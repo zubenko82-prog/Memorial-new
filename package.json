@@ -1,0 +1,23 @@
+{
+  "name": "memorial",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n \"server,web,bot,ngrok\" -c \"green,cyan,magenta,yellow\" \"npm:dev:server\" \"npm:dev:web\" \"npm:dev:bot\" \"pwsh ./scripts/start-ngrok.ps1 -Port 5173 -UpdateEnv\"",
+    "dev:server": "npm --workspace=@memorial/server run dev",
+    "dev:web": "npm --workspace=@memorial/web run dev",
+    "dev:bot": "npm --workspace=@memorial/bot run dev",
+    "build": "npm run build -ws --if-present",
+    "lint": "echo \"(lint placeholder)\"",
+    "postinstall": "npm run build -ws --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  },
+  "dependencies": {
+    "lightgallery": "^2.9.0"
+  }
+}
