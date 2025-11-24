@@ -5,11 +5,14 @@
 // - size.orientation: "vertical" | "horizontal";
 // - engraving.photoPreview (dataURL), photoOriginalKey (IndexedDB), fileName/mime;
 // - graphics: список выбранной графики;
+// - editor/editorBack: состояния редакторов (элементы, превью, пожелания и т. п.);
 // - события обновления: window.dispatchEvent(new Event("memorial:orderDraftUpdated")).
 
 import { idbPutBlob, idbGetBlob, idbDel } from "./idb";
 
 export type Orientation = "vertical" | "horizontal";
+
+/* ============ Базовые типы заказа ============ */
 
 export type OrderItem = {
   id?: string;
@@ -59,6 +62,33 @@ export type Graphic = {
   subCatSlug?: string;
 };
 
+/* ============ Типы редакторов (лицевая/тыльная) ============ */
+
+// Элемент редактора (минимальный набор + произвольные поля)
+export type EditorElement = {
+  id: string;           // стабильный id (например: "metric-<personId>", "epitaph-<index>", "graphic-<id>")
+  type?: string;        // тип ("metric" | "epitaph" | "graphic" | "portrait" | "cross" ...)
+  x: number; y: number; w: number; h: number; // проценты в рамках контентной области
+  z: number;            // порядок
+  // дополнительные опции — по месту (uppercase/italic/flipH/bw/align/staircase и т.д.)
+  [key: string]: any;
+};
+
+// Состояние одного редактора (лицевая или тыльная сторона)
+export type EditorState = {
+  elements?: EditorElement[];
+  previewUrl?: string | null;
+  previewHiUrl?: string | null;
+  previewUpdatedAt?: number;
+  wishes?: string; // Пожелания по эскизу (для этой стороны)
+  // Доп. поля для тыльной стороны (или по месту):
+  selectedGraphicsIds?: string[];
+  selectedEpitaphIndexes?: number[];
+  updatedAt?: number;
+};
+
+/* ============ Итоговый драфт ============ */
+
 export type OrderDraft = {
   orderNumber?: string | null; // опционально, основной источник — lib/intro.ts
   intro?: {
@@ -70,6 +100,9 @@ export type OrderDraft = {
   size?: OrderSize | null;
   engraving?: EngravingData | null;
   graphics?: Graphic[];
+  // Новое: состояния редакторов
+  editor?: EditorState | null;      // лицевая сторона
+  editorBack?: EditorState | null;  // тыльная сторона
   notes?: string;
   updatedAt?: number;
 };
@@ -99,11 +132,33 @@ export function loadOrderDraft(): OrderDraft {
     if (!raw) return { graphics: [], updatedAt: now() };
     const obj = JSON.parse(raw) as OrderDraft;
 
-    // Нормализация
+    // Нормализация известных полей
     if (!Array.isArray(obj.graphics)) obj.graphics = [];
     if (obj.size && typeof obj.size !== "object") obj.size = null;
     if (obj.item && typeof obj.item !== "object") obj.item = null;
     if (obj.engraving && typeof obj.engraving !== "object") obj.engraving = null;
+    if (obj.editor && typeof obj.editor !== "object") obj.editor = null;
+    if (obj.editorBack && typeof obj.editorBack !== "object") obj.editorBack = null;
+
+    // Нормализация editor/editorBack по типам (без агрессивного исправления, только базовые массивы)
+    if (obj.editor) {
+      if (!Array.isArray(obj.editor.elements)) obj.editor.elements = [];
+      if (!Array.isArray(obj.editor.selectedGraphicsIds) && obj.editor.selectedGraphicsIds != null) {
+        obj.editor.selectedGraphicsIds = [];
+      }
+      if (!Array.isArray(obj.editor.selectedEpitaphIndexes) && obj.editor.selectedEpitaphIndexes != null) {
+        obj.editor.selectedEpitaphIndexes = [];
+      }
+    }
+    if (obj.editorBack) {
+      if (!Array.isArray(obj.editorBack.elements)) obj.editorBack.elements = [];
+      if (!Array.isArray(obj.editorBack.selectedGraphicsIds) && obj.editorBack.selectedGraphicsIds != null) {
+        obj.editorBack.selectedGraphicsIds = [];
+      }
+      if (!Array.isArray(obj.editorBack.selectedEpitaphIndexes) && obj.editorBack.selectedEpitaphIndexes != null) {
+        obj.editorBack.selectedEpitaphIndexes = [];
+      }
+    }
 
     return { ...obj, updatedAt: obj.updatedAt || now() };
   } catch {
@@ -121,9 +176,14 @@ export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
     item: { ...(prev.item || {}), ...(patch.item || {}) },
     size: { ...(prev.size || {}), ...(patch.size || {}) },
     engraving: { ...(prev.engraving || {}), ...(patch.engraving || {}) },
+    // глубокое объединение состояний редакторов
+    editor: { ...(prev.editor || {}), ...(patch.editor || {}) },
+    editorBack: { ...(prev.editorBack || {}), ...(patch.editorBack || {}) },
+    // список графики
     graphics: Array.isArray(patch.graphics) ? patch.graphics : prev.graphics || [],
     updatedAt: now()
   };
+
   try {
     localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
   } catch {}
@@ -281,4 +341,30 @@ export function removeGraphicById(id: string): OrderDraft {
 
 export function clearGraphics(): OrderDraft {
   return saveOrderDraft({ graphics: [] });
+}
+
+/* ==================== Удобные сеттеры редакторов (по желанию) ==================== */
+
+// Частично обновить состояние лицевой стороны
+export function patchEditor(patch: Partial<EditorState>): OrderDraft {
+  const cur = loadOrderDraft();
+  return saveOrderDraft({
+    editor: {
+      ...(cur.editor || {}),
+      ...patch,
+      updatedAt: now()
+    }
+  });
+}
+
+// Частично обновить состояние тыльной стороны
+export function patchEditorBack(patch: Partial<EditorState>): OrderDraft {
+  const cur = loadOrderDraft();
+  return saveOrderDraft({
+    editorBack: {
+      ...(cur.editorBack || {}),
+      ...patch,
+      updatedAt: now()
+    }
+  });
 }

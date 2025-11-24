@@ -6,9 +6,20 @@ import EngravingStep from './screens/EngravingStep';
 import GraphicsStep from './screens/GraphicsStep';
 import EpitaphStep from './screens/EpitaphStep';
 import EditorStep from './screens/EditorStep';
+import BackEditorStep from './screens/BackEditorStep';
+import ReviewAndSendStep from './screens/ReviewAndSendStep';
 
+type Step =
+  | 'start'
+  | 'size'
+  | 'inscription'
+  | 'graphics'
+  | 'epitaph'
+  | 'editor'
+  | 'editorBack'
+  | 'review'
+  | 'done';
 
-type Step = 'start' | 'size' | 'inscription' | 'graphics' | 'epitaph' | 'editor' | 'done';
 const LS_KEY = 'memorial.progress.v6';
 
 function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
@@ -17,11 +28,13 @@ function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
     padding: map[size],
     borderRadius: 12,
     border: '1px solid rgba(255,255,255,0.28)',
-    background: 'linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)',
+    background:
+      'linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)',
     color: '#fff',
     cursor: disabled ? 'not-allowed' : 'pointer',
     whiteSpace: 'nowrap',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)',
+    boxShadow:
+      'inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)',
     backdropFilter: 'blur(14px) saturate(140%)',
     WebkitBackdropFilter: 'blur(14px) saturate(140%)',
     opacity: disabled ? 0.6 : 1,
@@ -30,7 +43,7 @@ function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
   } as React.CSSProperties;
 }
 
-// Прокрутка к верху при каждой смене шага
+// Прокрутка к началу при смене шага
 function forceScrollTop() {
   try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); } catch {}
   try { (document.scrollingElement as any).scrollTop = 0; } catch {}
@@ -43,10 +56,11 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [sizeResult, setSizeResult] = useState<any>(null);
   const [engraving, setEngraving] = useState<any>(null);
-  const [decor, setDecor] = useState<any>({});       // { graphics:[], epitaphs:[] }
+  const [decor, setDecor] = useState<any>({}); // { graphics:[], epitaphs:[] }
   const [editorState, setEditorState] = useState<any>(null);
+  const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // Восстановление/сохранение
+  // Восстановление прогресса
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -59,26 +73,40 @@ export default function App() {
         setEngraving(p.engraving ?? null);
         setDecor(p.decor ?? {});
         setEditorState(p.editorState ?? null);
+        setEditorBackState(p.editorBackState ?? null);
       }
     } catch {}
   }, []);
+
+  // Сохранение прогресса
   useEffect(() => {
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify({ step, selectedItem, sizeResult, engraving, decor, editorState }));
+      localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({
+          step,
+          selectedItem,
+          sizeResult,
+          engraving,
+          decor,
+          editorState,
+          editorBackState
+        })
+      );
     } catch {}
-  }, [step, selectedItem, sizeResult, engraving, decor, editorState]);
+  }, [step, selectedItem, sizeResult, engraving, decor, editorState, editorBackState]);
 
-  // Контроль последовательности
+  // Мини-контроль последовательности
   useEffect(() => {
     if (!selectedItem && step !== 'start') { setStep('start'); return; }
     if (step !== 'start' && !sizeResult) { setStep('size'); return; }
-    if ((step === 'graphics' || step === 'epitaph' || step === 'editor') && !engraving) {
+    if ((step === 'graphics' || step === 'epitaph' || step === 'editor' || step === 'editorBack' || step === 'review') && !engraving) {
       setStep('inscription');
       return;
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
-  // Скролл к верху
+  // Скролл к началу на каждом шаге
   useLayoutEffect(() => {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
@@ -86,7 +114,7 @@ export default function App() {
     return () => { clearTimeout(t0); clearTimeout(t1); };
   }, [step]);
 
-  // Навигация и коллбеки
+  // Навигация и колбэки шагов
   const onStartConfirm = (item: any) => { setSelectedItem(item); setStep('size'); };
 
   const onSizeBack = () => setStep('start');
@@ -104,23 +132,33 @@ export default function App() {
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
   const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editor'); };
 
-  // Редактор
+  // Редактор (лицевая)
   const onEditorBack = () => setStep('epitaph');
   const onEditorSave = (payload: any) => setEditorState(payload);
-  const onSendOrder = (payload: any) => {
-    // TODO: подключить чат менеджеров
-    console.log('Отправка заказа менеджерам:', payload);
-    setStep('done');
+  const onSendOrder = (payload: any) => { // «Продолжить» с лицевой стороны
+    try { console.log('[App] Continue from Editor -> editorBack'); } catch {}
+    setEditorState(payload);
+    setStep('editorBack');
   };
   const onGenerateSketch = (payload: any) => {
-    // TODO: интеграция нейросети
     console.log('Генерация эскиза (заглушка):', payload);
     alert('Генерация эскиза будет подключена позже.');
   };
   const onRearSide = (payload: any) => {
-    console.log('Тыльная сторона (шаг будет добавлен позже):', payload);
-    alert('Шаг тыльной стороны скоро появится.');
+    setEditorState(payload);
+    setStep('editorBack');
   };
+
+  // Редактор (тыльная)
+  const onBackEditorBack = () => setStep('editor'); // назад на лицевую
+  const onBackEditorDone = (payload: any) => {
+    setEditorBackState(payload);
+    setStep('review'); // перейти на шаг «Обзор и подтверждение»
+  };
+
+  // ReviewAndSend
+  const onReviewBack = () => setStep('editorBack');
+  const onReviewSend = () => setStep('done');
 
   const resetAll = () => {
     try { localStorage.removeItem(LS_KEY); } catch {}
@@ -129,6 +167,7 @@ export default function App() {
     setEngraving(null);
     setDecor({});
     setEditorState(null);
+    setEditorBackState(null);
     setStep('start');
   };
 
@@ -137,7 +176,12 @@ export default function App() {
       {step === 'start' && <Start onConfirm={onStartConfirm} />}
 
       {step === 'size' && selectedItem && (
-        <SizeStep item={selectedItem} initial={sizeResult || undefined} onBack={onSizeBack} onDone={onSizeDone} />
+        <SizeStep
+          item={selectedItem}
+          initial={sizeResult || undefined}
+          onBack={onSizeBack}
+          onDone={onSizeDone}
+        />
       )}
 
       {step === 'inscription' && selectedItem && sizeResult && (
@@ -186,6 +230,20 @@ export default function App() {
         />
       )}
 
+      {step === 'editorBack' && (
+        <BackEditorStep
+          onBack={onBackEditorBack}
+          onContinue={(payload) => onBackEditorDone(payload)}
+        />
+      )}
+
+      {step === 'review' && (
+        <ReviewAndSendStep
+          onBack={onReviewBack}
+          onSend={onReviewSend}
+        />
+      )}
+
       {step === 'done' && (
         <div style={{ padding: 16 }}>
           <h2 style={{ marginTop: 0 }}>Заявка отправлена менеджерам</h2>
@@ -193,6 +251,14 @@ export default function App() {
             Спасибо! Менеджер свяжется с вами. Вы можете начать заново.
           </div>
           <button style={glassButtonStyle('sm')} onClick={resetAll}>Начать заново</button>
+        </div>
+      )}
+
+      {/* Фолбек на случай неизвестного шага */}
+      {!['start','size','inscription','graphics','epitaph','editor','editorBack','review','done'].includes(step) && (
+        <div style={{ padding: 16 }}>
+          <h3>Неизвестный шаг: {String(step)}</h3>
+          <button style={glassButtonStyle('sm')} onClick={() => setStep('start')}>На главную</button>
         </div>
       )}
     </div>
