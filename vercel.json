@@ -1,8 +1,0 @@
-{
-  "buildCommand": "npm --workspace=@memorial/web run build",
-  "outputDirectory": "apps/web/dist",
-  "framework": "vite",
-  "functions": {
-    "api/*.ts": { "runtime": "nodejs18.x" }
-  }
-}
