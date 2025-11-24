@@ -10,9 +10,8 @@
     "dev:server": "npm --workspace=@memorial/server run dev",
     "dev:web": "npm --workspace=@memorial/web run dev",
     "dev:bot": "npm --workspace=@memorial/bot run dev",
-    "build": "npm run build -ws --if-present",
-    "lint": "echo \"(lint placeholder)\"",
-    "postinstall": "npm run build -ws --if-present"
+    "build": "npm --workspace=@memorial/web run build",
+    "lint": "echo \"(lint placeholder)\""
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
