@@ -693,55 +693,56 @@ export default function SketchTemplate({
   };
 
   /* ===== PEOPLE: Вертикальные шаблоны ===== */
+  // ВАЖНО: исправлено — портрет и метрика собраны в один вертикальный стек,
+  // позиционируется только контейнер; метрика всегда под портретом.
   const VerticalOne = () => {
     const B = tpl.blocks;
     const p = peopleBlocks[0];
 
     return (
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
-        {/* Портрет */}
         <div
           style={{
             position: "absolute",
-            ...B.portraits.pos,
-            width: B.portraits.size.width,
-            maxWidth: B.portraits.size.maxWidth,
-            ...B.portraits.margins
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: (B.portraits.pos as any).top ?? "12%",
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center"
           }}
         >
-          <div
-            data-sketch-el="portrait"
-            data-sketch-key={p.id}
-            style={{
-              width: "100%",
-              aspectRatio: "3 / 4",
-              borderRadius: 4,
-              overflow: "hidden",
-              background: "rgba(255,255,255,0.04)",
-              boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
-            }}
-          >
-            {p.photo ? (
-              <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
-            ) : (
-              <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
-            )}
+          {/* Портрет */}
+          <div style={{ width: B.portraits.size.width, maxWidth: B.portraits.size.maxWidth, ...B.portraits.margins }}>
+            <div
+              data-sketch-el="portrait"
+              data-sketch-key={p.id}
+              style={{
+                width: "100%",
+                aspectRatio: "3 / 4",
+                borderRadius: 4,
+                overflow: "hidden",
+                background: "rgba(255,255,255,0.04)",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+              }}
+            >
+              {p.photo ? (
+                <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+              ) : (
+                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+              )}
+            </div>
           </div>
-        </div>
 
-        {/* Метрика */}
-        <div
-          data-sketch-el="metric"
-          data-sketch-key={p.id}
-          style={{
-            position: "absolute",
-            ...B.metric.pos,
-            width: B.metric.size.width,
-            maxWidth: B.metric.size.maxWidth,
-            ...B.metric.margins
-          }}
-        >
-          <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
+          {/* Метрика */}
+          <div
+            data-sketch-el="metric"
+            data-sketch-key={p.id}
+            style={{ width: B.metric.size.width, maxWidth: B.metric.size.maxWidth, ...B.metric.margins }}
+          >
+            <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
+          </div>
         </div>
       </div>
     );
