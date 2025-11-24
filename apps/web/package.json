@@ -3,9 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node ../../scripts/generate-catalog.mjs",
     "dev": "vite --port 5173 --strictPort",
     "dev:server": "nodemon server/index.js",
     "dev:full": "concurrently \"npm:dev\" \"npm:dev:server\"",
+    "generate:catalogs": "node ../../scripts/generate-catalog.mjs",
+    "generate:carvings": "node ../../scripts/generate-catalog.mjs carvings",
+    "generate:graphics": "node ../../scripts/generate-catalog.mjs graphics",
+    "prebuild": "npm run generate:catalogs",
     "build": "vite build",
     "preview": "vite preview --port 5173 --strictPort"
   },

@@ -1,13 +1,9 @@
 // src/screens/SizeStep.tsx
 // Экран «Параметры стелы»
-// Изменения:
-// - Убрали выбор ориентации из UI.
-// - Ориентация определяется автоматически по изображению выбранной резной работы (item.url):
-//   • если ширина > высоты — horizontal;
-//   • иначе — vertical.
-// - Сохраняем ориентацию в драфт вместе с размером и толщиной (мм).
-// - При первом входе: значения размера/толщины берём из драфта, если есть. Если нет — стандарт: 50×100, 8 см.
-// - Текст подсказки обновлён (без упоминания ручного выбора ориентации).
+// Автоориентация:
+// 1) Пытаемся определить по изображению (item.url) через naturalWidth/naturalHeight.
+// 2) Если не получилось или url пустой — берём из выбранного размера (Ш×В).
+// 3) Ориентация сохраняется в драфт и используется при следующих шагах.
 
 import React, { useMemo, useState, useEffect } from "react";
 import type { CatalogItem } from "../api";
@@ -107,6 +103,12 @@ function findPresetFor(widthCm?: number, heightCm?: number): (typeof PRESET_SIZE
   const cand = `${widthCm}×${heightCm}`;
   return (PRESET_SIZES as readonly string[]).includes(cand as any) ? (cand as any) : undefined;
 }
+function orientFromSize(widthCm?: number, heightCm?: number): Orientation {
+  if (typeof widthCm === "number" && typeof heightCm === "number" && isFinite(widthCm) && isFinite(heightCm) && widthCm > 0 && heightCm > 0) {
+    return widthCm > heightCm ? "horizontal" : "vertical";
+  }
+  return "vertical";
+}
 
 // Тип пропсов и компонент
 interface SizeStepProps {
@@ -126,6 +128,7 @@ export default function SizeStep(props: SizeStepProps) {
   const draftWcm = mmToCm(draft.size?.width);
   const draftHcm = mmToCm(draft.size?.height);
   const draftTcm = mmToCm(draft.size?.thickness);
+  const draftOrientation = (draft.size?.orientation as Orientation | undefined) || "vertical";
 
   // Определим пресет или кастом
   const draftPreset = findPresetFor(draftWcm, draftHcm);
@@ -154,34 +157,78 @@ export default function SizeStep(props: SizeStepProps) {
   });
   const [thickCustom, setThickCustom] = useState<string>(() => (typeof draftTcm === "number" ? String(draftTcm) : "8"));
 
-  // Ориентация — автоматически по изображению работы (по умолчанию vertical, пока не узнаем размеры)
-  const [orientation, setOrientation] = useState<Orientation>("vertical");
+  // Ориентация
+  const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
+  // Источник текущей ориентации: "image" — успешно по картинке; "size" — по размеру; "default" — начальное/из драфта.
+  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">("default");
 
-  // Автоопределение ориентации по item.url
+  // Текущие размеры в см из UI
+  const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
+    if (sizeMode === "preset") {
+      const [wcm, hcm] = parsePresetWHcm(sizePreset);
+      return [wcm, hcm];
+    }
+    const wcm = Number(w);
+    const hcm = Number(h);
+    return [
+      Number.isFinite(wcm) && wcm > 0 ? wcm : undefined,
+      Number.isFinite(hcm) && hcm > 0 ? hcm : undefined
+    ];
+  }, [sizeMode, sizePreset, w, h]);
+
+  // Автоопределение ориентации по item.url (если доступно)
   useEffect(() => {
     let cancelled = false;
-    async function detect() {
+
+    async function detectByImage() {
+      if (!item?.url) {
+        // нет картинки — используем размер
+        setOrientation((prev) => {
+          const [wcm, hcm] = currentWHcm;
+          const next = orientFromSize(wcm, hcm);
+          setOrientationSource("size");
+          return next;
+        });
+        return;
+      }
+
       try {
         const im = await new Promise<HTMLImageElement>((resolve, reject) => {
-          if (!item?.url) return reject(new Error("no url"));
           const img = new Image();
-          img.crossOrigin = "anonymous";
+          // Важно: не ставим crossOrigin — нам не нужен canvas, а в некоторых окружениях это ломает onload.
           img.onload = () => resolve(img);
-          img.onerror = reject;
+          img.onerror = () => reject(new Error("image load failed"));
           img.src = item.url;
         });
         if (cancelled) return;
         const next: Orientation = im.naturalWidth > im.naturalHeight ? "horizontal" : "vertical";
         setOrientation(next);
+        setOrientationSource("image");
       } catch {
-        setOrientation("vertical");
+        if (cancelled) return;
+        // Fallback: по размеру
+        const [wcm, hcm] = currentWHcm;
+        const next = orientFromSize(wcm, hcm);
+        setOrientation(next);
+        setOrientationSource("size");
       }
     }
-    detect();
+
+    detectByImage();
     return () => {
       cancelled = true;
     };
-  }, [item?.url]);
+    // завязаны на url и на текущие размеры (для корректного fallback)
+  }, [item?.url, currentWHcm[0], currentWHcm[1]]);
+
+  // Если по изображению ориентир не получен, пересчитываем по размеру при изменении размеров
+  useEffect(() => {
+    if (orientationSource === "image") return;
+    const [wcm, hcm] = currentWHcm;
+    const next = orientFromSize(wcm, hcm);
+    setOrientation(next);
+    setOrientationSource((s) => (s === "image" ? s : "size"));
+  }, [orientationSource, currentWHcm[0], currentWHcm[1]]);
 
   // Валидация
   const sizeValid = useMemo(() => {
@@ -258,7 +305,7 @@ export default function SizeStep(props: SizeStepProps) {
     <div
       style={{
         color: "#fff",
-        maxWidth: 600, 
+        maxWidth: 600,
         margin: "0 auto",
         fontFamily:
           "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
@@ -270,7 +317,7 @@ export default function SizeStep(props: SizeStepProps) {
 
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
       <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
-        Выберите желаемый размер и толщину. Ориентация будет определена автоматически по изображению.
+        Выберите желаемый размер и толщину. Ориентация будет определена автоматически по изображению или по выбранному размеру.
       </div>
 
       {/* Блоки выбора */}
