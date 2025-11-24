@@ -3,7 +3,11 @@
     {
       "name": "Каталог",
       "slug": "carvings",
-      "items": []
+      "items": [
+        { "id": "c1", "name": "Резьба 1", "url": "/images/carvings/sample1.jpg" },
+        { "id": "c2", "name": "Резьба 2", "url": "/images/carvings/sample2.jpg" }
+      ]
     }
   ]
 }
+
