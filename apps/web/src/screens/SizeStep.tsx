@@ -1,16 +1,14 @@
 // src/screens/SizeStep.tsx
-// Экран «Параметры стелы»
 // Автоориентация:
-// 1) Пытаемся определить по изображению (item.url) через naturalWidth/naturalHeight.
-// 2) Если не получилось или url пустой — берём из выбранного размера (Ш×В).
-// 3) Ориентация сохраняется в драфт и используется при следующих шагах.
+// 1) По изображению (naturalWidth/Height) с таймаутом.
+// 2) Если не удалось — по выбранным размерам (Ш×В).
+// 3) Сохраняется в драфт и отображается на экране.
 
 import React, { useMemo, useState, useEffect } from "react";
 import type { CatalogItem } from "../api";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 
-// Предустановленные варианты (см), формат: Ш×В
 const PRESET_SIZES = ["40×60", "40×80", "50×100", "60×120"] as const; // см (Ш×В)
 const PRESET_THICKNESS = ["5", "8", "10"] as const; // см
 
@@ -19,7 +17,6 @@ type ThickMode = "preset" | "custom";
 export type Orientation = "vertical" | "horizontal";
 export type SizeStepResult = { size: string; thickness: string; orientation: Orientation };
 
-// Анимация появления
 function useAnimationsOnce(): void {
   useEffect(() => {
     const style = document.createElement("style");
@@ -30,13 +27,10 @@ function useAnimationsOnce(): void {
       }
     `;
     document.head.appendChild(style);
-    return () => {
-      document.head.removeChild(style);
-    };
+    return () => document.head.removeChild(style);
   }, []);
 }
 
-// Стеклянные стили
 type BtnSize = "nano" | "sm" | "md";
 function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProperties {
   const paddings: Record<BtnSize, string> = { nano: "4px 8px", sm: "8px 12px", md: "12px 18px" };
@@ -68,26 +62,13 @@ function glassPanelStyle(): React.CSSProperties {
   };
 }
 
-// Радио-опции
-const optionWrapStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 10
-};
-const optionLabelStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  whiteSpace: "nowrap",
-  marginRight: 4
-};
+const optionWrapStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 10 };
+const optionLabelStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", marginRight: 4 };
 
-// Утилиты конвертации и парсинга
 function parsePresetWHcm(s: string): [number, number] {
-  // формат: "Ш×В"
   const parts = String(s).split(/[×xX]/);
-  const w = Number(parts[0]); // ширина, см
-  const h = Number(parts[1]); // высота, см
+  const w = Number(parts[0]);
+  const h = Number(parts[1]);
   return [w, h];
 }
 function mmToCm(mm?: number | null): number | undefined {
@@ -110,7 +91,6 @@ function orientFromSize(widthCm?: number, heightCm?: number): Orientation {
   return "vertical";
 }
 
-// Тип пропсов и компонент
 interface SizeStepProps {
   item: CatalogItem;
   onBack?: () => void;
@@ -123,24 +103,19 @@ export default function SizeStep(props: SizeStepProps) {
 
   useAnimationsOnce();
 
-  // 1) Считываем драфт для инициализации
   const draft = loadOrderDraft();
   const draftWcm = mmToCm(draft.size?.width);
   const draftHcm = mmToCm(draft.size?.height);
   const draftTcm = mmToCm(draft.size?.thickness);
-  const draftOrientation = (draft.size?.orientation as Orientation | undefined) || "vertical";
+  const draftOrientation = (draft.size?.orientation as Orientation | undefined) || (draft.orientation as Orientation | undefined) || "vertical";
 
-  // Определим пресет или кастом
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
-  // 2) Состояния (инициализация из драфта)
-  // Размер
   const [sizeMode, setSizeMode] = useState<SizeMode>(() => (draftWcm && draftHcm ? (draftPreset ? "preset" : "custom") : "preset"));
   const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "50×100");
   const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "50"));
   const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "100"));
 
-  // Толщина
   const [thickMode, setThickMode] = useState<ThickMode>(() => {
     if (typeof draftTcm === "number") {
       const s = String(draftTcm);
@@ -157,12 +132,9 @@ export default function SizeStep(props: SizeStepProps) {
   });
   const [thickCustom, setThickCustom] = useState<string>(() => (typeof draftTcm === "number" ? String(draftTcm) : "8"));
 
-  // Ориентация
   const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
-  // Источник текущей ориентации: "image" — успешно по картинке; "size" — по размеру; "default" — начальное/из драфта.
-  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">("default");
+  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">(draftOrientation ? "default" : "default");
 
-  // Текущие размеры в см из UI
   const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
     if (sizeMode === "preset") {
       const [wcm, hcm] = parsePresetWHcm(sizePreset);
@@ -176,88 +148,103 @@ export default function SizeStep(props: SizeStepProps) {
     ];
   }, [sizeMode, sizePreset, w, h]);
 
-  // Автоопределение ориентации по item.url (если доступно)
+  // Надёжный детект по изображению с таймаутом, иначе — по размерам
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
 
-    async function detectByImage() {
-      if (!item?.url) {
-        // нет картинки — используем размер
-        setOrientation((prev) => {
-          const [wcm, hcm] = currentWHcm;
-          const next = orientFromSize(wcm, hcm);
+    async function detect() {
+      const url = item?.url;
+      const [wcm, hcm] = currentWHcm;
+
+      if (!url) {
+        const next = orientFromSize(wcm, hcm);
+        console.log("[SizeStep] No image URL, fallback to size:", { wcm, hcm, next });
+        if (!cancelled) {
+          setOrientation(next);
           setOrientationSource("size");
-          return next;
-        });
+        }
         return;
       }
 
-      try {
-        const im = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          // Важно: не ставим crossOrigin — нам не нужен canvas, а в некоторых окружениях это ломает onload.
-          img.onload = () => resolve(img);
-          img.onerror = () => reject(new Error("image load failed"));
-          img.src = item.url;
-        });
+      // Таймаут 1500 мс
+      timer = window.setTimeout(() => {
         if (cancelled) return;
-        const next: Orientation = im.naturalWidth > im.naturalHeight ? "horizontal" : "vertical";
-        setOrientation(next);
-        setOrientationSource("image");
-      } catch {
-        if (cancelled) return;
-        // Fallback: по размеру
-        const [wcm, hcm] = currentWHcm;
         const next = orientFromSize(wcm, hcm);
+        console.warn("[SizeStep] Image load timeout, fallback to size:", { url, wcm, hcm, next });
+        setOrientation(next);
+        setOrientationSource("size");
+      }, 1500);
+
+      try {
+        const img = new Image();
+        img.onload = () => {
+          if (cancelled) return;
+          if (timer) window.clearTimeout(timer);
+          const next: Orientation = img.naturalWidth > img.naturalHeight ? "horizontal" : "vertical";
+          console.log("[SizeStep] Image loaded:", { url, w: img.naturalWidth, h: img.naturalHeight, next });
+          setOrientation(next);
+          setOrientationSource("image");
+        };
+        img.onerror = () => {
+          if (cancelled) return;
+          if (timer) window.clearTimeout(timer);
+          const next = orientFromSize(wcm, hcm);
+          console.warn("[SizeStep] Image error, fallback to size:", { url, wcm, hcm, next });
+          setOrientation(next);
+          setOrientationSource("size");
+        };
+        img.src = url;
+      } catch (e) {
+        if (cancelled) return;
+        if (timer) window.clearTimeout(timer);
+        const next = orientFromSize(wcm, hcm);
+        console.warn("[SizeStep] Exception on image load, fallback to size:", e);
         setOrientation(next);
         setOrientationSource("size");
       }
     }
 
-    detectByImage();
+    detect();
     return () => {
       cancelled = true;
+      if (timer) window.clearTimeout(timer);
     };
-    // завязаны на url и на текущие размеры (для корректного fallback)
   }, [item?.url, currentWHcm[0], currentWHcm[1]]);
 
-  // Если по изображению ориентир не получен, пересчитываем по размеру при изменении размеров
+  // Если источник не изображение — при изменении размеров пересчитываем
   useEffect(() => {
     if (orientationSource === "image") return;
     const [wcm, hcm] = currentWHcm;
     const next = orientFromSize(wcm, hcm);
     setOrientation(next);
-    setOrientationSource((s) => (s === "image" ? s : "size"));
+    if (orientationSource !== "image") setOrientationSource("size");
   }, [orientationSource, currentWHcm[0], currentWHcm[1]]);
 
-  // Валидация
   const sizeValid = useMemo(() => {
     if (sizeMode === "preset") return true;
     const wn = Number(w);
     const hn = Number(h);
     return Number.isFinite(wn) && Number.isFinite(hn) && wn > 0 && hn > 0 && wn <= 300 && hn <= 300;
   }, [sizeMode, w, h]);
-
   const thickValid = useMemo(() => {
     if (thickMode === "preset") return true;
     const tn = Number(thickCustom);
     return Number.isFinite(tn) && tn > 0 && tn <= 50;
   }, [thickMode, thickCustom]);
-
   const canContinue = sizeValid && thickValid;
 
-  // Пэйлоад (Ш×В в см)
   const finalSize = sizeMode === "preset" ? sizePreset : `${Number(w)}×${Number(h)}`;
   const finalThick = thickMode === "preset" ? thickPreset : `${Number(thickCustom)}`;
   const payload: SizeStepResult = { size: finalSize, thickness: finalThick, orientation };
 
-  // Сохранение в драфт (мм + orientation)
+  // Сохраняем и в size.orientation, и в корень (на случай старого чтения)
   useEffect(() => {
     let widthCm: number | undefined;
     let heightCm: number | undefined;
 
     if (sizeMode === "preset") {
-      const [wcm, hcm] = parsePresetWHcm(sizePreset); // Ш×В, см
+      const [wcm, hcm] = parsePresetWHcm(sizePreset);
       widthCm = wcm;
       heightCm = hcm;
     } else {
@@ -282,23 +269,15 @@ export default function SizeStep(props: SizeStepProps) {
         height: cmToMm(heightCm),
         thickness: cmToMm(thickCm),
         orientation
-      }
+      },
+      orientation // дублируем в корень для обратной совместимости
     });
   }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation]);
 
-  // Выход
   const handleContinue = () => {
-    const fn =
-      typeof onDone === "function"
-        ? onDone
-        : typeof onConfirm === "function"
-        ? onConfirm
-        : undefined;
-    if (fn) {
-      fn(payload);
-    } else {
-      console.error("SizeStep: ни onDone, ни onConfirm не переданы в props");
-    }
+    const fn = (typeof onDone === "function" ? onDone : typeof onConfirm === "function" ? onConfirm : undefined);
+    if (fn) fn(payload);
+    else console.error("SizeStep: ни onDone, ни onConfirm не переданы в props");
   };
 
   return (
@@ -307,8 +286,7 @@ export default function SizeStep(props: SizeStepProps) {
         color: "#fff",
         maxWidth: 600,
         margin: "0 auto",
-        fontFamily:
-          "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
+        fontFamily: "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
         animation: "fade-slide-in-slow 480ms ease both",
         padding: 16
       }}
@@ -317,37 +295,24 @@ export default function SizeStep(props: SizeStepProps) {
 
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
       <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
-        Выберите желаемый размер и толщину. Ориентация будет определена автоматически по изображению или по выбранному размеру.
+        Ориентация: <b>{orientation === "horizontal" ? "горизонтальная" : "вертикальная"}</b> {orientationSource === "image" ? "(по изображению)" : "(по размеру)"}
       </div>
 
-      {/* Блоки выбора */}
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
         {/* Размер */}
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
-
           <div style={{ display: "grid", gap: 12 }}>
             <div>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input
-                  type="radio"
-                  name="sizeMode"
-                  checked={sizeMode === "preset"}
-                  onChange={() => setSizeMode("preset")}
-                />
+                <input type="radio" name="sizeMode" checked={sizeMode === "preset"} onChange={() => setSizeMode("preset")} />
                 <span>Стандартный</span>
               </label>
-
               {sizeMode === "preset" && (
                 <div style={{ marginTop: 6, ...optionWrapStyle }}>
                   {PRESET_SIZES.map((s) => (
                     <label key={s} style={optionLabelStyle}>
-                      <input
-                        type="radio"
-                        name="sizePreset"
-                        checked={sizePreset === s}
-                        onChange={() => setSizePreset(s)}
-                      />
+                      <input type="radio" name="sizePreset" checked={sizePreset === s} onChange={() => setSizePreset(s)} />
                       <span>{s} см</span>
                     </label>
                   ))}
@@ -357,51 +322,22 @@ export default function SizeStep(props: SizeStepProps) {
 
             <div>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input
-                  type="radio"
-                  name="sizeMode"
-                  checked={sizeMode === "custom"}
-                  onChange={() => setSizeMode("custom")}
-                />
+                <input type="radio" name="sizeMode" checked={sizeMode === "custom"} onChange={() => setSizeMode("custom")} />
                 <span>Свой вариант</span>
               </label>
 
               {sizeMode === "custom" && (
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    marginTop: 6
-                  }}
-                >
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span>Ширина, см</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={300}
-                      value={w}
-                      onChange={(e) => setW(e.target.value)}
-                      style={{ width: 90 }}
-                    />
+                    <input type="number" min={1} max={300} value={w} onChange={(e) => setW(e.target.value)} style={{ width: 90 }} />
                   </label>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span>Высота, см</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={300}
-                      value={h}
-                      onChange={(e) => setH(e.target.value)}
-                      style={{ width: 90 }}
-                    />
+                    <input type="number" min={1} max={300} value={h} onChange={(e) => setH(e.target.value)} style={{ width: 90 }} />
                   </label>
-                  {!sizeValid && (
-                    <div style={{ color: "salmon", fontSize: 12 }}>
-                      Укажите положительные значения до 300 см.
-                    </div>
+                  {!(Number.isFinite(Number(w)) && Number.isFinite(Number(h)) && Number(w) > 0 && Number(h) > 0) && (
+                    <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>
                   )}
                 </div>
               )}
@@ -412,61 +348,33 @@ export default function SizeStep(props: SizeStepProps) {
         {/* Толщина */}
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Толщина</div>
-
           <div style={{ display: "grid", gap: 8 }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="radio"
-                name="thickMode"
-                checked={thickMode === "preset"}
-                onChange={() => setThickMode("preset")}
-              />
+              <input type="radio" name="thickMode" checked={thickMode === "preset"} onChange={() => setThickMode("preset")} />
               <span>Стандартная</span>
             </label>
-
             {thickMode === "preset" && (
               <div style={optionWrapStyle}>
                 {PRESET_THICKNESS.map((t) => (
                   <label key={t} style={optionLabelStyle}>
-                    <input
-                      type="radio"
-                      name="thickPreset"
-                      checked={thickPreset === t}
-                      onChange={() => setThickPreset(t)}
-                    />
+                    <input type="radio" name="thickPreset" checked={thickPreset === t} onChange={() => setThickPreset(t)} />
                     <span>{t} см</span>
                   </label>
                 ))}
               </div>
             )}
-
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="radio"
-                name="thickMode"
-                checked={thickMode === "custom"}
-                onChange={() => setThickMode("custom")}
-              />
+              <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
               <span>Свой вариант</span>
             </label>
-
             {thickMode === "custom" && (
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <span>Толщина, см</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={thickCustom}
-                    onChange={(e) => setThickCustom(e.target.value)}
-                    style={{ width: 90 }}
-                  />
+                  <input type="number" min={1} max={50} value={thickCustom} onChange={(e) => setThickCustom(e.target.value)} style={{ width: 90 }} />
                 </label>
-                {!thickValid && (
-                  <div style={{ color: "salmon", fontSize: 12 }}>
-                    Укажите положительное значение до 50 см.
-                  </div>
+                {!(Number.isFinite(Number(thickCustom)) && Number(thickCustom) > 0 && Number(thickCustom) <= 50) && (
+                  <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>
                 )}
               </div>
             )}
@@ -493,25 +401,11 @@ export default function SizeStep(props: SizeStepProps) {
               <img
                 src={item.url}
                 alt={item.name}
-                style={{
-                  width: "100%",
-                  maxWidth: 640,
-                  maxHeight: "55vh",
-                  objectFit: "contain",
-                  borderRadius: 8,
-                  display: "block"
-                }}
+                style={{ width: "100%", maxWidth: 640, maxHeight: "55vh", objectFit: "contain", borderRadius: 8, display: "block" }}
               />
             </div>
             <div
-              style={{
-                fontWeight: 600,
-                fontSize: 18,
-                textAlign: "center",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis"
-              }}
+              style={{ fontWeight: 600, fontSize: 18, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
               title={item.name}
             >
               {item.name}
