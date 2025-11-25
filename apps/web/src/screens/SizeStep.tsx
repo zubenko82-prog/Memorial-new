@@ -148,6 +148,46 @@ export default function SizeStep(props: SizeStepProps) {
     ];
   }, [sizeMode, sizePreset, w, h]);
 
+  // Сохраняем текущие значения в драфт немедленно (исключаем гонки рендеров)
+  function persistDraft(currentOrientation: Orientation) {
+    // берём текущие см из UI
+    let widthCm: number | undefined;
+    let heightCm: number | undefined;
+
+    if (sizeMode === "preset") {
+      const [wcm, hcm] = parsePresetWHcm(sizePreset);
+      widthCm = wcm;
+      heightCm = hcm;
+    } else {
+      const wcm = Number(w);
+      const hcm = Number(h);
+      if (Number.isFinite(wcm) && wcm > 0) widthCm = wcm;
+      if (Number.isFinite(hcm) && hcm > 0) heightCm = hcm;
+    }
+
+    let thickCm: number | undefined;
+    if (thickMode === "preset") {
+      const t = Number(thickPreset);
+      if (Number.isFinite(t) && t > 0) thickCm = t;
+    } else {
+      const t = Number(thickCustom);
+      if (Number.isFinite(t) && t > 0) thickCm = t;
+    }
+
+    // перевод в мм
+    const toMm = (cm?: number) => (typeof cm === "number" ? Math.round(cm * 10) : undefined);
+    const sizePatch: any = { orientation: currentOrientation };
+    const wmm = toMm(widthCm);
+    const hmm = toMm(heightCm);
+    const tmm = toMm(thickCm);
+    if (typeof wmm === "number") sizePatch.width = wmm;
+    if (typeof hmm === "number") sizePatch.height = hmm;
+    if (typeof tmm === "number") sizePatch.thickness = tmm;
+
+    // сохраняем и дублируем orientation в корень (совместимость)
+    saveOrderDraft({ size: sizePatch, orientation: currentOrientation });
+  }
+
   // Надёжный детект по изображению с таймаутом, иначе — по размерам
   useEffect(() => {
     let cancelled = false;
@@ -163,6 +203,7 @@ export default function SizeStep(props: SizeStepProps) {
         if (!cancelled) {
           setOrientation(next);
           setOrientationSource("size");
+          persistDraft(next);
         }
         return;
       }
@@ -174,6 +215,7 @@ export default function SizeStep(props: SizeStepProps) {
         console.warn("[SizeStep] Image load timeout, fallback to size:", { url, wcm, hcm, next });
         setOrientation(next);
         setOrientationSource("size");
+        persistDraft(next);
       }, 1500);
 
       try {
@@ -185,6 +227,7 @@ export default function SizeStep(props: SizeStepProps) {
           console.log("[SizeStep] Image loaded:", { url, w: img.naturalWidth, h: img.naturalHeight, next });
           setOrientation(next);
           setOrientationSource("image");
+          persistDraft(next);
         };
         img.onerror = () => {
           if (cancelled) return;
@@ -193,6 +236,7 @@ export default function SizeStep(props: SizeStepProps) {
           console.warn("[SizeStep] Image error, fallback to size:", { url, wcm, hcm, next });
           setOrientation(next);
           setOrientationSource("size");
+          persistDraft(next);
         };
         img.src = url;
       } catch (e) {
@@ -202,6 +246,7 @@ export default function SizeStep(props: SizeStepProps) {
         console.warn("[SizeStep] Exception on image load, fallback to size:", e);
         setOrientation(next);
         setOrientationSource("size");
+        persistDraft(next);
       }
     }
 
@@ -212,13 +257,14 @@ export default function SizeStep(props: SizeStepProps) {
     };
   }, [item?.url, currentWHcm[0], currentWHcm[1]]);
 
-  // Если источник не изображение — при изменении размеров пересчитываем
+  // Если источник не изображение — при изменении размеров пересчитываем и немедленно сохраняем
   useEffect(() => {
     if (orientationSource === "image") return;
     const [wcm, hcm] = currentWHcm;
     const next = orientFromSize(wcm, hcm);
     setOrientation(next);
     if (orientationSource !== "image") setOrientationSource("size");
+    persistDraft(next);
   }, [orientationSource, currentWHcm[0], currentWHcm[1]]);
 
   const sizeValid = useMemo(() => {
@@ -238,7 +284,7 @@ export default function SizeStep(props: SizeStepProps) {
   const finalThick = thickMode === "preset" ? thickPreset : `${Number(thickCustom)}`;
   const payload: SizeStepResult = { size: finalSize, thickness: finalThick, orientation };
 
-  // Сохраняем ТОЛЬКО определённые значения + ориентацию (и в size, и в корень — для совместимости)
+  // Страхующий авто-сейв (оставляем; persistDraft уже пишет сразу, но этот эффект не мешает)
   useEffect(() => {
     let widthCm: number | undefined;
     let heightCm: number | undefined;
@@ -278,6 +324,9 @@ export default function SizeStep(props: SizeStepProps) {
   }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation]);
 
   const handleContinue = () => {
+    // гарантированно сохранить актуальные значения перед навигацией
+    persistDraft(orientation);
+
     const fn = (typeof onDone === "function" ? onDone : typeof onConfirm === "function" ? onConfirm : undefined);
     if (fn) fn(payload);
     else console.error("SizeStep: ни onDone, ни onConfirm не переданы в props");
