@@ -10,8 +10,12 @@
 // Внешние инструменты могут измерять DOM-узлы через querySelectorAll("[data-sketch-el]")
 // и конвертировать px → проценты относительно «контентной» области: она равна контейнеру
 // за вычетом внутренних паддингов (CFG.general.containerPadding).
+//
+// ВАЖНО: ориентация теперь принудительно берётся из драфта (size.orientation или legacy orientation).
+// Если в драфте нет ориентации — используется фактическое соотношение сторон изображения.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
 export type SketchTemplateProps = {
   item: { url?: string; name?: string } | null;
@@ -315,7 +319,26 @@ export default function SketchTemplate({
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
   const [sketchH, setSketchH] = useState(CFG.general.minContainerHeight);
 
-  const isVertical = imgRect.h > imgRect.w;
+  // Принудительная ориентация из драфта (если есть)
+  const [forcedOrientation, setForcedOrientation] = useState<"vertical" | "horizontal" | null>(null);
+
+  // Подписываемся на обновления драфта и читаем текущую ориентацию
+  useEffect(() => {
+    const apply = () => {
+      const draft = loadOrderDraft();
+      const o = (draft.size?.orientation as "vertical" | "horizontal" | undefined) || (draft as any).orientation;
+      setForcedOrientation(o ?? null);
+    };
+    apply();
+    const handler = () => apply();
+    window.addEventListener(DRAFT_UPDATED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, handler as EventListener);
+  }, []);
+
+  // Если ориентация принудительно задана — используем её, иначе — определяем по изображению.
+  const isVerticalByImage = imgRect.h > imgRect.w;
+  const isVertical = forcedOrientation ? forcedOrientation === "vertical" : isVerticalByImage;
+
   const tplKey = pickTplKey(peopleBlocks.length);
 
   const tpl = useMemo(() => {
@@ -446,6 +469,7 @@ export default function SketchTemplate({
           flexWrap: "wrap",
           zIndex: 3
         }}
+        data-sketch-orient={isVertical ? "vertical" : "horizontal"}
       >
         {others.map((g, i) => (
           <img
@@ -693,8 +717,6 @@ export default function SketchTemplate({
   };
 
   /* ===== PEOPLE: Вертикальные шаблоны ===== */
-  // ВАЖНО: исправлено — портрет и метрика собраны в один вертикальный стек,
-  // позиционируется только контейнер; метрика всегда под портретом.
   const VerticalOne = () => {
     const B = tpl.blocks;
     const p = peopleBlocks[0];
@@ -911,6 +933,8 @@ export default function SketchTemplate({
         color: "#fff",
         ...style
       }}
+      data-sketch-orient={isVertical ? "vertical" : "horizontal"}
+      data-sketch-orient-source={forcedOrientation ? "draft" : "image"}
     >
       {/* Изображение изделия */}
       <img

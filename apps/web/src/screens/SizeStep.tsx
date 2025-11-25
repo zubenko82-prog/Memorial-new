@@ -238,7 +238,7 @@ export default function SizeStep(props: SizeStepProps) {
   const finalThick = thickMode === "preset" ? thickPreset : `${Number(thickCustom)}`;
   const payload: SizeStepResult = { size: finalSize, thickness: finalThick, orientation };
 
-  // Сохраняем и в size.orientation, и в корень (на случай старого чтения)
+  // Сохраняем ТОЛЬКО определённые значения + ориентацию (и в size, и в корень — для совместимости)
   useEffect(() => {
     let widthCm: number | undefined;
     let heightCm: number | undefined;
@@ -250,27 +250,30 @@ export default function SizeStep(props: SizeStepProps) {
     } else {
       const wcm = Number(w);
       const hcm = Number(h);
-      widthCm = Number.isFinite(wcm) && wcm > 0 ? wcm : undefined;
-      heightCm = Number.isFinite(hcm) && hcm > 0 ? hcm : undefined;
+      if (Number.isFinite(wcm) && wcm > 0) widthCm = wcm;
+      if (Number.isFinite(hcm) && hcm > 0) heightCm = hcm;
     }
 
     let thickCm: number | undefined;
     if (thickMode === "preset") {
       const t = Number(thickPreset);
-      thickCm = Number.isFinite(t) && t > 0 ? t : undefined;
+      if (Number.isFinite(t) && t > 0) thickCm = t;
     } else {
       const t = Number(thickCustom);
-      thickCm = Number.isFinite(t) && t > 0 ? t : undefined;
+      if (Number.isFinite(t) && t > 0) thickCm = t;
     }
 
+    const sizePatch: any = { orientation };
+    const wmm = cmToMm(widthCm);
+    const hmm = cmToMm(heightCm);
+    const tmm = cmToMm(thickCm);
+    if (typeof wmm === "number") sizePatch.width = wmm;
+    if (typeof hmm === "number") sizePatch.height = hmm;
+    if (typeof tmm === "number") sizePatch.thickness = tmm;
+
     saveOrderDraft({
-      size: {
-        width: cmToMm(widthCm),
-        height: cmToMm(heightCm),
-        thickness: cmToMm(thickCm),
-        orientation
-      },
-      orientation // дублируем в корень для обратной совместимости
+      size: sizePatch,
+      orientation // дубль для совместимости со старым чтением
     });
   }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation]);
 

@@ -1,18 +1,10 @@
 // src/lib/order.ts
 // Единый стор заказа (draft) в localStorage + оригинал фото в IndexedDB.
-// Поддержка:
-// - size.width/height/thickness в миллиметрах;
-// - size.orientation: "vertical" | "horizontal";
-// - engraving.photoPreview (dataURL), photoOriginalKey (IndexedDB), fileName/mime;
-// - graphics: список выбранной графики;
-// - editor/editorBack: состояния редакторов (элементы, превью, пожелания и т. п.);
-// - события обновления: window.dispatchEvent(new Event("memorial:orderDraftUpdated")).
+// Поля: size.width/height/thickness/notes/orientation, graphics, engraving, etc.
 
 import { idbPutBlob, idbGetBlob, idbDel } from "./idb";
 
 export type Orientation = "vertical" | "horizontal";
-
-/* ============ Базовые типы заказа ============ */
 
 export type OrderItem = {
   id?: string;
@@ -48,7 +40,7 @@ export type EngravingData = {
   photoPreview?: string | null;
   photoFileName?: string | null;
   photoMime?: string | null;
-  photoOriginalKey?: string | null; // ключ в IndexedDB
+  photoOriginalKey?: string | null;
 };
 
 export type Graphic = {
@@ -62,35 +54,8 @@ export type Graphic = {
   subCatSlug?: string;
 };
 
-/* ============ Типы редакторов (лицевая/тыльная) ============ */
-
-// Элемент редактора (минимальный набор + произвольные поля)
-export type EditorElement = {
-  id: string;           // стабильный id (например: "metric-<personId>", "epitaph-<index>", "graphic-<id>")
-  type?: string;        // тип ("metric" | "epitaph" | "graphic" | "portrait" | "cross" ...)
-  x: number; y: number; w: number; h: number; // проценты в рамках контентной области
-  z: number;            // порядок
-  // дополнительные опции — по месту (uppercase/italic/flipH/bw/align/staircase и т.д.)
-  [key: string]: any;
-};
-
-// Состояние одного редактора (лицевая или тыльная сторона)
-export type EditorState = {
-  elements?: EditorElement[];
-  previewUrl?: string | null;
-  previewHiUrl?: string | null;
-  previewUpdatedAt?: number;
-  wishes?: string; // Пожелания по эскизу (для этой стороны)
-  // Доп. поля для тыльной стороны (или по месту):
-  selectedGraphicsIds?: string[];
-  selectedEpitaphIndexes?: number[];
-  updatedAt?: number;
-};
-
-/* ============ Итоговый драфт ============ */
-
 export type OrderDraft = {
-  orderNumber?: string | null; // опционально, основной источник — lib/intro.ts
+  orderNumber?: string | null;
   intro?: {
     customerName?: string;
     customerPhone?: string;
@@ -100,9 +65,6 @@ export type OrderDraft = {
   size?: OrderSize | null;
   engraving?: EngravingData | null;
   graphics?: Graphic[];
-  // Новое: состояния редакторов
-  editor?: EditorState | null;      // лицевая сторона
-  editorBack?: EditorState | null;  // тыльная сторона
   notes?: string;
   updatedAt?: number;
 };
@@ -124,6 +86,22 @@ function now() {
   return Date.now();
 }
 
+/* ==================== Deep merge ==================== */
+
+function deepMergeDefined<T>(target: T, source: Partial<T>): T {
+  if (source == null) return target;
+  const out: any = Array.isArray(target) ? [...(target as any)] : { ...(target as any) };
+  for (const [k, v] of Object.entries(source)) {
+    if (v === undefined || v === null) continue; // не пишем undefined/null, чтобы случайно не затереть поле
+    if (typeof v === "object" && !Array.isArray(v)) {
+      out[k] = deepMergeDefined((out[k] ?? {}), v as any);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 /* ==================== Load/Save ==================== */
 
 export function loadOrderDraft(): OrderDraft {
@@ -131,35 +109,11 @@ export function loadOrderDraft(): OrderDraft {
     const raw = localStorage.getItem(LS_ORDER_DRAFT_KEY);
     if (!raw) return { graphics: [], updatedAt: now() };
     const obj = JSON.parse(raw) as OrderDraft;
-
-    // Нормализация известных полей
+    // Нормализация
     if (!Array.isArray(obj.graphics)) obj.graphics = [];
     if (obj.size && typeof obj.size !== "object") obj.size = null;
     if (obj.item && typeof obj.item !== "object") obj.item = null;
     if (obj.engraving && typeof obj.engraving !== "object") obj.engraving = null;
-    if (obj.editor && typeof obj.editor !== "object") obj.editor = null;
-    if (obj.editorBack && typeof obj.editorBack !== "object") obj.editorBack = null;
-
-    // Нормализация editor/editorBack по типам (без агрессивного исправления, только базовые массивы)
-    if (obj.editor) {
-      if (!Array.isArray(obj.editor.elements)) obj.editor.elements = [];
-      if (!Array.isArray(obj.editor.selectedGraphicsIds) && obj.editor.selectedGraphicsIds != null) {
-        obj.editor.selectedGraphicsIds = [];
-      }
-      if (!Array.isArray(obj.editor.selectedEpitaphIndexes) && obj.editor.selectedEpitaphIndexes != null) {
-        obj.editor.selectedEpitaphIndexes = [];
-      }
-    }
-    if (obj.editorBack) {
-      if (!Array.isArray(obj.editorBack.elements)) obj.editorBack.elements = [];
-      if (!Array.isArray(obj.editorBack.selectedGraphicsIds) && obj.editorBack.selectedGraphicsIds != null) {
-        obj.editorBack.selectedGraphicsIds = [];
-      }
-      if (!Array.isArray(obj.editorBack.selectedEpitaphIndexes) && obj.editorBack.selectedEpitaphIndexes != null) {
-        obj.editorBack.selectedEpitaphIndexes = [];
-      }
-    }
-
     return { ...obj, updatedAt: obj.updatedAt || now() };
   } catch {
     return { graphics: [], updatedAt: now() };
@@ -168,33 +122,17 @@ export function loadOrderDraft(): OrderDraft {
 
 export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
   const prev = loadOrderDraft();
-  const next: OrderDraft = {
-    ...prev,
-    ...patch,
-    // глубокое объединение некоторых вложенных объектов
-    intro: { ...(prev.intro || {}), ...(patch.intro || {}) },
-    item: { ...(prev.item || {}), ...(patch.item || {}) },
-    size: { ...(prev.size || {}), ...(patch.size || {}) },
-    engraving: { ...(prev.engraving || {}), ...(patch.engraving || {}) },
-    // глубокое объединение состояний редакторов
-    editor: { ...(prev.editor || {}), ...(patch.editor || {}) },
-    editorBack: { ...(prev.editorBack || {}), ...(patch.editorBack || {}) },
-    // список графики
-    graphics: Array.isArray(patch.graphics) ? patch.graphics : prev.graphics || [],
-    updatedAt: now()
-  };
-
+  // обновляем updatedAt и всегда делаем глубокий merge!
+  const next: OrderDraft = deepMergeDefined(prev, { ...patch, updatedAt: now() });
   try {
     localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
   } catch {}
-
   emitDraftUpdated();
   return next;
 }
 
 /* ==================== Размеры: удобные сеттеры ==================== */
 
-// Установить размеры и ориентацию из сантиметров (см -> мм)
 export function setSizeFromCm(params: {
   heightCm?: number;
   widthCm?: number;
@@ -204,15 +142,16 @@ export function setSizeFromCm(params: {
 }): OrderDraft {
   const { heightCm, widthCm, thicknessCm, orientation, notes } = params;
   const mm = (v?: number) => (typeof v === "number" && isFinite(v) ? Math.round(v * 10) : undefined);
-  return saveOrderDraft({
-    size: {
-      height: mm(heightCm),
-      width: mm(widthCm),
-      thickness: mm(thicknessCm),
-      orientation,
-      notes: notes?.trim() || undefined
-    }
-  });
+
+  // Передаём только определённые значения!
+  const sizePatch: any = {};
+  if (typeof heightCm === "number" && isFinite(heightCm)) sizePatch.height = mm(heightCm);
+  if (typeof widthCm === "number" && isFinite(widthCm)) sizePatch.width = mm(widthCm);
+  if (typeof thicknessCm === "number" && isFinite(thicknessCm)) sizePatch.thickness = mm(thicknessCm);
+  if (orientation) sizePatch.orientation = orientation;
+  if (typeof notes === "string" && notes.trim()) sizePatch.notes = notes.trim();
+
+  return saveOrderDraft({ size: sizePatch });
 }
 
 /* ==================== Работа с фото (оригинал в IndexedDB) ==================== */
@@ -243,7 +182,6 @@ export async function getPhotoOriginalFromDraft(draft?: OrderDraft): Promise<Blo
   }
 }
 
-// Удаляет оригинал фото (если есть) из IndexedDB и чистит ссылки в драфте
 export async function clearPhotoOriginal(): Promise<OrderDraft> {
   const cur = loadOrderDraft();
   const key = cur.engraving?.photoOriginalKey;
@@ -284,7 +222,6 @@ export async function clearOrderDraft(): Promise<void> {
 async function makePreviewDataUrl(file: File, maxSide = 300): Promise<string> {
   const img = await fileToImage(file);
   const { canvas } = drawContain(img, maxSide, maxSide);
-  // JPEG 0.8 — компромисс по размеру/качеству
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
@@ -304,17 +241,14 @@ function fileToImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-// Рисуем изображение «contain» в заданный прямоугольник (с отступами по центру)
 function drawContain(img: HTMLImageElement, w: number, h: number) {
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, w, h);
-  // фон — лёгкий светло-серый, чтобы миниатюра корректно выглядела на светлой теме
   ctx.fillStyle = "#f4f4f4";
   ctx.fillRect(0, 0, w, h);
-
   const ratio = Math.min(w / img.width, h / img.height);
   const nw = Math.round(img.width * ratio);
   const nh = Math.round(img.height * ratio);
@@ -341,30 +275,4 @@ export function removeGraphicById(id: string): OrderDraft {
 
 export function clearGraphics(): OrderDraft {
   return saveOrderDraft({ graphics: [] });
-}
-
-/* ==================== Удобные сеттеры редакторов (по желанию) ==================== */
-
-// Частично обновить состояние лицевой стороны
-export function patchEditor(patch: Partial<EditorState>): OrderDraft {
-  const cur = loadOrderDraft();
-  return saveOrderDraft({
-    editor: {
-      ...(cur.editor || {}),
-      ...patch,
-      updatedAt: now()
-    }
-  });
-}
-
-// Частично обновить состояние тыльной стороны
-export function patchEditorBack(patch: Partial<EditorState>): OrderDraft {
-  const cur = loadOrderDraft();
-  return saveOrderDraft({
-    editorBack: {
-      ...(cur.editorBack || {}),
-      ...patch,
-      updatedAt: now()
-    }
-  });
 }
