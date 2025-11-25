@@ -2,6 +2,7 @@
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 // Требования:
 // - Горизонтальный шаблон с одним человеком: портрет 40% высоты изображения, метрика 30% высоты изображения (РАСТРИРУЕМ).
+//   Метрика растрируется и уменьшается вместе с портретом. Расположение — по центру.
 // - Остальные шаблоны НЕ меняем.
 // - Кресты: если один крест — слева вверху на всех шаблонах, кроме горизонтального "два человека";
 //   на горизонтальном "два человека": 1 крест по центру, 2 — по краям.
@@ -415,7 +416,7 @@ export default function SketchTemplate({
           color: "#fff",
           textShadow: "0 1px 2px rgba(0,0,0,0.6)",
           fontStyle: tpl.blocks.epitaphs.text.italic ? "italic" : "normal",
-          textTransform: tpl.blocks.epitaphs.text.uppercase ? "uppercase" : "none",
+          textTransform: tpl.blocks.epитaphs.text.uppercase ? "uppercase" : "none",
           fontSize: (tpl.blocks.epitaphs.text.fontSizeClamp as any) ?? "clamp(10px, 3.2vw, 22px)",
           lineHeight: (tpl.blocks.epitaphs.text.lineHeight as any) ?? 1.2,
           letterSpacing: (tpl.blocks.epitaphs.text.letterSpacing as any) ?? "0",
@@ -458,7 +459,15 @@ export default function SketchTemplate({
   // Горизонтальный шаблон: ОДИН человек — портрет 40% H, метрика 30% H (растрируем), всё по центру.
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
-    if (!imgRect.h || !imgRect.w) return null;
+
+    // Hooks должны быть до любых ранних return
+    const metricOffscreenRef = useRef<HTMLDivElement | null>(null);
+    const [metricImg, setMetricImg] = useState<string | null>(null);
+
+    if (!imgRect.h || !imgRect.w) {
+      // Нет размеров картинки — еще нечего рисовать (hooks уже вызваны)
+      return null;
+    }
 
     const sideGutter = 16; // слева/справа как в остальных горизонтальных
     const topPercent = 0.10; // отступ сверху по аналогии с CFG
@@ -500,9 +509,6 @@ export default function SketchTemplate({
     const metricW = portraitW;
 
     // Offscreen рендер метрики → растровая картинка
-    const metricOffscreenRef = useRef<HTMLDivElement | null>(null);
-    const [metricImg, setMetricImg] = useState<string | null>(null);
-
     useEffect(() => {
       let cancelled = false;
       async function rasterize() {
@@ -529,6 +535,7 @@ export default function SketchTemplate({
       return () => {
         cancelled = true;
       };
+      // Важные зависимости: размеры метрики и её содержимое
     }, [metricW, metricH, p?.lines?.join("|")]);
 
     // Offscreen контейнер для html2canvas
