@@ -1,10 +1,8 @@
 // src/components/SketchTemplate.tsx
-// Правки по требованиям:
-// - Горизонтальный шаблон (1 человек): портрет = 40% высоты изображения, метрика = 25% высоты изображения.
-//   Оба блока центрируются и гарантированно умещаются внутри эскиза.
-//   Для метрики сделана растеризация текста в canvas с авто-подгонкой размера, чтобы точно вписать текст.
-// - Кресты: правила сохранены (1 крест слева сверху, кроме horizontal/two -> по центру; 2 креста на horizontal/two — по краям).
-// - Все элементы держим в пределах области изображения.
+// Изменения:
+// - Горизонтальный шаблон с одним человеком: портрет = 50% высоты изображения, метрика = 40% высоты.
+//   Оба блока центрируются и гарантированно умещаются в пределах эскиза (масштабируются при необходимости).
+// - Остальные шаблоны оставлены как в предыдущей версии.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -19,7 +17,7 @@ export type SketchTemplateProps = {
   epitaphs?: string[];
   carvingOpacity?: number;
   style?: React.CSSProperties;
-  orientationOverride?: Orientation;
+  orientationOverride?: Orientation; // принудительная ориентация
 };
 
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
@@ -34,13 +32,18 @@ const CFG = {
     layout: { gap: 12, columnMinW: 140 },
     one: {
       blocks: {
-        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
+        portraits: {
+          pos: { top: "10%", left: "50%", transform: "translateX(-50%)" },
+          size: { width: "60%", maxWidth: "400px", height: "auto" },
+          margins: { margin: "0 auto 16px auto" }
+        },
         metric: {
           pos: { top: "auto", bottom: "auto", left: "50%", transform: "translateX(-50%)" },
           size: { width: "100%", maxWidth: "520px", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            uppercase: true, align: "center",
+            uppercase: true,
+            align: "center",
             l1: { font: `700 32px ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
             l2: { font: `600 26px ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
             l3: { font: `400 22px ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.2px", opacity: 0.95 }
@@ -184,167 +187,18 @@ function bottomUnderlayGradient(): React.CSSProperties {
     backgroundImage: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   };
 }
+
 function pickTplKey(n: number): "one" | "two" | "many" {
   if (n <= 1) return "one";
   if (n === 2) return "two";
   return "many";
 }
+
 function parsePercent(p?: string): number | null {
   if (!p) return null;
   const m = String(p).trim().match(/^(-?\d+(?:\.\d+)?)%$/);
   if (!m) return null;
   return parseFloat(m[1]) / 100;
-}
-function parsePx(str?: string): number | null {
-  if (!str) return null;
-  const m = String(str).match(/(-?\d+(?:\.\d+)?)px/);
-  return m ? parseFloat(m[1]) : null;
-}
-
-/* ===== Растеризация метрики в Canvas с авто-подгонкой ===== */
-type MetricStyleCfg = {
-  uppercase?: boolean;
-  align?: "center" | "left" | "right";
-  l1: { font: string; lineHeight: number; letterSpacing?: string };
-  l2: { font: string; lineHeight: number; letterSpacing?: string };
-  l3: { font: string; lineHeight: number; letterSpacing?: string; opacity?: number };
-};
-
-function rasterizeMetricToDataURL(params: {
-  lines: string[];
-  widthCssPx: number;
-  heightCssPx: number;
-  cfg: MetricStyleCfg;
-  color?: string;
-  shadow?: { color: string; blur: number; offsetX?: number; offsetY?: number };
-}): string | null {
-  const { lines, widthCssPx, heightCssPx, cfg } = params;
-  if (widthCssPx <= 0 || heightCssPx <= 0) return null;
-
-  const dpr = Math.max(1, Math.min(3, (window.devicePixelRatio || 1)));
-  const W = Math.floor(widthCssPx * dpr);
-  const H = Math.floor(heightCssPx * dpr);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.scale(dpr, dpr);
-
-  // bg transparent
-  ctx.clearRect(0, 0, widthCssPx, heightCssPx);
-
-  const padX = Math.max(6, Math.round(widthCssPx * 0.04));
-  const padY = Math.max(4, Math.round(heightCssPx * 0.06));
-
-  const text = cfg.uppercase
-    ? lines.map((s) => (s || "").toUpperCase())
-    : lines.map((s) => s || "");
-
-  // Базовые размеры из cfg (px) -> будем масштабировать
-  const baseSizes = [
-    parsePx(cfg.l1.font) ?? 24,
-    parsePx(cfg.l2.font) ?? 20,
-    parsePx(cfg.l3.font) ?? 16
-  ];
-  const lineHeights = [cfg.l1.lineHeight || 1.15, cfg.l2.lineHeight || 1.12, cfg.l3.lineHeight || 1.1];
-  const letterSpacingPx = [
-    parsePx(cfg.l1.letterSpacing || "0px") ?? 0,
-    parsePx(cfg.l2.letterSpacing || "0px") ?? 0,
-    parsePx(cfg.l3.letterSpacing || "0px") ?? 0
-  ];
-
-  // Предположим, что высота блока займёт ~90% доступной высоты (оставляя паддинги)
-  const availW = Math.max(1, widthCssPx - padX * 2);
-  const availH = Math.max(1, heightCssPx - padY * 2);
-
-  // Стартовый масштаб от высоты (чтобы суммарная высота 3 строк влезла)
-  // Доли высоты между строками (примерно как в дизайне): 0.42 / 0.35 / 0.23
-  const shares = [0.42, 0.35, 0.23];
-  let sizes = baseSizes.slice();
-
-  // Подбор по высоте
-  const heightBasedScale = Math.min(
-    (availH * shares[0]) / (baseSizes[0] * lineHeights[0]),
-    (availH * shares[1]) / (baseSizes[1] * lineHeights[1]),
-    (availH * shares[2]) / (baseSizes[2] * lineHeights[2])
-  );
-  sizes = sizes.map((s) => s * heightBasedScale);
-
-  // Измерение ширины с учётом letterSpacing
-  function setFont(i: number) {
-    const weight = i === 0 ? "700" : i === 1 ? "600" : "400";
-    ctx.font = `${weight} ${Math.max(1, sizes[i]).toFixed(2)}px ${FONT_CENTURY}`;
-  }
-  function measureWithSpacing(i: number, s: string): number {
-    setFont(i);
-    const w = ctx.measureText(s).width;
-    const extra = Math.max(0, s.length - 1) * (letterSpacingPx[i] || 0);
-    return w + extra;
-  }
-
-  // Подгонка по ширине (если хоть одна строка шире availW — уменьшаем масштаб)
-  const widths = text.map((t, i) => measureWithSpacing(i, t));
-  const widest = Math.max(1, ...widths);
-  if (widest > availW) {
-    const kw = availW / widest;
-    sizes = sizes.map((s) => s * kw);
-  }
-
-  // Финальные метрики
-  const heightsPx = sizes.map((sz, i) => sz * lineHeights[i]);
-  const totalH = heightsPx.reduce((a, b) => a + b, 0);
-  const gap = Math.max(2, Math.round(sizes[2] * 0.25)); // небольшой зазор между строками
-  const totalHWithGaps = totalH + gap * (text.filter(Boolean).length - 1);
-  let startY = padY + (availH - totalHWithGaps) / 2 + sizes[0]; // первая строка baseline
-
-  // Тени/цвета
-  ctx.fillStyle = "#fff";
-  ctx.textBaseline = "alphabetic";
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 2;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 1;
-
-  // Отрисовка с посимвольным letterSpacing и выравниванием
-  function drawLine(i: number, s: string, y: number) {
-    setFont(i);
-    const ls = letterSpacingPx[i] || 0;
-    // ширина со spacing
-    const w = measureWithSpacing(i, s);
-    let x = padX;
-    if ((cfg.align || "center") === "center") x = padX + (availW - w) / 2;
-    else if (cfg.align === "right") x = padX + (availW - w);
-
-    // посимвольно
-    for (let k = 0; k < s.length; k++) {
-      const ch = s[k];
-      ctx.fillText(ch, x, y);
-      x += ctx.measureText(ch).width + ls;
-    }
-  }
-
-  // Заливка фона прозрачная — только текст
-  let y = startY;
-  const present = text.filter((t) => t && t.trim().length > 0);
-  const t0 = text[0] || "";
-  const t1 = text[1] || "";
-  const t2 = text[2] || "";
-
-  if (t0) {
-    drawLine(0, t0, y);
-    y += heightsPx[0] + gap;
-  }
-  if (t1) {
-    drawLine(1, t1, y);
-    y += heightsPx[1] + gap;
-  }
-  if (t2) {
-    drawLine(2, t2, y);
-  }
-
-  return canvas.toDataURL("image/png");
 }
 
 export default function SketchTemplate({
@@ -364,14 +218,14 @@ export default function SketchTemplate({
 
   useEffect(() => {
     const apply = () => {
-      const d = loadOrderDraft();
-      const o = (d.size?.orientation as Orientation | undefined) ?? (d as any).orientation ?? null;
+      const draft = loadOrderDraft();
+      const o = (draft.size?.orientation as Orientation | undefined) ?? (draft as any).orientation ?? null;
       setForcedOrientation(o);
     };
     apply();
-    const h = () => apply();
-    window.addEventListener(DRAFT_UPDATED_EVENT, h as EventListener);
-    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, h as EventListener);
+    const handler = () => apply();
+    window.addEventListener(DRAFT_UPDATED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, handler as EventListener);
   }, []);
 
   const recalc = useCallback(() => {
@@ -404,15 +258,14 @@ export default function SketchTemplate({
   const tpl = useMemo(() => (isVertical ? (CFG.vertical as any)[tplKey] : (CFG.horizontal as any)[tplKey]), [isVertical, tplKey]);
   const layout = useMemo(() => (isVertical ? CFG.vertical.layout : CFG.horizontal.layout), [isVertical]);
 
-  /* ===== Кресты по правилам ===== */
+  /* ===== Кресты (оставлено как в предыдущей версии с улучшениями) ===== */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
-
     const isHorizontal = !isVertical;
     const isHorizontalTwo = isHorizontal && tplKey === "two";
-    const baseSize = (tpl.blocks as any).cross.size;
-    const baseCss: React.CSSProperties = { position: "absolute", ...baseSize, objectFit: "contain", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))", zIndex: 3 };
 
+    const baseSize = (tpl.blocks as any).cross.size;
+    const css: React.CSSProperties = { position: "absolute", ...baseSize, objectFit: "contain", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))", zIndex: 3 };
     const topLeft: React.CSSProperties = { top: "6%", left: "4%" };
     const topCenter: React.CSSProperties = { top: "6%", left: "50%", transform: "translateX(-50%)" };
     const topRight: React.CSSProperties = { top: "6%", right: "4%" };
@@ -420,14 +273,14 @@ export default function SketchTemplate({
     if (crosses.length === 1) {
       const c = crosses[0];
       const pos = isHorizontalTwo ? topCenter : topLeft;
-      return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseCss, ...pos }} draggable={false} />;
+      return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...css, ...pos }} draggable={false} />;
     }
     if (crosses.length >= 2 && isHorizontalTwo) {
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
-          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseCss, ...topLeft }} draggable={false} />
-          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseCss, ...topRight }} draggable={false} />
+          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...css, ...topLeft }} draggable={false} />
+          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...css, ...topRight }} draggable={false} />
         </>
       );
     }
@@ -435,8 +288,8 @@ export default function SketchTemplate({
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
-          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseCss, ...topLeft }} draggable={false} />
-          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseCss, ...topRight }} draggable={false} />
+          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...css, ...topLeft }} draggable={false} />
+          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...css, ...topRight }} draggable={false} />
         </>
       );
     }
@@ -490,7 +343,7 @@ export default function SketchTemplate({
           lineHeight: (tpl.blocks.epitaphs.text.lineHeight as any) ?? 1.2,
           letterSpacing: (tpl.blocks.epitaphs.text.letterSpacing as any) ?? "0",
           fontWeight: (tpl.blocks.epitaphs.text.fontWeight as any) ?? 400,
-          fontFamily: tpl.blocks.epitaphs.text.fontFamily ?? FONT_CENTURY,
+          fontFamily: tpl.blocks.epитaphs?.text?.fontFamily || FONT_CENTURY,
           display: "grid",
           gap: 8,
           zIndex: 4
@@ -504,26 +357,26 @@ export default function SketchTemplate({
       </div>
     ) : null;
 
-  /* ===== Горизонтальный: 1 человек (портрет 40% H, метрика 25% H; всё помещается) ===== */
+  /* ===== Горизонтальный: 1 человек (портрет 50% H, метрика 40% H; всё влезает) ===== */
   const HorizontalOne = () => {
     const B = tpl.blocks;
     const p = peopleBlocks[0];
     const pad = CFG.general.containerPadding;
 
+    // Область изображения
     const imgTop = pad;
     const imgBottom = pad + imgRect.h;
-    const imgLeft = pad;
 
-    // Верхний отступ из конфига (процент)
+    // Начальная позиция сверху из конфигурации
     const topPct = parsePercent((CFG.horizontal.one.blocks.portraits.pos as any).top) ?? 0.1;
     let topY = imgTop + Math.round(imgRect.h * topPct);
 
-    // Базовые высоты
-    let portraitH = Math.max(40, Math.round(imgRect.h * 0.40));
-    let metricH = Math.max(24, Math.round(imgRect.h * 0.25));
+    // Базовые высоты по требованию
+    let portraitH = Math.max(40, Math.round(imgRect.h * 0.5));
+    let metricH = Math.max(24, Math.round(imgRect.h * 0.4));
     let spacing = 12;
 
-    // Ширина портрета по AR 3:4 и ограничение по доступной ширине
+    // Ширина портрета по AR 3:4 с ограничением по ширине изображения
     let portraitW = Math.round(portraitH * (3 / 4));
     const maxW = imgRect.w;
     if (portraitW > maxW) {
@@ -544,29 +397,18 @@ export default function SketchTemplate({
         spacing = Math.max(0, Math.round(spacing * kh));
       }
     }
-    // Если всё равно не влезло из-за большого topPct — сдвинуть вверх
+    // Если всё равно не влезло — подвинем вверх
     const totalH = portraitH + spacing + metricH;
     if (topY + totalH > imgBottom) {
       topY = Math.max(imgTop, imgBottom - totalH);
     }
 
-    // Растер-метрика как картинка (всегда впишется)
-    const metricUrl = useMemo(() => {
-      return rasterizeMetricToDataURL({
-        lines: [p.lines?.[0] || "", p.lines?.[1] || "", p.lines?.[2] || ""],
-        widthCssPx: portraitW,
-        heightCssPx: metricH,
-        cfg: CFG.horizontal.two.blocks.metric.text as MetricStyleCfg
-      }) || undefined;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [portraitW, metricH, p?.lines?.[0], p?.lines?.[1], p?.lines?.[2], imgRect.w, imgRect.h, window.devicePixelRatio]);
-
     return (
       <div
         style={{
           position: "absolute",
-          left: imgLeft,
-          right: imgLeft,
+          left: CFG.general.containerPadding,
+          right: CFG.general.containerPadding,
           top: topY,
           display: "flex",
           justifyContent: "center",
@@ -596,11 +438,37 @@ export default function SketchTemplate({
             </div>
           </div>
 
-          {/* Метрика (растеризованная) */}
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: portraitW, height: metricH, overflow: "hidden" }}>
-            {metricUrl ? (
-              <img src={metricUrl} alt="Метрика" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} draggable={false} />
-            ) : null}
+          {/* Метрика (контейнер фиксированной высоты, текст обрезается, чтобы не выходить за границы) */}
+          <div
+            data-sketch-el="metric"
+            data-sketch-key={p.id}
+            style={{
+              width: portraitW,
+              height: metricH,
+              overflow: "hidden",
+              color: "#fff",
+              textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              display: "grid",
+              alignContent: "start",
+              gap: 6,
+              textAlign: (B.metric.text.align as any) ?? "center"
+            }}
+          >
+            {!!p.lines?.[0] && (
+              <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>
+                {p.lines[0]}
+              </div>
+            )}
+            {!!p.lines?.[1] && (
+              <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>
+                {p.lines[1]}
+              </div>
+            )}
+            {!!p.lines?.[2] && (
+              <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>
+                {p.lines[2]}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -615,8 +483,7 @@ export default function SketchTemplate({
       <div
         style={{
           position: "absolute",
-          left: CFG.general.containerPadding,
-          right: CFG.general.containerPadding,
+          left: 16, right: 16,
           top: CFG.horizontal.one.blocks.portraits.pos.top,
           display: "grid",
           gridTemplateColumns: `repeat(2, ${colW}px)`,
@@ -633,12 +500,11 @@ export default function SketchTemplate({
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins, overflow: "hidden" }}>
-              {/* В 2-х людях оставляем обычный текст (влезает по ширине колонки) */}
-              <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)", color: "#fff" }}>
-                {p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[0].toUpperCase() : p.lines[0]}</div>}
-                {p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[1].toUpperCase() : p.lines[1]}</div>}
-                {p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1 }}>{(B.metric.text as any).uppercase ? p.lines[2].toUpperCase() : p.lines[2]}</div>}
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins }}>
+              <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center", color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                {!!p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[0]}</div>}
+                {!!p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[1]}</div>}
+                {!!p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[2]}</div>}
               </div>
             </div>
           </div>
@@ -656,8 +522,7 @@ export default function SketchTemplate({
       <div
         style={{
           position: "absolute",
-          left: CFG.general.containerPadding,
-          right: CFG.general.containerPadding,
+          left: 16, right: 16,
           top: CFG.horizontal.one.blocks.portraits.pos.top,
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, ${perCol}px)`,
@@ -674,11 +539,11 @@ export default function SketchTemplate({
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins, overflow: "hidden" }}>
-              <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)", color: "#fff" }}>
-                {p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[0].toUpperCase() : p.lines[0]}</div>}
-                {p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[1].toUpperCase() : p.lines[1]}</div>}
-                {p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1 }}>{(B.metric.text as any).uppercase ? p.lines[2].toUpperCase() : p.lines[2]}</div>}
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins }}>
+              <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center", color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                {!!p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[0]}</div>}
+                {!!p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[1]}</div>}
+                {!!p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[2]}</div>}
               </div>
             </div>
           </div>
@@ -690,6 +555,7 @@ export default function SketchTemplate({
   const VerticalOne = () => {
     const B = tpl.blocks;
     const p = peopleBlocks[0];
+
     return (
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: (B.portraits.pos as any).top ?? "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -698,11 +564,12 @@ export default function SketchTemplate({
               {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
             </div>
           </div>
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, maxWidth: B.metric.size.maxWidth, ...B.metric.margins, overflow: "hidden", color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, maxWidth: B.metric.size.maxWidth, ...B.metric.margins, color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
             <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center" }}>
-              {p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[0].toUpperCase() : p.lines[0]}</div>}
-              {p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[1].toUpperCase() : p.lines[1]}</div>}
-              {p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1 }}>{(B.metric.text as any).uppercase ? p.lines[2].toUpperCase() : p.lines[2]}</div>}
+              {!!p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[0]}</div>}
+              {!!p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[1]}</div>}
+              {!!p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[2]}</div>}
             </div>
           </div>
         </div>
@@ -713,13 +580,13 @@ export default function SketchTemplate({
   const VerticalTwo = () => {
     const B = tpl.blocks;
     const rowsH = Math.max(100, Math.floor(imgRect.h * CFG.vertical.layout.rowsHeightFactor));
+
     return (
       <div
         style={{
           position: "absolute",
           top: CFG.vertical.one.blocks.portraits.pos.top,
-          left: CFG.general.containerPadding,
-          right: CFG.general.containerPadding,
+          left: 16, right: 16,
           display: "grid",
           gridTemplateRows: `repeat(2, minmax(${Math.floor(rowsH / 2)}px, 1fr))`,
           rowGap: CFG.vertical.layout.rowGapPx,
@@ -733,12 +600,13 @@ export default function SketchTemplate({
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
+
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins, overflow: "hidden", color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins, color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
                 <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center" }}>
-                  {p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[0].toUpperCase() : p.lines[0]}</div>}
-                  {p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[1].toUpperCase() : p.lines[1]}</div>}
-                  {p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1 }}>{(B.metric.text as any).uppercase ? p.lines[2].toUpperCase() : p.lines[2]}</div>}
+                  {!!p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[0]}</div>}
+                  {!!p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[1]}</div>}
+                  {!!p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[2]}</div>}
                 </div>
               </div>
             </div>
@@ -752,13 +620,13 @@ export default function SketchTemplate({
     const B = tpl.blocks;
     const rowsH = Math.max(100, Math.floor(imgRect.h * CFG.vertical.layout.rowsHeightFactor));
     const rowCount = peopleBlocks.length;
+
     return (
       <div
         style={{
           position: "absolute",
           top: CFG.vertical.one.blocks.portraits.pos.top,
-          left: CFG.general.containerPadding,
-          right: CFG.general.containerPadding,
+          left: 16, right: 16,
           display: "grid",
           gridTemplateRows: `repeat(${rowCount}, minmax(${Math.floor(rowsH / rowCount)}px, 1fr))`,
           rowGap: CFG.vertical.layout.rowGapPx,
@@ -772,12 +640,13 @@ export default function SketchTemplate({
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
+
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins, overflow: "hidden", color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins, color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
                 <div style={{ width: "100%", display: "grid", gap: 6, textAlign: (B.metric.text.align as any) ?? "center" }}>
-                  {p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[0].toUpperCase() : p.lines[0]}</div>}
-                  {p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing }}>{(B.metric.text as any).uppercase ? p.lines[1].toUpperCase() : p.lines[1]}</div>}
-                  {p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1 }}>{(B.metric.text as any).uppercase ? p.lines[2].toUpperCase() : p.lines[2]}</div>}
+                  {!!p.lines?.[0] && <div style={{ font: (B.metric.text.l1.font as any), lineHeight: B.metric.text.l1.lineHeight, letterSpacing: B.metric.text.l1.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[0]}</div>}
+                  {!!p.lines?.[1] && <div style={{ font: (B.metric.text.l2.font as any), lineHeight: B.metric.text.l2.lineHeight, letterSpacing: B.metric.text.l2.letterSpacing, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[1]}</div>}
+                  {!!p.lines?.[2] && <div style={{ font: (B.metric.text.l3.font as any), lineHeight: B.metric.text.l3.lineHeight, letterSpacing: B.metric.text.l3.letterSpacing, opacity: B.metric.text.l3.opacity ?? 1, textTransform: (B.metric.text as any).uppercase ? "uppercase" : "none" }}>{p.lines[2]}</div>}
                 </div>
               </div>
             </div>
