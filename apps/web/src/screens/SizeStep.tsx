@@ -3,6 +3,7 @@
 // 1) По изображению (naturalWidth/Height) с таймаутом.
 // 2) Если не удалось — по выбранным размерам (Ш×В).
 // 3) Сохраняется в драфт и отображается на экране.
+// Важно: не сохраняем orientation в драфт, пока она реально не определена (orientationReady).
 
 import React, { useMemo, useState, useEffect } from "react";
 import type { CatalogItem } from "../api";
@@ -108,6 +109,7 @@ export default function SizeStep(props: SizeStepProps) {
   const draftHcm = mmToCm(draft.size?.height);
   const draftTcm = mmToCm(draft.size?.thickness);
   const draftOrientation = (draft.size?.orientation as Orientation | undefined) || (draft.orientation as Orientation | undefined) || "vertical";
+  const hadDraftOrientation = Boolean(draft.size?.orientation || (draft as any).orientation);
 
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
@@ -133,7 +135,8 @@ export default function SizeStep(props: SizeStepProps) {
   const [thickCustom, setThickCustom] = useState<string>(() => (typeof draftTcm === "number" ? String(draftTcm) : "8"));
 
   const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
-  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">(draftOrientation ? "default" : "default");
+  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">(hadDraftOrientation ? "default" : "default");
+  const [orientationReady, setOrientationReady] = useState<boolean>(hadDraftOrientation);
 
   const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
     if (sizeMode === "preset") {
@@ -149,13 +152,13 @@ export default function SizeStep(props: SizeStepProps) {
   }, [sizeMode, sizePreset, w, h]);
 
   function persistDraft(currentOrientation: Orientation) {
+    // вычислим см из UI
     let widthCm: number | undefined;
     let heightCm: number | undefined;
 
     if (sizeMode === "preset") {
       const [wcm, hcm] = parsePresetWHcm(sizePreset);
-      widthCm = wcm;
-      heightCm = hcm;
+      widthCm = wcm; heightCm = hcm;
     } else {
       const wcm = Number(w);
       const hcm = Number(h);
@@ -174,9 +177,7 @@ export default function SizeStep(props: SizeStepProps) {
 
     const toMm = (cm?: number) => (typeof cm === "number" ? Math.round(cm * 10) : undefined);
     const sizePatch: any = { orientation: currentOrientation };
-    const wmm = toMm(widthCm);
-    const hmm = toMm(heightCm);
-    const tmm = toMm(thickCm);
+    const wmm = toMm(widthCm), hmm = toMm(heightCm), tmm = toMm(thickCm);
     if (typeof wmm === "number") sizePatch.width = wmm;
     if (typeof hmm === "number") sizePatch.height = hmm;
     if (typeof tmm === "number") sizePatch.thickness = tmm;
@@ -184,6 +185,7 @@ export default function SizeStep(props: SizeStepProps) {
     saveOrderDraft({ size: sizePatch, orientation: currentOrientation });
   }
 
+  // Детект по изображению с таймаутом, иначе — по размерам
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
@@ -192,24 +194,24 @@ export default function SizeStep(props: SizeStepProps) {
       const url = item?.url;
       const [wcm, hcm] = currentWHcm;
 
-      if (!url) {
+      const fallbackToSize = () => {
         const next = orientFromSize(wcm, hcm);
-        console.log("[SizeStep] No image URL, fallback to size:", { wcm, hcm, next });
         if (!cancelled) {
           setOrientation(next);
           setOrientationSource("size");
+          setOrientationReady(true);
           persistDraft(next);
         }
+      };
+
+      if (!url) {
+        fallbackToSize();
         return;
       }
 
       timer = window.setTimeout(() => {
         if (cancelled) return;
-        const next = orientFromSize(wcm, hcm);
-        console.warn("[SizeStep] Image load timeout, fallback to size:", { url, wcm, hcm, next });
-        setOrientation(next);
-        setOrientationSource("size");
-        persistDraft(next);
+        fallbackToSize();
       }, 1500);
 
       try {
@@ -218,29 +220,21 @@ export default function SizeStep(props: SizeStepProps) {
           if (cancelled) return;
           if (timer) window.clearTimeout(timer);
           const next: Orientation = img.naturalWidth > img.naturalHeight ? "horizontal" : "vertical";
-          console.log("[SizeStep] Image loaded:", { url, w: img.naturalWidth, h: img.naturalHeight, next });
           setOrientation(next);
           setOrientationSource("image");
+          setOrientationReady(true);
           persistDraft(next);
         };
         img.onerror = () => {
           if (cancelled) return;
           if (timer) window.clearTimeout(timer);
-          const next = orientFromSize(wcm, hcm);
-          console.warn("[SizeStep] Image error, fallback to size:", { url, wcm, hcm, next });
-          setOrientation(next);
-          setOrientationSource("size");
-          persistDraft(next);
+          fallbackToSize();
         };
         img.src = url;
-      } catch (e) {
+      } catch {
         if (cancelled) return;
         if (timer) window.clearTimeout(timer);
-        const next = orientFromSize(wcm, hcm);
-        console.warn("[SizeStep] Exception on image load, fallback to size:", e);
-        setOrientation(next);
-        setOrientationSource("size");
-        persistDraft(next);
+        fallbackToSize();
       }
     }
 
@@ -251,13 +245,16 @@ export default function SizeStep(props: SizeStepProps) {
     };
   }, [item?.url, currentWHcm[0], currentWHcm[1]]);
 
+  // Если источник не изображение — при изменении размеров пересчитываем и сохраняем
   useEffect(() => {
     if (orientationSource === "image") return;
     const [wcm, hcm] = currentWHcm;
     const next = orientFromSize(wcm, hcm);
     setOrientation(next);
     if (orientationSource !== "image") setOrientationSource("size");
+    setOrientationReady(true);
     persistDraft(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orientationSource, currentWHcm[0], currentWHcm[1]]);
 
   const sizeValid = useMemo(() => {
@@ -277,14 +274,15 @@ export default function SizeStep(props: SizeStepProps) {
   const finalThick = thickMode === "preset" ? thickPreset : `${Number(thickCustom)}`;
   const payload: SizeStepResult = { size: finalSize, thickness: finalThick, orientation };
 
+  // Страхующий авто-сейв: выполняем ТОЛЬКО после того, как ориентация действительно определена
   useEffect(() => {
+    if (!orientationReady) return;
     let widthCm: number | undefined;
     let heightCm: number | undefined;
 
     if (sizeMode === "preset") {
       const [wcm, hcm] = parsePresetWHcm(sizePreset);
-      widthCm = wcm;
-      heightCm = hcm;
+      widthCm = wcm; heightCm = hcm;
     } else {
       const wcm = Number(w);
       const hcm = Number(h);
@@ -302,21 +300,21 @@ export default function SizeStep(props: SizeStepProps) {
     }
 
     const sizePatch: any = { orientation };
-    const wmm = cmToMm(widthCm);
-    const hmm = cmToMm(heightCm);
-    const tmm = cmToMm(thickCm);
+    const wmm = cmToMm(widthCm), hmm = cmToMm(heightCm), tmm = cmToMm(thickCm);
     if (typeof wmm === "number") sizePatch.width = wmm;
     if (typeof hmm === "number") sizePatch.height = hmm;
     if (typeof tmm === "number") sizePatch.thickness = tmm;
 
-    saveOrderDraft({
-      size: sizePatch,
-      orientation
-    });
-  }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation]);
+    saveOrderDraft({ size: sizePatch, orientation });
+  }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation, orientationReady]);
 
   const handleContinue = () => {
-    persistDraft(orientation);
+    // на случай редкого состояния, если не успели — зафиксируем текущую ориентацию
+    if (!orientationReady) {
+      const [wcm, hcm] = currentWHcm;
+      const next = orientFromSize(wcm, hcm);
+      persistDraft(next);
+    }
     const fn = (typeof onDone === "function" ? onDone : typeof onConfirm === "function" ? onConfirm : undefined);
     if (fn) fn(payload);
     else console.error("SizeStep: ни onDone, ни onConfirm не переданы в props");
@@ -337,7 +335,8 @@ export default function SizeStep(props: SizeStepProps) {
 
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
       <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
-        Ориентация: <b>{orientation === "horizontal" ? "горизонтальная" : "вертикальная"}</b> {orientationSource === "image" ? "(по изображению)" : "(по размеру)"}
+        Ориентация: <b>{orientation === "horizontal" ? "горизонтальная" : "вертикальная"}</b>{" "}
+        {orientationSource === "image" ? "(по изображению)" : "(по размеру)"}
       </div>
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
@@ -378,9 +377,7 @@ export default function SizeStep(props: SizeStepProps) {
                     <span>Высота, см</span>
                     <input type="number" min={1} max={300} value={h} onChange={(e) => setH(e.target.value)} style={{ width: 90 }} />
                   </label>
-                  {!(Number.isFinite(Number(w)) && Number.isFinite(Number(h)) && Number(w) > 0 && Number(h) > 0) && (
-                    <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>
-                  )}
+                  {!sizeValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>}
                 </div>
               )}
             </div>
@@ -415,9 +412,7 @@ export default function SizeStep(props: SizeStepProps) {
                   <span>Толщина, см</span>
                   <input type="number" min={1} max={50} value={thickCustom} onChange={(e) => setThickCustom(e.target.value)} style={{ width: 90 }} />
                 </label>
-                {!(Number.isFinite(Number(thickCustom)) && Number(thickCustom) > 0 && Number(thickCustom) <= 50) && (
-                  <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>
-                )}
+                {!thickValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>}
               </div>
             )}
           </div>
@@ -447,7 +442,14 @@ export default function SizeStep(props: SizeStepProps) {
               />
             </div>
             <div
-              style={{ fontWeight: 600, fontSize: 18, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              style={{
+                fontWeight: 600,
+                fontSize: 18,
+                textAlign: "center",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+              }}
               title={item.name}
             >
               {item.name}

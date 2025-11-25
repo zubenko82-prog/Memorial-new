@@ -31,7 +31,7 @@ const CFG = {
     layout: { gap: 12, columnMinW: 140 },
     one: {
       blocks: {
-        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "30%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
+        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "15%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
         metric: {
           pos: { top: "auto", bottom: "auto", left: "50%", transform: "translateX(-50%)" },
           size: { width: "100%", maxWidth: "520px", height: "auto" },

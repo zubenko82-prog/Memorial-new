@@ -1,16 +1,8 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
-//
-// Что делает:
-// - Панель с данными заказа, контактами, габаритами, людьми.
-// - Блок «Эскизы» в 2 колонки: сверху списки «Графика» и «Эпитафии» (для лицевой/тыльной),
-//   снизу — мини-эскиз (клик = сохранить изображение) и «Пожелания».
-// - Миниатюры графики: не фиксированный размер, но ограничены max-width/max-height = 35px; справа имя файла, при дублях ×кол-во.
-// - В мини-эскизе тыла используем именно backBig || backMini (исправлено).
-//
-// ВАЖНО: здесь мы
-// - явно отображаем и НЕ перетираем orientation (size.orientation) при сохранении;
-// - берём актуальный draft перед сохранением (loadOrderDraft), чтобы избежать потери orientation при merge.
+// Правки:
+// - "(тыл)" в заголовке «Люди на памятнике» теперь показывается только если есть люди на тыльной стороне (backHasPeople).
+// - Остальной функционал без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -350,11 +342,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     downloadDataUrl(url, side === "front" ? "front-sketch.jpg" : "rear-sketch.jpg");
   };
 
-  // Коллапс панели
   const coll = useCollapse(open, 280);
   const panelId = "order-panel";
 
-  // Элемент ряда графики (вспом.)
   const renderGraphicRow = (g: any, qty: number, theme: ThemeMode) => {
     const url = g.preview || g.url || "";
     const fname = g.name || fileNameFromUrl(url) || g.id || "—";
@@ -377,35 +367,17 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             <img
               src={url}
               alt={fname}
-              style={{
-                maxWidth: 55,
-                maxHeight: 55,
-                width: "auto",
-                height: "auto",
-                display: "block",
-                objectFit: "contain"
-              }}
+              style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }}
             />
           ) : (
             <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-          <div
-            style={{
-              color: palette(theme).text,
-              fontSize: 13,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              maxWidth: "100%"
-            }}
-          >
+          <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
             {fname}
           </div>
-          {qty > 1 && (
-            <div style={{ fontSize: 12, opacity: 0.8, color: palette(theme).subText }}>×{qty}</div>
-          )}
+          {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: palette(theme).subText }}>×{qty}</div>}
         </div>
       </div>
     );
@@ -540,12 +512,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   };
                   saveIntro(introNext, { lock: false });
 
-                  // Берём АКТУАЛЬНЫЙ драфт прямо перед сохранением, чтобы не потерять orientation (и другие поля).
                   const cur = loadOrderDraft();
                   const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
 
                   const sizePatch = {
-                    ...(cur.size || {}), // гарантируем сохранение width/height/thickness/orientation
+                    ...(cur.size || {}),
                     notes: sizeNotes?.trim() || undefined
                   };
 
@@ -627,13 +598,13 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
             <div style={{ textAlign: "center", textDecoration: "underline", fontWeight: 600, marginBottom: 8, color: palette(theme).text }}>
               Люди на памятнике
-              {!backHasPeople && !backHasMetric && (
+              {backHasPeople && (
                 <span style={{ marginLeft: 6, opacity: 0.7 }}> (тыл)</span>
               )}
             </div>
 
             {backHasPeople ? (
-              // Две колонки: левая — лицевая (как было), правая — тыльная (по тому же шаблону)
+              // Две колонки: левая — лицевая, правая — тыльная
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 {/* Левая колонка — лицевая */}
                 <div>
@@ -668,9 +639,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
                 {/* Правая колонка — тыльная */}
                 <div>
+                  <span style={{ marginLeft: 6, opacity: 0.7 }}>тыльная сторона</span>
                   {backPersons.length ? (
                     <div style={{ display: "grid", gap: 0 }}>
-                      <span style={{ marginLeft: 6, opacity: 0.7 }}>тыльная сторона</span>
                       {backPersons.map((p: any, idx: number) => {
                         const last = idx === backPersons.length - 1;
                         const fio1 = (p.lastName || "").trim();
@@ -698,7 +669,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 </div>
               </div>
             ) : (
-              // Старое поведение — одна колонка (лицевая)
+              // Одна колонка (лицевая)
               <>
                 {frontPersons.length ? (
                   <div style={{ display: "grid", gap: 0 }}>
@@ -847,7 +818,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 {/* row 2 — spacer */}
                 <div style={{ minHeight: 0 }} />
 
-                {/* row 3 — мини-эскиз (снизу) — ИСПРАВЛЕНО: backBig || backMini + objectFit: contain */}
+                {/* row 3 — мини-эскиз (снизу) */}
                 <div
                   role="button"
                   title={(backBig || backMini) ? "Сохранить эскиз (тыльная)" : "Нет превью"}
