@@ -434,30 +434,52 @@ export default function SketchTemplate({
     );
   }
 
+  // ИЗМЕНЕНО: для горизонтального шаблона с одним человеком делаем портрет как «в двух людях»
+  // и метрику ниже портрета (обычная колонка, без абсолютного позиционирования).
   const HorizontalOne = () => {
     const B = tpl.blocks;
+    // вычислим ширину колонки как у «двух людей»
+    const colW = Math.min(320, Math.max((CFG.horizontal.layout as any).columnMinW, Math.floor((imgRect.w - 32 - (CFG.horizontal.layout as any).gap) / 2)));
     const p = peopleBlocks[0];
 
     return (
       <div
-        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" }}
+        style={{
+          position: "absolute",
+          left: 16,
+          right: 16,
+          top: (CFG.horizontal.one.blocks.portraits.pos.top as any) || "8%",
+          display: "flex",
+          justifyContent: "center",
+          pointerEvents: "none"
+        }}
       >
-        <div style={{ position: "absolute", ...B.portraits.pos, width: B.portraits.size.width, maxWidth: B.portraits.size.maxWidth, ...B.portraits.margins }}>
-          <div
-            data-sketch-el="portrait"
-            data-sketch-key={p.id}
-            style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
-          >
-            {p.photo ? (
-              <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
-            ) : (
-              <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
-            )}
+        <div style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          {/* Портрет — уменьшенный (как колонка в двух людях) */}
+          <div style={{ width: "100%", ...(B.portraits.margins as any) }}>
+            <div
+              data-sketch-el="portrait"
+              data-sketch-key={p.id}
+              style={{
+                width: "100%",
+                aspectRatio: "3 / 4",
+                borderRadius: 4,
+                overflow: "hidden",
+                background: "rgba(255,255,255,0.04)",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+              }}
+            >
+              {p.photo ? (
+                <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+              ) : (
+                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+              )}
+            </div>
           </div>
-        </div>
-
-        <div data-sketch-el="metric" data-sketch-key={p.id} style={{ position: "absolute", ...B.metric.pos, width: B.metric.size.width, maxWidth: B.metric.size.maxWidth, ...B.metric.margins }}>
-          <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
+          {/* Метрика — сразу под портретом */}
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%", ...(B.metric.margins as any) }}>
+            <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
+          </div>
         </div>
       </div>
     );
@@ -465,7 +487,7 @@ export default function SketchTemplate({
 
   const HorizontalTwo = () => {
     const B = tpl.blocks;
-    const colW = Math.min(320, Math.max(layout.columnMinW, Math.floor((imgRect.w - 32 - layout.gap) / 2)));
+    const colW = Math.min(320, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32 - (layout as any).gap) / 2)));
 
     return (
       <div
@@ -476,7 +498,7 @@ export default function SketchTemplate({
           top: CFG.horizontal.one.blocks.portraits.pos.top,
           display: "grid",
           gridTemplateColumns: `repeat(2, ${colW}px)`,
-          gap: layout.gap,
+          gap: (layout as any).gap,
           justifyContent: "center",
           alignItems: "start",
           pointerEvents: "none"
@@ -509,7 +531,7 @@ export default function SketchTemplate({
   const HorizontalMany = () => {
     const B = tpl.blocks;
     const cols = Math.min(4, Math.max(3, peopleBlocks.length));
-    const perCol = Math.min(260, Math.max(layout.columnMinW, Math.floor((imgRect.w - 32) / cols)));
+    const perCol = Math.min(260, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32) / cols)));
 
     return (
       <div
@@ -520,7 +542,7 @@ export default function SketchTemplate({
           top: CFG.horizontal.one.blocks.portraits.pos.top,
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, ${perCol}px)`,
-          gap: layout.gap,
+          gap: (layout as any).gap,
           alignItems: "start",
           justifyContent: "center",
           pointerEvents: "none"

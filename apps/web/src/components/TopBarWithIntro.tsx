@@ -628,7 +628,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             <div style={{ textAlign: "center", textDecoration: "underline", fontWeight: 600, marginBottom: 8, color: palette(theme).text }}>
               Люди на памятнике
               {!backHasPeople && !backHasMetric && (
-                <span style={{ marginLeft: 6, opacity: 0.7 }}> (тыл)</span>
+                
               )}
             </div>
 
@@ -668,6 +668,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
                 {/* Правая колонка — тыльная */}
                 <div>
+                  <span style={{ marginLeft: 6, opacity: 0.7 }}>тыл</span>
                   {backPersons.length ? (
                     <div style={{ display: "grid", gap: 0 }}>
                       <span style={{ marginLeft: 6, opacity: 0.7 }}>тыльная сторона</span>
