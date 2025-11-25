@@ -1,12 +1,9 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
-// Ориентация берётся из драфта (size.orientation/legacy) либо из пропса orientationOverride,
-// иначе — по соотношению сторон изображения.
-//
-// Правки:
-// - Горизонтальный шаблон с ОДНИМ человеком: портрет = 50% высоты изображения; метрика под портретом = 40% высоты.
-// - Метрика автоматически вписывается в выделенную область (масштабирование текста без обрезаний).
-// - Добавлена подсказка под шаблоном с новым текстом.
+// Требования:
+// - Горизонтальный шаблон с одним человеком: размеры портрета и метрики как в шаблоне "два человека", но по центру.
+// - Кресты: если один крест — слева вверху на всех шаблонах, кроме горизонтального "два человека";
+//   на горизонтальном "два человека": 1 крест по центру, 2 — по краям.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -21,7 +18,7 @@ export type SketchTemplateProps = {
   epitaphs?: string[];
   carvingOpacity?: number;
   style?: React.CSSProperties;
-  orientationOverride?: Orientation;
+  orientationOverride?: Orientation; // принудительная ориентация
 };
 
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
@@ -36,18 +33,13 @@ const CFG = {
     layout: { gap: 12, columnMinW: 140 },
     one: {
       blocks: {
-        portraits: {
-          pos: { top: "10%", left: "50%", transform: "translateX(-50%)" },
-          size: { width: "60%", maxWidth: "400px", height: "auto" },
-          margins: { margin: "0 auto 16px auto" }
-        },
+        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
         metric: {
           pos: { top: "auto", bottom: "auto", left: "50%", transform: "translateX(-50%)" },
           size: { width: "100%", maxWidth: "520px", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            uppercase: true,
-            align: "center",
+            uppercase: true, align: "center",
             l1: { font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
             l2: { font: `600 clamp(16px, 3vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
             l3: { font: `400 clamp(14px, 2.6vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.2px", opacity: 0.95 }
@@ -71,8 +63,7 @@ const CFG = {
           size: { width: "80%", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            uppercase: true,
-            align: "center",
+            uppercase: true, align: "center",
             l1: { font: `500 clamp(10px, 1.6vw, 24px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.35px" },
             l2: { font: `400 clamp(8px, 1.2vw, 20px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.25px" },
             l3: { font: `300 clamp(6px, 0.9vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.2px", opacity: 0.95 }
@@ -96,8 +87,7 @@ const CFG = {
           size: { width: "90%", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            uppercase: true,
-            align: "center",
+            uppercase: true, align: "center",
             l1: { font: `700 clamp(14px, 1.8vw, 20px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.25px" },
             l2: { font: `600 clamp(12px, 1.6vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px" },
             l3: { font: `400 clamp(11px, 1.5vw, 16px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px", opacity: 0.95 }
@@ -124,8 +114,7 @@ const CFG = {
           size: { width: "80%", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            uppercase: true,
-            align: "center",
+            uppercase: true, align: "center",
             l1: { font: `700 clamp(20px, 4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
             l2: { font: `600 clamp(18px, 3.4vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
             l3: { font: `400 clamp(16px, 3vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.25px", opacity: 0.95 }
@@ -149,8 +138,7 @@ const CFG = {
           size: { width: "90%", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            uppercase: true,
-            align: "center",
+            uppercase: true, align: "center",
             l1: { font: `700 clamp(18px, 3.2vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.35px" },
             l2: { font: `600 clamp(16px, 2.8vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.25px" },
             l3: { font: `400 clamp(14px, 2.4vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.2px", opacity: 0.95 }
@@ -172,8 +160,7 @@ const CFG = {
         metric: {
           pos: {}, size: { width: "92%", height: "auto" }, margins: { margin: "0 auto" },
           text: {
-            uppercase: true,
-            align: "center",
+            uppercase: true, align: "center",
             l1: { font: `700 clamp(16px, 2.8vw, 24px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.25px" },
             l2: { font: `600 clamp(14px, 2.4vw, 20px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px" },
             l3: { font: `400 clamp(12px, 2vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px", opacity: 0.95 }
@@ -264,56 +251,103 @@ export default function SketchTemplate({
   const tpl = useMemo(() => (isVertical ? (CFG.vertical as any)[tplKey] : (CFG.horizontal as any)[tplKey]), [isVertical, tplKey]);
   const layout = useMemo(() => (isVertical ? CFG.vertical.layout : CFG.horizontal.layout), [isVertical]);
 
-  /* ===== Кресты ===== */
+  /* ===== Оверлеи: кресты ===== */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
-    const C = (tpl.blocks as any).cross;
-    const commonStyle: React.CSSProperties = {
-      position: "absolute",
-      ...C.pos,
-      ...C.size,
-      ...C.margins,
+
+    const isHorizontal = !isVertical;
+    const isHorizontalTwo = isHorizontal && tplKey === "two";
+
+    const baseSize = (tpl.blocks as any).cross.size; // размеры берём из шаблона (проценты)
+    const baseFilter: React.CSSProperties = {
       objectFit: "contain",
       filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-      zIndex: 3
+      zIndex: 3,
+      position: "absolute"
     };
 
-    if (isVertical) {
-      if (crosses.length === 1) {
-        const c = crosses[0];
-        return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={commonStyle} draggable={false} />;
-      }
+    const topLeftPos: React.CSSProperties = { top: "6%", left: "4%" };
+    const topCenterPos: React.CSSProperties = { top: "6%", left: "50%", transform: "translateX(-50%)" };
+    const topRightPos: React.CSSProperties = { top: "6%", right: "4%" };
+
+    if (crosses.length === 1) {
+      const c = crosses[0];
+      // Правило: один крест — слева вверху на всех шаблонах, КРОМЕ горизонтального "два человека".
+      // На горизонтальном "два человека" — по центру.
+      const pos = isHorizontalTwo ? topCenterPos : topLeftPos;
+      return (
+        <img
+          data-sketch-el="cross"
+          data-sketch-key="0"
+          src={c.url}
+          alt={c.name || "Крест"}
+          style={{ ...baseFilter, ...baseSize, ...pos }}
+          draggable={false}
+        />
+      );
+    }
+
+    if (crosses.length >= 2 && isHorizontalTwo) {
+      // Правило: на горизонтальном "два человека" — 2 креста по краям
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
-          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={commonStyle} draggable={false} />
-          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...commonStyle, left: undefined, right: (C.pos as any).right ?? "4%" }} draggable={false} />
+          <img
+            data-sketch-el="cross"
+            data-sketch-key="0"
+            src={cL.url}
+            alt={cL.name || "Крест"}
+            style={{ ...baseFilter, ...baseSize, ...topLeftPos }}
+            draggable={false}
+          />
+          <img
+            data-sketch-el="cross"
+            data-sketch-key="1"
+            src={cR.url}
+            alt={cR.name || "Крест"}
+            style={{ ...baseFilter, ...baseSize, ...topRightPos }}
+            draggable={false}
+          />
         </>
       );
     }
 
-    if (crosses.length === 1 && tplKey === "two") {
-      const c = crosses[0];
-      return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={commonStyle} draggable={false} />;
-    }
-    if (crosses.length >= 2) {
+    // Прочие случаи (оставим разумный дефолт): два и более — слева/справа,
+    // больше двух — в столбец слева (как было)
+    if (crosses.length === 2) {
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
-          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={commonStyle} draggable={false} />
-          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...commonStyle, left: undefined, right: (C.pos as any).right ?? "4%" }} draggable={false} />
+          <img
+            data-sketch-el="cross"
+            data-sketch-key="0"
+            src={cL.url}
+            alt={cL.name || "Крест"}
+            style={{ ...baseFilter, ...baseSize, ...topLeftPos }}
+            draggable={false}
+          />
+          <img
+            data-sketch-el="cross"
+            data-sketch-key="1"
+            src={cR.url}
+            alt={cR.name || "Крест"}
+            style={{ ...baseFilter, ...baseSize, ...topRightPos }}
+            draggable={false}
+          />
         </>
       );
     }
+
+    // >2 — рендерим столбцом слева
     return (
       <div
         style={{
           position: "absolute",
-          ...(tpl.blocks as any).cross.pos,
+          ...topLeftPos,
           display: "grid",
           gridAutoFlow: "row",
           rowGap: 6,
-          width: (tpl.blocks as any).cross.size.width,
+          width: baseSize.width,
           zIndex: 3
         }}
       >
@@ -332,7 +366,7 @@ export default function SketchTemplate({
     );
   };
 
-  /* ===== Прочая графика ===== */
+  /* ===== Оверлеи: прочая графика (others) ===== */
   const GraphicsOverlay = () =>
     others.length > 0 ? (
       <div
@@ -371,7 +405,7 @@ export default function SketchTemplate({
       </div>
     ) : null;
 
-  /* ===== Эпитафии ===== */
+  /* ===== Оверлеи: эпитафии ===== */
   const EpitaphsOverlay = () =>
     Array.isArray(epitaphs) && epitaphs.length > 0 ? (
       <div
@@ -390,7 +424,7 @@ export default function SketchTemplate({
           lineHeight: (tpl.blocks.epitaphs.text.lineHeight as any) ?? 1.2,
           letterSpacing: (tpl.blocks.epitaphs.text.letterSpacing as any) ?? "0",
           fontWeight: (tpl.blocks.epitaphs.text.fontWeight as any) ?? 400,
-          fontFamily: FONT_CENTURY,
+          fontFamily: tpl.blocks.epitaphs.text.fontFamily ?? FONT_CENTURY,
           display: "grid",
           gap: 8,
           zIndex: 4
@@ -418,91 +452,51 @@ export default function SketchTemplate({
 
     return (
       <div style={{ width: "100%", display: "grid", gap: 6, textAlign: align, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-        {!!L[0] && <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>}
-        {!!L[1] && <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>}
-        {!!L[2] && <div style={{ font: textCfg.l3.font, lineHeight: textCfg.l3.lineHeight, letterSpacing: textCfg.l3.letterSpacing, opacity: textCfg.l3.opacity ?? 1 }}>{toUp(L[2])}</div>}
+        {!!L[0] && (
+          <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>
+        )}
+        {!!L[1] && (
+          <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>
+        )}
+        {!!L[2] && (
+          <div
+            style={{ font: textCfg.l3.font, lineHeight: textCfg.l3.lineHeight, letterSpacing: textCfg.l3.letterSpacing, opacity: textCfg.l3.opacity ?? 1 }}
+          >
+            {toUp(L[2])}
+          </div>
+        )}
       </div>
     );
   }
 
-  // Горизонтальный шаблон: 1 человек
-  // Портрет = 50% высоты изображения; метрика под портретом = 40% высоты; авто-вписывание метрики.
+  // Горизонтальный шаблон с ОДНИМ человеком: размеры как у "двух людей", но по центру
   const HorizontalOne = () => {
     const B = tpl.blocks;
+    const gap = (CFG.horizontal.layout as any).gap ?? 12;
+    const colW = Math.min(320, Math.max((CFG.horizontal.layout as any).columnMinW, Math.floor((imgRect.w - 32 - gap) / 2)));
     const p = peopleBlocks[0];
-
-    const sideGutter = 16;
-    const availableW = Math.max(0, imgRect.w - sideGutter * 2);
-
-    // 50% высоты — портрет
-    let portraitH = Math.max(60, Math.round(imgRect.h * 0.5));
-    let portraitW = Math.round(portraitH * (3 / 4)); // AR 3:4
-
-    // Уложим по ширине, если портрет шире доступного
-    if (portraitW > availableW) {
-      const k = availableW / portraitW;
-      portraitW = Math.max(40, Math.round(portraitW * k));
-      portraitH = Math.max(40, Math.round(portraitH * k));
-    }
-
-    // 40% высоты — метрика
-    const metricH = Math.max(40, Math.round(imgRect.h * 0.4));
-    const metricW = portraitW;
-
-    // Авто-вписывание метрики: масштабируем внутренний контент
-    const metricInnerRef = useRef<HTMLDivElement | null>(null);
-    const [metricScale, setMetricScale] = useState(1);
-
-    const recomputeScale = useCallback(() => {
-      const el = metricInnerRef.current;
-      if (!el) return;
-      // Снимаем масштаб, чтобы получить реальные размеры
-      el.style.transform = "scale(1)";
-      el.style.transformOrigin = "top center";
-      // Берём фактический размер содержимого
-      const contentW = el.scrollWidth || el.clientWidth || 1;
-      const contentH = el.scrollHeight || el.clientHeight || 1;
-      const scaleW = metricW / contentW;
-      const scaleH = metricH / contentH;
-      const next = Math.min(1, scaleW, scaleH);
-      setMetricScale(next > 0 && isFinite(next) ? next : 1);
-    }, [metricW, metricH]);
-
-    useEffect(() => {
-      const r1 = requestAnimationFrame(recomputeScale);
-      const roCls = (window as any).ResizeObserver as typeof ResizeObserver | undefined;
-      let ro: ResizeObserver | undefined;
-      if (roCls && metricInnerRef.current) {
-        ro = new roCls(() => recomputeScale());
-        ro.observe(metricInnerRef.current);
-      }
-      return () => {
-        cancelAnimationFrame(r1);
-        ro?.disconnect();
-      };
-    }, [recomputeScale, p?.lines?.join("|")]);
 
     return (
       <div
         style={{
           position: "absolute",
-          left: sideGutter,
-          right: sideGutter,
-          top: (CFG.horizontal.one.blocks.portraits.pos.top as any) || "8%",
+          left: 16,
+          right: 16,
+          top: CFG.horizontal.one.blocks.portraits.pos.top,
           display: "flex",
           justifyContent: "center",
           pointerEvents: "none"
         }}
       >
-        <div style={{ width: portraitW, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-          {/* Портрет */}
-          <div style={{ width: portraitW, ...(B.portraits.margins as any) }}>
+        <div style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          {/* Портрет: как в "двух людях": контейнер шириной B.portraits.size.width (процент от colW), внутри — AR 3/4 */}
+          <div style={{ width: B.portraits.size.width, ...B.portraits.margins }}>
             <div
               data-sketch-el="portrait"
               data-sketch-key={p.id}
               style={{
-                width: portraitW,
-                height: portraitH,
+                width: "100%",
+                aspectRatio: "3 / 4",
                 borderRadius: 4,
                 overflow: "hidden",
                 background: "rgba(255,255,255,0.04)",
@@ -517,37 +511,15 @@ export default function SketchTemplate({
             </div>
           </div>
 
-          {/* Метрика: фикс. область + авто-вписывание */}
-          <div
-            data-sketch-el="metric"
-            data-sketch-key={p.id}
-            style={{
-              width: metricW,
-              height: metricH,
-              overflow: "hidden",
-              ...(B.metric.margins as any),
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "center"
-            }}
-          >
-            <div
-              ref={metricInnerRef}
-              style={{
-                width: metricW,
-                transform: `scale(${metricScale})`,
-                transformOrigin: "top center"
-              }}
-            >
-              <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
-            </div>
+          {/* Метрика: как в "двух людях": ширина B.metric.size.width (процент от colW) */}
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins }}>
+            <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
           </div>
         </div>
       </div>
     );
   };
 
-  /* ===== Горизонтальный: 2 человека ===== */
   const HorizontalTwo = () => {
     const B = tpl.blocks;
     const colW = Math.min(320, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32 - (layout as any).gap) / 2)));
@@ -591,7 +563,6 @@ export default function SketchTemplate({
     );
   };
 
-  /* ===== Горизонтальный: много ===== */
   const HorizontalMany = () => {
     const B = tpl.blocks;
     const cols = Math.min(4, Math.max(3, peopleBlocks.length));
@@ -636,7 +607,6 @@ export default function SketchTemplate({
     );
   };
 
-  /* ===== Вертикальные варианты без изменений ===== */
   const VerticalOne = () => {
     const B = tpl.blocks;
     const p = peopleBlocks[0];
@@ -793,46 +763,36 @@ export default function SketchTemplate({
   };
 
   return (
-    <>
-      <div
-        style={{
-          ...bottomUnderlayGradient(),
-          borderRadius: 10,
-          position: "relative",
-          width: "100%",
-          height: sketchH,
-          overflow: "hidden",
-          userSelect: "none",
-          padding: CFG.general.containerPadding,
-          boxSizing: "border-box",
-          color: "#fff",
-          ...style
-        }}
-        data-sketch-orient={isVertical ? "vertical" : "horizontal"}
-        data-sketch-orient-source={orientation ? "draft" : "image"}
-      >
-        {/* Изображение изделия */}
-        <img
-          ref={imgRef}
-          src={item?.url || ""}
-          alt={item?.name || "Изделие"}
-          style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-          draggable={false}
-          onLoad={() => setTimeout(recalc, 0)}
-        />
+    <div
+      style={{
+        ...bottomUnderlayGradient(),
+        borderRadius: 10,
+        position: "relative",
+        width: "100%",
+        height: sketchH,
+        overflow: "hidden",
+        userSelect: "none",
+        padding: CFG.general.containerPadding,
+        boxSizing: "border-box",
+        color: "#fff",
+        ...style
+      }}
+      data-sketch-orient={isVertical ? "vertical" : "horizontal"}
+      data-sketch-orient-source={orientation ? "draft" : "image"}
+    >
+      <img
+        ref={imgRef}
+        src={item?.url || ""}
+        alt={item?.name || "Изделие"}
+        style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
+        draggable={false}
+        onLoad={() => setTimeout(recalc, 0)}
+      />
 
-        {renderPeople()}
-
-        <CrossOverlay />
-        <GraphicsOverlay />
-        <EpitaphsOverlay />
-      </div>
-
-      {/* Подсказка под шаблоном (обновлённый текст) */}
-      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85, color: "#ddd" }}>
-        Набросок расположения элементов гравировки. Изображения могут наезжать друг на друга, это не страшно.
-        Итоговую работу сделает специалист. Кроме того, расположение элементов можно будет скорректировать позже.
-      </div>
-    </>
+      {renderPeople()}
+      <CrossOverlay />
+      <GraphicsOverlay />
+      <EpitaphsOverlay />
+    </div>
   );
 }
