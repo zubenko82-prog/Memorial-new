@@ -389,7 +389,7 @@ export default function SketchTemplate({
           lineHeight: (tpl.blocks.epitaphs.text.lineHeight as any) ?? 1.2,
           letterSpacing: (tpl.blocks.epitaphs.text.letterSpacing as any) ?? "0",
           fontWeight: (tpl.blocks.epitaphs.text.fontWeight as any) ?? 400,
-          fontFamily: tpl.blocks.epitaphs.text.fontFamily ?? FONT_CENTURY,
+          fontFamily: FONT_CENTURY,
           display: "grid",
           gap: 8,
           zIndex: 4
@@ -435,25 +435,29 @@ export default function SketchTemplate({
   }
 
   // Горизонтальный шаблон с одним человеком:
-  // Портрет = 40% от высоты изображения (imgRect.h), ширина с сохранением AR 3:4, метрика ниже.
+  // Портрет = 40% от высоты изображения; метрика под портретом и занимает 30% от оставшейся высоты.
   const HorizontalOne = () => {
     const B = tpl.blocks;
     const p = peopleBlocks[0];
 
-    // Отступы слева/справа в этом режиме = 16px (как в других горизонтальных лэйаутах)
     const sideGutter = 16;
     const availableW = Math.max(0, imgRect.w - sideGutter * 2);
 
-    // Базовая высота портрета = 40% от высоты изображения
+    // 40% высоты изображения на портрет
     let portraitH = Math.max(60, Math.round(imgRect.h * 0.4));
     let portraitW = Math.round(portraitH * (3 / 4)); // AR 3:4
 
-    // Если ширина портрета больше доступной — уменьшаем пропорционально
+    // Уложить по ширине, если надо
     if (portraitW > availableW) {
       const k = availableW / portraitW;
       portraitW = Math.max(40, Math.round(portraitW * k));
       portraitH = Math.max(40, Math.round(portraitH * k));
     }
+
+    // Оставшаяся высота под остальной контент
+    const remainingH = Math.max(0, imgRect.h - portraitH);
+    // 30% от оставшейся — под метрику (минимум 40px)
+    const metricH = Math.max(40, Math.round(remainingH * 0.3));
 
     return (
       <div
@@ -468,7 +472,7 @@ export default function SketchTemplate({
         }}
       >
         <div style={{ width: portraitW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-          {/* Портрет фиксированного размера (W×H), AR ≈ 3:4 */}
+          {/* Портрет фиксированного размера */}
           <div style={{ width: portraitW, ...(B.portraits.margins as any) }}>
             <div
               data-sketch-el="portrait"
@@ -496,9 +500,24 @@ export default function SketchTemplate({
               )}
             </div>
           </div>
-          {/* Метрика — сразу под портретом, по ширине портрета */}
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: portraitW, ...(B.metric.margins as any) }}>
-            <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
+
+          {/* Метрика — под портретом, фиксированной высоты */}
+          <div
+            data-sketch-el="metric"
+            data-sketch-key={p.id}
+            style={{
+              width: portraitW,
+              height: metricH,
+              ...(B.metric.margins as any),
+              overflow: "hidden",
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "center"
+            }}
+          >
+            <div style={{ width: "100%" }}>
+              <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
+            </div>
           </div>
         </div>
       </div>
