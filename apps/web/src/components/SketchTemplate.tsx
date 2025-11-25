@@ -31,7 +31,7 @@ const CFG = {
     layout: { gap: 12, columnMinW: 140 },
     one: {
       blocks: {
-        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "auto", maxWidth: "400px", height: "40%" }, margins: { margin: "0 auto 16px auto" } },
+        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
         metric: {
           pos: { top: "auto", bottom: "auto", left: "50%", transform: "translateX(-50%)" },
           size: { width: "100%", maxWidth: "520px", height: "auto" },
@@ -106,7 +106,7 @@ const CFG = {
     layout: { rowsHeightFactor: 0.5, rowGapPx: 10 },
     one: {
       blocks: {
-        portraits: { pos: { top: "12%", left: "50%", transform: "translateX(-50%)" }, size: { width: "40%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
+        portraits: { pos: { top: "12%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
         metric: {
           pos: { left: "50%", transform: "translateX(-50%)" },
           size: { width: "80%", height: "auto" },
@@ -434,35 +434,48 @@ export default function SketchTemplate({
     );
   }
 
-  // ИЗМЕНЕНО: для горизонтального шаблона с одним человеком делаем портрет как «в двух людях»
-  // и метрику ниже портрета (обычная колонка, без абсолютного позиционирования).
+  // Горизонтальный шаблон с одним человеком:
+  // Портрет = 40% от высоты изображения (imgRect.h), ширина с сохранением AR 3:4, метрика ниже.
   const HorizontalOne = () => {
     const B = tpl.blocks;
-    // вычислим ширину колонки как у «двух людей»
-    const colW = Math.min(320, Math.max((CFG.horizontal.layout as any).columnMinW, Math.floor((imgRect.w - 32 - (CFG.horizontal.layout as any).gap) / 2)));
     const p = peopleBlocks[0];
+
+    // Отступы слева/справа в этом режиме = 16px (как в других горизонтальных лэйаутах)
+    const sideGutter = 16;
+    const availableW = Math.max(0, imgRect.w - sideGutter * 2);
+
+    // Базовая высота портрета = 40% от высоты изображения
+    let portraitH = Math.max(60, Math.round(imgRect.h * 0.4));
+    let portraitW = Math.round(portraitH * (3 / 4)); // AR 3:4
+
+    // Если ширина портрета больше доступной — уменьшаем пропорционально
+    if (portraitW > availableW) {
+      const k = availableW / portraitW;
+      portraitW = Math.max(40, Math.round(portraitW * k));
+      portraitH = Math.max(40, Math.round(portraitH * k));
+    }
 
     return (
       <div
         style={{
           position: "absolute",
-          left: 16,
-          right: 16,
+          left: sideGutter,
+          right: sideGutter,
           top: (CFG.horizontal.one.blocks.portraits.pos.top as any) || "8%",
           display: "flex",
           justifyContent: "center",
           pointerEvents: "none"
         }}
       >
-        <div style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-          {/* Портрет — уменьшенный (как колонка в двух людях) */}
-          <div style={{ width: "100%", ...(B.portraits.margins as any) }}>
+        <div style={{ width: portraitW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          {/* Портрет фиксированного размера (W×H), AR ≈ 3:4 */}
+          <div style={{ width: portraitW, ...(B.portraits.margins as any) }}>
             <div
               data-sketch-el="portrait"
               data-sketch-key={p.id}
               style={{
-                width: "100%",
-                aspectRatio: "3 / 4",
+                width: portraitW,
+                height: portraitH,
                 borderRadius: 4,
                 overflow: "hidden",
                 background: "rgba(255,255,255,0.04)",
@@ -470,14 +483,21 @@ export default function SketchTemplate({
               }}
             >
               {p.photo ? (
-                <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                <img
+                  src={p.photo}
+                  alt="Фото"
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  draggable={false}
+                />
               ) : (
-                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>
+                  (нет фото)
+                </div>
               )}
             </div>
           </div>
-          {/* Метрика — сразу под портретом */}
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%", ...(B.metric.margins as any) }}>
+          {/* Метрика — сразу под портретом, по ширине портрета */}
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: portraitW, ...(B.metric.margins as any) }}>
             <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
           </div>
         </div>
