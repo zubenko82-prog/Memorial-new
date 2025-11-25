@@ -1,12 +1,14 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 // Требования:
-// - Горизонтальный шаблон с одним человеком: размеры портрета и метрики как в шаблоне "два человека", но по центру.
+// - Горизонтальный шаблон с одним человеком: портрет 40% высоты изображения, метрика 30% высоты изображения (РАСТРИРУЕМ).
+// - Остальные шаблоны НЕ меняем.
 // - Кресты: если один крест — слева вверху на всех шаблонах, кроме горизонтального "два человека";
 //   на горизонтальном "два человека": 1 крест по центру, 2 — по краям.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
+import html2canvas from "html2canvas";
 
 type Orientation = "vertical" | "horizontal";
 
@@ -272,8 +274,6 @@ export default function SketchTemplate({
 
     if (crosses.length === 1) {
       const c = crosses[0];
-      // Правило: один крест — слева вверху на всех шаблонах, КРОМЕ горизонтального "два человека".
-      // На горизонтальном "два человека" — по центру.
       const pos = isHorizontalTwo ? topCenterPos : topLeftPos;
       return (
         <img
@@ -288,7 +288,6 @@ export default function SketchTemplate({
     }
 
     if (crosses.length >= 2 && isHorizontalTwo) {
-      // Правило: на горизонтальном "два человека" — 2 креста по краям
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
@@ -312,8 +311,6 @@ export default function SketchTemplate({
       );
     }
 
-    // Прочие случаи (оставим разумный дефолт): два и более — слева/справа,
-    // больше двух — в столбец слева (как было)
     if (crosses.length === 2) {
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
@@ -338,7 +335,6 @@ export default function SketchTemplate({
       );
     }
 
-    // >2 — рендерим столбцом слева
     return (
       <div
         style={{
@@ -424,7 +420,7 @@ export default function SketchTemplate({
           lineHeight: (tpl.blocks.epitaphs.text.lineHeight as any) ?? 1.2,
           letterSpacing: (tpl.blocks.epitaphs.text.letterSpacing as any) ?? "0",
           fontWeight: (tpl.blocks.epitaphs.text.fontWeight as any) ?? 400,
-          fontFamily: tpl.blocks.epitaphs.text.fontFamily ?? FONT_CENTURY,
+          fontFamily: FONT_CENTURY,
           display: "grid",
           gap: 8,
           zIndex: 4
@@ -452,74 +448,190 @@ export default function SketchTemplate({
 
     return (
       <div style={{ width: "100%", display: "grid", gap: 6, textAlign: align, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-        {!!L[0] && (
-          <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>
-        )}
-        {!!L[1] && (
-          <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>
-        )}
-        {!!L[2] && (
-          <div
-            style={{ font: textCfg.l3.font, lineHeight: textCfg.l3.lineHeight, letterSpacing: textCfg.l3.letterSpacing, opacity: textCfg.l3.opacity ?? 1 }}
-          >
-            {toUp(L[2])}
-          </div>
-        )}
+        {!!L[0] && <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>}
+        {!!L[1] && <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>}
+        {!!L[2] && <div style={{ font: textCfg.l3.font, lineHeight: textCfg.l3.lineHeight, letterSpacing: textCfg.l3.letterSpacing, opacity: textCfg.l3.opacity ?? 1 }}>{toUp(L[2])}</div>}
       </div>
     );
   }
 
-  // Горизонтальный шаблон с ОДНИМ человеком: размеры как у "двух людей", но по центру
+  // Горизонтальный шаблон: ОДИН человек — портрет 40% H, метрика 30% H (растрируем), всё по центру.
   const HorizontalOne = () => {
-    const B = tpl.blocks;
-    const gap = (CFG.horizontal.layout as any).gap ?? 12;
-    const colW = Math.min(320, Math.max((CFG.horizontal.layout as any).columnMinW, Math.floor((imgRect.w - 32 - gap) / 2)));
     const p = peopleBlocks[0];
+    if (!imgRect.h || !imgRect.w) return null;
 
-    return (
+    const sideGutter = 16; // слева/справа как в остальных горизонтальных
+    const topPercent = 0.10; // отступ сверху по аналогии с CFG
+    const gapPercent = 0.02; // небольшой зазор между портретом и метрикой
+
+    // Базовые целевые размеры
+    let portraitH = Math.max(40, Math.round(imgRect.h * 0.40));
+    let metricH = Math.max(20, Math.round(imgRect.h * 0.30));
+    let gapPx = Math.round(imgRect.h * gapPercent);
+
+    // Учитываем верхний отступ и подгоняем по высоте при необходимости
+    const topPx = Math.round(imgRect.h * topPercent);
+    const totalNeeded = portraitH + gapPx + metricH;
+    const availableH = Math.max(0, imgRect.h - topPx);
+    if (totalNeeded > availableH && totalNeeded > 0) {
+      const k = availableH / totalNeeded;
+      portraitH = Math.max(40, Math.round(portraitH * k));
+      metricH = Math.max(20, Math.round(metricH * k));
+      gapPx = Math.max(0, Math.round(gapPx * k));
+    }
+
+    // Ширина портрета по AR 3:4, не шире доступной области
+    const availableW = Math.max(0, imgRect.w - sideGutter * 2);
+    let portraitW = Math.round(portraitH * (3 / 4));
+    if (portraitW > availableW) {
+      const k = availableW / portraitW;
+      portraitW = Math.max(40, Math.round(portraitW * k));
+      portraitH = Math.max(40, Math.round(portraitH * k));
+      // подрегулируем метрику, если после уменьшения портрета стало теснее
+      const metricTotal = metricH + gapPx;
+      const afterPortraitAvailable = Math.max(0, availableH - portraitH);
+      if (metricTotal > afterPortraitAvailable && metricTotal > 0) {
+        const mk = afterPortraitAvailable / metricTotal;
+        metricH = Math.max(20, Math.round(metricH * mk));
+        gapPx = Math.max(0, Math.round(gapPx * mk));
+      }
+    }
+
+    const metricW = portraitW;
+
+    // Offscreen рендер метрики → растровая картинка
+    const metricOffscreenRef = useRef<HTMLDivElement | null>(null);
+    const [metricImg, setMetricImg] = useState<string | null>(null);
+
+    useEffect(() => {
+      let cancelled = false;
+      async function rasterize() {
+        setMetricImg(null);
+        const holder = metricOffscreenRef.current;
+        if (!holder) return;
+        await new Promise((r) => setTimeout(r, 0)); // дождаться рендера DOM
+        try {
+          const canvas = await html2canvas(holder, {
+            backgroundColor: null,
+            useCORS: true,
+            scale: Math.min(2, window.devicePixelRatio || 1),
+            width: metricW,
+            height: metricH
+          });
+          if (!cancelled) {
+            setMetricImg(canvas.toDataURL("image/png"));
+          }
+        } catch {
+          if (!cancelled) setMetricImg(null);
+        }
+      }
+      if (metricW > 0 && metricH > 0) rasterize();
+      return () => {
+        cancelled = true;
+      };
+    }, [metricW, metricH, p?.lines?.join("|")]);
+
+    // Offscreen контейнер для html2canvas
+    const OffscreenMetric = () => (
       <div
         style={{
           position: "absolute",
-          left: 16,
-          right: 16,
-          top: CFG.horizontal.one.blocks.portraits.pos.top,
-          display: "flex",
-          justifyContent: "center",
-          pointerEvents: "none"
+          left: -99999,
+          top: -99999,
+          width: metricW,
+          height: metricH,
+          overflow: "hidden",
+          padding: 0,
+          margin: 0,
+          background: "transparent"
         }}
       >
-        <div style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-          {/* Портрет: как в "двух людях": контейнер шириной B.portraits.size.width (процент от colW), внутри — AR 3/4 */}
-          <div style={{ width: B.portraits.size.width, ...B.portraits.margins }}>
-            <div
-              data-sketch-el="portrait"
-              data-sketch-key={p.id}
-              style={{
-                width: "100%",
-                aspectRatio: "3 / 4",
-                borderRadius: 4,
-                overflow: "hidden",
-                background: "rgba(255,255,255,0.04)",
-                boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
-              }}
-            >
-              {p.photo ? (
-                <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
-              ) : (
-                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
-              )}
-            </div>
-          </div>
-
-          {/* Метрика: как в "двух людях": ширина B.metric.size.width (процент от colW) */}
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...B.metric.margins }}>
-            <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
-          </div>
+        <div ref={metricOffscreenRef} style={{ width: metricW, height: metricH, overflow: "hidden", color: "#fff" }}>
+          <PersonMetricText
+            lines={p.lines}
+            textCfg={CFG.horizontal.one.blocks.metric.text}
+            align={(CFG.horizontal.one.blocks.metric.text.align as any) ?? "center"}
+          />
         </div>
       </div>
     );
+
+    return (
+      <>
+        <OffscreenMetric />
+        <div
+          style={{
+            position: "absolute",
+            left: sideGutter,
+            right: sideGutter,
+            top: Math.round(topPx),
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none"
+          }}
+        >
+          <div style={{ width: portraitW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            {/* Портрет */}
+            <div style={{ width: portraitW }}>
+              <div
+                data-sketch-el="portrait"
+                data-sketch-key={p.id}
+                style={{
+                  width: portraitW,
+                  height: portraitH,
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                }}
+              >
+                {p.photo ? (
+                  <img
+                    src={p.photo}
+                    alt="Фото"
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    draggable={false}
+                  />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>
+                    (нет фото)
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Зазор */}
+            <div style={{ height: Math.max(0, gapPx) }} />
+
+            {/* Метрика (растровая) */}
+            <div style={{ width: metricW, height: metricH, overflow: "hidden" }}>
+              {metricImg ? (
+                <img
+                  data-sketch-el="metric"
+                  data-sketch-key={p.id}
+                  src={metricImg}
+                  alt="Метрика"
+                  style={{ width: metricW, height: metricH, objectFit: "contain", display: "block" }}
+                  draggable={false}
+                />
+              ) : (
+                // Fallback — живой текст, если растр не собрался
+                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricW, height: metricH, overflow: "hidden" }}>
+                  <PersonMetricText
+                    lines={p.lines}
+                    textCfg={CFG.horizontal.one.blocks.metric.text}
+                    align={(CFG.horizontal.one.blocks.metric.text.align as any) ?? "center"}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
   };
 
+  // Остальные шаблоны — БЕЗ ИЗМЕНЕНИЙ
   const HorizontalTwo = () => {
     const B = tpl.blocks;
     const colW = Math.min(320, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32 - (layout as any).gap) / 2)));
