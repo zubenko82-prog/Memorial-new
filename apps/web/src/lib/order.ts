@@ -66,6 +66,7 @@ export type OrderDraft = {
   engraving?: EngravingData | null;
   graphics?: Graphic[];
   notes?: string;
+  orientation?: Orientation; // legacy-дубль для совместимости
   updatedAt?: number;
 };
 
@@ -92,9 +93,9 @@ function deepMergeDefined<T>(target: T, source: Partial<T>): T {
   if (source == null) return target;
   const out: any = Array.isArray(target) ? [...(target as any)] : { ...(target as any) };
   for (const [k, v] of Object.entries(source)) {
-    if (v === undefined || v === null) continue; // не пишем undefined/null, чтобы случайно не затереть поле
+    if (v === undefined || v === null) continue; // не пишем undefined/null, чтобы не затирать поля
     if (typeof v === "object" && !Array.isArray(v)) {
-      out[k] = deepMergeDefined((out[k] ?? {}), v as any);
+      out[k] = deepMergeDefined(out[k] ?? {}, v as any);
     } else {
       out[k] = v;
     }
@@ -109,7 +110,6 @@ export function loadOrderDraft(): OrderDraft {
     const raw = localStorage.getItem(LS_ORDER_DRAFT_KEY);
     if (!raw) return { graphics: [], updatedAt: now() };
     const obj = JSON.parse(raw) as OrderDraft;
-    // Нормализация
     if (!Array.isArray(obj.graphics)) obj.graphics = [];
     if (obj.size && typeof obj.size !== "object") obj.size = null;
     if (obj.item && typeof obj.item !== "object") obj.item = null;
@@ -122,7 +122,6 @@ export function loadOrderDraft(): OrderDraft {
 
 export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
   const prev = loadOrderDraft();
-  // обновляем updatedAt и всегда делаем глубокий merge!
   const next: OrderDraft = deepMergeDefined(prev, { ...patch, updatedAt: now() });
   try {
     localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
@@ -143,7 +142,6 @@ export function setSizeFromCm(params: {
   const { heightCm, widthCm, thicknessCm, orientation, notes } = params;
   const mm = (v?: number) => (typeof v === "number" && isFinite(v) ? Math.round(v * 10) : undefined);
 
-  // Передаём только определённые значения!
   const sizePatch: any = {};
   if (typeof heightCm === "number" && isFinite(heightCm)) sizePatch.height = mm(heightCm);
   if (typeof widthCm === "number" && isFinite(widthCm)) sizePatch.width = mm(widthCm);
@@ -151,7 +149,7 @@ export function setSizeFromCm(params: {
   if (orientation) sizePatch.orientation = orientation;
   if (typeof notes === "string" && notes.trim()) sizePatch.notes = notes.trim();
 
-  return saveOrderDraft({ size: sizePatch });
+  return saveOrderDraft({ size: sizePatch, ...(orientation ? { orientation } : {}) });
 }
 
 /* ==================== Работа с фото (оригинал в IndexedDB) ==================== */
@@ -258,7 +256,7 @@ function drawContain(img: HTMLImageElement, w: number, h: number) {
   return { canvas, ctx };
 }
 
-/* ==================== Графика (удобные хелперы, опционально) ==================== */
+/* ==================== Графика (удобные хелперы) ==================== */
 
 export function addGraphic(g: Graphic): OrderDraft {
   const cur = loadOrderDraft();
