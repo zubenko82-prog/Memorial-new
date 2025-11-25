@@ -7,6 +7,10 @@
 //   снизу — мини-эскиз (клик = сохранить изображение) и «Пожелания».
 // - Миниатюры графики: не фиксированный размер, но ограничены max-width/max-height = 35px; справа имя файла, при дублях ×кол-во.
 // - В мини-эскизе тыла используем именно backBig || backMini (исправлено).
+//
+// ВАЖНО: здесь мы
+// - явно отображаем и НЕ перетираем orientation (size.orientation) при сохранении;
+// - берём актуальный draft перед сохранением (loadOrderDraft), чтобы избежать потери orientation при merge.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -211,6 +215,10 @@ function cmValue(n?: number): string {
   if (typeof n !== "number" || !isFinite(n)) return "—";
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
 }
+function orientationLabel(o?: "vertical" | "horizontal"): string {
+  if (!o) return "—";
+  return o === "horizontal" ? "горизонтальная" : "вертикальная";
+}
 
 /* ===== Компонент ===== */
 export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
@@ -320,6 +328,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [backWH, setBackWH] = useState<{ w: number; h: number } | null>(null);
   const frontAR = frontWH ? `${frontWH.w} / ${frontWH.h}` : undefined;
   const backAR = backWH ? `${backWH.w} / ${backWH.h}` : undefined;
+
+  // orientation для отображения
+  const draftOrientation = (order.size?.orientation as "vertical" | "horizontal" | undefined) ?? ((order as any).orientation as "vertical" | "horizontal" | undefined);
 
   // Сохранить эскиз (скачивание)
   const downloadDataUrl = (dataUrl: string, filename: string) => {
@@ -528,16 +539,25 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                     customerNotes: (contactNotes || "").trim() || undefined
                   };
                   saveIntro(introNext, { lock: false });
+
+                  // Берём АКТУАЛЬНЫЙ драфт прямо перед сохранением, чтобы не потерять orientation (и другие поля).
+                  const cur = loadOrderDraft();
                   const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+
+                  const sizePatch = {
+                    ...(cur.size || {}), // гарантируем сохранение width/height/thickness/orientation
+                    notes: sizeNotes?.trim() || undefined
+                  };
+
                   const next = saveOrderDraft({
-                    size: { ...(order.size || {}), notes: sizeNotes?.trim() || undefined },
+                    size: sizePatch as any,
                     engraving: {
-                      ...(order.engraving || {}),
+                      ...(cur.engraving || {}),
                       epitaphs: epLines.length ? epLines : undefined,
                       epitaphText: epLines.length === 1 ? epLines[0] : undefined
                     },
-                    editor: { ...(order as any).editor, wishes: (frontWishes || "").trim() || undefined },
-                    editorBack: { ...(order as any).editorBack, wishes: (backWishes || "").trim() || undefined },
+                    editor: { ...(cur as any).editor, wishes: (frontWishes || "").trim() || undefined },
+                    editorBack: { ...(cur as any).editorBack, wishes: (backWishes || "").trim() || undefined },
                     notes: orderNotes?.trim() || undefined
                   });
                   setOrder(next);
@@ -588,8 +608,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Размеры/характеристики</div>
             {!editing ? (
               <div style={{ display: "grid", gap: 4, color: palette(theme).text }}>
-                <div style={{ padding: "8px 0" }}>
-                  {cmValue(mmToCm(order.size?.height))}&#215;{cmValue(mmToCm(order.size?.width))}&#215;{cmValue(mmToCm(order.size?.thickness))} см
+                <div style={{ padding: "6px 0" }}>
+                  {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
+                </div>
+                <div style={{ padding: "4px 0", opacity: 0.9 }}>
+                  Ориентация: {orientationLabel(draftOrientation)}
                 </div>
                 {sizeNotes ? <div style={{ padding: "8px 0" }}>{sizeNotes}</div> : null}
               </div>
