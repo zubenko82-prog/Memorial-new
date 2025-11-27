@@ -1,18 +1,15 @@
 // src/screens/EditorStep.tsx
 // Редактор элементов с собственным рендером контента, мини-кнопками и превью в драфт.
 //
-// Новое:
-// - Изначальное расположение элементов считываем с эскиза (SketchTemplate):
-//   скрытно рендерим SketchTemplate, читаем DOM-узлы по data-атрибутам
-//   (data-sketch-el="portrait|metric|epitaph|cross|graphic", data-sketch-key="..."),
-//   конвертируем boundingClientRect → проценты относительно «контентной» области,
-//   и используем как дефолтные рамки редактора.
-// - Исправлены потенциальные утечки слушателей и импорт useCallback.
-//
-// По-прежнему:
-// - Синхронизация элементов редактора с данными драфта (добавление/удаление).
-// - Мини-кнопки: метрика (ПРОПИСНЫЕ/строчные), эпитафия (Лесенкой/В строку), графика (Отразить ⇄).
-// - Превью рендерится в canvas и сохраняется в драфт.
+// Исправления и улучшения:
+// 1) Ориентация шаблона теперь определяется корректно с первого раза.
+//    Мы ждём, пока скрытый SketchTemplate полностью отрендерится и изображение загрузится,
+//    затем измеряем элементы (по data-sketch-el) и инициализируем рамки редактора.
+// 2) Редактор действительно располагает элементы по шаблону (а не по своим дефолтам).
+//    Как только измерения готовы, один раз применяем координаты из SketchTemplate ко всем текущим элементам
+//    (и создаём отсутствующие), не перезаписывая последующие ручные изменения.
+// 3) Устранён ReferenceError (добавлен импорт useCallback) и устранены потенциальные циклы setState
+//    (аккуратные зависимости, одноразовые применения по флагам).
 
 import React, {
   useEffect,
@@ -318,7 +315,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (d.mode.includes("e")) nw = w + dxPct;
         if (d.mode.includes("s")) nh = h + dyPct;
         if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
-        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dyPct; }
+        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dxPct; }
 
         if (keepRatio) {
           if (["e", "w"].some((k) => d.mode.includes(k))) nh = nw / startRatio;
@@ -346,7 +343,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  // Автосохранение геометрии + wishes
+  // Автосохранение геометрии + wishes (debounce)
   useEffect(() => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
@@ -410,21 +407,29 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   /* ===== СКРЫТЫЙ ЭСКИЗ ДЛЯ ИНИЦИАЛИЗАЦИИ РАМOК ===== */
 
-  // контейнер скрытого рендера SketchTemplate
   const hiddenSketchRef = useRef<HTMLDivElement | null>(null);
-  // измеренные дефолты из скетча
   const sketchDefaultsRef = useRef<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
+  const measureRetryTimerRef = useRef<number | null>(null);
+  const [sketchReady, setSketchReady] = useState(false);
+  const appliedSketchDefaultsRef = useRef(false);
 
-  // Утилита: пересчитать DOM -> проценты в контентной области
   const measureHiddenSketch = useCallback(() => {
-    const root = hiddenSketchRef.current;
-    if (!root) return;
+    const rootHost = hiddenSketchRef.current;
+    if (!rootHost) return false;
 
-    const sketchRoot = root.querySelector("[data-sketch-orient]") as HTMLElement | null;
-    if (!sketchRoot) return;
+    const sketchRoot = rootHost.querySelector("[data-sketch-orient]") as HTMLElement | null;
+    if (!sketchRoot) return false;
+
+    // Проверяем, что картинка в SketchTemplate уже реализована и имеет размеры
+    const img = sketchRoot.querySelector("img") as HTMLImageElement | null;
+    const imgLoaded =
+      img && img.naturalWidth > 0 && img.naturalHeight > 0 && img.clientWidth > 0 && img.clientHeight > 0;
+
+    if (!imgLoaded) return false;
 
     const rootRect = sketchRoot.getBoundingClientRect();
-    // Контентная область (за вычетом внутренних паддингов SketchTemplate = SKETCH_PAD)
+    if (rootRect.height < 10 || rootRect.width < 10) return false;
+
     const content = {
       left: rootRect.left + SKETCH_PAD,
       top: rootRect.top + SKETCH_PAD,
@@ -443,21 +448,21 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
 
     // портреты
-    root.querySelectorAll<HTMLElement>('[data-sketch-el="portrait"]').forEach((n) => {
+    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="portrait"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("portrait", key, n.getBoundingClientRect());
     });
 
     // метрики
-    root.querySelectorAll<HTMLElement>('[data-sketch-el="metric"]').forEach((n) => {
+    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="metric"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("metric", key, n.getBoundingClientRect());
     });
 
-    // эпитафии — объединяем строки одного индекса
-    const epNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-sketch-el="epitaph"]'));
+    // эпитафии (консолидируем строки одного индекса)
+    const epNodes = Array.from(rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="epitaph"]'));
     if (epNodes.length) {
       const grouped = new Map<string, DOMRect[]>();
       for (const n of epNodes) {
@@ -478,33 +483,60 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     }
 
     // кресты
-    root.querySelectorAll<HTMLElement>('[data-sketch-el="cross"]').forEach((n) => {
+    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="cross"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("cross", key, n.getBoundingClientRect());
     });
 
     // прочая графика
-    root.querySelectorAll<HTMLElement>('[data-sketch-el="graphic"]').forEach((n) => {
+    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="graphic"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("graphic", key, n.getBoundingClientRect());
     });
 
     sketchDefaultsRef.current = map;
+    return map.size > 0;
   }, []);
 
-  // Пересчитываем при изменениях входных данных/ширины контейнера/ориентации
-  useEffect(() => {
-    const t = setTimeout(() => measureHiddenSketch(), 0);
-    window.addEventListener("resize", measureHiddenSketch);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener("resize", measureHiddenSketch);
+  // Ждать готовности скрытого SketchTemplate (ориентация+изображение загружены), затем измерять
+  const ensureSketchMeasured = useCallback(() => {
+    if (measureRetryTimerRef.current) {
+      window.clearTimeout(measureRetryTimerRef.current);
+      measureRetryTimerRef.current = null;
+    }
+    let attempts = 0;
+    const tick = () => {
+      attempts++;
+      const ok = measureHiddenSketch();
+      if (ok) {
+        setSketchReady(true);
+        return;
+      }
+      if (attempts < 40) {
+        measureRetryTimerRef.current = window.setTimeout(tick, 50) as unknown as number;
+      } else {
+        // Даже если не удалось — зафиксируем попытку, чтобы не зависать.
+        setSketchReady(true);
+      }
     };
-  }, [measureHiddenSketch, containerW, peopleBlocks, epitaphs, crosses, others, draft?.size?.orientation]);
+    tick();
+  }, [measureHiddenSketch]);
 
-  // ===== СИНХРОНИЗАЦИЯ ЭЛЕМЕНТОВ С ДАННЫМИ =====
+  // Триггеры измерения: изменение входных данных / ориентации / ширины контейнера
+  useEffect(() => {
+    setSketchReady(false);
+    ensureSketchMeasured();
+    return () => {
+      if (measureRetryTimerRef.current) {
+        window.clearTimeout(measureRetryTimerRef.current);
+        measureRetryTimerRef.current = null;
+      }
+    };
+  }, [ensureSketchMeasured, containerW, peopleBlocks, epitaphs, crosses, others, draft?.size?.orientation]);
+
+  // ===== СИНХРОНИЗАЦИЯ ЭЛЕМЕНТОВ С ДАННЫМИ + ПРИМЕНЕНИЕ ИЗМЕРЕНИЙ ШАБЛОНА =====
   const desiredIds = useMemo(() => {
     const ids: string[] = [];
     for (const p of peopleBlocks) {
@@ -517,75 +549,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return new Set(ids);
   }, [peopleBlocks, epitaphs, crosses, others]);
 
-  function makeDefaultEl(id: string, z: number): EditorEl {
-    const [type] = id.split("-");
-    const elType = type as ElType;
-
-    // 1) Пытаемся взять измеренные координаты из скрытого SketchTemplate
-    const measured = sketchDefaultsRef.current.get(id);
-    if (measured) {
-      const base: EditorEl = {
-        id,
-        type: elType,
-        ...measured,
-        z,
-        title: id
-      };
-      if (elType === "portrait") base.bw = true;
-      if (elType === "metric") base.uppercase = true;
-      if (elType === "graphic") base.flipH = false;
-      if (elType === "epitaph") {
-        const idx = Number(id.split("-")[1]);
-        if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
-      }
-      return base;
-    }
-
-    // 2) Если измерений нет — допустимые дефолты
-    const key = id.slice((elType as string).length + 1);
-    const idx = Number(key);
-    let x = 10, y = 10, w = 30, h = 20;
-
-    switch (elType) {
-      case "portrait":
-        x = 8; y = 10; w = 32; h = 45;
-        break;
-      case "metric":
-        x = 10; y = 58; w = 80; h = 24;
-        break;
-      case "epitaph": {
-        w = 80; h = 14; x = 10;
-        const baseY = 80;
-        const offset = Number.isFinite(idx) ? idx * (h + 2) : 0;
-        y = clamp(baseY + offset, 0, 100 - h);
-        break;
-      }
-      case "cross":
-        w = 18; h = 18; y = 6; x = (idx % 2 === 0) ? 6 : 76;
-        break;
-      case "graphic":
-        w = 24; h = 24; y = 60; x = (idx % 2 === 0) ? 6 : 70;
-        break;
-    }
-
-    const base: EditorEl = {
-      id,
-      type: elType,
-      ...clampBox(x, y, w, h),
-      z,
-      title: id
-    };
-
-    if (elType === "portrait") base.bw = true;
-    if (elType === "metric") base.uppercase = true;
-    if (elType === "graphic") base.flipH = false;
-    if (elType === "epitaph") {
-      if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
-    }
-
-    return base;
-  }
-
+  // базовая синхронизация (добавление/удаление по данным)
   useEffect(() => {
     setElements((prev) => {
       const prevMap = new Map(prev.map((e) => [e.id, e]));
@@ -611,14 +575,96 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       if (missing.length) changed = true;
 
       const maxZ = kept.reduce((m, e) => Math.max(m, e.z), 0);
-      const added: EditorEl[] = missing.map((id, i) => makeDefaultEl(id, maxZ + i + 1));
+      const added: EditorEl[] = missing.map((id, i) => {
+        const [type] = id.split("-");
+        const elType = type as ElType;
+        // Если измерения уже есть — используем их; иначе — временный дефолт, позже заменим.
+        const measured = sketchDefaultsRef.current.get(id);
+        if (measured) {
+          const base: EditorEl = {
+            id,
+            type: elType,
+            ...measured,
+            z: maxZ + i + 1,
+            title: id
+          };
+          if (elType === "portrait") base.bw = true;
+          if (elType === "metric") base.uppercase = true;
+          if (elType === "graphic") base.flipH = false;
+          if (elType === "epitaph") {
+            const idx = Number(id.split("-")[1]);
+            if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
+          }
+          return base;
+        }
+        // дефолт
+        let x = 10, y = 10, w = 30, h = 20;
+        const idx = Number(id.slice(elType.length + 1));
+        switch (elType) {
+          case "portrait": x = 8; y = 10; w = 32; h = 45; break;
+          case "metric": x = 10; y = 58; w = 80; h = 24; break;
+          case "epitaph": {
+            w = 80; h = 14; x = 10;
+            const baseY = 80; const offset = Number.isFinite(idx) ? idx * (h + 2) : 0;
+            y = clamp(baseY + offset, 0, 100 - h); break;
+          }
+          case "cross": w = 18; h = 18; y = 6; x = (idx % 2 === 0) ? 6 : 76; break;
+          case "graphic": w = 24; h = 24; y = 60; x = (idx % 2 === 0) ? 6 : 70; break;
+        }
+        const base: EditorEl = { id, type: elType, ...clampBox(x, y, w, h), z: maxZ + i + 1, title: id };
+        if (elType === "portrait") base.bw = true;
+        if (elType === "metric") base.uppercase = true;
+        if (elType === "graphic") base.flipH = false;
+        if (elType === "epitaph") {
+          if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
+        }
+        return base;
+      });
 
       if (!changed) return prev;
-
       return kept.concat(added);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desiredIds]);
+
+  // Одноразовое применение измерений SketchTemplate ко всем элементам, когда они готовы.
+  useEffect(() => {
+    if (!sketchReady || appliedSketchDefaultsRef.current) return;
+    if (sketchDefaultsRef.current.size === 0) {
+      appliedSketchDefaultsRef.current = true; // чтобы не зациклиться
+      return;
+    }
+    setElements((prev) => {
+      // Если уже есть элементы — обновим координаты по измерениям (не трогая z и прочие настройки).
+      const map = sketchDefaultsRef.current;
+      const updated = prev.map((el) => {
+        const m = map.get(el.id);
+        if (!m) return el;
+        return { ...el, ...m };
+      });
+      // На случай, если чего-то не хватает — добавим
+      const existing = new Set(updated.map((e) => e.id));
+      const toAdd: EditorEl[] = [];
+      let maxZ = updated.reduce((m, e) => Math.max(m, e.z), 0);
+      map.forEach((m, id) => {
+        if (!existing.has(id)) {
+          const [type] = id.split("-");
+          const elType = type as ElType;
+          const base: EditorEl = { id, type: elType, ...m, z: ++maxZ, title: id };
+          if (elType === "portrait") base.bw = true;
+          if (elType === "metric") base.uppercase = true;
+          if (elType === "graphic") base.flipH = false;
+          if (elType === "epitaph") {
+            const idx = Number(id.split("-")[1]);
+            if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
+          }
+          toAdd.push(base);
+        }
+      });
+      return updated.concat(toAdd);
+    });
+    appliedSketchDefaultsRef.current = true;
+  }, [sketchReady, epitaphs]);
 
   // Превью в драфт (canvas)
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
@@ -1138,7 +1184,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onError={() => { if (!aspect) setImgWH({ w: 4, h: 3 }); }}
             />
 
-            {/* Контент */}
+            {/* Контент: располагаем в рамках редактора */}
             <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
               <ContentOverlay />
             </div>
