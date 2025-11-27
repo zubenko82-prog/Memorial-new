@@ -57,18 +57,18 @@ const TPL_SETTINGS: TemplateSettings = {
         grid: {
           heightPctOfRow: 95,         // портрет занимает до 95% высоты ряда
           widthPctOfColLimitPct: 95,  // и не шире 95% ширины колонки
-          topExtraPctOfRow: 8         // дополнительный сдвиг вниз от верхнего края ряда в процентах
+          topExtraPctOfRow: 18         // дополнительный сдвиг вниз от верхнего края ряда в процентах
         }
       },
       metric: {
         // Твики сетки 2×3 для метрики
         grid: {
-          widthPctOfCol: 70,          // метрика — 70% ширины колонки (мельче)
-          maxHeightPctOfRow: 90,      // высота метрики не более 90% высоты ряда
+          widthPctOfCol: 50,          // метрика — 70% ширины колонки (мельче)
+          maxHeightPctOfRow: 60,      // высота метрики не более 90% высоты ряда
           topExtraPctOfRow: 0         // можно добавить сдвиг вниз в % ряда при необходимости
         },
         display: {
-          scale: 0.88                 // визуальный масштаб метрики (<1 делает её компактнее)
+          scale: 0.6                 // визуальный масштаб метрики (<1 делает её компактнее)
         }
       }
       // cross/graphics/epitaphs для "one" — без индивидуальных правок (используем базовые CFG)
@@ -116,7 +116,7 @@ const CFG = {
             l3: { font: `400 clamp(14px, 2.6vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.2px", opacity: 0.95 }
           }
         },
-        cross: { pos: { top: "6%", left: "50%", transform: "translateX(-50%)" }, size: { width: "8%", height: "auto" }, margins: {} },
+        cross: { pos: { top: "6%", left: "6%", transform: "translateX(-50%)" }, size: { width: "8%", height: "auto" }, margins: {} },
         epitaphs: {
           pos: { bottom: "34%", left: "50%", transform: "translateX(-50%)" },
           size: { width: "88%", height: "auto" },
