@@ -1,15 +1,14 @@
 // src/screens/EditorStep.tsx
-// Редактор элементов с собственным рендером контента, мини-кнопками и превью в драфт.
+// Редактор элементов: объединённый шаг.
+// - Расположение шаблонов берём из SketchTemplate (встроенная внутрь этого файла версия).
+//   В скрытом контейнере рендерим шаблон и считываем координаты по data-атрибутам.
+// - Функционал редактора берём из EditorStep: рамки, DnD/resize, мини-кнопки, рендер превью,
+//   авто-синхронизация с драфтом, «лесенка» для «Помним, любим, скорбим…».
 //
-// Исправления и улучшения:
-// 1) Ориентация шаблона теперь определяется корректно с первого раза.
-//    Мы ждём, пока скрытый SketchTemplate полностью отрендерится и изображение загрузится,
-//    затем измеряем элементы (по data-sketch-el) и инициализируем рамки редактора.
-// 2) Редактор действительно располагает элементы по шаблону (а не по своим дефолтам).
-//    Как только измерения готовы, один раз применяем координаты из SketchTemplate ко всем текущим элементам
-//    (и создаём отсутствующие), не перезаписывая последующие ручные изменения.
-// 3) Устранён ReferenceError (добавлен импорт useCallback) и устранены потенциальные циклы setState
-//    (аккуратные зависимости, одноразовые применения по флагам).
+// Важно:
+// - Ориентация берётся из драфта (size.orientation или legacy orientation). Если нет — по соотношению сторон изображения.
+// - Считывание координат (инициализация рамок) выполняется ПОСЛЕ того, как шаблон и фон загрузились и разметка готова.
+// - Инициализация позиционирования из шаблона выполняется один раз (не затирает ручные правки).
 
 import React, {
   useEffect,
@@ -19,10 +18,9 @@ import React, {
   useCallback
 } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
-import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft } from "../lib/order";
 
-/* ===== UI ===== */
+/* ===== Общие стили/UI ===== */
 function glassPanelStyle() {
   return {
     background: "rgba(20,20,24,0.55)",
@@ -55,7 +53,7 @@ function bottomUnderlayGradient(): React.CSSProperties {
   };
 }
 
-/* ===== Types ===== */
+/* ===== Типы редактора ===== */
 type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type Align = "left" | "center" | "right";
 type EditorEl = {
@@ -66,7 +64,7 @@ type EditorEl = {
   title?: string;
   locked?: boolean;
   // Контентные настройки
-  align?: Align;           // для metric/epitaph (не трогаем)
+  align?: Align;           // для metric/epitaph
   uppercase?: boolean;     // для metric/epitaph
   italic?: boolean;        // для metric/epitaph
   flipH?: boolean;         // для graphic
@@ -74,7 +72,7 @@ type EditorEl = {
   staircase?: boolean;     // для «Помним, любим, скорбим…»: строка/лесенка
 };
 
-/* ===== Helpers ===== */
+/* ===== Хелперы ===== */
 function isCrossCategoryName(s?: string) {
   const v = (s || "").toLowerCase();
   return v.includes("крест") || v.includes("cross") || v.includes("crosses");
@@ -85,7 +83,7 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const SKETCH_PAD = 8; // Должен совпадать с CFG.general.containerPadding в SketchTemplate
+const SKETCH_PAD = 8; // Должен совпадать с CFG.general.containerPadding в шаблоне
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -106,7 +104,7 @@ async function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-// Нормализация фразы «Помним, любим, скорбим…» (для сравнения)
+// Нормализация фразы «Помним, любим, скорбим…»
 const normRemember = (t?: string) =>
   (t || "")
     .toLowerCase()
@@ -116,7 +114,6 @@ const normRemember = (t?: string) =>
 
 const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
 
-// Разбиение строки с сохранением пунктуации
 function splitRememberPreserve(text: string) {
   const t = (text || "").trim();
   const parts: string[] = [];
@@ -136,56 +133,459 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Component ===== */
+/* ===== Конфигурация шаблона (из SketchTemplate) ===== */
+type Orientation = "vertical" | "horizontal";
+const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
+
+const CFG = {
+  general: {
+    minContainerHeight: 200,
+    containerPadding: 8,
+    carvingOpacityDefault: 0.4
+  },
+  horizontal: {
+    layout: { gap: 12, columnMinW: 140 },
+    one: {
+      blocks: {
+        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" } },
+        metric: {
+          pos: { left: "50%", transform: "translateX(-50%)" },
+          size: { width: "100%", maxWidth: "520px", height: "auto" },
+          text: {
+            uppercase: true, align: "center",
+            l1: { font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
+            l2: { font: `600 clamp(16px, 3vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
+            l3: { font: `400 clamp(14px, 2.6vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.2px", opacity: 0.95 }
+          }
+        },
+        cross: { pos: { top: "6%", left: "50%", transform: "translateX(-50%)" }, size: { width: "8%", height: "auto" } },
+        epitaphs: {
+          size: { width: "88%", height: "auto" },
+          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.0vw, 22px)", lineHeight: 1.2, letterSpacing: "0.3px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
+        },
+        graphics: { pos: { bottom: "7%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "80px", width: "auto" } }
+      }
+    },
+    two: {
+      blocks: {
+        portraits: { pos: { top: "8%", left: "50%", transform: "translateX(-50%)" }, size: { width: "45%", height: "auto" } },
+        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "80%", height: "auto" } },
+        cross: { pos: { top: "6%", left: "4%" }, size: { width: "8%", height: "auto" } },
+        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.8vw, 10px)", lineHeight: 1.15 } },
+        graphics: { pos: { bottom: "4%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "42px", width: "auto" } }
+      }
+    },
+    many: {
+      blocks: {
+        portraits: { pos: { top: "8%", left: "50%", transform: "translateX(-50%)" }, size: { width: "78%", height: "auto" } },
+        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "90%", height: "auto" } },
+        cross: { pos: { top: "6%", left: "4%" }, size: { width: "7%", height: "auto" } },
+        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15 } },
+        graphics: { pos: { bottom: "5%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "64px", width: "auto" } }
+      }
+    }
+  },
+  vertical: {
+    layout: { rowsHeightFactor: 0.5, rowGapPx: 10 },
+    one: {
+      blocks: {
+        portraits: { pos: { top: "12%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" } },
+        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "80%", height: "auto" } },
+        cross: { pos: { top: "4%", left: "4%" }, size: { width: "14%", height: "auto" } },
+        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.2vw, 22px)", lineHeight: 1.2 } },
+        graphics: { pos: { bottom: "6%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "80px", width: "auto" } }
+      }
+    },
+    two: {
+      blocks: {
+        portraits: { pos: {}, size: { width: "60%", height: "auto" } },
+        metric: { pos: {}, size: { width: "90%", height: "auto" } },
+        cross: { pos: { top: "4%", left: "4%" }, size: { width: "14%", height: "auto" } },
+        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.9vw, 20px)", lineHeight: 1.15 } },
+        graphics: { pos: { bottom: "7%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "74px", width: "auto" } }
+      }
+    },
+    many: {
+      blocks: {
+        portraits: { pos: {}, size: { width: "52%", height: "auto" } },
+        metric: { pos: {}, size: { width: "92%", height: "auto" } },
+        cross: { pos: { top: "4%", left: "4%" }, size: { width: "13%", height: "auto" } },
+        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15 } },
+        graphics: { pos: { bottom: "5%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "64px", width: "auto" } }
+      }
+    }
+  }
+} as const;
+
+/* ===== Встроенный шаблон для скрытого рендера и считывания позиций ===== */
+function pickTplKey(n: number): "one" | "two" | "many" {
+  if (n <= 1) return "one";
+  if (n === 2) return "two";
+  return "many";
+}
+
+function SketchTemplateHidden({
+  item,
+  peopleBlocks,
+  crosses = [],
+  others = [],
+  epitaphs = [],
+  carvingOpacity = CFG.general.carvingOpacityDefault,
+  orientationOverride
+}: {
+  item: { url?: string; name?: string } | null;
+  peopleBlocks: Array<{ id: string; lines: string[]; photo?: string | null }>;
+  crosses?: Array<{ url: string; name?: string }>;
+  others?: Array<{ url: string; name?: string }>;
+  epitaphs?: string[];
+  carvingOpacity?: number;
+  orientationOverride?: Orientation;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
+
+  const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
+
+  useEffect(() => {
+    const d = loadOrderDraft();
+    const o = (d.size?.orientation as Orientation | undefined) ?? (d as any).orientation ?? null;
+    setForcedOrientation(o);
+  }, []);
+
+  const recalc = useCallback(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    const r = img.getBoundingClientRect();
+    setImgRect({ w: r.width, h: r.height });
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => recalc();
+    window.addEventListener("resize", onResize);
+    const RO = (window as any).ResizeObserver as typeof ResizeObserver | undefined;
+    let ro: ResizeObserver | null = null;
+    if (RO && imgRef.current) {
+      ro = new RO(onResize);
+      ro.observe(imgRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", onResize);
+      ro?.disconnect();
+    };
+  }, [recalc]);
+
+  const isVerticalByImage = imgRect.h > imgRect.w;
+  const orientation: Orientation | null = orientationOverride ?? forcedOrientation ?? null;
+  const isVertical = orientation ? orientation === "vertical" : isVerticalByImage;
+
+  const tplKey = pickTplKey(peopleBlocks.length);
+  const H = imgRect.h;
+  const W = imgRect.w;
+
+  // Горизонтальный 1: портрет+метрика — как в основной версии
+  const gap = Math.round(0.015 * H);
+  const topOffset = Math.round(0.06 * H);
+  let portraitH = Math.max(40, Math.round(0.40 * H));
+  let portraitW = Math.round(portraitH * (3 / 4));
+  if (portraitW > W * 0.9) {
+    const k = (W * 0.9) / portraitW;
+    portraitW = Math.max(40, Math.round(portraitW * k));
+    portraitH = Math.max(40, Math.round(portraitH * k));
+  }
+  const portraitTop = topOffset;
+  const metricTargetH = Math.max(24, Math.round(0.20 * H));
+  const metricTop = portraitTop + portraitH + gap;
+  const metricW = Math.round(W * 0.8);
+
+  // Нижние блоки: эпитафия и графика
+  const epitaphW = Math.round(W * 0.88);
+  const bottomPadPx = Math.max(8, Math.round(0.02 * H));
+  const graphicsMaxHDefault = Math.round(0.18 * H);
+
+  // Кресты
+  const crossTop = "6%";
+
+  // Рендер скрытно (важны только data-sketch-el с размерами bbox)
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        ...bottomUnderlayGradient(),
+        position: "relative",
+        width: "100%",
+        height: Math.max(CFG.general.minContainerHeight, H + CFG.general.containerPadding * 2),
+        overflow: "hidden",
+        userSelect: "none",
+        padding: CFG.general.containerPadding,
+        boxSizing: "border-box",
+        color: "#fff"
+      }}
+      data-sketch-orient={isVertical ? "vertical" : "horizontal"}
+      data-sketch-orient-source={orientation ? "draft" : "image"}
+    >
+      <img
+        ref={imgRef}
+        src={item?.url || ""}
+        alt={item?.name || "Изделие"}
+        style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
+        draggable={false}
+        onLoad={() => setTimeout(recalc, 0)}
+      />
+
+      {/* Люди */}
+      {!isVertical ? (
+        tplKey === "one" ? (
+          <>
+            {/* Портрет */}
+            {peopleBlocks[0] && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: portraitTop,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  width: portraitW,
+                  pointerEvents: "none"
+                }}
+              >
+                <div
+                  data-sketch-el="portrait"
+                  data-sketch-key={peopleBlocks[0].id}
+                  style={{
+                    width: portraitW,
+                    height: portraitH,
+                    borderRadius: 4,
+                    overflow: "hidden",
+                    background: "rgba(255,255,255,0.04)"
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Метрика */}
+            {peopleBlocks[0] && (
+              <div
+                data-sketch-el="metric"
+                data-sketch-key={peopleBlocks[0].id}
+                style={{
+                  position: "absolute",
+                  top: metricTop,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  width: metricW,
+                  height: metricTargetH
+                }}
+              />
+            )}
+          </>
+        ) : tplKey === "two" ? (
+          // Горизонтальный: 2 человека — две колонки по B
+          <div
+            style={{
+              position: "absolute",
+              left: 16,
+              right: 16,
+              top: (CFG.horizontal.one.blocks as any).portraits.pos.top,
+              display: "grid",
+              gridTemplateColumns: `repeat(2, minmax(${(CFG.horizontal.layout as any).columnMinW}px, 320px))`,
+              gap: (CFG.horizontal.layout as any).gap,
+              justifyContent: "center",
+              alignItems: "start",
+              pointerEvents: "none"
+            }}
+          >
+            {peopleBlocks.slice(0, 2).map((p) => (
+              <div key={p.id} style={{ width: "100%", maxWidth: 320, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <div style={{ width: (CFG.horizontal.two.blocks as any).portraits.size.width }}>
+                  <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4" }} />
+                </div>
+                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.horizontal.two.blocks as any).metric.size.width }} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          // Горизонтальный many
+          <div
+            style={{
+              position: "absolute",
+              left: 16,
+              right: 16,
+              top: (CFG.horizontal.one.blocks as any).portraits.pos.top,
+              display: "grid",
+              gridTemplateColumns: `repeat(${Math.min(4, Math.max(3, peopleBlocks.length))}, minmax(${(CFG.horizontal.layout as any).columnMinW}px, 260px))`,
+              gap: (CFG.horizontal.layout as any).gap,
+              alignItems: "start",
+              justifyContent: "center",
+              pointerEvents: "none"
+            }}
+          >
+            {peopleBlocks.map((p) => (
+              <div key={p.id} style={{ width: "100%", maxWidth: 260, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <div style={{ width: (CFG.horizontal.many.blocks as any).portraits.size.width }}>
+                  <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4" }} />
+                </div>
+                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.horizontal.many.blocks as any).metric.size.width }} />
+              </div>
+            ))}
+          </div>
+        )
+      ) : tplKey === "one" ? (
+        // Вертикальный 1
+        <>
+          {peopleBlocks[0] && (
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                transform: "translateX(-50%)",
+                top: (CFG.vertical.one.blocks as any).portraits.pos.top ?? "12%",
+                width: "100%",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                pointerEvents: "none"
+              }}
+            >
+              <div style={{ width: (CFG.vertical.one.blocks as any).portraits.size.width, maxWidth: (CFG.vertical.one.blocks as any).portraits.size.maxWidth }}>
+                <div data-sketch-el="portrait" data-sketch-key={peopleBlocks[0].id} style={{ width: "100%", aspectRatio: "3 / 4" }} />
+              </div>
+              <div data-sketch-el="metric" data-sketch-key={peopleBlocks[0].id} style={{ width: (CFG.vertical.one.blocks as any).metric.size.width, maxWidth: (CFG.vertical.one.blocks as any).metric.size.maxWidth }} />
+            </div>
+          )}
+        </>
+      ) : tplKey === "two" ? (
+        // Вертикальный 2 (две строки-ряды)
+        <div
+          style={{
+            position: "absolute",
+            top: (CFG.vertical.one.blocks as any).portraits.pos.top,
+            left: 16,
+            right: 16,
+            display: "grid",
+            gridTemplateRows: `repeat(2, 1fr)`,
+            rowGap: (CFG.vertical.layout as any).rowGapPx,
+            pointerEvents: "none"
+          }}
+        >
+          {peopleBlocks.slice(0, 2).map((p) => (
+            <div key={p.id} style={{ width: "100%", display: "grid", gridTemplateColumns: `45% 55%`, columnGap: 12, alignItems: "center" }}>
+              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: (CFG.vertical.two.blocks as any).portraits.size.width, aspectRatio: "3 / 4" }} />
+              </div>
+              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.two.blocks as any).metric.size.width }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        // Вертикальный many
+        <div
+          style={{
+            position: "absolute",
+            top: (CFG.vertical.one.blocks as any).portraits.pos.top,
+            left: 16,
+            right: 16,
+            display: "grid",
+            gridTemplateRows: `repeat(${peopleBlocks.length}, 1fr)`,
+            rowGap: (CFG.vertical.layout as any).rowGapPx,
+            pointerEvents: "none"
+          }}
+        >
+          {peopleBlocks.map((p) => (
+            <div key={p.id} style={{ width: "100%", display: "grid", gridTemplateColumns: `42% 58%`, columnGap: 12, alignItems: "center" }}>
+              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: (CFG.vertical.many.blocks as any).portraits.size.width, aspectRatio: "3 / 4" }} />
+              </div>
+              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.many.blocks as any).metric.size.width }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Кресты: правила — по умолчанию слева; 2 — слева и справа; H two: 1 центр, 2 края */}
+      {(!isVertical && tplKey === "two") ? (
+        <>
+          {crosses[0] && (
+            <div data-sketch-el="cross" data-sketch-key="0" style={{ position: "absolute", top: crossTop, left: "50%", transform: "translateX(-50%)", width: (CFG.horizontal.two.blocks as any).cross.size.width }} />
+          )}
+          {crosses[1] && (
+            <div data-sketch-el="cross" data-sketch-key="1" style={{ position: "absolute", top: crossTop, right: "4%", width: (CFG.horizontal.two.blocks as any).cross.size.width }} />
+          )}
+          {crosses.length >= 2 && (
+            <div data-sketch-el="cross" data-sketch-key="0" style={{ position: "absolute", top: crossTop, left: "4%", width: (CFG.horizontal.two.blocks as any).cross.size.width }} />
+          )}
+        </>
+      ) : (
+        <>
+          {crosses[0] && (
+            <div data-sketch-el="cross" data-sketch-key="0" style={{ position: "absolute", top: crossTop, left: "4%", width: (CFG.horizontal.one.blocks as any).cross.size.width }} />
+          )}
+          {crosses[1] && (
+            <div data-sketch-el="cross" data-sketch-key="1" style={{ position: "absolute", top: crossTop, right: "4%", width: (CFG.horizontal.one.blocks as any).cross.size.width }} />
+          )}
+        </>
+      )}
+
+      {/* Эпитафии — общий контейнер (под метрикой, будет измерен объединённо в редакторе) */}
+      {Array.isArray(epitaphs) &&
+        epitaphs.map((_, idx) => (
+          <div key={`epitaph-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)" }} />
+        ))}
+
+      {/* Графика — внизу (у шаблона мы её показываем внизу; в редакторе она будет «у самого низа») */}
+      {others.map((_, idx) => (
+        <div key={`graphic-${idx}`} data-sketch-el="graphic" data-sketch-key={`${idx}`} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)" }} />
+      ))}
+    </div>
+  );
+}
+
+/* ===== Компонент редактора ===== */
 type Props = {
   onBack?: () => void;
-  onContinue?: (payload?: any) => void;   // fallback
-  onRearSide?: (payload?: any) => void;   // Переход на шаг тыльной стороны (предпочтительно)
-  onSendOrder?: (payload?: any) => void;  // Альтернативный коллбэк, если используется в App
+  onContinue?: (payload?: any) => void;
+  onRearSide?: (payload?: any) => void;
+  onSendOrder?: (payload?: any) => void;
 };
 
 export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
   const [outro, setOutro] = useState(false);
 
-  // Элементы редактора
   const [elements, setElements] = useState<EditorEl[]>(
     () => (draft as any)?.editor?.elements || []
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  // Пожелания
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
 
-  // Контейнер
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
   const wishesTimerRef = useRef<number | null>(null);
-  const [containerW, setContainerW] = useState(1);
 
-  // aspect ratio по изделию
+  const [containerW, setContainerW] = useState(1);
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const aspect = useMemo(
     () => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined),
     [imgWH]
   );
 
-  // Слежение за обновлением драфта из других шагов (в текущем табе)
+  // draft live reload
   useEffect(() => {
     const reload = () => setDraft(loadOrderDraft());
     const onFocus = () => reload();
     const onStorage = () => reload();
-    const onVis = () => {
-      if (document.visibilityState === "visible") reload();
-    };
+    const onVis = () => document.visibilityState === "visible" && reload();
     const onDraftUpdated = () => reload();
 
     window.addEventListener("focus", onFocus);
     window.addEventListener("storage", onStorage);
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("draft:updated" as any, onDraftUpdated);
-
     return () => {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("storage", onStorage);
@@ -194,7 +594,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  // Источники контента из draft
+  // sources
   const item = draft?.item || null;
   const engr: any = draft?.engraving || {};
   const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
@@ -207,7 +607,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         return { id: p.id || `person-${idx}`, lines, photo };
       });
     }
-    // legacy
+    // legacy fallback
     const legacyLines: string[] = [];
     if (engr?.fullName) legacyLines.push(String(engr.fullName));
     const dates: string[] = [];
@@ -235,7 +635,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [graphics]
   );
 
-  // Следим за шириной контейнера
+  // width observer
   useEffect(() => {
     const measure = () => {
       const r = wrapperRef.current?.getBoundingClientRect();
@@ -251,7 +651,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  // DnD/Resize
+  /* ===== DnD/Resize ===== */
   const dragRef = useRef<{
     id: string;
     mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -289,7 +689,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     const { w: cw, h: ch } = contentWH();
     const dxPct = ((e.clientX - d.startX) / cw) * 100;
     const dyPct = ((e.clientY - d.startY) / ch) * 100;
-    const withSnap = !e.altKey; // Alt — без снапа
+    const withSnap = !e.altKey;
     const snapStep = e.shiftKey ? 1.5 : 1;
 
     setElements((prev) =>
@@ -343,7 +743,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  // Автосохранение геометрии + wishes (debounce)
+  /* ===== Автосохранение и wishes ===== */
   useEffect(() => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
@@ -364,7 +764,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [elements, wishes]);
 
-  // Сохранение wishes (debounce)
   useEffect(() => {
     if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
     wishesTimerRef.current = window.setTimeout(() => {
@@ -382,7 +781,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [wishes]);
 
-  // ВКЛЮЧИТЬ «Лесенку» по умолчанию для «Помним, любим, скорбим…»
+  /* ===== «Лесенка» по умолчанию ===== */
   const initStaircaseAppliedRef = useRef(false);
   useEffect(() => {
     if (initStaircaseAppliedRef.current) return;
@@ -405,8 +804,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     initStaircaseAppliedRef.current = true;
   }, [elements, epitaphs]);
 
-  /* ===== СКРЫТЫЙ ЭСКИЗ ДЛЯ ИНИЦИАЛИЗАЦИИ РАМOК ===== */
-
+  /* ===== СКРЫТЫЙ рендер шаблона и считывание координат ===== */
   const hiddenSketchRef = useRef<HTMLDivElement | null>(null);
   const sketchDefaultsRef = useRef<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
   const measureRetryTimerRef = useRef<number | null>(null);
@@ -420,11 +818,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     const sketchRoot = rootHost.querySelector("[data-sketch-orient]") as HTMLElement | null;
     if (!sketchRoot) return false;
 
-    // Проверяем, что картинка в SketchTemplate уже реализована и имеет размеры
+    // Проверяем, что картинка уже разложилась (есть реальные размеры)
     const img = sketchRoot.querySelector("img") as HTMLImageElement | null;
     const imgLoaded =
       img && img.naturalWidth > 0 && img.naturalHeight > 0 && img.clientWidth > 0 && img.clientHeight > 0;
-
     if (!imgLoaded) return false;
 
     const rootRect = sketchRoot.getBoundingClientRect();
@@ -447,21 +844,18 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       map.set(`${elType}-${key}`, clampBox(x, y, w, h));
     };
 
-    // портреты
     rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="portrait"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("portrait", key, n.getBoundingClientRect());
     });
 
-    // метрики
     rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="metric"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("metric", key, n.getBoundingClientRect());
     });
 
-    // эпитафии (консолидируем строки одного индекса)
     const epNodes = Array.from(rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="epitaph"]'));
     if (epNodes.length) {
       const grouped = new Map<string, DOMRect[]>();
@@ -482,14 +876,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       });
     }
 
-    // кресты
     rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="cross"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
       pushBox("cross", key, n.getBoundingClientRect());
     });
 
-    // прочая графика
     rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="graphic"]').forEach((n) => {
       const key = n.dataset.sketchKey || "";
       if (!key) return;
@@ -500,7 +892,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return map.size > 0;
   }, []);
 
-  // Ждать готовности скрытого SketchTemplate (ориентация+изображение загружены), затем измерять
   const ensureSketchMeasured = useCallback(() => {
     if (measureRetryTimerRef.current) {
       window.clearTimeout(measureRetryTimerRef.current);
@@ -517,14 +908,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       if (attempts < 40) {
         measureRetryTimerRef.current = window.setTimeout(tick, 50) as unknown as number;
       } else {
-        // Даже если не удалось — зафиксируем попытку, чтобы не зависать.
         setSketchReady(true);
       }
     };
     tick();
   }, [measureHiddenSketch]);
 
-  // Триггеры измерения: изменение входных данных / ориентации / ширины контейнера
   useEffect(() => {
     setSketchReady(false);
     ensureSketchMeasured();
@@ -536,7 +925,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [ensureSketchMeasured, containerW, peopleBlocks, epitaphs, crosses, others, draft?.size?.orientation]);
 
-  // ===== СИНХРОНИЗАЦИЯ ЭЛЕМЕНТОВ С ДАННЫМИ + ПРИМЕНЕНИЕ ИЗМЕРЕНИЙ ШАБЛОНА =====
+  /* ===== Синхронизация состав элементов + одноразовое применение координат шаблона ===== */
   const desiredIds = useMemo(() => {
     const ids: string[] = [];
     for (const p of peopleBlocks) {
@@ -549,7 +938,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return new Set(ids);
   }, [peopleBlocks, epitaphs, crosses, others]);
 
-  // базовая синхронизация (добавление/удаление по данным)
+  // Состав
   useEffect(() => {
     setElements((prev) => {
       const prevMap = new Map(prev.map((e) => [e.id, e]));
@@ -578,26 +967,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const added: EditorEl[] = missing.map((id, i) => {
         const [type] = id.split("-");
         const elType = type as ElType;
-        // Если измерения уже есть — используем их; иначе — временный дефолт, позже заменим.
-        const measured = sketchDefaultsRef.current.get(id);
-        if (measured) {
-          const base: EditorEl = {
-            id,
-            type: elType,
-            ...measured,
-            z: maxZ + i + 1,
-            title: id
-          };
-          if (elType === "portrait") base.bw = true;
-          if (elType === "metric") base.uppercase = true;
-          if (elType === "graphic") base.flipH = false;
-          if (elType === "epitaph") {
-            const idx = Number(id.split("-")[1]);
-            if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
-          }
-          return base;
-        }
-        // дефолт
+        // Пока дефолт грубый; позже заменим координатами шаблона
         let x = 10, y = 10, w = 30, h = 20;
         const idx = Number(id.slice(elType.length + 1));
         switch (elType) {
@@ -627,22 +997,20 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desiredIds]);
 
-  // Одноразовое применение измерений SketchTemplate ко всем элементам, когда они готовы.
+  // Применение координат из шаблона один раз
   useEffect(() => {
     if (!sketchReady || appliedSketchDefaultsRef.current) return;
     if (sketchDefaultsRef.current.size === 0) {
-      appliedSketchDefaultsRef.current = true; // чтобы не зациклиться
+      appliedSketchDefaultsRef.current = true;
       return;
     }
     setElements((prev) => {
-      // Если уже есть элементы — обновим координаты по измерениям (не трогая z и прочие настройки).
       const map = sketchDefaultsRef.current;
       const updated = prev.map((el) => {
         const m = map.get(el.id);
         if (!m) return el;
         return { ...el, ...m };
       });
-      // На случай, если чего-то не хватает — добавим
       const existing = new Set(updated.map((e) => e.id));
       const toAdd: EditorEl[] = [];
       let maxZ = updated.reduce((m, e) => Math.max(m, e.z), 0);
@@ -666,7 +1034,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     appliedSketchDefaultsRef.current = true;
   }, [sketchReady, epitaphs]);
 
-  // Превью в драфт (canvas)
+  /* ===== Превью (canvas) ===== */
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
     if (W <= 0 || H <= 0) return null;
     const canvas = document.createElement("canvas");
@@ -756,7 +1124,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const ww = r.w, hh = Math.round(ww / sr), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
           ctx.drawImage(im, xx, yy, ww, hh);
         } else {
-          const hh = r.h, ww = Math.round(hh * sr), xx = r.x + Math.round((r.w - ww) / 2), yy = r.y;
+          const hh = r.h, ww = Math.round(hh / sr), xx = r.x + Math.round((r.w - ww) / 2), yy = r.y;
           ctx.drawImage(im, xx, yy, ww, hh);
         }
       } else if (el.type === "metric") {
@@ -850,7 +1218,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, containerW, wishes]);
 
-  // Back/Continue
+  /* ===== Back/Continue ===== */
   const handleBack = () => {
     const prev = loadOrderDraft();
     saveOrderDraft({
@@ -861,7 +1229,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     setTimeout(() => onBack?.(), 150);
   };
 
-  // «Продолжить» ведёт на тыльную сторону: onRearSide → onSendOrder → onContinue.
   const handleContinue = () => {
     const prev = loadOrderDraft();
     saveOrderDraft({
@@ -879,7 +1246,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     setTimeout(() => go({ elements, wishes }), 150);
   };
 
-  // Render helpers
+  /* ===== Мини тулбар ===== */
   const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
     position: "absolute",
     left,
@@ -893,7 +1260,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     cursor
   });
 
-  // Мини-контекст для выбранного элемента
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const key = el.id.split("-").slice(1).join("-");
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
@@ -968,7 +1334,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  // Контент (WYSIWYG)
+  /* ===== Контент поверх (WYSIWYG) ===== */
   const ContentOverlay = () => {
     const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
     const { h: ch } = contentWH();
@@ -1101,9 +1467,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
 
   const MAX_W = 600;
-
-  // Ориентация для скрытого SketchTemplate (совпадает с SizeStep)
-  const orientationOverride = (draft.size?.orientation as "vertical" | "horizontal" | undefined) ?? (draft as any).orientation ?? undefined;
+  const orientationOverride = (draft.size?.orientation as Orientation | undefined) ?? (draft as any).orientation ?? undefined;
 
   return (
     <div
@@ -1132,28 +1496,28 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           zIndex: -1
         }}
       >
-        <SketchTemplate
+        <SketchTemplateHidden
           item={item}
           peopleBlocks={peopleBlocks}
           crosses={crosses}
           others={others}
           epitaphs={epitaphs}
           carvingOpacity={0.4}
-          orientationOverride={orientationOverride}
+          orientationOverride={orientationOverride || undefined}
         />
       </div>
 
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial - редактор" />
 
-        {/* Подсказка над эскизом — заменена по требованию */}
+        {/* Подсказка (замена по требованию) */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
           Не старайтесь идеально расположить элементы, не страшно если они пересекаются или вызодят за край — эскиз схематичный. Исправьте ключевые позиции
           (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ) и опишите пожелания.
           Финальную обработку выполнит специалист.
         </section>
 
-        {/* Эскиз */}
+        {/* Эскиз с редактором */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={wrapperRef}
@@ -1184,7 +1548,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onError={() => { if (!aspect) setImgWH({ w: 4, h: 3 }); }}
             />
 
-            {/* Контент: располагаем в рамках редактора */}
+            {/* Контент поверх (WYSIWYG) */}
             <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
               <ContentOverlay />
             </div>
