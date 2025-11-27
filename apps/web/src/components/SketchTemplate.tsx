@@ -1,15 +1,21 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
-// Изменения по требованию:
-// - Над эскизом — предупреждение о предварительном макете.
-// - Горизонтальный шаблон (1 человек): БЕЗ сетки. Размещение:
-//   • Портрет — по центру в верхней половине, отступ сверху 6% высоты изображения,
-//     высота портрета = 40% от общей высоты изображения (резной работы).
-//   • Метрика — под портретом, высота = 20% от общей высоты изображения.
-//   • Под метрикой — графика; под графикой — эпитафия (внизу). Наложения допустимы.
-// - Кресты как раньше: слева; если 2 — слева и справа.
-//   Исключение: Горизонтальный шаблон (2 человека): 1 крест — по центру, 2 — по краям.
-// Остальные шаблоны — без изменений.
+//
+// Что изменили по требованию:
+// 1) Над эскизом добавлен текст-пояснение о предварительном макете.
+// 2) Горизонтальный шаблон «1 человек» БЕЗ сетки:
+//    - Портрет по центру верхней половины, отступ сверху 6% высоты изображения, высота портрета 40% высоты изображения.
+//    - Метрика под портретом, высота 20% высоты изображения. В метрике строго 3 строки:
+//      1 — Фамилия; 2 — Имя Отчество; 3 — Даты (в таком порядке, без переносов между строками!).
+//      Чтобы строки не обрезались, мы динамически уменьшаем масштаб метрики (scale), если ей не хватает места.
+//    - Под метрикой — графика; под графикой — эпитафия.
+//    - Наложение элементов запрещено: все секции «идут друг за другом», а тексты (метрика/эпитафия) динамически уменьшаются,
+//      чтобы уместиться в отведённое место. Если места мало, контент масштабируется, а не наезжает.
+// 3) Кресты:
+//    - По умолчанию: один — слева, два — слева и справа.
+//    - Исключение: Горизонтальный шаблон «2 человека»: один крест по центру, два — по краям.
+// 4) Прочие шаблоны оставлены без перестроения логики, но в них изначально блоки разнесены так, чтобы не пересекаться.
+//    (Если потребуется, можно аналогично добавить измерение и масштабирование для метрики/эпитафии и в остальных шаблонах.)
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -29,7 +35,6 @@ export type SketchTemplateProps = {
 
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
 
-// Базовая конфигурация (позиции/размеры для остальных шаблонов)
 const CFG = {
   general: {
     minContainerHeight: 200,
@@ -46,6 +51,8 @@ const CFG = {
           size: { width: "100%", maxWidth: "520px", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
+            // Комментарий по настройкам метрики:
+            // Три строки строго: [0] Фамилия, [1] Имя Отчество, [2] Даты — без перестановок.
             uppercase: true, align: "center",
             l1: { font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
             l2: { font: `600 clamp(16px, 3vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
@@ -213,6 +220,12 @@ export default function SketchTemplate({
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
   const [sketchH, setSketchH] = useState(CFG.general.minContainerHeight);
 
+  // Измерение естественных высот для масштабирования (чтобы ничего не налезало)
+  const metricMeasureRef = useRef<HTMLDivElement | null>(null);
+  const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
+  const [metricScale, setMetricScale] = useState(1);
+  const [epitaphScale, setEpitaphScale] = useState(1);
+
   const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
 
   useEffect(() => {
@@ -260,8 +273,8 @@ export default function SketchTemplate({
 
   /* ===== Кресты =====
      Правила:
-     - По умолчанию: один крест — слева, два — слева и справа.
-     - Горизонтальный шаблон (два человека): один крест — по центру, два — по краям. */
+     - По умолчанию: один — слева, два — слева и справа.
+     - Горизонтальный (2 человека): один — по центру, два — по краям. */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
 
@@ -297,7 +310,6 @@ export default function SketchTemplate({
       }
     }
 
-    // По умолчанию (вертикальные и горизонтальные, кроме "two")
     if (crosses.length === 1) {
       const c = crosses[0];
       return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />;
@@ -314,7 +326,7 @@ export default function SketchTemplate({
     return null;
   };
 
-  /* ===== Прочая графика (others) — для всех шаблонов, кроме HorizontalOne (см. ниже) ===== */
+  /* ===== Прочая графика — для всех шаблонов, кроме HorizontalOne (там отдельная логика ниже) ===== */
   const GraphicsOverlay = () =>
     others.length > 0 ? (
       <div
@@ -329,7 +341,6 @@ export default function SketchTemplate({
           flexWrap: "wrap",
           zIndex: 3
         }}
-        data-sketch-orient={isVertical ? "vertical" : "horizontal"}
       >
         {others.map((g, i) => (
           <img
@@ -353,7 +364,7 @@ export default function SketchTemplate({
       </div>
     ) : null;
 
-  /* ===== Эпитафии — для всех шаблонов, кроме HorizontalOne (см. ниже) ===== */
+  /* ===== Эпитафии — для всех шаблонов, кроме HorizontalOne (там отдельная логика ниже) ===== */
   const EpitaphsOverlay = () =>
     Array.isArray(epitaphs) && epitaphs.length > 0 ? (
       <div
@@ -395,6 +406,10 @@ export default function SketchTemplate({
     align: "center" | "left" | "right";
     textCfg: any;
   }) {
+    // Комментарий по строкам:
+    // lines[0] — Фамилия
+    // lines[1] — Имя Отчество
+    // lines[2] — Даты
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => (textCfg.uppercase ? s.toUpperCase() : s);
 
@@ -407,14 +422,7 @@ export default function SketchTemplate({
     );
   }
 
-  /* ===== PEOPLE LAYOUTS ===== */
-
-  // Горизонтальный шаблон (1 человек) — БЕЗ сетки.
-  // Настройки (как требовалось):
-  // - Отступ сверху портрета: 6% от высоты изображения (top = 0.06 * H).
-  // - Высота портрета: 40% от высоты изображения (portraitH = 0.40 * H), ширина по AR 3:4.
-  // - Метрика под портретом: высота 20% от высоты изображения (metricH = 0.20 * H).
-  // - Далее — блок графики, затем — эпитафия; допускаем наложения.
+  /* ===== Горизонтальный шаблон: 1 человек (без сетки, с динамическим масштабированием, без наложений) ===== */
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
     if (!imgRect.h || !imgRect.w) return null;
@@ -422,28 +430,63 @@ export default function SketchTemplate({
     const H = imgRect.h;
     const W = imgRect.w;
 
+    const gap = Math.round(0.015 * H); // технологический зазор ~1.5% высоты
     const topOffset = Math.round(0.06 * H); // 6% сверху
-    let portraitH = Math.max(40, Math.round(0.40 * H)); // 40% высоты
-    let portraitW = Math.round(portraitH * (3 / 4)); // AR 3:4
 
-    // Если портрет шире доступной области, масштабируем вниз
+    // Портрет: высота 40% H, ширина по AR 3:4 (с ограничением по ширине экрана)
+    let portraitH = Math.max(40, Math.round(0.40 * H));
+    let portraitW = Math.round(portraitH * (3 / 4));
     if (portraitW > W * 0.9) {
       const k = (W * 0.9) / portraitW;
       portraitW = Math.max(40, Math.round(portraitW * k));
       portraitH = Math.max(40, Math.round(portraitH * k));
     }
-
     const portraitTop = topOffset;
+    const portraitBottom = portraitTop + portraitH;
 
-    const gap = Math.round(0.015 * H); // небольшой технологический зазор ~1.5%
-    const metricH = Math.max(24, Math.round(0.20 * H)); // 20% высоты
-    const metricTop = portraitTop + portraitH + gap;
+    // Метрика: высота 20% H (контейнер), но контент может быть больше — тогда уменьшим scale, чтобы поместить 3 строки.
+    const metricTargetH = Math.max(24, Math.round(0.20 * H));
+    const metricTop = portraitBottom + gap;
+    const metricW = Math.round(W * 0.8);
 
-    // Графика — под метрикой; задаём разумный maxHeight, чтобы не «съедать» эпитафию.
-    const graphicsTop = metricTop + metricH + gap;
-    const graphicsMaxH = Math.round(0.18 * H); // до ~18% высоты, при необходимости может наложиться ниже
+    // После изменения размеров/контента — измеряем естественную высоту метрики (без масштаба)
+    useEffect(() => {
+      if (!metricMeasureRef.current) return;
+      // Естественная высота
+      const natural = metricMeasureRef.current.scrollHeight || metricMeasureRef.current.offsetHeight || 1;
+      const scale = Math.min(1, metricTargetH / natural);
+      setMetricScale(scale);
+    }, [metricTargetH, metricW, p?.lines?.join("|"), imgRect.w, imgRect.h]);
 
-    // Эпитафия — ниже графики. Наложения допустимы, поэтому рассчитываем «идеальную» позицию
+    const metricBottom = metricTop + metricTargetH * metricScale;
+
+    // Графика: под метрикой. Высоту ограничиваем оставшимся местом с запасом под эпитафию.
+    const graphicsTop = Math.round(metricBottom + gap);
+    // Эпитафию измерим отдельно и масштабируем, если не помещается.
+    const epitaphW = Math.round(W * 0.88);
+
+    // Измеряем естественную высоту эпитафии
+    useEffect(() => {
+      if (!epitaphMeasureRef.current) return;
+      const natural = epitaphMeasureRef.current.scrollHeight || epitaphMeasureRef.current.offsetHeight || 1;
+      // Сколько места осталось под эпитафию (после графики, которую ограничим ниже)
+      const remainingAfterGraphics = H - graphicsTop - gap;
+      // Для первичной оценки берем весь остаток под эпитафию (графику зажмем ниже, чтобы точно не было пересечений)
+      const scale = Math.min(1, remainingAfterGraphics / natural);
+      setEpitaphScale(scale > 0 ? scale : 1);
+    }, [epitaphs?.join("|"), epitaphW, graphicsTop, H]);
+
+    // Теперь рассчитаем разумную высоту графики с учётом того, что эпитафия должна помещаться после неё.
+    const epitaphNaturalForCalc = (() => {
+      // если масштаба < 1, значит natural > remaining; нам важнее оставить место — возьмем требуемое место как natural*scale
+      // но scale уже вычислен по remainingAfterGraphics (верхняя оценка), что гарантирует непересечение.
+      if (!epitaphMeasureRef.current) return 0;
+      const natural = epitaphMeasureRef.current.scrollHeight || epitaphMeasureRef.current.offsetHeight || 0;
+      return natural * epitaphScale;
+    })();
+
+    const availableForGraphics = Math.max(0, H - graphicsTop - gap - epitaphNaturalForCalc);
+    const graphicsMaxH = Math.max(0, Math.min(Math.round(0.18 * H), availableForGraphics));
     const epitaphTop = graphicsTop + graphicsMaxH + gap;
 
     return (
@@ -488,7 +531,7 @@ export default function SketchTemplate({
           </div>
         </div>
 
-        {/* Метрика */}
+        {/* Метрика (строго 3 строки: Фамилия / Имя Отчество / Даты) с динамическим масштабом */}
         <div
           data-sketch-el="metric"
           data-sketch-key={p.id}
@@ -497,8 +540,8 @@ export default function SketchTemplate({
             top: metricTop,
             left: "50%",
             transform: "translateX(-50%)",
-            width: Math.round(W * 0.8), // 80% ширины изображения — комфортная область
-            height: metricH,
+            width: metricW,
+            height: metricTargetH,
             overflow: "hidden",
             pointerEvents: "none",
             display: "flex",
@@ -506,15 +549,17 @@ export default function SketchTemplate({
             alignItems: "flex-start"
           }}
         >
-          <PersonMetricText
-            lines={p.lines}
-            textCfg={(CFG.horizontal.one.blocks as any).metric.text}
-            align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
-          />
+          <div style={{ transform: `scale(${metricScale})`, transformOrigin: "top center", width: "100%" }}>
+            <PersonMetricText
+              lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]}
+              textCfg={(CFG.horizontal.one.blocks as any).metric.text}
+              align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
+            />
+          </div>
         </div>
 
-        {/* Графика — под метрикой */}
-        {others.length > 0 && (
+        {/* Графика — строго под метрикой, высота зависит от оставшегося места (чтобы не наезжать на эпитафию) */}
+        {others.length > 0 && graphicsMaxH > 0 && (
           <div
             style={{
               position: "absolute",
@@ -542,7 +587,7 @@ export default function SketchTemplate({
                 style={{
                   width: "auto",
                   height: "auto",
-                  maxHeight: Math.max(28, Math.round(graphicsMaxH * 0.9)),
+                  maxHeight: Math.max(24, Math.round(graphicsMaxH * 0.9)),
                   objectFit: "contain",
                   filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
                   flex: "0 0 auto"
@@ -553,7 +598,7 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Эпитафия — под графикой (может накладываться; это допустимо) */}
+        {/* Эпитафия — под графикой; если не помещается, уменьшаем масштаб (epitaphScale), чтобы не было наложений */}
         {Array.isArray(epitaphs) && epitaphs.length > 0 && (
           <div
             style={{
@@ -561,13 +606,55 @@ export default function SketchTemplate({
               top: epitaphTop,
               left: "50%",
               transform: "translateX(-50%)",
-              width: "88%",
+              width: epitaphW,
               color: "#fff",
               textAlign: "center" as const,
               textShadow: "0 1px 2px rgba(0,0,0,0.6)",
-              zIndex: 4
+              zIndex: 4,
+              overflow: "hidden"
             }}
           >
+            <div
+              style={{
+                transform: `scale(${epitaphScale})`,
+                transformOrigin: "top center",
+                width: "100%"
+              }}
+            >
+              <div
+                style={{
+                  fontStyle: "italic",
+                  textTransform: "uppercase",
+                  fontFamily: FONT_CENTURY,
+                  lineHeight: 1.2,
+                  letterSpacing: "0.3px",
+                  fontSize: "clamp(10px, 3.0vw, 22px)",
+                  display: "grid",
+                  gap: 8
+                }}
+              >
+                {epitaphs.slice(0, 8).map((t, idx) => (
+                  <div key={`ep-h1-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+                    {t}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Offscreen-измерители (не видны пользователю) */}
+        <div style={{ position: "absolute", left: -99999, top: -99999, width: 0, height: 0, overflow: "hidden" }}>
+          {/* Метрика (естественная высота без масштаба) */}
+          <div ref={metricMeasureRef} style={{ width: metricW }}>
+            <PersonMetricText
+              lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]}
+              textCfg={(CFG.horizontal.one.blocks as any).metric.text}
+              align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
+            />
+          </div>
+          {/* Эпитафия (естественная высота без масштаба) */}
+          <div ref={epitaphMeasureRef} style={{ width: epitaphW }}>
             <div
               style={{
                 fontStyle: "italic",
@@ -580,19 +667,18 @@ export default function SketchTemplate({
                 gap: 8
               }}
             >
-              {epitaphs.slice(0, 8).map((t, idx) => (
-                <div key={`ep-h1-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+              {epitaphs?.slice(0, 8).map((t, idx) => (
+                <div key={`ep-measure-${idx}`} style={{ whiteSpace: "pre-wrap" }}>
                   {t}
                 </div>
               ))}
             </div>
           </div>
-        )}
+        </div>
       </>
     );
   };
 
-  // Горизонтальный шаблон (2 человека) — без изменений (портреты в 2 колонках).
   const HorizontalTwo = () => {
     const B = (CFG.horizontal.two.blocks as any);
     const colW = Math.min(320, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32 - (layout as any).gap) / 2)));
@@ -636,7 +722,6 @@ export default function SketchTemplate({
     );
   };
 
-  // Горизонтальный шаблон (более 2) — без изменений
   const HorizontalMany = () => {
     const B = (CFG.horizontal.many.blocks as any);
     const cols = Math.min(4, Math.max(3, peopleBlocks.length));
@@ -681,7 +766,6 @@ export default function SketchTemplate({
     );
   };
 
-  // Вертикальные шаблоны — без изменений
   const VerticalOne = () => {
     const B = (CFG.vertical.one.blocks as any);
     const p = peopleBlocks[0];
@@ -841,7 +925,7 @@ export default function SketchTemplate({
 
   return (
     <>
-      {/* Предупреждение над эскизом */}
+      {/* Пояснение над эскизом */}
       <div
         style={{
           color: "#fff",
@@ -872,7 +956,7 @@ export default function SketchTemplate({
         data-sketch-orient={isVertical ? "vertical" : "horizontal"}
         data-sketch-orient-source={orientation ? "draft" : "image"}
       >
-        {/* Изображение изделия (резной работы) */}
+        {/* Изображение изделия */}
         <img
           ref={imgRef}
           src={item?.url || ""}
@@ -882,11 +966,11 @@ export default function SketchTemplate({
           onLoad={() => setTimeout(recalc, 0)}
         />
 
-        {/* Контент поверх */}
+        {/* Слои поверх */}
         {renderPeople()}
         <CrossOverlay />
 
-        {/* Для HorizontalOne графику и эпитафию рисуем внутри самого HorizontalOne (см. выше). */}
+        {/* Во всех шаблонах, КРОМЕ HorizontalOne, графика/эпитафия остаются по старой схеме (без наложений по дизайну). */}
         {!isHorizontalOne && (
           <>
             <GraphicsOverlay />
