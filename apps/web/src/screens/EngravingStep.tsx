@@ -536,11 +536,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
 
         {/* Эскиз — общий шаблон SketchTemplate (ДОБАВЛЕНЫ ЭПИТАФИИ) */}
         <section ref={previewRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-          <h4 style={{ margin: "0 0 8px 0", textAlign: "center", fontWeight: "normal", fontStyle: "italic" }}>
-            Набросок расположения элементов гравировки. Изображения могут наезжать друг на друга, это не страшно.
-        Итоговую работу сделает специалист. Кроме того, расположение элементов можно будет скорректировать позже.
-          </h4>
-          <SketchTemplate
+            <SketchTemplate
             item={item}
             peopleBlocks={peopleBlocks}
             crosses={selectedCrosses}

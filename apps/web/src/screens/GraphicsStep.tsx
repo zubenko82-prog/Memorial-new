@@ -796,11 +796,7 @@ export default function GraphicsStep(props: any) {
 
       {/* Предпросмотр — общий SketchTemplate с гориз./верт. шаблоном, оверлеями и ЭПИТАФИЯМИ */}
       <section ref={previewSectionRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0", scrollMarginTop: navH + 24 }}>
-        <h4 style={{ margin: "0 0 8px 0", textAlign: "center", fontWeight: "normal", fontStyle: "italic" }}>
-          Набросок расположения элементов гравировки. Изображения могут наезжать друг на друга, это не страшно.
-        Итоговую работу сделает специалист. Кроме того, расположение элементов можно будет скорректировать позже.
-        </h4>
-        <SketchTemplate
+          <SketchTemplate
           item={item}
           peopleBlocks={peopleBlocks}
           crosses={selectedCrosses}
