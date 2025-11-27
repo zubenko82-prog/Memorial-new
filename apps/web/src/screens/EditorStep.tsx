@@ -1,23 +1,26 @@
 // src/screens/EditorStep.tsx
 // Редактор элементов с собственным рендером контента, мини-кнопками и превью в драфт.
 //
-// Добавлено:
-// - ИЗНАЧАЛЬНОЕ РАСПОЛОЖЕНИЕ ЭЛЕМЕНТОВ СЧИТЫВАЕМ С ЭСКИЗА (SketchTemplate):
-//   скрытно рендерим SketchTemplate рядом, читаем DOM-узлы по data-атрибутам
+// Новое:
+// - Изначальное расположение элементов считываем с эскиза (SketchTemplate):
+//   скрытно рендерим SketchTemplate, читаем DOM-узлы по data-атрибутам
 //   (data-sketch-el="portrait|metric|epitaph|cross|graphic", data-sketch-key="..."),
-//   пересчитываем их boundingClientRect → проценты относительно «контентной» области,
-//   и используем эти проценты как дефолтные рамки редактора (вместо «жёстких» координат).
+//   конвертируем boundingClientRect → проценты относительно «контентной» области,
+//   и используем как дефолтные рамки редактора.
+// - Исправлены потенциальные утечки слушателей и импорт useCallback.
 //
-// Условия:
-// - Для корректа нужны data-атрибуты в SketchTemplate на соответствующих блоках.
-//   Мы уже добавляли их ранее. Если где-то отсутствуют — для этих узлов сработают
-//   прежние «разумные» дефолты.
-// - Контентная область — контейнер SketchTemplate за вычетом внутренних паддингов
-//   (CFG.general.containerPadding = 8px). Здесь мы используем тот же SKETCH_PAD.
-//
-// Остальное (DnD/resize, мини-кнопки, превью, «лесенка», авто-синхронизация) — без изменений.
+// По-прежнему:
+// - Синхронизация элементов редактора с данными драфта (добавление/удаление).
+// - Мини-кнопки: метрика (ПРОПИСНЫЕ/строчные), эпитафия (Лесенкой/В строку), графика (Отразить ⇄).
+// - Превью рендерится в canvas и сохраняется в драфт.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback
+} from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft } from "../lib/order";
@@ -150,12 +153,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   // Элементы редактора
   const [elements, setElements] = useState<EditorEl[]>(
-    () => (draft?.editor?.elements as EditorEl[]) || []
+    () => (draft as any)?.editor?.elements || []
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Пожелания
-  const [wishes, setWishes] = useState<string>(() => draft?.editor?.wishes || "");
+  const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
 
   // Контейнер
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -171,20 +174,26 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [imgWH]
   );
 
-  // Слежение за обновлением драфта из других шагов
+  // Слежение за обновлением драфта из других шагов (в текущем табе)
   useEffect(() => {
     const reload = () => setDraft(loadOrderDraft());
-    window.addEventListener("storage", reload);
-    window.addEventListener("focus", reload);
-    document.addEventListener("visibilitychange", () => {
+    const onFocus = () => reload();
+    const onStorage = () => reload();
+    const onVis = () => {
       if (document.visibilityState === "visible") reload();
-    });
-    window.addEventListener("draft:updated" as any, reload);
+    };
+    const onDraftUpdated = () => reload();
+
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("storage", onStorage);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("draft:updated" as any, onDraftUpdated);
+
     return () => {
-      window.removeEventListener("storage", reload);
-      window.removeEventListener("focus", reload);
-      window.removeEventListener("draft:updated" as any, reload);
-      document.removeEventListener("visibilitychange", reload as any);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("draft:updated" as any, onDraftUpdated);
     };
   }, []);
 
@@ -415,7 +424,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (!sketchRoot) return;
 
     const rootRect = sketchRoot.getBoundingClientRect();
-    // Контентная область (за вычетом внутренних паддингов SketchTemplate)
+    // Контентная область (за вычетом внутренних паддингов SketchTemplate = SKETCH_PAD)
     const content = {
       left: rootRect.left + SKETCH_PAD,
       top: rootRect.top + SKETCH_PAD,
@@ -447,7 +456,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       pushBox("metric", key, n.getBoundingClientRect());
     });
 
-    // эпитафии (каждая строка может быть отдельным блоком — берём общий контейнер по объединённому bbox)
+    // эпитафии — объединяем строки одного индекса
     const epNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-sketch-el="epitaph"]'));
     if (epNodes.length) {
       const grouped = new Map<string, DOMRect[]>();
@@ -515,23 +524,24 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     // 1) Пытаемся взять измеренные координаты из скрытого SketchTemplate
     const measured = sketchDefaultsRef.current.get(id);
     if (measured) {
-      return {
+      const base: EditorEl = {
         id,
         type: elType,
         ...measured,
         z,
-        title: id,
-        ...(elType === "portrait" ? { bw: true } : {}),
-        ...(elType === "metric" ? { uppercase: true } : {}),
-        ...(elType === "graphic" ? { flipH: false } : {}),
-        ...(elType === "epitaph" ? { staircase: (() => {
-          const idx = Number(id.split("-")[1]);
-          return Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx]) ? true : undefined;
-        })() } : {})
-      } as EditorEl;
+        title: id
+      };
+      if (elType === "portrait") base.bw = true;
+      if (elType === "metric") base.uppercase = true;
+      if (elType === "graphic") base.flipH = false;
+      if (elType === "epitaph") {
+        const idx = Number(id.split("-")[1]);
+        if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
+      }
+      return base;
     }
 
-    // 2) Если измерений нет — разумные дефолты
+    // 2) Если измерений нет — допустимые дефолты
     const key = id.slice((elType as string).length + 1);
     const idx = Number(key);
     let x = 10, y = 10, w = 30, h = 20;
@@ -608,7 +618,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       return kept.concat(added);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desiredIds, peopleBlocks, epitaphs, crosses, others]);
+  }, [desiredIds]);
 
   // Превью в драфт (canvas)
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
@@ -771,8 +781,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
       const prev = loadOrderDraft();
       const needSave =
-        (!!mini && mini !== prev.editor?.previewUrl) ||
-        (!!big && big !== prev.editor?.previewHiUrl);
+        (!!mini && mini !== (prev as any).editor?.previewUrl) ||
+        (!!big && big !== (prev as any).editor?.previewHiUrl);
 
       if (needSave) {
         saveOrderDraft({
@@ -1046,7 +1056,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   const MAX_W = 600;
 
-  // Вычислим ориентацию для SketchTemplate (совпадает с SizeStep)
+  // Ориентация для скрытого SketchTemplate (совпадает с SizeStep)
   const orientationOverride = (draft.size?.orientation as "vertical" | "horizontal" | undefined) ?? (draft as any).orientation ?? undefined;
 
   return (
@@ -1090,9 +1100,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial - редактор" />
 
-        {/* Подсказка над эскизом */}
+        {/* Подсказка над эскизом — заменена по требованию */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
-Не старайтесь идеально расположить элементы, не страшно если они пересекаются или вызодят за край — эскиз схематичный. Исправьте ключевые позиции
+          Не старайтесь идеально расположить элементы, не страшно если они пересекаются или вызодят за край — эскиз схематичный. Исправьте ключевые позиции
           (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ) и опишите пожелания.
           Финальную обработку выполнит специалист.
         </section>
