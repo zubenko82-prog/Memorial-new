@@ -1,18 +1,20 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 // Изменения по требованию:
-// - Горизонтальный шаблон 1 человек: портрет больше, добавлен отступ сверху у портрета; метрика мельче.
-// - Горизонтальный шаблон 2 человека: графика (others) крупнее.
-// - Добавлен блок "Настройки шаблона" для каждого шаблона (вертикальные/горизонтальные; 1, 2, >2 чел):
-//   для каждого блока (крест, портрет, метрика, графика, эпитафия) редактируются размер (width/height/maxWidth/maxHeight) и положение (top/left/right/bottom/transform).
-//   Настройки сохраняются в localStorage и применяются как оверрайды к базовому CFG.
+// - Над эскизом — предупреждение о предварительном макете.
+// - Горизонтальный шаблон (1 человек): БЕЗ сетки. Размещение:
+//   • Портрет — по центру в верхней половине, отступ сверху 6% высоты изображения,
+//     высота портрета = 40% от общей высоты изображения (резной работы).
+//   • Метрика — под портретом, высота = 20% от общей высоты изображения.
+//   • Под метрикой — графика; под графикой — эпитафия (внизу). Наложения допустимы.
+// - Кресты как раньше: слева; если 2 — слева и справа.
+//   Исключение: Горизонтальный шаблон (2 человека): 1 крест — по центру, 2 — по краям.
+// Остальные шаблоны — без изменений.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
 type Orientation = "vertical" | "horizontal";
-type VariantKey = "one" | "two" | "many";
-type BlockKey = "cross" | "portraits" | "metric" | "graphics" | "epitaphs";
 
 export type SketchTemplateProps = {
   item: { url?: string; name?: string } | null;
@@ -27,7 +29,7 @@ export type SketchTemplateProps = {
 
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
 
-// Базовая конфигурация
+// Базовая конфигурация (позиции/размеры для остальных шаблонов)
 const CFG = {
   general: {
     minContainerHeight: 200,
@@ -184,43 +186,6 @@ const CFG = {
   }
 } as const;
 
-// Настройки (overrides)
-type PosCfg = Partial<{ top: string; right: string; bottom: string; left: string; transform: string }>;
-type SizeCfg = Partial<{ width: string; height: string; maxWidth: string; maxHeight: string }>;
-type BlockOverride = { pos?: PosCfg; size?: SizeCfg };
-type VariantOverride = Partial<Record<BlockKey, BlockOverride>>;
-type OrientationOverrideCfg = Partial<Record<VariantKey, VariantOverride>>;
-type TemplateOverrides = { horizontal?: OrientationOverrideCfg; vertical?: OrientationOverrideCfg };
-
-const LS_SETTINGS_KEY = "memorial.sketch.settings.v1";
-
-function loadOverrides(): TemplateOverrides {
-  try {
-    const raw = localStorage.getItem(LS_SETTINGS_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as TemplateOverrides;
-  } catch {
-    return {};
-  }
-}
-function saveOverrides(data: TemplateOverrides) {
-  try {
-    localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(data));
-  } catch {}
-}
-
-// Мерджим pos/size
-function mergeBlock(base: any, override?: BlockOverride) {
-  if (!override) return base;
-  return {
-    ...base,
-    pos: { ...(base.pos || {}), ...(override.pos || {}) },
-    size: { ...(base.size || {}), ...(override.size || {}) },
-    margins: { ...(base.margins || {}) },
-    text: { ...(base.text || {}) } // для эпитафий
-  };
-}
-
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
     backgroundColor: "#000",
@@ -228,19 +193,10 @@ function bottomUnderlayGradient(): React.CSSProperties {
   };
 }
 
-function pickTplKey(n: number): VariantKey {
+function pickTplKey(n: number): "one" | "two" | "many" {
   if (n <= 1) return "one";
   if (n === 2) return "two";
   return "many";
-}
-
-// Парсер процентов (для горизонтального "1" с гридом 2×3)
-function parsePct(v?: string, fallbackPct?: number): number | undefined {
-  if (v == null || v === "") return fallbackPct;
-  const m = String(v).trim().match(/^(-?\d+(?:\.\d+)?)\s*%$/);
-  if (!m) return fallbackPct;
-  const n = parseFloat(m[1]);
-  return isFinite(n) ? n : fallbackPct;
 }
 
 export default function SketchTemplate({
@@ -258,8 +214,6 @@ export default function SketchTemplate({
   const [sketchH, setSketchH] = useState(CFG.general.minContainerHeight);
 
   const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
-  const [overrides, setOverrides] = useState<TemplateOverrides>(() => loadOverrides());
-  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const apply = () => {
@@ -301,25 +255,13 @@ export default function SketchTemplate({
   const isVertical = orientation ? orientation === "vertical" : isVerticalByImage;
 
   const tplKey = pickTplKey(peopleBlocks.length);
-
-  // Применяем overrides к CFG для текущей ориентации/варианта
-  const tpl = useMemo(() => {
-    const base = isVertical ? (CFG.vertical as any)[tplKey] : (CFG.horizontal as any)[tplKey];
-    const ov = (isVertical ? overrides.vertical : overrides.horizontal)?.[tplKey] || {};
-    return {
-      blocks: {
-        cross: mergeBlock(base.blocks.cross, (ov as any).cross),
-        portraits: mergeBlock(base.blocks.portraits, (ov as any).portraits),
-        metric: mergeBlock(base.blocks.metric, (ov as any).metric),
-        graphics: mergeBlock(base.blocks.graphics, (ov as any).graphics),
-        epitaphs: mergeBlock(base.blocks.epitaphs, (ov as any).epitaphs)
-      }
-    };
-  }, [isVertical, tplKey, overrides]);
-
+  const tpl = useMemo(() => (isVertical ? (CFG.vertical as any)[tplKey] : (CFG.horizontal as any)[tplKey]), [isVertical, tplKey]);
   const layout = useMemo(() => (isVertical ? CFG.vertical.layout : CFG.horizontal.layout), [isVertical]);
 
-  /* ===== Кресты (позиции+размер из tpl, с правилами для горизонтального "два") ===== */
+  /* ===== Кресты =====
+     Правила:
+     - По умолчанию: один крест — слева, два — слева и справа.
+     - Горизонтальный шаблон (два человека): один крест — по центру, два — по краям. */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
 
@@ -327,7 +269,6 @@ export default function SketchTemplate({
     const isHorizontalTwo = isHorizontal && tplKey === "two";
 
     const baseSize = (tpl.blocks as any).cross.size;
-    const basePos = (tpl.blocks as any).cross.pos;
 
     const baseFilter: React.CSSProperties = {
       objectFit: "contain",
@@ -336,17 +277,32 @@ export default function SketchTemplate({
       position: "absolute"
     };
 
-    const topLeftPos: React.CSSProperties = { top: basePos.top ?? "6%", left: basePos.left ?? "4%", transform: basePos.transform };
-    const topCenterPos: React.CSSProperties = { top: basePos.top ?? "6%", left: "50%", transform: "translateX(-50%)" };
-    const topRightPos: React.CSSProperties = { top: basePos.top ?? "6%", right: "4%" };
+    const topLeftPos: React.CSSProperties = { top: "6%", left: "4%" };
+    const topCenterPos: React.CSSProperties = { top: "6%", left: "50%", transform: "translateX(-50%)" };
+    const topRightPos: React.CSSProperties = { top: "6%", right: "4%" };
 
+    if (isHorizontalTwo) {
+      if (crosses.length === 1) {
+        const c = crosses[0];
+        return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topCenterPos }} draggable={false} />;
+      }
+      if (crosses.length >= 2) {
+        const [cL, cR] = [crosses[0], crosses[1]];
+        return (
+          <>
+            <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />
+            <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topRightPos }} draggable={false} />
+          </>
+        );
+      }
+    }
+
+    // По умолчанию (вертикальные и горизонтальные, кроме "two")
     if (crosses.length === 1) {
       const c = crosses[0];
-      const pos = isHorizontalTwo ? topCenterPos : topLeftPos;
-      return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...pos }} draggable={false} />;
+      return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />;
     }
-
-    if (crosses.length >= 2 && isHorizontalTwo) {
+    if (crosses.length >= 2) {
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
@@ -355,57 +311,12 @@ export default function SketchTemplate({
         </>
       );
     }
-
-    if (crosses.length === 2) {
-      const [cL, cR] = [crosses[0], crosses[1]];
-      return (
-        <>
-          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />
-          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topRightPos }} draggable={false} />
-        </>
-      );
-    }
-
-    return (
-      <div
-        style={{
-          position: "absolute",
-          ...topLeftPos,
-          display: "grid",
-          gridAutoFlow: "row",
-          rowGap: 6,
-          width: baseSize.width,
-          zIndex: 3
-        }}
-      >
-        {crosses.map((c, i) => (
-          <img
-            key={`cross-${i}`}
-            data-sketch-el="cross"
-            data-sketch-key={`${i}`}
-            src={c.url}
-            alt={c.name || "Крест"}
-            style={{ width: "100%", height: "auto", objectFit: "contain", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }}
-            draggable={false}
-          />
-        ))}
-      </div>
-    );
+    return null;
   };
 
-  /* ===== Прочая графика (others) =====
-     На горизонтальном "два" — увеличиваем до 80px, если нет переопределения через настройки. */
-  const GraphicsOverlay = () => {
-    if (others.length === 0) return null;
-
-    const isHorizontal = !isVertical;
-    const isHorizontalTwo = isHorizontal && tplKey === "two";
-
-    const configuredMaxH = (tpl.blocks as any).graphics.size.maxHeight as string | undefined;
-    // Если пользователь не задал maxHeight — применим увеличенный 80px для Horizontal Two
-    const maxH = configuredMaxH ?? (isHorizontalTwo ? "80px" : undefined);
-
-    return (
+  /* ===== Прочая графика (others) — для всех шаблонов, кроме HorizontalOne (см. ниже) ===== */
+  const GraphicsOverlay = () =>
+    others.length > 0 ? (
       <div
         style={{
           position: "absolute",
@@ -430,7 +341,7 @@ export default function SketchTemplate({
             style={{
               width: (tpl.blocks as any).graphics.size.width ?? "auto",
               height: (tpl.blocks as any).graphics.size.height ?? "auto",
-              maxHeight: maxH ?? (tpl.blocks as any).graphics.size.maxHeight ?? "80px",
+              maxHeight: (tpl.blocks as any).graphics.size.maxHeight ?? "80px",
               maxWidth: (tpl.blocks as any).graphics.size.maxWidth,
               objectFit: "contain",
               filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
@@ -440,10 +351,9 @@ export default function SketchTemplate({
           />
         ))}
       </div>
-    );
-  };
+    ) : null;
 
-  /* ===== Эпитафии ===== */
+  /* ===== Эпитафии — для всех шаблонов, кроме HorizontalOne (см. ниже) ===== */
   const EpitaphsOverlay = () =>
     Array.isArray(epitaphs) && epitaphs.length > 0 ? (
       <div
@@ -497,54 +407,48 @@ export default function SketchTemplate({
     );
   }
 
-  // Горизонтальный шаблон: 1 человек — портрет больше + отступ сверху, метрика мельче.
-  // Сетка 2×3: портрет — верхний ряд, центр по горизонтали; метрика — нижний ряд, центр по горизонтали.
-  // Добавлены оверрайды: portraits.size.height/width как % ряда/колонки; portraits.pos.top — доп. сдвиг % ряда;
-  // metric.size.width — % колонки; metric.size.height — макс % ряда; metric.pos.top — доп. сдвиг % ряда.
+  /* ===== PEOPLE LAYOUTS ===== */
+
+  // Горизонтальный шаблон (1 человек) — БЕЗ сетки.
+  // Настройки (как требовалось):
+  // - Отступ сверху портрета: 6% от высоты изображения (top = 0.06 * H).
+  // - Высота портрета: 40% от высоты изображения (portraitH = 0.40 * H), ширина по AR 3:4.
+  // - Метрика под портретом: высота 20% от высоты изображения (metricH = 0.20 * H).
+  // - Далее — блок графики, затем — эпитафия; допускаем наложения.
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
     if (!imgRect.h || !imgRect.w) return null;
 
-    const cols = 2;
-    const rows = 3;
-    const cellW = imgRect.w / cols;
-    const cellH = imgRect.h / rows;
+    const H = imgRect.h;
+    const W = imgRect.w;
 
-    const ov = (overrides.horizontal?.one as VariantOverride | undefined) || {};
-    const ovPortrait = ov.portraits;
-    const ovMetric = ov.metric;
+    const topOffset = Math.round(0.06 * H); // 6% сверху
+    let portraitH = Math.max(40, Math.round(0.40 * H)); // 40% высоты
+    let portraitW = Math.round(portraitH * (3 / 4)); // AR 3:4
 
-    // Портрет
-    const phPct = parsePct(ovPortrait?.size?.height, 95) || 95; // % высоты ряда
-    const pwPct = parsePct(ovPortrait?.size?.width, 95) || 95;  // % ширины колонки
-    const pTopExtraPct = parsePct(ovPortrait?.pos?.top, 8) || 8; // % доп. сдвига вниз
-    let portraitH = Math.max(50, Math.round((phPct / 100) * cellH));
-    let portraitW = Math.round(portraitH * (3 / 4));
-    const maxPortraitW = Math.round((pwPct / 100) * cellW);
-    if (portraitW > maxPortraitW) {
-      const k = maxPortraitW / portraitW;
-      portraitW = Math.max(50, Math.round(portraitW * k));
-      portraitH = Math.max(50, Math.round(portraitH * k));
+    // Если портрет шире доступной области, масштабируем вниз
+    if (portraitW > W * 0.9) {
+      const k = (W * 0.9) / portraitW;
+      portraitW = Math.max(40, Math.round(portraitW * k));
+      portraitH = Math.max(40, Math.round(portraitH * k));
     }
-    let portraitTop = Math.round((cellH - portraitH) / 2 + (pTopExtraPct / 100) * cellH);
-    portraitTop = Math.min(portraitTop, Math.max(0, Math.round(cellH - portraitH - 4)));
 
-    // Метрика
-    const mwPct = parsePct(ovMetric?.size?.width, 70) || 70;
-    const mhPct = parsePct(ovMetric?.size?.height, 90) || 90;
-    const mTopExtraPct = parsePct(ovMetric?.pos?.top, 0) || 0;
+    const portraitTop = topOffset;
 
-    const metricW = Math.max(100, Math.round((mwPct / 100) * cellW));
-    const metricMaxH = Math.max(40, Math.round((mhPct / 100) * cellH));
-    const metricTopBase = Math.round(2 * cellH + (cellH - metricMaxH) / 2);
-    const metricTop = Math.round(metricTopBase + (mTopExtraPct / 100) * cellH);
+    const gap = Math.round(0.015 * H); // небольшой технологический зазор ~1.5%
+    const metricH = Math.max(24, Math.round(0.20 * H)); // 20% высоты
+    const metricTop = portraitTop + portraitH + gap;
 
-    // Визуально немного уменьшенная метрика (как по требованию)
-    const metricScale = 0.88;
+    // Графика — под метрикой; задаём разумный maxHeight, чтобы не «съедать» эпитафию.
+    const graphicsTop = metricTop + metricH + gap;
+    const graphicsMaxH = Math.round(0.18 * H); // до ~18% высоты, при необходимости может наложиться ниже
+
+    // Эпитафия — ниже графики. Наложения допустимы, поэтому рассчитываем «идеальную» позицию
+    const epitaphTop = graphicsTop + graphicsMaxH + gap;
 
     return (
       <>
-        {/* Портрет (верхний ряд, центр) */}
+        {/* Портрет */}
         <div
           style={{
             position: "absolute",
@@ -584,7 +488,7 @@ export default function SketchTemplate({
           </div>
         </div>
 
-        {/* Метрика (нижний ряд, центр) */}
+        {/* Метрика */}
         <div
           data-sketch-el="metric"
           data-sketch-key={p.id}
@@ -593,28 +497,104 @@ export default function SketchTemplate({
             top: metricTop,
             left: "50%",
             transform: "translateX(-50%)",
-            width: metricW,
-            maxHeight: metricMaxH,
+            width: Math.round(W * 0.8), // 80% ширины изображения — комфортная область
+            height: metricH,
             overflow: "hidden",
             pointerEvents: "none",
             display: "flex",
-            justifyContent: "center"
+            justifyContent: "center",
+            alignItems: "flex-start"
           }}
         >
-          <div style={{ transform: `scale(${metricScale})`, transformOrigin: "top center", width: "100%" }}>
-            <PersonMetricText
-              lines={p.lines}
-              textCfg={(CFG.horizontal.one.blocks as any).metric.text}
-              align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
-            />
-          </div>
+          <PersonMetricText
+            lines={p.lines}
+            textCfg={(CFG.horizontal.one.blocks as any).metric.text}
+            align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
+          />
         </div>
+
+        {/* Графика — под метрикой */}
+        {others.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: graphicsTop,
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "90%",
+              maxHeight: graphicsMaxH,
+              overflow: "hidden",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: "10px",
+              flexWrap: "wrap",
+              zIndex: 3
+            }}
+          >
+            {others.map((g, i) => (
+              <img
+                key={`other-h1-${i}`}
+                data-sketch-el="graphic"
+                data-sketch-key={`${i}`}
+                src={g.url}
+                alt={g.name || "Графика"}
+                style={{
+                  width: "auto",
+                  height: "auto",
+                  maxHeight: Math.max(28, Math.round(graphicsMaxH * 0.9)),
+                  objectFit: "contain",
+                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                  flex: "0 0 auto"
+                }}
+                draggable={false}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Эпитафия — под графикой (может накладываться; это допустимо) */}
+        {Array.isArray(epitaphs) && epitaphs.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: epitaphTop,
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "88%",
+              color: "#fff",
+              textAlign: "center" as const,
+              textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              zIndex: 4
+            }}
+          >
+            <div
+              style={{
+                fontStyle: "italic",
+                textTransform: "uppercase",
+                fontFamily: FONT_CENTURY,
+                lineHeight: 1.2,
+                letterSpacing: "0.3px",
+                fontSize: "clamp(10px, 3.0vw, 22px)",
+                display: "grid",
+                gap: 8
+              }}
+            >
+              {epitaphs.slice(0, 8).map((t, idx) => (
+                <div key={`ep-h1-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </>
     );
   };
 
+  // Горизонтальный шаблон (2 человека) — без изменений (портреты в 2 колонках).
   const HorizontalTwo = () => {
-    const B = (tpl.blocks as any);
+    const B = (CFG.horizontal.two.blocks as any);
     const colW = Math.min(320, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32 - (layout as any).gap) / 2)));
 
     return (
@@ -623,7 +603,7 @@ export default function SketchTemplate({
           position: "absolute",
           left: 16,
           right: 16,
-          top: (B.portraits.pos as any)?.top ?? (CFG.horizontal.one.blocks as any).portraits.pos.top,
+          top: (CFG.horizontal.one.blocks as any).portraits.pos.top,
           display: "grid",
           gridTemplateColumns: `repeat(2, ${colW}px)`,
           gap: (layout as any).gap,
@@ -656,8 +636,9 @@ export default function SketchTemplate({
     );
   };
 
+  // Горизонтальный шаблон (более 2) — без изменений
   const HorizontalMany = () => {
-    const B = (tpl.blocks as any);
+    const B = (CFG.horizontal.many.blocks as any);
     const cols = Math.min(4, Math.max(3, peopleBlocks.length));
     const perCol = Math.min(260, Math.max((layout as any).columnMinW, Math.floor((imgRect.w - 32) / cols)));
 
@@ -667,7 +648,7 @@ export default function SketchTemplate({
           position: "absolute",
           left: 16,
           right: 16,
-          top: (B.portraits.pos as any)?.top ?? (CFG.horizontal.one.blocks as any).portraits.pos.top,
+          top: (CFG.horizontal.one.blocks as any).portraits.pos.top,
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, ${perCol}px)`,
           gap: (layout as any).gap,
@@ -700,8 +681,9 @@ export default function SketchTemplate({
     );
   };
 
+  // Вертикальные шаблоны — без изменений
   const VerticalOne = () => {
-    const B = (tpl.blocks as any);
+    const B = (CFG.vertical.one.blocks as any);
     const p = peopleBlocks[0];
 
     return (
@@ -730,7 +712,7 @@ export default function SketchTemplate({
   };
 
   const VerticalTwo = () => {
-    const B = (tpl.blocks as any);
+    const B = (CFG.vertical.two.blocks as any);
     const rowsH = Math.max(100, Math.floor(imgRect.h * CFG.vertical.layout.rowsHeightFactor));
 
     return (
@@ -786,7 +768,7 @@ export default function SketchTemplate({
   };
 
   const VerticalMany = () => {
-    const B = (tpl.blocks as any);
+    const B = (CFG.vertical.many.blocks as any);
     const rowsH = Math.max(100, Math.floor(imgRect.h * CFG.vertical.layout.rowsHeightFactor));
     const rowCount = peopleBlocks.length;
 
@@ -855,235 +837,63 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  // Панель настроек
-  function setField(
-    ori: Orientation,
-    varKey: VariantKey,
-    block: BlockKey,
-    group: "pos" | "size",
-    key: keyof (PosCfg & SizeCfg),
-    value: string
-  ) {
-    setOverrides((prev) => {
-      const next: TemplateOverrides = JSON.parse(JSON.stringify(prev || {}));
-      if (!next[ori]) next[ori] = {};
-      if (!(next[ori] as any)[varKey]) (next[ori] as any)[varKey] = {};
-      const vRef = (next[ori] as any)[varKey] as VariantOverride;
-      if (!vRef[block]) vRef[block] = {};
-      if (!(vRef[block] as any)[group]) (vRef[block] as any)[group] = {};
-      (vRef[block] as any)[group][key] = value;
-      saveOverrides(next);
-      return next;
-    });
-  }
-
-  const panels: Array<{ ori: Orientation; title: string }> = [
-    { ori: "vertical", title: "Вертикальные шаблоны" },
-    { ori: "horizontal", title: "Горизонтальные шаблоны" }
-  ];
-  const variants: Array<{ key: VariantKey; title: string }> = [
-    { key: "one", title: "1 человек" },
-    { key: "two", title: "2 человека" },
-    { key: "many", title: "Более 2 человек" }
-  ];
-  const blocks: Array<{ key: BlockKey; title: string }> = [
-    { key: "cross", title: "Крест" },
-    { key: "portraits", title: "Портрет" },
-    { key: "metric", title: "Метрика" },
-    { key: "graphics", title: "Графика" },
-    { key: "epitaphs", title: "Эпитафия" }
-  ];
-
-  const SettingsPanel = () => (
-    <div style={{ position: "absolute", right: 10, top: 10, zIndex: 20, maxWidth: 340 }}>
-      <button
-        onClick={() => setSettingsOpen((v) => !v)}
-        style={{
-          padding: "8px 12px",
-          borderRadius: 10,
-          border: "1px solid rgba(255,255,255,0.25)",
-          background: "rgba(30,30,36,0.65)",
-          color: "#fff",
-          cursor: "pointer"
-        }}
-      >
-        {settingsOpen ? "Скрыть настройки" : "Настройки шаблона"}
-      </button>
-
-      {settingsOpen && (
-        <div
-          style={{
-            marginTop: 8,
-            maxHeight: "68vh",
-            overflow: "auto",
-            background: "rgba(20,20,24,0.6)",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 10,
-            padding: 10,
-            color: "#fff"
-          }}
-        >
-          {panels.map((pnl) => {
-            const oriOv = overrides[pnl.ori] || {};
-            return (
-              <div key={pnl.ori} style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, margin: "6px 0 8px" }}>{pnl.title}</div>
-
-                {variants.map((v) => {
-                  const varOv = (oriOv as any)[v.key] || {};
-                  return (
-                    <div key={`${pnl.ori}-${v.key}`} style={{ marginBottom: 10, padding: 8, border: "1px dashed rgba(255,255,255,0.25)", borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{v.title}</div>
-
-                      {blocks.map((b) => {
-                        const bOv: BlockOverride = (varOv as any)[b.key] || {};
-                        const pos = bOv.pos || {};
-                        const size = bOv.size || {};
-                        const Input = ({
-                          label,
-                          value,
-                          onChange,
-                          placeholder
-                        }: {
-                          label: string;
-                          value?: string;
-                          placeholder?: string;
-                          onChange: (s: string) => void;
-                        }) => (
-                          <label style={{ display: "grid", gridTemplateColumns: "88px 1fr", alignItems: "center", gap: 6 }}>
-                            <span style={{ opacity: 0.9 }}>{label}</span>
-                            <input
-                              value={value ?? ""}
-                              placeholder={placeholder ?? ""}
-                              onChange={(e) => onChange(e.target.value)}
-                              style={{
-                                width: "100%",
-                                padding: "6px 8px",
-                                borderRadius: 8,
-                                border: "1px solid rgba(255,255,255,0.25)",
-                                background: "rgba(255,255,255,0.06)",
-                                color: "#fff"
-                              }}
-                            />
-                          </label>
-                        );
-
-                        return (
-                          <div key={`${pnl.ori}-${v.key}-${b.key}`} style={{ margin: "8px 0", padding: 8, background: "rgba(255,255,255,0.04)", borderRadius: 8 }}>
-                            <div style={{ fontWeight: 500, marginBottom: 6 }}>{b.title}</div>
-                            <div style={{ display: "grid", gap: 8 }}>
-                              <div style={{ fontSize: 12, opacity: 0.85 }}>Размер (CSS значения: %, px и т.п.)</div>
-                              <div style={{ display: "grid", gap: 6 }}>
-                                <Input
-                                  label="width"
-                                  value={size.width}
-                                  placeholder="например: 80% или 240px"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "size", "width", s)}
-                                />
-                                <Input
-                                  label="height"
-                                  value={size.height}
-                                  placeholder="например: 90%"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "size", "height", s)}
-                                />
-                                <Input
-                                  label="maxWidth"
-                                  value={size.maxWidth}
-                                  placeholder="например: 520px или 90%"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "size", "maxWidth", s)}
-                                />
-                                <Input
-                                  label="maxHeight"
-                                  value={size.maxHeight}
-                                  placeholder="например: 80px или 90%"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "size", "maxHeight", s)}
-                                />
-                              </div>
-
-                              <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>Положение (CSS: top/left/right/bottom/transform)</div>
-                              <div style={{ display: "grid", gap: 6 }}>
-                                <Input
-                                  label="top"
-                                  value={pos.top}
-                                  placeholder="например: 6% (для Horizontal 1 — доп. сдвиг в % ряда)"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "pos", "top", s)}
-                                />
-                                <Input
-                                  label="left"
-                                  value={pos.left}
-                                  placeholder="например: 50% или 4%"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "pos", "left", s)}
-                                />
-                                <Input
-                                  label="right"
-                                  value={pos.right}
-                                  placeholder="например: 4%"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "pos", "right", s)}
-                                />
-                                <Input
-                                  label="bottom"
-                                  value={pos.bottom}
-                                  placeholder="например: 22%"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "pos", "bottom", s)}
-                                />
-                                <Input
-                                  label="transform"
-                                  value={pos.transform}
-                                  placeholder="например: translateX(-50%)"
-                                  onChange={(s) => setField(pnl.ori, v.key, b.key, "pos", "transform", s)}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  const isHorizontalOne = !isVertical && tplKey === "one";
 
   return (
-    <div
-      style={{
-        ...bottomUnderlayGradient(),
-        borderRadius: 10,
-        position: "relative",
-        width: "100%",
-        height: sketchH,
-        overflow: "hidden",
-        userSelect: "none",
-        padding: CFG.general.containerPadding,
-        boxSizing: "border-box",
-        color: "#fff",
-        ...style
-      }}
-      data-sketch-orient={isVertical ? "vertical" : "horizontal"}
-      data-sketch-orient-source={orientation ? "draft" : "image"}
-    >
-      {/* Панель настроек */}
-      <SettingsPanel />
+    <>
+      {/* Предупреждение над эскизом */}
+      <div
+        style={{
+          color: "#fff",
+          opacity: 0.9,
+          fontSize: 13,
+          lineHeight: 1.25,
+          margin: "6px 0 8px",
+          textAlign: "center"
+        }}
+      >
+        Предварительный макет. Изображения могут накладываться — это допустимо. Финальное расположение сделает специалист. Принципиальные моменты скорректируем позже.
+      </div>
 
-      {/* Бэкграунд-изображение стелы */}
-      <img
-        ref={imgRef}
-        src={item?.url || ""}
-        alt={item?.name || "Изделие"}
-        style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-        draggable={false}
-        onLoad={() => setTimeout(recalc, 0)}
-      />
+      <div
+        style={{
+          ...bottomUnderlayGradient(),
+          borderRadius: 10,
+          position: "relative",
+          width: "100%",
+          height: sketchH,
+          overflow: "hidden",
+          userSelect: "none",
+          padding: CFG.general.containerPadding,
+          boxSizing: "border-box",
+          color: "#fff",
+          ...style
+        }}
+        data-sketch-orient={isVertical ? "vertical" : "horizontal"}
+        data-sketch-orient-source={orientation ? "draft" : "image"}
+      >
+        {/* Изображение изделия (резной работы) */}
+        <img
+          ref={imgRef}
+          src={item?.url || ""}
+          alt={item?.name || "Изделие"}
+          style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
+          draggable={false}
+          onLoad={() => setTimeout(recalc, 0)}
+        />
 
-      {/* Контент поверх */}
-      {renderPeople()}
-      <CrossOverlay />
-      <GraphicsOverlay />
-      <EpitaphsOverlay />
-    </div>
+        {/* Контент поверх */}
+        {renderPeople()}
+        <CrossOverlay />
+
+        {/* Для HorizontalOne графику и эпитафию рисуем внутри самого HorizontalOne (см. выше). */}
+        {!isHorizontalOne && (
+          <>
+            <GraphicsOverlay />
+            <EpitaphsOverlay />
+          </>
+        )}
+      </div>
+    </>
   );
 }
