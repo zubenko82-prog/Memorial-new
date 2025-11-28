@@ -1,11 +1,12 @@
 // src/screens/SizeStep.tsx
-// Автоориентация:
-// 1) По изображению (naturalWidth/Height) с таймаутом.
-// 2) Если не удалось — по выбранным размерам (Ш×В).
-// 3) Сохраняется в драфт и отображается на экране.
-// Важно: не сохраняем orientation в драфт, пока она реально не определена (orientationReady).
+// Автоориентация (исправлено, чтобы определялась с первого раза и без гонок):
+// 1) Пробуем по изображению (naturalWidth/Height) — единожды при смене item.url.
+// 2) Если не удалось (ошибка/таймаут) — берём по выбранным размерам (Ш×В).
+// 3) Сохраняем в драфт только после того, как ориентация реально определена.
+// 4) Если после определения источник = "size", то при изменении размеров ориентир обновляется динамически.
+// 5) Если в драфте уже есть ориентация — НЕ перезапускаем детект (считаем, что она валидна).
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import type { CatalogItem } from "../api";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
@@ -108,7 +109,10 @@ export default function SizeStep(props: SizeStepProps) {
   const draftWcm = mmToCm(draft.size?.width);
   const draftHcm = mmToCm(draft.size?.height);
   const draftTcm = mmToCm(draft.size?.thickness);
-  const draftOrientation = (draft.size?.orientation as Orientation | undefined) || (draft.orientation as Orientation | undefined) || "vertical";
+
+  const draftOrientation = (draft.size?.orientation as Orientation | undefined)
+    || (draft.orientation as Orientation | undefined)
+    || "vertical";
   const hadDraftOrientation = Boolean(draft.size?.orientation || (draft as any).orientation);
 
   const draftPreset = findPresetFor(draftWcm, draftHcm);
@@ -137,6 +141,10 @@ export default function SizeStep(props: SizeStepProps) {
   const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
   const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">(hadDraftOrientation ? "default" : "default");
   const [orientationReady, setOrientationReady] = useState<boolean>(hadDraftOrientation);
+
+  // Флаг и рефы для детекта, чтобы остановить гонки
+  const detectionDoneRef = useRef<boolean>(hadDraftOrientation);
+  const detectingRef = useRef<boolean>(false);
 
   const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
     if (sizeMode === "preset") {
@@ -185,77 +193,97 @@ export default function SizeStep(props: SizeStepProps) {
     saveOrderDraft({ size: sizePatch, orientation: currentOrientation });
   }
 
-  // Детект по изображению с таймаутом, иначе — по размерам
+  // ЕДИНОЖДЫ детектируем по картинке (или fallback по размеру). Не завязываемся на изменение размеров.
   useEffect(() => {
+    // Если в драфте уже есть ориентация — считаем её валидной, не перезапускаем детект.
+    if (hadDraftOrientation) {
+      detectionDoneRef.current = true;
+      setOrientationReady(true);
+      setOrientation(draftOrientation);
+      setOrientationSource("image");
+      return;
+    }
+
     let cancelled = false;
     let timer: number | undefined;
+    detectingRef.current = true;
 
-    async function detect() {
-      const url = item?.url;
+    const url = item?.url;
+
+    const fallbackToSize = () => {
+      if (cancelled || detectionDoneRef.current) return;
       const [wcm, hcm] = currentWHcm;
+      const next = orientFromSize(wcm, hcm);
+      detectionDoneRef.current = true;
+      detectingRef.current = false;
+      setOrientation(next);
+      setOrientationSource("size");
+      setOrientationReady(true);
+      persistDraft(next);
+    };
 
-      const fallbackToSize = () => {
-        const next = orientFromSize(wcm, hcm);
-        if (!cancelled) {
-          setOrientation(next);
-          setOrientationSource("size");
-          setOrientationReady(true);
-          persistDraft(next);
-        }
+    if (!url) {
+      fallbackToSize();
+      return () => {};
+    }
+
+    // Таймаут ожидания загрузки картинки
+    timer = window.setTimeout(() => {
+      if (cancelled) return;
+      fallbackToSize();
+    }, 1500);
+
+    // Надёжный детект по изображению
+    try {
+      const img = new Image();
+      img.decoding = "async";
+      img.onload = () => {
+        if (cancelled || detectionDoneRef.current) return;
+        if (timer) window.clearTimeout(timer);
+        const next: Orientation = img.naturalWidth > img.naturalHeight ? "horizontal" : "vertical";
+        detectionDoneRef.current = true;
+        detectingRef.current = false;
+        setOrientation(next);
+        setOrientationSource("image");
+        setOrientationReady(true);
+        persistDraft(next);
       };
-
-      if (!url) {
+      img.onerror = () => {
+        if (cancelled || detectionDoneRef.current) return;
+        if (timer) window.clearTimeout(timer);
         fallbackToSize();
-        return;
-      }
-
-      timer = window.setTimeout(() => {
-        if (cancelled) return;
-        fallbackToSize();
-      }, 1500);
-
-      try {
-        const img = new Image();
-        img.onload = () => {
-          if (cancelled) return;
-          if (timer) window.clearTimeout(timer);
-          const next: Orientation = img.naturalWidth > img.naturalHeight ? "horizontal" : "vertical";
-          setOrientation(next);
-          setOrientationSource("image");
-          setOrientationReady(true);
-          persistDraft(next);
-        };
-        img.onerror = () => {
-          if (cancelled) return;
-          if (timer) window.clearTimeout(timer);
-          fallbackToSize();
-        };
-        img.src = url;
-      } catch {
-        if (cancelled) return;
+      };
+      // старт
+      img.src = url;
+    } catch {
+      if (!cancelled) {
         if (timer) window.clearTimeout(timer);
         fallbackToSize();
       }
     }
 
-    detect();
     return () => {
       cancelled = true;
+      detectingRef.current = false;
       if (timer) window.clearTimeout(timer);
     };
-  }, [item?.url, currentWHcm[0], currentWHcm[1]]);
+    // ВАЖНО: запускаем детект ТОЛЬКО при смене URL (чтобы избежать гонок с изменениями размеров)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.url]);
 
-  // Если источник не изображение — при изменении размеров пересчитываем и сохраняем
+  // Если детект завершился размером — поддерживаем актуальность ориентации при изменении размеров
   useEffect(() => {
-    if (orientationSource === "image") return;
+    if (!detectionDoneRef.current) return; // детект ещё идёт
+    if (orientationSource !== "size") return; // ориентир по картинке — ничего не делаем
     const [wcm, hcm] = currentWHcm;
     const next = orientFromSize(wcm, hcm);
-    setOrientation(next);
-    if (orientationSource !== "image") setOrientationSource("size");
-    setOrientationReady(true);
-    persistDraft(next);
+    if (next !== orientation) {
+      setOrientation(next);
+      setOrientationReady(true);
+      persistDraft(next);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orientationSource, currentWHcm[0], currentWHcm[1]]);
+  }, [sizeMode, sizePreset, w, h, orientationSource]);
 
   const sizeValid = useMemo(() => {
     if (sizeMode === "preset") return true;
@@ -336,7 +364,7 @@ export default function SizeStep(props: SizeStepProps) {
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
       <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
         Ориентация: <b>{orientation === "horizontal" ? "горизонтальная" : "вертикальная"}</b>{" "}
-        {orientationSource === "image" ? "(по изображению)" : "(по размеру)"}
+        {orientationSource === "image" ? "(по изображению)" : orientationSource === "size" ? "(по размеру)" : "(по умолчанию)"}
       </div>
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>

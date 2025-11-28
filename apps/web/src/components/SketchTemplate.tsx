@@ -1,22 +1,16 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Обновления:
-// - Над эскизом добавлен текст-пояснение (без упоминания наложений).
-// - На ВСЕХ шаблонах порядок строго такой: Метрика → Эпитафия → Графика (в самом низу, минимальный отступ).
-//   Эпитафия всегда располагается под метрикой, графика — у нижнего края.
-// - Наложение элементов запрещено: размеры/масштабы динамически подгоняются, чтобы всё уместилось.
-// - Горизонтальный шаблон (1 человек) БЕЗ сетки:
-//   • Портрет по центру верхней половины, отступ сверху 6% высоты изображения,
-//     высота портрета 40% высоты изображения.
-//   • Метрика под портретом, высота контейнера 20% высоты изображения,
-//     в метрике строго 3 строки: 1 — Фамилия, 2 — Имя Отчество, 3 — Даты (порядок фиксирован).
-//     Если строки не помещаются, метрика масштабируется (уменьшается).
-//   • Далее — Эпитафия (ниже метрики, масштабируется при нехватке места).
-//   • Графика — в самом низу (минимальный отступ от низа), высота ограничена, чтобы не пересекаться с эпитафией.
-//
-// Примечание: портреты/метрики во всех прочих шаблонах оставлены как в конфиге, но
-// эпитафия и графика теперь рендерятся общим модулем «снизу» без пересечений.
+// Обновления/фикс:
+// - На шаблоне "горизонтальный, 1 человек" третья строка метрики (даты) могла обрезаться.
+//   Что сделали:
+//   1) Для HorizontalOne рендерим метрику собственной разметкой (три строки), где третья строка
+//      принудительно в одну строку (whiteSpace: 'nowrap'; wordBreak: 'keep-all').
+//   2) Масштаб метрики рассчитываем так же по offscreen-блоку, НО используем точно такую же
+//      разметку и добавляем небольшой «припуск» (available = targetH - 2px), чтобы не было
+//      клиппинга из-за дифференций шрифтов/округления.
+//   Это устраняет ситуацию, когда даты не попадали в видимую область.
+// - Порядок блоков: Метрика → Эпитафия → Графика (внизу), без наложений (элементы масштабируются).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -52,8 +46,6 @@ const CFG = {
           size: { width: "100%", maxWidth: "520px", height: "auto" },
           margins: { margin: "0 auto" },
           text: {
-            // Настройка метрики (комментарий):
-            // Строго 3 строки: 1 — Фамилия, 2 — Имя Отчество, 3 — Даты (порядок фиксирован).
             uppercase: true, align: "center",
             l1: { font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
             l2: { font: `600 clamp(16px, 3vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
@@ -62,8 +54,6 @@ const CFG = {
         },
         cross: { pos: { top: "6%", left: "50%", transform: "translateX(-50%)" }, size: { width: "8%", height: "auto" }, margins: {} },
         epitaphs: {
-          // Исторические значения (не используются для позиционирования, порядок фиксируем кодом)
-          pos: { bottom: "34%", left: "50%", transform: "translateX(-50%)" },
           size: { width: "88%", height: "auto" },
           margins: { padding: "0 6px" },
           text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.0vw, 22px)", lineHeight: 1.2, letterSpacing: "0.3px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
@@ -74,48 +64,18 @@ const CFG = {
     two: {
       blocks: {
         portraits: { pos: { top: "8%", left: "50%", transform: "translateX(-50%)" }, size: { width: "45%", height: "auto" }, margins: { margin: "0 auto 8px auto" } },
-        metric: {
-          pos: { left: "50%", transform: "translateX(-50%)" },
-          size: { width: "80%", height: "auto" },
-          margins: { margin: "0 auto" },
-          text: {
-            uppercase: true, align: "center",
-            l1: { font: `500 clamp(10px, 1.6vw, 24px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.35px" },
-            l2: { font: `400 clamp(8px, 1.2vw, 20px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.25px" },
-            l3: { font: `300 clamp(6px, 0.9vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.2px", opacity: 0.95 }
-          }
-        },
+        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "80%", height: "auto" }, margins: { margin: "0 auto" } },
         cross: { pos: { top: "6%", left: "4%" }, size: { width: "8%", height: "auto" }, margins: {} },
-        epitaphs: {
-          pos: { bottom: "22%", left: "50%", transform: "translateX(-50%)" },
-          size: { width: "88%", height: "auto" },
-          margins: { padding: "0 6px" },
-          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.8vw, 10px)", lineHeight: 1.15, letterSpacing: "0.25px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
-        },
+        epitaphs: { size: { width: "88%", height: "auto" }, margins: { padding: "0 6px" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.8vw, 10px)", lineHeight: 1.15 } },
         graphics: { pos: { bottom: "4%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "42px", width: "auto" }, margins: { gap: "10px" } }
       }
     },
     many: {
       blocks: {
         portraits: { pos: { top: "8%", left: "50%", transform: "translateX(-50%)" }, size: { width: "78%", height: "auto" }, margins: { margin: "0 auto 6px auto" } },
-        metric: {
-          pos: { left: "50%", transform: "translateX(-50%)" },
-          size: { width: "90%", height: "auto" },
-          margins: { margin: "0 auto" },
-          text: {
-            uppercase: true, align: "center",
-            l1: { font: `700 clamp(14px, 1.8vw, 20px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.25px" },
-            l2: { font: `600 clamp(12px, 1.6vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px" },
-            l3: { font: `400 clamp(11px, 1.5vw, 16px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px", opacity: 0.95 }
-          }
-        },
+        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "90%", height: "auto" }, margins: { margin: "0 auto" } },
         cross: { pos: { top: "6%", left: "4%" }, size: { width: "7%", height: "auto" }, margins: {} },
-        epitaphs: {
-          pos: { bottom: "38%", left: "50%", transform: "translateX(-50%)" },
-          size: { width: "88%", height: "auto" },
-          margins: { padding: "0 6px" },
-          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15, letterSpacing: "0.2px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
-        },
+        epitaphs: { size: { width: "88%", height: "auto" }, margins: { padding: "0 6px" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15 } },
         graphics: { pos: { bottom: "5%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "64px", width: "auto" }, margins: { gap: "8px" } }
       }
     }
@@ -125,70 +85,27 @@ const CFG = {
     one: {
       blocks: {
         portraits: { pos: { top: "12%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" }, margins: { margin: "0 auto 16px auto" } },
-        metric: {
-          pos: { left: "50%", transform: "translateX(-50%)" },
-          size: { width: "80%", height: "auto" },
-          margins: { margin: "0 auto" },
-          text: {
-            uppercase: true, align: "center",
-            l1: { font: `700 clamp(20px, 4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
-            l2: { font: `600 clamp(18px, 3.4vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
-            l3: { font: `400 clamp(16px, 3vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.25px", opacity: 0.95 }
-          }
-        },
+        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "80%", height: "auto" }, margins: { margin: "0 auto" } },
         cross: { pos: { top: "4%", left: "4%" }, size: { width: "14%", height: "auto" }, margins: {} },
-        epitaphs: {
-          pos: { bottom: "18%", left: "50%", transform: "translateX(-50%)" },
-          size: { width: "88%", height: "auto" },
-          margins: { padding: "0 6px" },
-          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.2vw, 22px)", lineHeight: 1.2, letterSpacing: "0.3px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
-        },
+        epitaphs: { size: { width: "88%", height: "auto" }, margins: { padding: "0 6px" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.2vw, 22px)", lineHeight: 1.2 } },
         graphics: { pos: { bottom: "6%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "80px", width: "auto" }, margins: { gap: "10px" } }
       }
     },
     two: {
       blocks: {
         portraits: { pos: {}, size: { width: "60%", height: "auto" }, margins: { margin: "0 auto" } },
-        metric: {
-          pos: {},
-          size: { width: "90%", height: "auto" },
-          margins: { margin: "0 auto" },
-          text: {
-            uppercase: true, align: "center",
-            l1: { font: `700 clamp(18px, 3.2vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.35px" },
-            l2: { font: `600 clamp(16px, 2.8vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.25px" },
-            l3: { font: `400 clamp(14px, 2.4vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.2px", opacity: 0.95 }
-          }
-        },
+        metric: { pos: {}, size: { width: "90%", height: "auto" }, margins: { margin: "0 auto" } },
         cross: { pos: { top: "4%", left: "4%" }, size: { width: "14%", height: "auto" }, margins: {} },
-        epitaphs: {
-          pos: { bottom: "20%", left: "50%", transform: "translateX(-50%)" },
-          size: { width: "88%", height: "auto" },
-          margins: { padding: "0 6px" },
-          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.9vw, 20px)", lineHeight: 1.15, letterSpacing: "0.25px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
-        },
+        epitaphs: { size: { width: "88%", height: "auto" }, margins: { padding: "0 6px" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.9vw, 20px)", lineHeight: 1.15 } },
         graphics: { pos: { bottom: "7%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "74px", width: "auto" }, margins: { gap: "10px" } }
       }
     },
     many: {
       blocks: {
         portraits: { pos: {}, size: { width: "52%", height: "auto" }, margins: { margin: "0 auto" } },
-        metric: {
-          pos: {}, size: { width: "92%", height: "auto" }, margins: { margin: "0 auto" },
-          text: {
-            uppercase: true, align: "center",
-            l1: { font: `700 clamp(16px, 2.8vw, 24px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.25px" },
-            l2: { font: `600 clamp(14px, 2.4vw, 20px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px" },
-            l3: { font: `400 clamp(12px, 2vw, 18px) ${FONT_CENTURY}`, lineHeight: 1.1, letterSpacing: "0.2px", opacity: 0.95 }
-          }
-        },
+        metric: { pos: {}, size: { width: "92%", height: "auto" }, margins: { margin: "0 auto" } },
         cross: { pos: { top: "4%", left: "4%" }, size: { width: "13%", height: "auto" }, margins: {} },
-        epitaphs: {
-          pos: { bottom: "22%", left: "50%", transform: "translateX(-50%)" },
-          size: { width: "88%", height: "auto" },
-          margins: { padding: "0 6px" },
-          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15, letterSpacing: "0.2px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
-        },
+        epitaphs: { size: { width: "88%", height: "auto" }, margins: { padding: "0 6px" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15 } },
         graphics: { pos: { bottom: "5%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "64px", width: "auto" }, margins: { gap: "8px" } }
       }
     }
@@ -222,12 +139,12 @@ export default function SketchTemplate({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Общие измерители для запрета пересечений
-  const [metricBottomPx, setMetricBottomPx] = useState(0); // нижняя граница метрик внутри изображения
-  const epitaphMeasureRef = useRef<HTMLDivElement | null>(null); // offscreen естественная высота эпитафии
+  // Общие измерители
+  const [metricBottomPx, setMetricBottomPx] = useState(0);
+  const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
   const [epitaphScale, setEpitaphScale] = useState(1);
 
-  // Для HorizontalOne: динамическая метрика (масштаб, чтобы влезла в 20% высоты)
+  // Горизонтальный 1: масштаб метрики
   const metricMeasureRef = useRef<HTMLDivElement | null>(null);
   const [metricScaleH1, setMetricScaleH1] = useState(1);
 
@@ -272,15 +189,71 @@ export default function SketchTemplate({
   const isVertical = orientation ? orientation === "vertical" : isVerticalByImage;
 
   const tplKey = pickTplKey(peopleBlocks.length);
-  const tpl = useMemo(() => (isVertical ? (CFG.vertical as any)[tplKey] : (CFG.horizontal as any)[tplKey]), [isVertical, tplKey]);
   const H = imgRect.h;
   const W = imgRect.w;
 
-  /* ===== Измеряем нижнюю границу всех блоков метрики внутри контейнера (для всех шаблонов) ===== */
+  /* ===== Компонент: Три строки метрики (для HorizontalOne) ===== */
+  function MetricThreeLines({
+    lines,
+    textCfg
+  }: {
+    lines: string[];
+    textCfg: any;
+  }) {
+    const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
+    const toUp = (s: string) => (textCfg.uppercase ? s.toUpperCase() : s);
+
+    // Размеры шрифтов берутся аналогично PersonMetricText
+    // (Но управляются масштабом контейнера metricScaleH1)
+    return (
+      <div style={{ width: "100%", display: "grid", gap: 6, textAlign: textCfg.align ?? "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+        {!!L[0] && <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>}
+        {!!L[1] && <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>}
+        {!!L[2] && (
+          <div
+            // Даты — только в одну строку, без переноса
+            style={{
+              font: textCfg.l3.font,
+              lineHeight: textCfg.l3.lineHeight,
+              letterSpacing: textCfg.l3.letterSpacing,
+              opacity: textCfg.l3.opacity ?? 1,
+              whiteSpace: "nowrap",
+              wordBreak: "keep-all",
+              overflow: "hidden"
+            }}
+          >
+            {toUp(L[2])}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function PersonMetricText({
+    lines,
+    align,
+    textCfg
+  }: {
+    lines: string[];
+    align: "center" | "left" | "right";
+    textCfg: any;
+  }) {
+    const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
+    const toUp = (s: string) => (textCfg.uppercase ? s.toUpperCase() : s);
+
+    return (
+      <div style={{ width: "100%", display: "grid", gap: 6, textAlign: align, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+        {!!L[0] && <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>}
+        {!!L[1] && <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>}
+        {!!L[2] && <div style={{ font: textCfg.l3.font, lineHeight: textCfg.l3.lineHeight, letterSpacing: textCfg.l3.letterSpacing, opacity: textCfg.l3.opacity ?? 1 }}>{toUp(L[2])}</div>}
+      </div>
+    );
+  }
+
+  /* ===== Измерение нижней границы метрик (для позиционирования эпитафии) ===== */
   useEffect(() => {
     const root = containerRef.current;
     if (!root) return;
-    // Ждём, чтобы DOM успел разложить метрики
     const t = setTimeout(() => {
       const rootRect = root.getBoundingClientRect();
       const nodes = root.querySelectorAll('[data-sketch-el="metric"]');
@@ -290,7 +263,7 @@ export default function SketchTemplate({
         const bottom = r.bottom - rootRect.top;
         if (bottom > maxBottom) maxBottom = bottom;
       });
-      setMetricBottomPx(Math.max(0, Math.min(maxBottom, H))); // clamp в пределах изображения
+      setMetricBottomPx(Math.max(0, Math.min(maxBottom, H)));
     }, 0);
     return () => clearTimeout(t);
   }, [H, W, isVertical, tplKey, peopleBlocks.map((p) => p.lines.join("|")).join("||")]);
@@ -314,34 +287,30 @@ export default function SketchTemplate({
     return { gap, topOffset, portraitH, portraitW, portraitTop, metricTargetH, metricTop, metricW };
   }, [isVertical, tplKey, H, W]);
 
-  // Масштаб метрики (HorizontalOne) — чтобы три строки влезли в containerHeight = 20% H
+  // Масштаб метрики (HorizontalOne), используем «припуск» 2px, чтобы избежать клиппинга
   useEffect(() => {
     if (!h1) return;
     const holder = metricMeasureRef.current;
     if (!holder) return;
     const t = setTimeout(() => {
       const natural = holder.scrollHeight || holder.offsetHeight || 1;
-      const scale = Math.min(1, h1.metricTargetH / natural);
+      const available = Math.max(1, h1.metricTargetH - 2); // припуск
+      const scale = Math.min(1, available / natural);
       setMetricScaleH1(scale);
     }, 0);
     return () => clearTimeout(t);
   }, [h1, peopleBlocks[0]?.lines?.join("|")]);
 
-  /* ===== Унифицированная эпитафия + графика (для всех шаблонов):
-         — Эпитафия сразу под метрикой и растягивается (масштабируется), чтобы поместиться над графикой.
-         — Графика у самого низа (минимальный отступ), высота ограничена. ===== */
+  /* ===== Нижние блоки ===== */
   const epitaphW = Math.round(W * 0.88);
-  const bottomPadPx = Math.max(8, Math.round(0.02 * H)); // минимальный отступ от низа
-  const graphicsMaxHDefault = Math.round(0.18 * H);      // верхняя граница высоты блока графики
+  const bottomPadPx = Math.max(8, Math.round(0.02 * H));
+  const graphicsMaxHDefault = Math.round(0.18 * H);
 
-  // Измеряем естественную высоту эпитафии, чтобы вычислить масштаб (идёт под метрикой)
   useEffect(() => {
     const holder = epitaphMeasureRef.current;
     if (!holder) return setEpitaphScale(1);
     const t = setTimeout(() => {
       const natural = holder.scrollHeight || holder.offsetHeight || 1;
-      // временно возьмём максимально допустимую высоту эпитафии «без пересечения» с графикой:
-      // оставим под графику graphicsMaxH (может быть уменьшена далее при фактическом рендере).
       const graphicsMaxH = graphicsMaxHDefault;
       const available = Math.max(0, H - bottomPadPx - graphicsMaxH - (metricBottomPx + Math.round(0.015 * H)));
       const scale = Math.min(1, available / natural);
@@ -350,15 +319,12 @@ export default function SketchTemplate({
     return () => clearTimeout(t);
   }, [H, W, metricBottomPx, epitaphs?.join("|")]);
 
-  /* ===== Кресты =====
-     Правила:
-     - По умолчанию: один — слева, два — слева и справа.
-     - Горизонтальный (2 человека): один — по центру, два — по краям. */
+  /* ===== Кресты ===== */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
 
     const isHorizontalTwo = !isVertical && tplKey === "two";
-    const baseSize = (tpl.blocks as any).cross.size;
+    const baseSize = (CFG.horizontal.one.blocks as any).cross.size;
 
     const baseFilter: React.CSSProperties = {
       objectFit: "contain",
@@ -403,31 +369,7 @@ export default function SketchTemplate({
     return null;
   };
 
-  function PersonMetricText({
-    lines,
-    align,
-    textCfg
-  }: {
-    lines: string[];
-    align: "center" | "left" | "right";
-    textCfg: any;
-  }) {
-    // Порядок жёстко фиксирован: Фамилия / Имя Отчество / Даты
-    const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
-    const toUp = (s: string) => (textCfg.uppercase ? s.toUpperCase() : s);
-
-    return (
-      <div style={{ width: "100%", display: "grid", gap: 6, textAlign: align, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-        {!!L[0] && <div style={{ font: textCfg.l1.font, lineHeight: textCfg.l1.lineHeight, letterSpacing: textCfg.l1.letterSpacing }}>{toUp(L[0])}</div>}
-        {!!L[1] && <div style={{ font: textCfg.l2.font, lineHeight: textCfg.l2.lineHeight, letterSpacing: textCfg.l2.letterSpacing }}>{toUp(L[1])}</div>}
-        {!!L[2] && <div style={{ font: textCfg.l3.font, lineHeight: textCfg.l3.lineHeight, letterSpacing: textCfg.l3.letterSpacing, opacity: textCfg.l3.opacity ?? 1 }}>{toUp(L[2])}</div>}
-      </div>
-    );
-  }
-
   /* ===== PEOPLE ===== */
-
-  // Horizontal: 1 person — без сетки (портрет → метрика)
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
     if (!H || !W) return null;
@@ -467,7 +409,7 @@ export default function SketchTemplate({
           </div>
         </div>
 
-        {/* Метрика (строго 3 строки) — контейнер 20% H, контент масштабируется */}
+        {/* Метрика — контейнер фиксированной высоты, контент масштабируется, третья строка (даты) — без переноса */}
         <div
           data-sketch-el="metric"
           data-sketch-key={p.id}
@@ -486,29 +428,20 @@ export default function SketchTemplate({
           }}
         >
           <div style={{ transform: `scale(${metricScaleH1})`, transformOrigin: "top center", width: "100%" }}>
-            <PersonMetricText
-              lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]}
-              textCfg={(CFG.horizontal.one.blocks as any).metric.text}
-              align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
-            />
+            <MetricThreeLines lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]} textCfg={(CFG.horizontal.one.blocks as any).metric.text} />
           </div>
         </div>
 
-        {/* Offscreen измеритель метрики (натуральная высота) */}
+        {/* Offscreen измеритель метрики (натуральная высота) — ДОЛЖЕН совпадать с видимой разметкой */}
         <div style={{ position: "absolute", left: -99999, top: -99999, width: s.metricW }}>
           <div ref={metricMeasureRef} style={{ width: s.metricW }}>
-            <PersonMetricText
-              lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]}
-              textCfg={(CFG.horizontal.one.blocks as any).metric.text}
-              align={((CFG.horizontal.one.blocks as any).metric.text.align as any) ?? "center"}
-            />
+            <MetricThreeLines lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]} textCfg={(CFG.horizontal.one.blocks as any).metric.text} />
           </div>
         </div>
       </>
     );
   };
 
-  // Horizontal: 2 — как было (портреты и метрики), эпитафия/графика — общим модулем снизу
   const HorizontalTwo = () => {
     const B = (CFG.horizontal.two.blocks as any);
     const colW = Math.min(320, Math.max((CFG.horizontal.layout as any).columnMinW, Math.floor((W - 32 - (CFG.horizontal.layout as any).gap) / 2)));
@@ -529,16 +462,12 @@ export default function SketchTemplate({
       >
         {peopleBlocks.slice(0, 2).map((p) => (
           <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: B.portraits.size.width, ...(B.portraits.margins || {}) }}>
-              <div
-                data-sketch-el="portrait"
-                data-sketch-key={p.id}
-                style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
-              >
+            <div style={{ width: B.portraits.size.width }}>
+              <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...(B.metric.margins || {}) }}>
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width }}>
               <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
             </div>
           </div>
@@ -568,16 +497,12 @@ export default function SketchTemplate({
       >
         {peopleBlocks.map((p) => (
           <div key={p.id} style={{ width: perCol, display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: B.portraits.size.width, ...(B.portraits.margins || {}) }}>
-              <div
-                data-sketch-el="portrait"
-                data-sketch-key={p.id}
-                style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
-              >
+            <div style={{ width: B.portraits.size.width }}>
+              <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, ...(B.metric.margins || {}) }}>
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width }}>
               <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
             </div>
           </div>
@@ -592,13 +517,13 @@ export default function SketchTemplate({
     return (
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: (B.portraits.pos as any).top ?? "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ width: B.portraits.size.width, maxWidth: B.portraits.size.maxWidth, ...(B.portraits.margins || {}) }}>
+          <div style={{ width: B.portraits.size.width, maxWidth: B.portraits.size.maxWidth }}>
             <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
               {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
             </div>
           </div>
 
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, maxWidth: B.metric.size.maxWidth, ...(B.metric.margins || {}) }}>
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: B.metric.size.width, maxWidth: B.metric.size.maxWidth }}>
             <PersonMetricText lines={p.lines} textCfg={B.metric.text} align={B.metric.text.align ?? "center"} />
           </div>
         </div>
@@ -607,7 +532,7 @@ export default function SketchTemplate({
   };
 
   const VerticalTwo = () => {
-    const rowsH = Math.max(100, Math.floor(H * CFG.vertical.layout.rowsHeightFactor));
+    const rowsH = Math.max(100, Math.floor(H * (CFG.vertical.layout as any).rowsHeightFactor));
     return (
       <div
         style={{
@@ -617,7 +542,7 @@ export default function SketchTemplate({
           right: 16,
           display: "grid",
           gridTemplateRows: `repeat(2, minmax(${Math.floor(rowsH / 2)}px, 1fr))`,
-          rowGap: CFG.vertical.layout.rowGapPx,
+          rowGap: (CFG.vertical.layout as any).rowGapPx,
           pointerEvents: "none"
         }}
       >
@@ -630,7 +555,7 @@ export default function SketchTemplate({
             </div>
 
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.two.blocks as any).metric.size.width, ...((CFG.vertical.two.blocks as any).metric.margins || {}) }}>
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.two.blocks as any).metric.size.width }}>
                 <PersonMetricText lines={p.lines} textCfg={(CFG.vertical.two.blocks as any).metric.text} align={(CFG.vertical.two.blocks as any).metric.text.align ?? "center"} />
               </div>
             </div>
@@ -641,7 +566,7 @@ export default function SketchTemplate({
   };
 
   const VerticalMany = () => {
-    const rowsH = Math.max(100, Math.floor(H * CFG.vertical.layout.rowsHeightFactor));
+    const rowsH = Math.max(100, Math.floor(H * (CFG.vertical.layout as any).rowsHeightFactor));
     const rowCount = peopleBlocks.length;
     return (
       <div
@@ -652,7 +577,7 @@ export default function SketchTemplate({
           right: 16,
           display: "grid",
           gridTemplateRows: `repeat(${rowCount}, minmax(${Math.floor(rowsH / rowCount)}px, 1fr))`,
-          rowGap: CFG.vertical.layout.rowGapPx,
+          rowGap: (CFG.vertical.layout as any).rowGapPx,
           pointerEvents: "none"
         }}
       >
@@ -665,7 +590,7 @@ export default function SketchTemplate({
             </div>
 
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.many.blocks as any).metric.size.width, ...((CFG.vertical.many.blocks as any).metric.margins || {}) }}>
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.many.blocks as any).metric.size.width }}>
                 <PersonMetricText lines={p.lines} textCfg={(CFG.vertical.many.blocks as any).metric.text} align={(CFG.vertical.many.blocks as any).metric.text.align ?? "center"} />
               </div>
             </div>
@@ -692,27 +617,22 @@ export default function SketchTemplate({
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
-    // Позиция эпитафии: сразу под метрикой
     const gap = Math.round(0.015 * H);
     const epitaphTop = Math.max(metricBottomPx + gap, 0);
 
-    // Графика: в самом низу (минимальный отступ)
     let graphicsMaxH = graphicsMaxHDefault;
-    // Гарантия, что эпитафии хватит места: если не хватает — уменьшаем высоту графики
     const reservedForEpitaph = (epitaphMeasureRef.current?.scrollHeight || 0) * epitaphScale;
     const minGraphicsTop = epitaphTop + reservedForEpitaph + gap;
     const maxGraphicsTop = H - bottomPadPx - graphicsMaxH;
     const finalGraphicsTop = Math.max(minGraphicsTop, maxGraphicsTop);
     graphicsMaxH = Math.max(0, H - bottomPadPx - finalGraphicsTop);
 
-    // Пересчёт масштаба эпитафии с учётом финальной высоты графики (на случай ужатия)
     const availableForEpitaph = Math.max(0, H - bottomPadPx - graphicsMaxH - epitaphTop);
     const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
     const finalEpitaphScale = Math.min(1, availableForEpitaph / naturalEp);
 
     return (
       <>
-        {/* Эпитафия — всегда под метрикой, масштабируется при нехватке места */}
         {Array.isArray(epitaphs) && epitaphs.length > 0 && (
           <div
             style={{
@@ -750,7 +670,6 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Графика — в самом низу, минимальный отступ от низа, без пересечения с эпитафией */}
         {others.length > 0 && graphicsMaxH > 0 && (
           <div
             style={{
@@ -790,7 +709,7 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Offscreen измеритель эпитафии (натуральная высота без масштаба) */}
+        {/* Offscreen измеритель эпитафии */}
         <div style={{ position: "absolute", left: -99999, top: -99999, width: epitaphW }}>
           <div ref={epitaphMeasureRef} style={{ width: epitaphW }}>
             <div
@@ -861,7 +780,6 @@ export default function SketchTemplate({
           onLoad={() => setTimeout(recalc, 0)}
         />
 
-        {/* Слои поверх */}
         {renderPeople()}
         <CrossOverlay />
         <EpitaphAndGraphics />
