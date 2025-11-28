@@ -1,17 +1,14 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Что исправлено для устранения "Maximum update depth exceeded":
-// - Измерения (metricBottomPx, epitaphScale, metricScaleH1) выполняются не чаще одного кадра
-//   и только при реальном изменении входных параметров/результатов (с порогом).
-// - Введены «сигнатуры» для измерений (refs): если входные данные не менялись — повторно не меряем.
-// - Все вычисления завязаны на стабильные числа (H/W и сигнатуры people/epitaphs), нет скрытых зависимостей.
-// - Выравнивание текста всегда center, .align из конфигурации не используется.
-// - Ни один элемент не выходит за пределы поля эскиза: при нехватке места блоки компактируются:
-//   • HorizontalOne: метрика — scale; даты в одну строку (nowrap).
-//   • Эпитафия/Графика: совместное сжатие по доступному месту (эпитафия — scale, графика — maxHeight).
+// Доп. фикс: графика больше не выходит за поле эскиза.
+// - Вместо «обёртки с переносами» рендерим графику в одну строку (nowrap) и
+//   жёстко рассчитываем ширину каждого элемента так, чтобы общая ширина не превышала ширину контейнера.
+// - По высоте графика также ограничена контейнером (gfxH), каждая картинка имеет max-height <= gfxH*0.9.
+//   В итоге и по ширине, и по высоте вся область графики гарантированно умещается.
 //
-// Порядок блоков: Метрика → Эпитафия → Графика (у нижнего края).
+// Также сохранены предыдущие фиксы бесконечных ререндеров, центрирование текста и совместное сжатие
+// Эпитафии/Графики по доступному месту (эпитафия — scale, графика — maxHeight).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -51,6 +48,10 @@ const CFG = {
   }
 } as const;
 
+// Порог для сравнений (чтобы избежать дребезга setState)
+const EPS = 0.0005;
+const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
+
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
     backgroundColor: "#000",
@@ -63,10 +64,6 @@ function pickTplKey(n: number): "one" | "two" | "many" {
   if (n === 2) return "two";
   return "many";
 }
-
-// Порог для сравнений, чтобы избегать «дребезга»
-const EPS = 0.0005;
-const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
 
 export default function SketchTemplate({
   item,
@@ -82,19 +79,17 @@ export default function SketchTemplate({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Измерители (с защитами)
+  // Метрики нижней границы/масштабов (с защитами от циклов)
   const [metricBottomPx, setMetricBottomPx] = useState(0);
-  const metricMeasureSigRef = useRef<string>(""); // сигнатура измерения метрики
+  const metricMeasureSigRef = useRef<string>("");
   const metricRafRef = useRef<number | null>(null);
 
   const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
   const [epitaphScale, setEpitaphScale] = useState(1);
-  const epitaphSigRef = useRef<string>(""); // сигнатура измерения эпитафии
 
-  // HorizontalOne: масштаб метрики
   const metricMeasureRef = useRef<HTMLDivElement | null>(null);
   const [metricScaleH1, setMetricScaleH1] = useState(1);
-  const metricH1SigRef = useRef<string>(""); // сигнатура H1
+  const metricH1SigRef = useRef<string>("");
 
   const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
 
@@ -140,7 +135,7 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  // Метрика: безопасное выравнивание center
+  // Метрика: три строки по центру, третья строка nowrap
   function MetricThreeLines({ lines }: { lines: string[] }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
@@ -179,7 +174,7 @@ export default function SketchTemplate({
     );
   }
 
-  /* ===== Измерение нижней границы метрики — не чаще одного кадра, только при изменении ===== */
+  /* ===== Измерение нижней границы метрики (без циклов) ===== */
   useEffect(() => {
     if (!H || !W) return;
     const root = containerRef.current;
@@ -193,7 +188,7 @@ export default function SketchTemplate({
       peopleBlocks.map((p) => p.lines.join("|")).join("||")
     ].join("::");
 
-    if (metricMeasureSigRef.current === sig) return; // уже измеряли для этой сигнатуры
+    if (metricMeasureSigRef.current === sig) return;
     metricMeasureSigRef.current = sig;
 
     if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
@@ -216,7 +211,7 @@ export default function SketchTemplate({
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
-  /* ===== Горизонтальный 1: вычисления портрета/метрики (без сетки) ===== */
+  /* ===== Горизонтальный 1: вычисления портрета/метрики ===== */
   const h1 = useMemo(() => {
     if (isVertical || tplKey !== "one") return null;
     const gap = Math.round(0.015 * H);
@@ -235,7 +230,7 @@ export default function SketchTemplate({
     return { gap, portraitH, portraitW, portraitTop, metricTargetH, metricTop, metricW };
   }, [isVertical, tplKey, H, W]);
 
-  // Масштаб метрики (HorizontalOne) — только при изменении сигнатуры
+  // Масштаб метрики (HorizontalOne)
   useEffect(() => {
     if (!h1) return;
     const holder = metricMeasureRef.current;
@@ -570,7 +565,7 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика: совместное сжатие, строго в пределах эскиза ===== */
+  /* ===== Эпитафия + графика (совместное сжатие) ===== */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
@@ -588,7 +583,7 @@ export default function SketchTemplate({
     // Доступно от epTop до низа с учётом отступа
     const available = Math.max(0, H - bottomPadPx - epTop);
 
-    // Определяем scale для эпитафии и высоту графики так, чтобы суммарно уложиться в available
+    // Распределяем место между эпитафией (scale) и графикой (высота контейнера)
     let scaleEp = 1;
     let gfxH = Math.min(desiredGfx, available);
 
@@ -606,6 +601,23 @@ export default function SketchTemplate({
 
     const epScaledHeight = Math.floor(epNatural * scaleEp);
     const gfxTop = epTop + (epScaledHeight > 0 ? epScaledHeight + gap : 0);
+
+    // Ширина контейнера графики в px
+    const gfxWrapW = Math.floor(W * 0.9);
+    // Промежуток между элементами
+    const gfxGap = 10;
+    // Всего графических элементов
+    const n = others.length;
+
+    // Рассчитываем ширину одного элемента так, чтобы В ОДНУ СТРОКУ уместились все элементы
+    // и общая ширина не превышала ширины контейнера (gfxWrapW).
+    // Каждому элементу назначаем фиксированную ширину perItemW и ограничиваем его по высоте (maxHeight).
+    let perItemW = 0;
+    if (n > 0) {
+      const totalGaps = (n - 1) * gfxGap;
+      perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
+    }
+    const perItemMaxH = Math.max(16, Math.floor(gfxH * 0.9));
 
     return (
       <>
@@ -647,7 +659,7 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Графика — контейнерная высота по расчету */}
+        {/* Графика: одна строка, контролируем ширину каждого элемента и высоту контейнера */}
         {others.length > 0 && gfxH > 0 && (
           <div
             style={{
@@ -662,8 +674,8 @@ export default function SketchTemplate({
               display: "flex",
               justifyContent: "center",
               alignItems: "center",
-              gap: "10px",
-              flexWrap: "wrap",
+              gap: `${gfxGap}px`,
+              flexWrap: "nowrap", // ВАЖНО: запрещаем перенос, чтобы никогда не «раздувать» высоту
               zIndex: 3
             }}
           >
@@ -675,12 +687,12 @@ export default function SketchTemplate({
                 src={g.url}
                 alt={g.name || "Графика"}
                 style={{
-                  width: "auto",
+                  width: perItemW ? `${perItemW}px` : "auto",
                   height: "auto",
-                  maxHeight: Math.max(16, Math.floor(gfxH * 0.9)),
+                  maxHeight: `${perItemMaxH}px`,
                   objectFit: "contain",
-                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                  flex: "0 0 auto"
+                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))`,
+                  flex: "0 0 auto" // фиксируем каждый элемент, чтобы не сжимался непредсказуемо
                 }}
                 draggable={false}
               />
