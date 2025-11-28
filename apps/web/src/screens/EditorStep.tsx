@@ -1,19 +1,17 @@
 // src/screens/EditorStep.tsx
-// Редактор элементов с надёжной инициализацией по «правилам шаблона», без чтения DOM.
+// Редактор элементов с надёжной инициализацией по правилам шаблона (без чтения DOM и без align).
 //
-// Зачем так:
-// - Ранее координаты читались из скрытого SketchTemplate через DOM и могли «схлопываться»
-//   (кресты с нулевыми размерами, кривая эпитафия, графика не видна).
-// - Теперь координаты вычисляются теми же правилами, что и шаблон (программно),
-//   с гарантированным минимумом размеров и без обращения к неопределённым полям вроде .align.
+// Исправления по ошибке "Cannot read properties of undefined (reading 'align')":
+// - В этом файле полностью исключено чтение любых свойств вида .align у конфигураций.
+// - Вся разметка и отрисовка текста используют безопасные значения по умолчанию.
+// - Инициализация позиций делается программно (computeSketchLayout), без скрытого рендера и чтения DOM,
+//   что устраняет расхождения и гонки с реальным SketchTemplate.
 //
-// Что сделано:
-// - computeSketchLayout(stageW, stageH, orientation, people, crosses, graphics, epitaphs)
-//   возвращает Map id->box в процентах от контентной области.
-// - Применяем эти координаты один раз на «состояние» (по хэшу), не затирая ручные правки.
-// - Гарантируем минимальные размеры (крест/графика/эпитафии/метрики не схлопываются).
-// - В рендере не читаем неизвестные поля типа .align — используем безопасные значения по умолчанию.
-// - DnD/resize, мини-кнопки, превью, «лесенка», авто-сейв — без изменений.
+// Сценарий:
+// - computeSketchLayout вычисляет стартовые рамки (в процентах), ориентируясь на правила из SketchTemplate
+//   (портрет/метрика/эпитафия/графика/кресты для разных ориентаций и числа людей).
+// - Применяем рамки один раз по хэшу входных данных и размеров контейнера (не затираем ручные правки).
+// - DnD/resize, мини-кнопки, предпросмотр, «лесенка», авто-сейв — без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -58,15 +56,15 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты (от контентной области)
+  x: number; y: number; w: number; h: number; // проценты от контентной области
   z: number;
   title?: string;
   locked?: boolean;
-  uppercase?: boolean;     // metric/epitaph
-  italic?: boolean;        // metric/epitaph
-  flipH?: boolean;         // graphic
-  bw?: boolean;            // portrait ч/б
-  staircase?: boolean;     // эпитафия «лесенкой»
+  uppercase?: boolean; // metric/epitaph
+  italic?: boolean;    // metric/epitaph
+  flipH?: boolean;     // graphic
+  bw?: boolean;        // portrait
+  staircase?: boolean; // «Помним, любим, скорбим…»
 };
 
 /* ===== Helpers ===== */
@@ -80,7 +78,7 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const SKETCH_PAD = 8; // совпадает со SketchTemplate
+const SKETCH_PAD = 8; // синхронизирован со SketchTemplate
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -101,13 +99,12 @@ async function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-// «Помним, любим, скорбим…»
 const normRemember = (t?: string) =>
   (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
 const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
 
 /* =========================================================================================
-   computeSketchLayout: программная раскладка (без DOM), синхронная с правилами SketchTemplate
+   computeSketchLayout: программная раскладка, синхронизированная с правилами SketchTemplate
    ========================================================================================= */
 function computeSketchLayout({
   stageW, stageH,
@@ -124,87 +121,82 @@ function computeSketchLayout({
   graphics: Array<any>;
   epitaphs: string[];
 }): Map<string, { x: number; y: number; w: number; h: number }> {
-  const toPct = (px: number, total: number) => clamp((px / total) * 100, 0, 100);
-  const m = new Map<string, { x: number; y: number; w: number; h: number }>();
-  const gapY = Math.round(0.015 * stageH);
-  const top6 = Math.round(0.06 * stageH);
-  const bottomPad = Math.max(8, Math.round(0.02 * stageH));
-  const add = (id: string, leftPx: number, topPx: number, wPx: number, hPx: number) => {
-    m.set(id, clampBox(toPct(leftPx, stageW), toPct(topPx, stageH), toPct(wPx, stageW), toPct(hPx, stageH)));
-  };
+  const toPct = (px: number, total: number) => (total > 0 ? (px / total) * 100 : 0);
+  const toBox = (leftPx: number, topPx: number, wPx: number, hPx: number) =>
+    clampBox(toPct(leftPx, stageW), toPct(topPx, stageH), toPct(wPx, stageW), toPct(hPx, stageH));
 
+  const m = new Map<string, { x: number; y: number; w: number; h: number }>();
   const n = people.length;
   const tplKey: "one" | "two" | "many" = n <= 1 ? "one" : n === 2 ? "two" : "many";
 
-  // Кресты — ширину зададим как долю от ширины сцены (квадрат)
-  const crossWpct = orientation === "vertical" ? 0.14 : 0.08;
-  const crossWpx = Math.round(stageW * crossWpct);
+  const gapY = Math.round(0.015 * stageH);
+  const top6 = Math.round(0.06 * stageH);
+  const bottomPad = Math.max(8, Math.round(0.02 * stageH));
+  const add = (id: string, x: number, y: number, w: number, h: number) => m.set(id, toBox(x, y, w, h));
+
+  // Кресты размеры
+  const crossWpx = Math.round(stageW * (orientation === "vertical" ? 0.14 : 0.08));
   const crossHpx = crossWpx;
 
   if (orientation === "horizontal" && tplKey === "one") {
-    // Портрет 40% H, центр
-    const portraitH = Math.round(0.40 * stageH);
-    let portraitW = Math.round(portraitH * (3 / 4));
-    if (portraitW > stageW * 0.9) {
-      const k = (stageW * 0.9) / portraitW;
-      portraitW = Math.max(40, Math.round(portraitW * k));
+    // Портрет
+    const ph = Math.round(0.40 * stageH);
+    let pw = Math.round(ph * (3 / 4));
+    if (pw > stageW * 0.9) {
+      const k = (stageW * 0.9) / pw;
+      pw = Math.max(40, Math.round(pw * k));
     }
-    const portraitX = Math.round((stageW - portraitW) / 2);
-    const portraitY = top6;
-    if (people[0]) add(`portrait-${people[0].id}`, portraitX, portraitY, portraitW, portraitH);
+    const px = Math.round((stageW - pw) / 2);
+    const py = top6;
+    if (people[0]) add(`portrait-${people[0].id}`, px, py, pw, ph);
 
-    // Метрика 20% H, 80% W, под портретом
-    const metricH = Math.max(24, Math.round(0.20 * stageH));
-    const metricW = Math.round(stageW * 0.8);
-    const metricX = Math.round((stageW - metricW) / 2);
-    const metricY = portraitY + portraitH + gapY;
-    if (people[0]) add(`metric-${people[0].id}`, metricX, metricY, metricW, metricH);
+    // Метрика
+    const mh = Math.max(24, Math.round(0.20 * stageH));
+    const mw = Math.round(stageW * 0.8);
+    const mx = Math.round((stageW - mw) / 2);
+    const my = py + ph + gapY;
+    if (people[0]) add(`metric-${people[0].id}`, mx, my, mw, mh);
 
-    // Эпитафия ниже метрики, графика внизу
-    const epTop = metricY + metricH + gapY;
+    // Эпитафия (сразу под метрикой), графика внизу
+    const epTop = my + mh + gapY;
     const graphicsMaxH = Math.round(0.18 * stageH);
     const gfxH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epTop - gapY));
     const gfxTop = stageH - bottomPad - gfxH;
     const epW = Math.round(stageW * 0.88);
     const epX = Math.round((stageW - epW) / 2);
     const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-
     epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
 
     if (graphics.length > 0 && gfxH > 0) {
       const gw = Math.round(stageW * 0.9);
       const gx = Math.round((stageW - gw) / 2);
-      add(`graphic-0`, gx, gfxTop, gw, gfxH);
-      for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, gfxTop, gw, gfxH);
+      graphics.forEach((_, i) => add(`graphic-${i}`, gx, gfxTop, gw, gfxH));
     }
 
-    // Кресты: один — слева, два — по краям
+    // Кресты
     if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
     if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
 
   } else if (orientation === "horizontal" && tplKey === "two") {
-    // Две колонки (центр)
     const gapCols = Math.round(0.012 * stageW);
     const colW = Math.min(320, Math.max(140, Math.floor((stageW - gapCols) / 2)));
     const totalW = colW * 2 + gapCols;
     const leftStart = Math.round((stageW - totalW) / 2);
-    const portraitW = colW;
-    const portraitH = Math.round(portraitW * (4 / 3));
     const top = Math.round(0.08 * stageH);
+    const pw = colW, ph = Math.round(pw * (4 / 3));
 
     people.slice(0, 2).forEach((p, idx) => {
       const px = leftStart + idx * (colW + gapCols);
-      add(`portrait-${p.id}`, px, top, portraitW, portraitH);
-      const mW = Math.round(colW * 0.8);
-      const mX = px + Math.round((colW - mW) / 2);
-      const mH = Math.max(30, Math.round(0.16 * stageH));
-      const mY = top + portraitH + Math.round(0.01 * stageH);
-      add(`metric-${p.id}`, mX, mY, mW, mH);
+      add(`portrait-${p.id}`, px, top, pw, ph);
+      const mw = Math.round(colW * 0.8);
+      const mx = px + Math.round((colW - mw) / 2);
+      const mh = Math.max(30, Math.round(0.16 * stageH));
+      const my = top + ph + Math.round(0.01 * stageH);
+      add(`metric-${p.id}`, mx, my, mw, mh);
     });
 
     const metricsBottom = people.slice(0, 2).reduce((acc, p) => {
-      const b = m.get(`metric-${p.id}`);
-      if (!b) return acc;
+      const b = m.get(`metric-${p.id}`); if (!b) return acc;
       const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
       return Math.max(acc, my + mh);
     }, 0);
@@ -216,46 +208,40 @@ function computeSketchLayout({
     const epX = Math.round((stageW - epW) / 2);
     const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
     epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
-
     if (graphics.length > 0 && gfxH > 0) {
       const gw = Math.round(stageW * 0.9);
       const gx = Math.round((stageW - gw) / 2);
-      add(`graphic-0`, gx, gfxTop, gw, gfxH);
-      for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, gfxTop, gw, gfxH);
+      graphics.forEach((_, i) => add(`graphic-${i}`, gx, gfxTop, gw, gfxH));
     }
 
-    // Кресты: 1 — центр, 2 — по краям
-    if (crosses.length === 1) {
-      add(`cross-0`, Math.round((stageW - crossWpx) / 2), Math.round(0.06 * stageH), crossWpx, crossHpx);
-    } else if (crosses.length >= 2) {
+    // Кресты: 1 — центр, 2 — края
+    if (crosses.length === 1) add(`cross-0`, Math.round((stageW - crossWpx) / 2), Math.round(0.06 * stageH), crossWpx, crossHpx);
+    if (crosses.length >= 2) {
       add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
       add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
     }
 
   } else if (orientation === "horizontal" && tplKey === "many") {
-    // 3..4 колонок
     const cols = Math.min(4, Math.max(3, people.length));
     const colGap = Math.round(0.012 * stageW);
     const colW = Math.min(260, Math.max(140, Math.floor((stageW - (cols - 1) * colGap) / cols)));
     const totalW = colW * cols + (cols - 1) * colGap;
     const leftStart = Math.round((stageW - totalW) / 2);
     const top = Math.round(0.08 * stageH);
-    const portraitW = colW;
-    const portraitH = Math.round(portraitW * (4 / 3));
+    const pw = colW, ph = Math.round(pw * (4 / 3));
 
     people.forEach((p, i) => {
       const cx = leftStart + i * (colW + colGap);
-      add(`portrait-${p.id}`, cx, top, portraitW, portraitH);
-      const mW = Math.round(colW * 0.8);
-      const mX = cx + Math.round((colW - mW) / 2);
-      const mH = Math.max(28, Math.round(0.14 * stageH));
-      const mY = top + portraitH + Math.round(0.008 * stageH);
-      add(`metric-${p.id}`, mX, mY, mW, mH);
+      add(`portrait-${p.id}`, cx, top, pw, ph);
+      const mw = Math.round(colW * 0.8);
+      const mx = cx + Math.round((colW - mw) / 2);
+      const mh = Math.max(28, Math.round(0.14 * stageH));
+      const my = top + ph + Math.round(0.008 * stageH);
+      add(`metric-${p.id}`, mx, my, mw, mh);
     });
 
     const metricsBottom = people.reduce((acc, p) => {
-      const b = m.get(`metric-${p.id}`);
-      if (!b) return acc;
+      const b = m.get(`metric-${p.id}`); if (!b) return acc;
       const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
       return Math.max(acc, my + mh);
     }, 0);
@@ -270,14 +256,13 @@ function computeSketchLayout({
     if (graphics.length > 0 && gfxH > 0) {
       const gw = Math.round(stageW * 0.9);
       const gx = Math.round((stageW - gw) / 2);
-      add(`graphic-0`, gx, gfxTop, gw, gfxH);
-      for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, gfxTop, gw, gfxH);
+      graphics.forEach((_, i) => add(`graphic-${i}`, gx, gfxTop, gw, gfxH));
     }
     if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
     if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
 
   } else {
-    // ВЕРТИКАЛЬНЫЕ
+    // Вертикальные
     const topPortrait = Math.round(0.12 * stageH);
     if (n === 1 && people[0]) {
       const p = people[0];
@@ -304,17 +289,15 @@ function computeSketchLayout({
       if (graphics.length > 0 && gfxH > 0) {
         const gw = Math.round(stageW * 0.9);
         const gx = Math.round((stageW - gw) / 2);
-        add(`graphic-0`, gx, gfxTop, gw, gfxH);
-        for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, gfxTop, gw, gfxH);
+        graphics.forEach((_, i) => add(`graphic-${i}`, gx, gfxTop, gw, gfxH));
       }
       if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx);
       if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx);
     } else {
-      // two/many — сетка строк
       const rows = n === 2 ? 2 : n;
       const rowGap = Math.round(0.01 * stageH);
       const gridTop = topPortrait;
-      const rowH = Math.floor((stageH - gridTop - bottomPad - (rows - 1) * rowGap) / rows);
+      const rowH = Math.max(40, Math.floor((stageH - gridTop - bottomPad - (rows - 1) * rowGap) / rows));
       people.forEach((p, i) => {
         const ry = gridTop + i * (rowH + rowGap);
         const pw = Math.round(stageW * 0.45);
@@ -330,8 +313,7 @@ function computeSketchLayout({
       });
 
       const metricsBottom = people.reduce((acc, p) => {
-        const b = m.get(`metric-${p.id}`);
-        if (!b) return acc;
+        const b = m.get(`metric-${p.id}`); if (!b) return acc;
         const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
         return Math.max(acc, my + mh);
       }, 0);
@@ -346,8 +328,7 @@ function computeSketchLayout({
       if (graphics.length > 0 && gfxH > 0) {
         const gw = Math.round(stageW * 0.9);
         const gx = Math.round((stageW - gw) / 2);
-        add(`graphic-0`, gx, gfxTop, gw, gfxH);
-        for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, gfxTop, gw, gfxH);
+        graphics.forEach((_, i) => add(`graphic-${i}`, gx, gfxTop, gw, gfxH));
       }
       if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx);
       if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx);
@@ -527,14 +508,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
         if (d.mode.includes("e")) nw = w + dxPct;
         if (d.mode.includes("s")) nh = h + dyPct;
-        if (d.mode.includes("w")) {
-          nx = x + dxPct;
-          nw = w - dxPct;
-        }
-        if (d.mode.includes("n")) {
-          ny = y + dyPct;
-          nh = h - dxPct;
-        }
+        if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
+        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dxPct; }
 
         if (keepRatio) {
           if (["e", "w"].some((k) => d.mode.includes(k))) nh = nw / startRatio;
@@ -595,7 +570,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [wishes]);
 
-  /* ===== Инициализация по шаблону (без DOM) ===== */
+  /* ===== Инициализация рамок по программной раскладке (без align/DOM) ===== */
   const [layoutAppliedHash, setLayoutAppliedHash] = useState<string | null>(
     () => (draft as any)?.editor?.sketchInitHash || null
   );
@@ -606,6 +581,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
     const stageW = Math.max(1, r.width - SKETCH_PAD * 2);
     const stageH = Math.max(1, r.height - SKETCH_PAD * 2);
+    if (stageW < 10 || stageH < 10) return;
 
     const orientation: Orientation =
       (draft.size?.orientation as Orientation | undefined) ??
@@ -648,7 +624,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const used = new Set<string>();
       const next: EditorEl[] = [];
 
-      // Люди
+      // Люди: портрет/метрика
       peopleBlocks.forEach((p, i) => {
         const pid = `portrait-${p.id}`;
         const mid = `metric-${p.id}`;
@@ -705,7 +681,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         used.add(id);
       });
 
-      // Переносим прочие (кастом)
+      // Прочие — переносим как есть
       prev.forEach((el) => {
         if (!used.has(el.id)) next.push(el);
       });
@@ -723,7 +699,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         updatedAt: Date.now()
       }
     });
-  }, [wrapperRef.current, item?.url, peopleBlocks, crosses, others, epitaphs, imgWH, draft?.size?.orientation, layoutAppliedHash]);
+  }, [item?.url, peopleBlocks, crosses, others, epitaphs, imgWH, draft?.size?.orientation, layoutAppliedHash]);
 
   /* ===== Превью (canvas) ===== */
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
@@ -766,7 +742,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const key = el.id.split("-").slice(1).join("-");
 
       if (el.type === "portrait") {
-        // в превью не показываем пустую картинку без фото
+        // Не рисуем пустой портрет без фото
         continue;
       } else if (el.type === "graphic") {
         const idx = Number(key);
@@ -935,7 +911,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     let showStair = false;
     if (isEpitaph) {
       const idx = Number(key);
-      const epText = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+      const epText = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
       showStair = isRememberLoveMourn(epText);
     }
 
@@ -1056,7 +1032,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               const boxHpx = (el.h / 100) * ch;
               const f = Math.max(10, Math.round(boxHpx * 0.32));
 
-              // Эпитафию показываем «как есть» (без чтения внешних .align)
               content = (
                 <div
                   style={{
@@ -1174,7 +1149,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               }}
             />
 
-            {/* Контент поверх (WYSIWYG) */}
+            {/* Контент поверх */}
             <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
               <ContentOverlay />
             </div>
@@ -1203,7 +1178,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       }}
                       title={el.title || el.id}
                     >
-                      {/* Мини панель для выбранного элемента */}
+                      {/* Мини-панель */}
                       {selected && (
                         <div
                           onPointerDown={(ev) => ev.stopPropagation()}
@@ -1230,6 +1205,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                               {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
                             </button>
                           )}
+
                           {el.type === "epitaph" && isRememberLoveMourn(epitaphs[Number(el.id.split("-")[1])] || "") && (
                             <button
                               type="button"
@@ -1242,6 +1218,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                               {el.staircase ? "В строку" : "Лесенкой"}
                             </button>
                           )}
+
                           {el.type === "graphic" && (
                             <button
                               type="button"
