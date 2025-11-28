@@ -281,12 +281,12 @@ function PreviewBottomSheet({
           bottom: 0,
           zIndex: 2147483601,
           width: "100%",
-          height: "clamp(600px, 78vh, 860px)",/*первое значение высота фрейма с просмотром + знакомство*/
+          height: "clamp(600px, 78vh, 860px)", /* первое значение: высота фрейма с просмотром + знакомство */
           padding: 12,
-          paddingBottom: "calc(0 + env(safe-area-inset-bottom, 0px))",
+          // Объединяем safe-area + базовый отступ в одно свойство, чтобы не было дублирования ключа:
+          paddingBottom: "calc(14px + env(safe-area-inset-bottom, 0px))",
           borderTopLeftRadius: 12,
           borderTopRightRadius: 12,
-          paddingBottom: 14,
           ...glassPanelStyle(),
           boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
           display: "grid",
@@ -332,7 +332,7 @@ function PreviewBottomSheet({
               alignItems: "center",
               justifyContent: "center",
               overflow: "hidden",
-              maxHeight: showIntro ? "12vh" : "60vh",
+              maxHeight: showIntro ? "18vh" : "60vh", // было 12vh — приводим к ТЗ: 18vh
               transition: "max-height 260ms ease, padding 260ms ease"
             }}
           >
@@ -566,7 +566,7 @@ export default function Start({
         padding: 12,
         opacity: outro ? 0 : 1,
         transition: "opacity 220ms ease",
-        maxWidth: 600, 
+        maxWidth: 600,
         margin: "0 auto"
       }}
     >
