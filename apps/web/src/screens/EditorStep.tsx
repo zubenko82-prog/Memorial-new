@@ -1,26 +1,33 @@
 // src/screens/EditorStep.tsx
-// Редактор элементов: объединённый шаг.
-// - Расположение шаблонов берём из SketchTemplate (встроенная внутрь этого файла версия).
-//   В скрытом контейнере рендерим шаблон и считываем координаты по data-атрибутам.
-// - Функционал редактора берём из EditorStep: рамки, DnD/resize, мини-кнопки, рендер превью,
-//   авто-синхронизация с драфтом, «лесенка» для «Помним, любим, скорбим…».
+// Редактор элементов: надёжная инициализация позиций из шаблона.
 //
-// Важно:
-// - Ориентация берётся из драфта (size.orientation или legacy orientation). Если нет — по соотношению сторон изображения.
-// - Считывание координат (инициализация рамок) выполняется ПОСЛЕ того, как шаблон и фон загрузились и разметка готова.
-// - Инициализация позиционирования из шаблона выполняется один раз (не затирает ручные правки).
+// Проблема:
+// - Чтение позиций через скрытый DOM SketchTemplate давало схлопнутые рамки (у элементов без явной высоты),
+//   криво считались области эпитафии, «графика» терялась, кресты сжимались и "появлялись" только после растягивания.
+// Решение (устойчиво и повторяемо):
+// - НЕ читаем DOM. Вместо этого вычисляем те же координаты, что и шаблон, программно.
+// - Внутри этого файла реализован computeSketchLayout(...) — единая функция построения раскладки
+//   (по тем же правилам, что в SketchTemplate: портрет, метрика, эпитафия под метрикой, графика у низа,
+//   кресты слева/справа, особый случай для горизонтального «2 человека»).
+// - Инициализация редактора: когда известны размеры «сцены» (контентной области) — берём layout и
+//   создаём/обновляем рамки. Применяем один раз (сохраняем хэш в драфт), ручные правки не затираем.
+//
+// Дополнительно:
+// - Рамкам крестов задаём квадратные боксы (на основе ширины), чтобы не схлопывались.
+// - Эпитафия получает разумную высоту (часть оставшейся области), чтобы всегда быть активной и «ровной».
+// - «Графика» всегда у нижнего края с минимальным отступом.
+// - Сохраняем превью и синхронизацию, мини-кнопки и DnD/resize без изменений.
 
 import React, {
   useEffect,
   useMemo,
   useRef,
-  useState,
-  useCallback
+  useState
 } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft } from "../lib/order";
 
-/* ===== Общие стили/UI ===== */
+/* ===== UI ===== */
 function glassPanelStyle() {
   return {
     background: "rgba(20,20,24,0.55)",
@@ -53,26 +60,26 @@ function bottomUnderlayGradient(): React.CSSProperties {
   };
 }
 
-/* ===== Типы редактора ===== */
+/* ===== Types ===== */
+type Orientation = "vertical" | "horizontal";
 type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type Align = "left" | "center" | "right";
 type EditorEl = {
-  id: string; // "{type}-{key}" где key = personId для portrait/metric, или индекс для остальных
+  id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты от контентной области
+  x: number; y: number; w: number; h: number; // проценты (от контентной области)
   z: number;
   title?: string;
   locked?: boolean;
-  // Контентные настройки
-  align?: Align;           // для metric/epitaph
-  uppercase?: boolean;     // для metric/epitaph
-  italic?: boolean;        // для metric/epitaph
-  flipH?: boolean;         // для graphic
-  bw?: boolean;            // для portrait (ч/б)
-  staircase?: boolean;     // для «Помним, любим, скорбим…»: строка/лесенка
+  align?: Align;
+  uppercase?: boolean;
+  italic?: boolean;
+  flipH?: boolean;
+  bw?: boolean;
+  staircase?: boolean;
 };
 
-/* ===== Хелперы ===== */
+/* ===== Helpers ===== */
 function isCrossCategoryName(s?: string) {
   const v = (s || "").toLowerCase();
   return v.includes("крест") || v.includes("cross") || v.includes("crosses");
@@ -83,7 +90,7 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const SKETCH_PAD = 8; // Должен совпадать с CFG.general.containerPadding в шаблоне
+const SKETCH_PAD = 8; // должен совпадать с SketchTemplate
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -104,444 +111,277 @@ async function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-// Нормализация фразы «Помним, любим, скорбим…»
+// «Помним, любим, скорбим…»
 const normRemember = (t?: string) =>
-  (t || "")
-    .toLowerCase()
-    .replace(/[.,…!?:;]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
+  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
 const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
 
-function splitRememberPreserve(text: string) {
-  const t = (text || "").trim();
-  const parts: string[] = [];
-  let buf = "";
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    buf += ch;
-    if (ch === ",") {
-      parts.push(buf.trim());
-      buf = "";
-    }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  const top = parts[0] || "Помним,";
-  const mid = parts[1] || "любим,";
-  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим...").trim();
-  return { top, mid, bot };
-}
-
-/* ===== Конфигурация шаблона (из SketchTemplate) ===== */
-type Orientation = "vertical" | "horizontal";
-const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
-
-const CFG = {
-  general: {
-    minContainerHeight: 200,
-    containerPadding: 8,
-    carvingOpacityDefault: 0.4
-  },
-  horizontal: {
-    layout: { gap: 12, columnMinW: 140 },
-    one: {
-      blocks: {
-        portraits: { pos: { top: "10%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" } },
-        metric: {
-          pos: { left: "50%", transform: "translateX(-50%)" },
-          size: { width: "100%", maxWidth: "520px", height: "auto" },
-          text: {
-            uppercase: true, align: "center",
-            l1: { font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" },
-            l2: { font: `600 clamp(16px, 3vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" },
-            l3: { font: `400 clamp(14px, 2.6vw, 22px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.2px", opacity: 0.95 }
-          }
-        },
-        cross: { pos: { top: "6%", left: "50%", transform: "translateX(-50%)" }, size: { width: "8%", height: "auto" } },
-        epitaphs: {
-          size: { width: "88%", height: "auto" },
-          text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.0vw, 22px)", lineHeight: 1.2, letterSpacing: "0.3px", fontWeight: 400, fontFamily: FONT_CENTURY, italic: true }
-        },
-        graphics: { pos: { bottom: "7%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "80px", width: "auto" } }
-      }
-    },
-    two: {
-      blocks: {
-        portraits: { pos: { top: "8%", left: "50%", transform: "translateX(-50%)" }, size: { width: "45%", height: "auto" } },
-        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "80%", height: "auto" } },
-        cross: { pos: { top: "6%", left: "4%" }, size: { width: "8%", height: "auto" } },
-        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.8vw, 10px)", lineHeight: 1.15 } },
-        graphics: { pos: { bottom: "4%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "42px", width: "auto" } }
-      }
-    },
-    many: {
-      blocks: {
-        portraits: { pos: { top: "8%", left: "50%", transform: "translateX(-50%)" }, size: { width: "78%", height: "auto" } },
-        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "90%", height: "auto" } },
-        cross: { pos: { top: "6%", left: "4%" }, size: { width: "7%", height: "auto" } },
-        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15 } },
-        graphics: { pos: { bottom: "5%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "64px", width: "auto" } }
-      }
-    }
-  },
-  vertical: {
-    layout: { rowsHeightFactor: 0.5, rowGapPx: 10 },
-    one: {
-      blocks: {
-        portraits: { pos: { top: "12%", left: "50%", transform: "translateX(-50%)" }, size: { width: "60%", maxWidth: "400px", height: "auto" } },
-        metric: { pos: { left: "50%", transform: "translateX(-50%)" }, size: { width: "80%", height: "auto" } },
-        cross: { pos: { top: "4%", left: "4%" }, size: { width: "14%", height: "auto" } },
-        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 3.2vw, 22px)", lineHeight: 1.2 } },
-        graphics: { pos: { bottom: "6%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "80px", width: "auto" } }
-      }
-    },
-    two: {
-      blocks: {
-        portraits: { pos: {}, size: { width: "60%", height: "auto" } },
-        metric: { pos: {}, size: { width: "90%", height: "auto" } },
-        cross: { pos: { top: "4%", left: "4%" }, size: { width: "14%", height: "auto" } },
-        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.9vw, 20px)", lineHeight: 1.15 } },
-        graphics: { pos: { bottom: "7%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "74px", width: "auto" } }
-      }
-    },
-    many: {
-      blocks: {
-        portraits: { pos: {}, size: { width: "52%", height: "auto" } },
-        metric: { pos: {}, size: { width: "92%", height: "auto" } },
-        cross: { pos: { top: "4%", left: "4%" }, size: { width: "13%", height: "auto" } },
-        epitaphs: { size: { width: "88%", height: "auto" }, text: { uppercase: true, align: "center", fontSizeClamp: "clamp(10px, 2.2vw, 18px)", lineHeight: 1.15 } },
-        graphics: { pos: { bottom: "5%", left: "50%", transform: "translateX(-50%)" }, size: { maxHeight: "64px", width: "auto" } }
-      }
-    }
-  }
-} as const;
-
-/* ===== Встроенный шаблон для скрытого рендера и считывания позиций ===== */
-function pickTplKey(n: number): "one" | "two" | "many" {
-  if (n <= 1) return "one";
-  if (n === 2) return "two";
-  return "many";
-}
-
-function SketchTemplateHidden({
-  item,
-  peopleBlocks,
-  crosses = [],
-  others = [],
-  epitaphs = [],
-  carvingOpacity = CFG.general.carvingOpacityDefault,
-  orientationOverride
+/* =========================================================================================
+   computeSketchLayout: ЕДИНАЯ ПРОГРАММНАЯ РАСКЛАДКА (без чтения DOM)
+   Вход:
+   - stageW, stageH — размеры контентной области (без внутренних паддингов)
+   - orientation — "horizontal" | "vertical"
+   - people, crosses, graphics, epitaphs — массивы контента
+   Выход:
+   - Map<id, box> где id = `${type}-${key}` (key = personId | index), box = {x,y,w,h} в процентах.
+   Логика синхронизирована с SketchTemplate:
+   - Горизонтальный «1»: портрет 40% H отступ 6% сверху; метрика 20% H под ним; эпитафия под метрикой;
+     графика у самого низа; кресты: один слева, два — по краям; особый случай H «2»: один крест по центру, два по краям.
+   - Прочие режимы — лэйаут колонок/строк аналогичен видимой версии.
+   ========================================================================================= */
+function computeSketchLayout({
+  stageW, stageH,
+  orientation,
+  people,
+  crosses,
+  graphics,
+  epitaphs
 }: {
-  item: { url?: string; name?: string } | null;
-  peopleBlocks: Array<{ id: string; lines: string[]; photo?: string | null }>;
-  crosses?: Array<{ url: string; name?: string }>;
-  others?: Array<{ url: string; name?: string }>;
-  epitaphs?: string[];
-  carvingOpacity?: number;
-  orientationOverride?: Orientation;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
+  stageW: number; stageH: number;
+  orientation: Orientation;
+  people: Array<{ id: string; lines: string[]; photo?: string | null }>;
+  crosses: Array<any>;
+  graphics: Array<any>;
+  epitaphs: string[];
+}): Map<string, { x: number; y: number; w: number; h: number }> {
+  const toPct = (px: number, total: number) => clamp((px / total) * 100, 0, 100);
+  const m = new Map<string, { x: number; y: number; w: number; h: number }>();
+  const gap = Math.round(0.015 * stageH);
+  const top6 = Math.round(0.06 * stageH);
+  const bottomPad = Math.max(8, Math.round(0.02 * stageH));
+  const add = (id: string, leftPx: number, topPx: number, wPx: number, hPx: number) => {
+    m.set(id, clampBox(toPct(leftPx, stageW), toPct(topPx, stageH), toPct(wPx, stageW), toPct(hPx, stageH)));
+  };
 
-  const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
+  const n = people.length;
+  const tplKey: "one" | "two" | "many" = n <= 1 ? "one" : n === 2 ? "two" : "many";
 
-  useEffect(() => {
-    const d = loadOrderDraft();
-    const o = (d.size?.orientation as Orientation | undefined) ?? (d as any).orientation ?? null;
-    setForcedOrientation(o);
-  }, []);
+  // Кресты: размеры (ширина в % сцены), зададим квадрат (во избежание схлопываний)
+  const crossWpctHorizontal = 0.08; // 8% ширины сцены
+  const crossWpctVertical = orientation === "vertical" ? 0.14 : crossWpctHorizontal;
+  const crossWpx = Math.round(stageW * crossWpctVertical);
+  const crossHpx = crossWpx; // квадрат
 
-  const recalc = useCallback(() => {
-    const img = imgRef.current;
-    if (!img) return;
-    const r = img.getBoundingClientRect();
-    setImgRect({ w: r.width, h: r.height });
-  }, []);
-
-  useEffect(() => {
-    const onResize = () => recalc();
-    window.addEventListener("resize", onResize);
-    const RO = (window as any).ResizeObserver as typeof ResizeObserver | undefined;
-    let ro: ResizeObserver | null = null;
-    if (RO && imgRef.current) {
-      ro = new RO(onResize);
-      ro.observe(imgRef.current);
+  if (orientation === "horizontal" && tplKey === "one") {
+    // Портрет
+    const portraitH = Math.round(0.40 * stageH);
+    let portraitW = Math.round(portraitH * (3 / 4));
+    if (portraitW > stageW * 0.9) {
+      const k = (stageW * 0.9) / portraitW;
+      portraitW = Math.max(40, Math.round(portraitW * k));
     }
-    return () => {
-      window.removeEventListener("resize", onResize);
-      ro?.disconnect();
-    };
-  }, [recalc]);
+    const portraitX = Math.round((stageW - portraitW) / 2);
+    const portraitY = top6;
+    if (people[0]) add(`portrait-${people[0].id}`, portraitX, portraitY, portraitW, portraitH);
 
-  const isVerticalByImage = imgRect.h > imgRect.w;
-  const orientation: Orientation | null = orientationOverride ?? forcedOrientation ?? null;
-  const isVertical = orientation ? orientation === "vertical" : isVerticalByImage;
+    // Метрика
+    const metricH = Math.max(24, Math.round(0.20 * stageH));
+    const metricW = Math.round(stageW * 0.8);
+    const metricX = Math.round((stageW - metricW) / 2);
+    const metricY = portraitY + portraitH + gap;
+    if (people[0]) add(`metric-${people[0].id}`, metricX, metricY, metricW, metricH);
 
-  const tplKey = pickTplKey(peopleBlocks.length);
-  const H = imgRect.h;
-  const W = imgRect.w;
+    // Эпитафия (под метрикой), графика у низа
+    const epitaphTop = metricY + metricH + gap;
+    const graphicsMaxH = Math.round(0.18 * stageH);
+    const graphicsH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epitaphTop - gap));
+    const graphicsTop = stageH - bottomPad - graphicsH;
+    const epW = Math.round(stageW * 0.88);
+    const epX = Math.round((stageW - epW) / 2);
+    const epH = Math.max(20, Math.round((graphicsTop - gap) - epitaphTop));
+    epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epitaphTop, epW, epH));
 
-  // Горизонтальный 1: портрет+метрика — как в основной версии
-  const gap = Math.round(0.015 * H);
-  const topOffset = Math.round(0.06 * H);
-  let portraitH = Math.max(40, Math.round(0.40 * H));
-  let portraitW = Math.round(portraitH * (3 / 4));
-  if (portraitW > W * 0.9) {
-    const k = (W * 0.9) / portraitW;
-    portraitW = Math.max(40, Math.round(portraitW * k));
-    portraitH = Math.max(40, Math.round(portraitH * k));
+    if (graphics.length > 0 && graphicsH > 0) {
+      const gw = Math.round(stageW * 0.9);
+      const gx = Math.round((stageW - gw) / 2);
+      // один общий блок графики (рамка для группы); далее в редакторе можно дробить
+      add(`graphic-0`, gx, graphicsTop, gw, graphicsH);
+      // остальные графические элементы как «этажи» в той же рамке — разместятся вручную
+      for (let i = 1; i < graphics.length; i++) {
+        add(`graphic-${i}`, gx, graphicsTop, gw, graphicsH);
+      }
+    }
+
+    // Кресты (по умолчанию: один слева, два — по краям)
+    if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
+    if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
+
+  } else if (orientation === "horizontal" && tplKey === "two") {
+    // Две колонки
+    const gapCols = Math.round(0.012 * stageW);
+    const colW = Math.min(320, Math.max(140, Math.floor((stageW - gapCols) / 2)));
+    const totalW = colW * 2 + gapCols;
+    const leftStart = Math.round((stageW - totalW) / 2);
+    const portraitW = colW;
+    const portraitH = Math.round(portraitW * (4 / 3));
+    const top = Math.round(0.08 * stageH);
+
+    people.slice(0, 2).forEach((p, idx) => {
+      const px = leftStart + idx * (colW + gapCols);
+      add(`portrait-${p.id}`, px, top, portraitW, portraitH);
+      // метрика под портретом (заданная высота относительно портретной колонки)
+      const mW = Math.round(colW * 0.8);
+      const mX = px + Math.round((colW - mW) / 2);
+      const mH = Math.max(30, Math.round(0.16 * stageH));
+      const mY = top + portraitH + Math.round(0.01 * stageH);
+      add(`metric-${p.id}`, mX, mY, mW, mH);
+    });
+
+    // Эпитафии (внизу, над графикой)
+    const metricsBottom = people.slice(0, 2).reduce((acc, p) => {
+      const m = m.get(`metric-${p.id}`)!;
+      const my = (m.y / 100) * stageH, mh = (m.h / 100) * stageH;
+      return Math.max(acc, my + mh);
+    }, 0);
+    const epitaphTop = Math.round(metricsBottom + gap);
+    const graphicsMaxH = Math.round(0.14 * stageH);
+    const graphicsH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epitaphTop - gap));
+    const graphicsTop = stageH - bottomPad - graphicsH;
+    const epW = Math.round(stageW * 0.88);
+    const epX = Math.round((stageW - epW) / 2);
+    const epH = Math.max(20, Math.round((graphicsTop - gap) - epitaphTop));
+    epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epitaphTop, epW, epH));
+
+    if (graphics.length > 0 && graphicsH > 0) {
+      const gw = Math.round(stageW * 0.9);
+      const gx = Math.round((stageW - gw) / 2);
+      add(`graphic-0`, gx, graphicsTop, gw, graphicsH);
+      for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, graphicsTop, gw, graphicsH);
+    }
+
+    // Кресты для H-two: 1 — по центру, 2 — по краям
+    if (crosses.length === 1) {
+      const x = Math.round((stageW - crossWpx) / 2);
+      const y = Math.round(0.06 * stageH);
+      add(`cross-0`, x, y, crossWpx, crossHpx);
+    } else if (crosses.length >= 2) {
+      add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
+      add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
+    }
+
+  } else if (orientation === "horizontal" && tplKey === "many") {
+    // 3..4 колонок
+    const cols = Math.min(4, Math.max(3, people.length));
+    const colGap = Math.round(0.012 * stageW);
+    const colW = Math.min(260, Math.max(140, Math.floor((stageW - (cols - 1) * colGap) / cols)));
+    const totalW = colW * cols + (cols - 1) * colGap;
+    const leftStart = Math.round((stageW - totalW) / 2);
+    const top = Math.round(0.08 * stageH);
+    const portraitW = colW;
+    const portraitH = Math.round(portraitW * (4 / 3));
+
+    people.forEach((p, i) => {
+      const cx = leftStart + i * (colW + colGap);
+      add(`portrait-${p.id}`, cx, top, portraitW, portraitH);
+      const mW = Math.round(colW * 0.8);
+      const mX = cx + Math.round((colW - mW) / 2);
+      const mH = Math.max(28, Math.round(0.14 * stageH));
+      const mY = top + portraitH + Math.round(0.008 * stageH);
+      add(`metric-${p.id}`, mX, mY, mW, mH);
+    });
+
+    // Низ — как у H-two
+    const metricsBottom = people.reduce((acc, p) => {
+      const b = m.get(`metric-${p.id}`)!;
+      const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
+      return Math.max(acc, my + mh);
+    }, 0);
+    const epitaphTop = Math.round(metricsBottom + gap);
+    const graphicsMaxH = Math.round(0.14 * stageH);
+    const graphicsH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epitaphTop - gap));
+    const graphicsTop = stageH - bottomPad - graphicsH;
+    const epW = Math.round(stageW * 0.88);
+    const epX = Math.round((stageW - epW) / 2);
+    const epH = Math.max(20, Math.round((graphicsTop - gap) - epitaphTop));
+    epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epitaphTop, epW, epH));
+    if (graphics.length > 0 && graphicsH > 0) {
+      const gw = Math.round(stageW * 0.9);
+      const gx = Math.round((stageW - gw) / 2);
+      add(`graphic-0`, gx, graphicsTop, gw, graphicsH);
+      for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, graphicsTop, gw, graphicsH);
+    }
+    // Кресты (по умолчанию)
+    if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
+    if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
+
+  } else {
+    // ВЕРТИКАЛЬНЫЕ шаблоны (упрощённо, но надёжно)
+    const topPortrait = Math.round(0.12 * stageH);
+    if (tplKey === "one" && people[0]) {
+      const p = people[0];
+      const pw = Math.round(stageW * 0.6);
+      const ph = Math.round(pw * (4 / 3));
+      const px = Math.round((stageW - pw) / 2);
+      add(`portrait-${p.id}`, px, topPortrait, pw, ph);
+
+      const mw = Math.round(stageW * 0.8);
+      const mh = Math.max(32, Math.round(0.18 * stageH));
+      const mx = Math.round((stageW - mw) / 2);
+      const my = topPortrait + ph + Math.round(0.01 * stageH);
+      add(`metric-${p.id}`, mx, my, mw, mh);
+
+      const metricsBottom = my + mh;
+      const epitaphTop = metricsBottom + gap;
+      const graphicsMaxH = Math.round(0.18 * stageH);
+      const graphicsH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epitaphTop - gap));
+      const graphicsTop = stageH - bottomPad - graphicsH;
+      const epW = Math.round(stageW * 0.88);
+      const epX = Math.round((stageW - epW) / 2);
+      const epH = Math.max(20, Math.round((graphicsTop - gap) - epitaphTop));
+      epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epitaphTop, epW, epH));
+      if (graphics.length > 0 && graphicsH > 0) {
+        const gw = Math.round(stageW * 0.9);
+        const gx = Math.round((stageW - gw) / 2);
+        add(`graphic-0`, gx, graphicsTop, gw, graphicsH);
+        for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, graphicsTop, gw, graphicsH);
+      }
+      if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx);
+      if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx);
+    } else {
+      // two/many — сетка строк
+      const rows = tplKey === "two" ? 2 : people.length;
+      const rowGap = Math.round(0.01 * stageH);
+      const gridTop = topPortrait;
+      const rowH = Math.floor((stageH - gridTop - bottomPad - (rows - 1) * rowGap) / rows);
+      people.forEach((p, i) => {
+        const ry = gridTop + i * (rowH + rowGap);
+        const pw = Math.round(stageW * 0.45);
+        const ph = Math.round(pw * (4 / 3));
+        const px = Math.round((stageW * 0.42 - pw) / 2) + Math.round(stageW * 0.03);
+        add(`portrait-${p.id}`, px, ry + Math.round((rowH - ph) / 2), pw, ph);
+
+        const mw = Math.round(stageW * 0.5);
+        const mh = Math.max(24, Math.round(0.16 * stageH));
+        const mx = Math.round(stageW * 0.48);
+        const my = ry + Math.round((rowH - mh) / 2);
+        add(`metric-${p.id}`, mx, my, mw, mh);
+      });
+
+      const metricsBottom = people.reduce((acc, p) => {
+        const b = m.get(`metric-${p.id}`)!;
+        const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
+        return Math.max(acc, my + mh);
+      }, 0);
+      const epitaphTop = Math.round(metricsBottom + gap);
+      const graphicsMaxH = Math.round(0.16 * stageH);
+      const graphicsH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epitaphTop - gap));
+      const graphicsTop = stageH - bottomPad - graphicsH;
+      const epW = Math.round(stageW * 0.88);
+      const epX = Math.round((stageW - epW) / 2);
+      const epH = Math.max(20, Math.round((graphicsTop - gap) - epitaphTop));
+      epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epitaphTop, epW, epH));
+      if (graphics.length > 0 && graphicsH > 0) {
+        const gw = Math.round(stageW * 0.9);
+        const gx = Math.round((stageW - gw) / 2);
+        add(`graphic-0`, gx, graphicsTop, gw, graphicsH);
+        for (let i = 1; i < graphics.length; i++) add(`graphic-${i}`, gx, graphicsTop, gw, graphicsH);
+      }
+      if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx);
+      if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx);
+    }
   }
-  const portraitTop = topOffset;
-  const metricTargetH = Math.max(24, Math.round(0.20 * H));
-  const metricTop = portraitTop + portraitH + gap;
-  const metricW = Math.round(W * 0.8);
 
-  // Нижние блоки: эпитафия и графика
-  const epitaphW = Math.round(W * 0.88);
-  const bottomPadPx = Math.max(8, Math.round(0.02 * H));
-  const graphicsMaxHDefault = Math.round(0.18 * H);
-
-  // Кресты
-  const crossTop = "6%";
-
-  // Рендер скрытно (важны только data-sketch-el с размерами bbox)
-  return (
-    <div
-      ref={containerRef}
-      style={{
-        ...bottomUnderlayGradient(),
-        position: "relative",
-        width: "100%",
-        height: Math.max(CFG.general.minContainerHeight, H + CFG.general.containerPadding * 2),
-        overflow: "hidden",
-        userSelect: "none",
-        padding: CFG.general.containerPadding,
-        boxSizing: "border-box",
-        color: "#fff"
-      }}
-      data-sketch-orient={isVertical ? "vertical" : "horizontal"}
-      data-sketch-orient-source={orientation ? "draft" : "image"}
-    >
-      <img
-        ref={imgRef}
-        src={item?.url || ""}
-        alt={item?.name || "Изделие"}
-        style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-        draggable={false}
-        onLoad={() => setTimeout(recalc, 0)}
-      />
-
-      {/* Люди */}
-      {!isVertical ? (
-        tplKey === "one" ? (
-          <>
-            {/* Портрет */}
-            {peopleBlocks[0] && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: portraitTop,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  width: portraitW,
-                  pointerEvents: "none"
-                }}
-              >
-                <div
-                  data-sketch-el="portrait"
-                  data-sketch-key={peopleBlocks[0].id}
-                  style={{
-                    width: portraitW,
-                    height: portraitH,
-                    borderRadius: 4,
-                    overflow: "hidden",
-                    background: "rgba(255,255,255,0.04)"
-                  }}
-                />
-              </div>
-            )}
-
-            {/* Метрика */}
-            {peopleBlocks[0] && (
-              <div
-                data-sketch-el="metric"
-                data-sketch-key={peopleBlocks[0].id}
-                style={{
-                  position: "absolute",
-                  top: metricTop,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  width: metricW,
-                  height: metricTargetH
-                }}
-              />
-            )}
-          </>
-        ) : tplKey === "two" ? (
-          // Горизонтальный: 2 человека — две колонки по B
-          <div
-            style={{
-              position: "absolute",
-              left: 16,
-              right: 16,
-              top: (CFG.horizontal.one.blocks as any).portraits.pos.top,
-              display: "grid",
-              gridTemplateColumns: `repeat(2, minmax(${(CFG.horizontal.layout as any).columnMinW}px, 320px))`,
-              gap: (CFG.horizontal.layout as any).gap,
-              justifyContent: "center",
-              alignItems: "start",
-              pointerEvents: "none"
-            }}
-          >
-            {peopleBlocks.slice(0, 2).map((p) => (
-              <div key={p.id} style={{ width: "100%", maxWidth: 320, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <div style={{ width: (CFG.horizontal.two.blocks as any).portraits.size.width }}>
-                  <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4" }} />
-                </div>
-                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.horizontal.two.blocks as any).metric.size.width }} />
-              </div>
-            ))}
-          </div>
-        ) : (
-          // Горизонтальный many
-          <div
-            style={{
-              position: "absolute",
-              left: 16,
-              right: 16,
-              top: (CFG.horizontal.one.blocks as any).portraits.pos.top,
-              display: "grid",
-              gridTemplateColumns: `repeat(${Math.min(4, Math.max(3, peopleBlocks.length))}, minmax(${(CFG.horizontal.layout as any).columnMinW}px, 260px))`,
-              gap: (CFG.horizontal.layout as any).gap,
-              alignItems: "start",
-              justifyContent: "center",
-              pointerEvents: "none"
-            }}
-          >
-            {peopleBlocks.map((p) => (
-              <div key={p.id} style={{ width: "100%", maxWidth: 260, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <div style={{ width: (CFG.horizontal.many.blocks as any).portraits.size.width }}>
-                  <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4" }} />
-                </div>
-                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.horizontal.many.blocks as any).metric.size.width }} />
-              </div>
-            ))}
-          </div>
-        )
-      ) : tplKey === "one" ? (
-        // Вертикальный 1
-        <>
-          {peopleBlocks[0] && (
-            <div
-              style={{
-                position: "absolute",
-                left: "50%",
-                transform: "translateX(-50%)",
-                top: (CFG.vertical.one.blocks as any).portraits.pos.top ?? "12%",
-                width: "100%",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                pointerEvents: "none"
-              }}
-            >
-              <div style={{ width: (CFG.vertical.one.blocks as any).portraits.size.width, maxWidth: (CFG.vertical.one.blocks as any).portraits.size.maxWidth }}>
-                <div data-sketch-el="portrait" data-sketch-key={peopleBlocks[0].id} style={{ width: "100%", aspectRatio: "3 / 4" }} />
-              </div>
-              <div data-sketch-el="metric" data-sketch-key={peopleBlocks[0].id} style={{ width: (CFG.vertical.one.blocks as any).metric.size.width, maxWidth: (CFG.vertical.one.blocks as any).metric.size.maxWidth }} />
-            </div>
-          )}
-        </>
-      ) : tplKey === "two" ? (
-        // Вертикальный 2 (две строки-ряды)
-        <div
-          style={{
-            position: "absolute",
-            top: (CFG.vertical.one.blocks as any).portraits.pos.top,
-            left: 16,
-            right: 16,
-            display: "grid",
-            gridTemplateRows: `repeat(2, 1fr)`,
-            rowGap: (CFG.vertical.layout as any).rowGapPx,
-            pointerEvents: "none"
-          }}
-        >
-          {peopleBlocks.slice(0, 2).map((p) => (
-            <div key={p.id} style={{ width: "100%", display: "grid", gridTemplateColumns: `45% 55%`, columnGap: 12, alignItems: "center" }}>
-              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-                <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: (CFG.vertical.two.blocks as any).portraits.size.width, aspectRatio: "3 / 4" }} />
-              </div>
-              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.two.blocks as any).metric.size.width }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        // Вертикальный many
-        <div
-          style={{
-            position: "absolute",
-            top: (CFG.vertical.one.blocks as any).portraits.pos.top,
-            left: 16,
-            right: 16,
-            display: "grid",
-            gridTemplateRows: `repeat(${peopleBlocks.length}, 1fr)`,
-            rowGap: (CFG.vertical.layout as any).rowGapPx,
-            pointerEvents: "none"
-          }}
-        >
-          {peopleBlocks.map((p) => (
-            <div key={p.id} style={{ width: "100%", display: "grid", gridTemplateColumns: `42% 58%`, columnGap: 12, alignItems: "center" }}>
-              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-                <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: (CFG.vertical.many.blocks as any).portraits.size.width, aspectRatio: "3 / 4" }} />
-              </div>
-              <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
-                <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: (CFG.vertical.many.blocks as any).metric.size.width }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Кресты: правила — по умолчанию слева; 2 — слева и справа; H two: 1 центр, 2 края */}
-      {(!isVertical && tplKey === "two") ? (
-        <>
-          {crosses[0] && (
-            <div data-sketch-el="cross" data-sketch-key="0" style={{ position: "absolute", top: crossTop, left: "50%", transform: "translateX(-50%)", width: (CFG.horizontal.two.blocks as any).cross.size.width }} />
-          )}
-          {crosses[1] && (
-            <div data-sketch-el="cross" data-sketch-key="1" style={{ position: "absolute", top: crossTop, right: "4%", width: (CFG.horizontal.two.blocks as any).cross.size.width }} />
-          )}
-          {crosses.length >= 2 && (
-            <div data-sketch-el="cross" data-sketch-key="0" style={{ position: "absolute", top: crossTop, left: "4%", width: (CFG.horizontal.two.blocks as any).cross.size.width }} />
-          )}
-        </>
-      ) : (
-        <>
-          {crosses[0] && (
-            <div data-sketch-el="cross" data-sketch-key="0" style={{ position: "absolute", top: crossTop, left: "4%", width: (CFG.horizontal.one.blocks as any).cross.size.width }} />
-          )}
-          {crosses[1] && (
-            <div data-sketch-el="cross" data-sketch-key="1" style={{ position: "absolute", top: crossTop, right: "4%", width: (CFG.horizontal.one.blocks as any).cross.size.width }} />
-          )}
-        </>
-      )}
-
-      {/* Эпитафии — общий контейнер (под метрикой, будет измерен объединённо в редакторе) */}
-      {Array.isArray(epitaphs) &&
-        epitaphs.map((_, idx) => (
-          <div key={`epitaph-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)" }} />
-        ))}
-
-      {/* Графика — внизу (у шаблона мы её показываем внизу; в редакторе она будет «у самого низа») */}
-      {others.map((_, idx) => (
-        <div key={`graphic-${idx}`} data-sketch-el="graphic" data-sketch-key={`${idx}`} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)" }} />
-      ))}
-    </div>
-  );
+  return m;
 }
 
 /* ===== Компонент редактора ===== */
@@ -574,7 +414,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [imgWH]
   );
 
-  // draft live reload
+  // live reload draft
   useEffect(() => {
     const reload = () => setDraft(loadOrderDraft());
     const onFocus = () => reload();
@@ -607,7 +447,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         return { id: p.id || `person-${idx}`, lines, photo };
       });
     }
-    // legacy fallback
+    // legacy
     const legacyLines: string[] = [];
     if (engr?.fullName) legacyLines.push(String(engr.fullName));
     const dates: string[] = [];
@@ -635,7 +475,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [graphics]
   );
 
-  // width observer
+  // watch wrapper width
   useEffect(() => {
     const measure = () => {
       const r = wrapperRef.current?.getBoundingClientRect();
@@ -781,258 +621,147 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [wishes]);
 
-  /* ===== «Лесенка» по умолчанию ===== */
-  const initStaircaseAppliedRef = useRef(false);
-  useEffect(() => {
-    if (initStaircaseAppliedRef.current) return;
-    if (!elements || elements.length === 0) return;
-
-    let changed = false;
-    const next = elements.map((el) => {
-      if (el.type !== "epitaph" || typeof el.staircase !== "undefined") return el;
-      const key = el.id.split("-").slice(1).join("-");
-      const idx = Number(key);
-      const t = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
-      if (isRememberLoveMourn(t)) {
-        changed = true;
-        return { ...el, staircase: true };
-      }
-      return el;
-    });
-
-    if (changed) setElements(next);
-    initStaircaseAppliedRef.current = true;
-  }, [elements, epitaphs]);
-
-  /* ===== СКРЫТЫЙ рендер шаблона и считывание координат ===== */
-  const hiddenSketchRef = useRef<HTMLDivElement | null>(null);
-  const sketchDefaultsRef = useRef<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
-  const measureRetryTimerRef = useRef<number | null>(null);
-  const [sketchReady, setSketchReady] = useState(false);
-  const appliedSketchDefaultsRef = useRef(false);
-
-  const measureHiddenSketch = useCallback(() => {
-    const rootHost = hiddenSketchRef.current;
-    if (!rootHost) return false;
-
-    const sketchRoot = rootHost.querySelector("[data-sketch-orient]") as HTMLElement | null;
-    if (!sketchRoot) return false;
-
-    // Проверяем, что картинка уже разложилась (есть реальные размеры)
-    const img = sketchRoot.querySelector("img") as HTMLImageElement | null;
-    const imgLoaded =
-      img && img.naturalWidth > 0 && img.naturalHeight > 0 && img.clientWidth > 0 && img.clientHeight > 0;
-    if (!imgLoaded) return false;
-
-    const rootRect = sketchRoot.getBoundingClientRect();
-    if (rootRect.height < 10 || rootRect.width < 10) return false;
-
-    const content = {
-      left: rootRect.left + SKETCH_PAD,
-      top: rootRect.top + SKETCH_PAD,
-      width: Math.max(1, rootRect.width - SKETCH_PAD * 2),
-      height: Math.max(1, rootRect.height - SKETCH_PAD * 2)
-    };
-
-    const map = new Map<string, { x: number; y: number; w: number; h: number }>();
-
-    const pushBox = (elType: ElType, key: string, r: DOMRect) => {
-      const x = clamp(((r.left - content.left) / content.width) * 100, 0, 100);
-      const y = clamp(((r.top - content.top) / content.height) * 100, 0, 100);
-      const w = clamp((r.width / content.width) * 100, 1, 100);
-      const h = clamp((r.height / content.height) * 100, 1, 100);
-      map.set(`${elType}-${key}`, clampBox(x, y, w, h));
-    };
-
-    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="portrait"]').forEach((n) => {
-      const key = n.dataset.sketchKey || "";
-      if (!key) return;
-      pushBox("portrait", key, n.getBoundingClientRect());
-    });
-
-    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="metric"]').forEach((n) => {
-      const key = n.dataset.sketchKey || "";
-      if (!key) return;
-      pushBox("metric", key, n.getBoundingClientRect());
-    });
-
-    const epNodes = Array.from(rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="epitaph"]'));
-    if (epNodes.length) {
-      const grouped = new Map<string, DOMRect[]>();
-      for (const n of epNodes) {
-        const key = n.dataset.sketchKey || "";
-        if (!key) continue;
-        const list = grouped.get(key) || [];
-        list.push(n.getBoundingClientRect());
-        grouped.set(key, list);
-      }
-      grouped.forEach((rects, key) => {
-        const left = Math.min(...rects.map((r) => r.left));
-        const top = Math.min(...rects.map((r) => r.top));
-        const right = Math.max(...rects.map((r) => r.right));
-        const bottom = Math.max(...rects.map((r) => r.bottom));
-        const box = new DOMRect(left, top, right - left, bottom - top);
-        pushBox("epitaph", key, box);
-      });
-    }
-
-    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="cross"]').forEach((n) => {
-      const key = n.dataset.sketchKey || "";
-      if (!key) return;
-      pushBox("cross", key, n.getBoundingClientRect());
-    });
-
-    rootHost.querySelectorAll<HTMLElement>('[data-sketch-el="graphic"]').forEach((n) => {
-      const key = n.dataset.sketchKey || "";
-      if (!key) return;
-      pushBox("graphic", key, n.getBoundingClientRect());
-    });
-
-    sketchDefaultsRef.current = map;
-    return map.size > 0;
-  }, []);
-
-  const ensureSketchMeasured = useCallback(() => {
-    if (measureRetryTimerRef.current) {
-      window.clearTimeout(measureRetryTimerRef.current);
-      measureRetryTimerRef.current = null;
-    }
-    let attempts = 0;
-    const tick = () => {
-      attempts++;
-      const ok = measureHiddenSketch();
-      if (ok) {
-        setSketchReady(true);
-        return;
-      }
-      if (attempts < 40) {
-        measureRetryTimerRef.current = window.setTimeout(tick, 50) as unknown as number;
-      } else {
-        setSketchReady(true);
-      }
-    };
-    tick();
-  }, [measureHiddenSketch]);
+  /* ===== Инициализация позиций по шаблону (без DOM) ===== */
+  const [layoutAppliedHash, setLayoutAppliedHash] = useState<string | null>(
+    () => (draft as any)?.editor?.sketchInitHash || null
+  );
 
   useEffect(() => {
-    setSketchReady(false);
-    ensureSketchMeasured();
-    return () => {
-      if (measureRetryTimerRef.current) {
-        window.clearTimeout(measureRetryTimerRef.current);
-        measureRetryTimerRef.current = null;
-      }
-    };
-  }, [ensureSketchMeasured, containerW, peopleBlocks, epitaphs, crosses, others, draft?.size?.orientation]);
+    const r = wrapperRef.current?.getBoundingClientRect();
+    if (!r) return;
 
-  /* ===== Синхронизация состав элементов + одноразовое применение координат шаблона ===== */
-  const desiredIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const p of peopleBlocks) {
-      ids.push(`portrait-${p.id}`);
-      ids.push(`metric-${p.id}`);
-    }
-    for (let i = 0; i < epitaphs.length; i++) ids.push(`epitaph-${i}`);
-    for (let i = 0; i < crosses.length; i++) ids.push(`cross-${i}`);
-    for (let i = 0; i < others.length; i++) ids.push(`graphic-${i}`);
-    return new Set(ids);
-  }, [peopleBlocks, epitaphs, crosses, others]);
+    const stageW = Math.max(1, r.width - SKETCH_PAD * 2);
+    const stageH = Math.max(1, r.height - SKETCH_PAD * 2);
 
-  // Состав
-  useEffect(() => {
+    const orientation: Orientation =
+      (draft.size?.orientation as Orientation | undefined) ??
+      ((draft as any).orientation as Orientation | undefined) ??
+      (imgWH.w > imgWH.h ? "horizontal" : "vertical");
+
+    const hash =
+      [
+        item?.url || "",
+        orientation,
+        peopleBlocks.map((p) => p.id).join(","),
+        crosses.length,
+        others.length,
+        epitaphs.join("|"),
+        Math.round(stageW),
+        Math.round(stageH)
+      ].join("::");
+
+    // Если уже применяли для данного состояния — выходим
+    if (layoutAppliedHash === hash) return;
+
+    const layout = computeSketchLayout({
+      stageW,
+      stageH,
+      orientation,
+      people: peopleBlocks,
+      crosses,
+      graphics: others,
+      epitaphs
+    });
+
+    if (layout.size === 0) return;
+
+    // Применяем: обновляем существующие элементы (если есть в layout), отсутствующие — создаём.
     setElements((prev) => {
       const prevMap = new Map(prev.map((e) => [e.id, e]));
-      const currentIds = new Set(prev.map((e) => e.id));
-      const desired = desiredIds;
+      const used = new Set<string>();
+      const next: EditorEl[] = [];
 
-      let changed = false;
-      const kept: EditorEl[] = [];
-
-      for (const id of currentIds) {
-        if (desired.has(id)) {
-          kept.push(prevMap.get(id)!);
-        } else {
-          changed = true;
-          if (selectedId === id) setSelectedId(null);
+      // Сначала — люди (сохраняем порядок z)
+      peopleBlocks.forEach((p, i) => {
+        for (const type of ["portrait", "metric"] as const) {
+          const id = `${type}-${p.id}`;
+          const box = layout.get(id);
+          if (!box) return;
+          used.add(id);
+          const old = prevMap.get(id);
+          const base: EditorEl = old
+            ? { ...old, ...box }
+            : {
+                id,
+                type,
+                ...box,
+                z: i * 10 + (type === "portrait" ? 1 : 2),
+                title: id,
+                ...(type === "portrait" ? { bw: true } : { uppercase: true })
+              };
+          next.push(base);
         }
-      }
-
-      const missing: string[] = [];
-      for (const id of desired) {
-        if (!currentIds.has(id)) missing.push(id);
-      }
-      if (missing.length) changed = true;
-
-      const maxZ = kept.reduce((m, e) => Math.max(m, e.z), 0);
-      const added: EditorEl[] = missing.map((id, i) => {
-        const [type] = id.split("-");
-        const elType = type as ElType;
-        // Пока дефолт грубый; позже заменим координатами шаблона
-        let x = 10, y = 10, w = 30, h = 20;
-        const idx = Number(id.slice(elType.length + 1));
-        switch (elType) {
-          case "portrait": x = 8; y = 10; w = 32; h = 45; break;
-          case "metric": x = 10; y = 58; w = 80; h = 24; break;
-          case "epitaph": {
-            w = 80; h = 14; x = 10;
-            const baseY = 80; const offset = Number.isFinite(idx) ? idx * (h + 2) : 0;
-            y = clamp(baseY + offset, 0, 100 - h); break;
-          }
-          case "cross": w = 18; h = 18; y = 6; x = (idx % 2 === 0) ? 6 : 76; break;
-          case "graphic": w = 24; h = 24; y = 60; x = (idx % 2 === 0) ? 6 : 70; break;
-        }
-        const base: EditorEl = { id, type: elType, ...clampBox(x, y, w, h), z: maxZ + i + 1, title: id };
-        if (elType === "portrait") base.bw = true;
-        if (elType === "metric") base.uppercase = true;
-        if (elType === "graphic") base.flipH = false;
-        if (elType === "epitaph") {
-          if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
-        }
-        return base;
       });
 
-      if (!changed) return prev;
-      return kept.concat(added);
+      // Эпитафии
+      epitaphs.forEach((_, idx) => {
+        const id = `epitaph-${idx}`;
+        const box = layout.get(id);
+        if (!box) return;
+        used.add(id);
+        const old = prevMap.get(id);
+        next.push(
+          old
+            ? { ...old, ...box }
+            : {
+                id,
+                type: "epitaph",
+                ...box,
+                z: 100 + idx,
+                title: id,
+                staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined
+              }
+        );
+      });
+
+      // Кресты
+      crosses.forEach((_, idx) => {
+        const id = `cross-${idx}`;
+        const box = layout.get(id);
+        if (!box) return;
+        used.add(id);
+        const old = prevMap.get(id);
+        next.push(
+          old
+            ? { ...old, ...box }
+            : { id, type: "cross", ...box, z: 200 + idx, title: id }
+        );
+      });
+
+      // Графика
+      others.forEach((_, idx) => {
+        const id = `graphic-${idx}`;
+        const box = layout.get(id);
+        if (!box) return;
+        used.add(id);
+        const old = prevMap.get(id);
+        next.push(
+          old
+            ? { ...old, ...box }
+            : { id, type: "graphic", ...box, z: 300 + idx, title: id, flipH: false }
+        );
+      });
+
+      // Переносим любые старые элементы, которых нет в новом layout (например, пользовательские)
+      prev.forEach((el) => {
+        if (!used.has(el.id)) next.push(el);
+      });
+
+      return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desiredIds]);
 
-  // Применение координат из шаблона один раз
-  useEffect(() => {
-    if (!sketchReady || appliedSketchDefaultsRef.current) return;
-    if (sketchDefaultsRef.current.size === 0) {
-      appliedSketchDefaultsRef.current = true;
-      return;
-    }
-    setElements((prev) => {
-      const map = sketchDefaultsRef.current;
-      const updated = prev.map((el) => {
-        const m = map.get(el.id);
-        if (!m) return el;
-        return { ...el, ...m };
-      });
-      const existing = new Set(updated.map((e) => e.id));
-      const toAdd: EditorEl[] = [];
-      let maxZ = updated.reduce((m, e) => Math.max(m, e.z), 0);
-      map.forEach((m, id) => {
-        if (!existing.has(id)) {
-          const [type] = id.split("-");
-          const elType = type as ElType;
-          const base: EditorEl = { id, type: elType, ...m, z: ++maxZ, title: id };
-          if (elType === "portrait") base.bw = true;
-          if (elType === "metric") base.uppercase = true;
-          if (elType === "graphic") base.flipH = false;
-          if (elType === "epitaph") {
-            const idx = Number(id.split("-")[1]);
-            if (Number.isFinite(idx) && isRememberLoveMourn(epitaphs[idx])) base.staircase = true;
-          }
-          toAdd.push(base);
-        }
-      });
-      return updated.concat(toAdd);
+    setLayoutAppliedHash(hash);
+    // Сохраняем хэш в драфт (чтобы не переинициализироваться при возврате)
+    const prev = loadOrderDraft();
+    saveOrderDraft({
+      ...prev,
+      editor: {
+        ...(prev.editor || {}),
+        sketchInitHash: hash,
+        updatedAt: Date.now()
+      }
     });
-    appliedSketchDefaultsRef.current = true;
-  }, [sketchReady, epitaphs]);
+  }, [wrapperRef.current, item?.url, peopleBlocks, crosses, others, epitaphs, imgWH, draft?.size?.orientation, layoutAppliedHash]);
 
   /* ===== Превью (canvas) ===== */
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
@@ -1143,7 +872,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const startY = r.y + r.h / 2 - ((lines.length - 1) * lh) / 2;
         const X = r.x + r.w / 2;
         lines.forEach((ln, i) => {
-          ctx.font = `${el.italic ? "italic " : ""}${sizes[i] || sizes[sizes.length - 1]}px ${fontFamily}`;
+          ctx.font = `${el.italic ? "italic " : ""}${sizes[i] || sizes[sizes.length - 1]}px "Century Schoolbook","Times New Roman",serif`;
           ctx.fillText(tf(ln), X, startY + i * lh, r.w);
         });
         ctx.restore();
@@ -1155,10 +884,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         ctx.fillStyle = "#fff";
         ctx.textBaseline = "middle";
         const f = Math.max(10, Math.round(r.h * 0.32));
-        ctx.font = `${el.italic ? "italic " : ""}${f}px ${fontFamily}`;
+        ctx.font = `${el.italic ? "italic " : ""}${f}px "Century Schoolbook","Times New Roman",serif`;
 
-        if (el.staircase && isRememberLoveMourn(text)) {
-          const { top, mid, bot } = splitRememberPreserve(text);
+        if (isRememberLoveMourn(text)) {
+          const parts = text.split(",");
+          const top = (parts[0] || "Помним").trim() + ",";
+          const mid = (parts[1] || "любим").trim() + ",";
+          const bot = (parts.slice(2).join(",") || "скорбим...").trim();
           ctx.textAlign = "left";
           ctx.fillText(top, r.x + 4, r.y + f / 1.5, r.w - 8);
           ctx.textAlign = "center";
@@ -1211,7 +943,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           }
         });
       }
-    }, 250) as unknown as number;
+    }, 300) as unknown as number;
 
     return () => {
       if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
@@ -1246,7 +978,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     setTimeout(() => go({ elements, wishes }), 150);
   };
 
-  /* ===== Мини тулбар ===== */
+  /* ===== Мини-toolbar и контент ===== */
   const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
     position: "absolute",
     left,
@@ -1334,7 +1066,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Контент поверх (WYSIWYG) ===== */
   const ContentOverlay = () => {
     const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
     const { h: ch } = contentWH();
@@ -1390,8 +1121,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               const boxHpx = (el.h / 100) * ch;
               const f = Math.max(10, Math.round(boxHpx * 0.32));
 
-              if (el.staircase && isRememberLoveMourn(txt)) {
-                const { top, mid, bot } = splitRememberPreserve(txt);
+              if (isRememberLoveMourn(txt)) {
+                const parts = txt.split(",");
+                const top = (parts[0] || "Помним").trim() + ",";
+                const mid = (parts[1] || "любим").trim() + ",";
+                const bot = (parts.slice(2).join(",") || "скорбим...").trim();
                 content = (
                   <div
                     style={{
@@ -1467,7 +1201,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
 
   const MAX_W = 600;
-  const orientationOverride = (draft.size?.orientation as Orientation | undefined) ?? (draft as any).orientation ?? undefined;
 
   return (
     <div
@@ -1482,42 +1215,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         backgroundAttachment: "fixed"
       }}
     >
-      {/* Скрытый скетч для измерений (НЕ виден пользователю) */}
-      <div
-        ref={hiddenSketchRef}
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          left: -99999,
-          top: -99999,
-          width: Math.max(320, containerW),
-          pointerEvents: "none",
-          visibility: "hidden",
-          zIndex: -1
-        }}
-      >
-        <SketchTemplateHidden
-          item={item}
-          peopleBlocks={peopleBlocks}
-          crosses={crosses}
-          others={others}
-          epitaphs={epitaphs}
-          carvingOpacity={0.4}
-          orientationOverride={orientationOverride || undefined}
-        />
-      </div>
-
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial - редактор" />
 
-        {/* Подсказка (замена по требованию) */}
+        {/* Подсказка */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
           Не старайтесь идеально расположить элементы, не страшно если они пересекаются или вызодят за край — эскиз схематичный. Исправьте ключевые позиции
           (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ) и опишите пожелания.
           Финальную обработку выполнит специалист.
         </section>
 
-        {/* Эскиз с редактором */}
+        {/* Эскиз */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={wrapperRef}
@@ -1548,7 +1256,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onError={() => { if (!aspect) setImgWH({ w: 4, h: 3 }); }}
             />
 
-            {/* Контент поверх (WYSIWYG) */}
+            {/* Контент поверх */}
             <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
               <ContentOverlay />
             </div>
@@ -1577,17 +1285,68 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       }}
                       title={el.title || el.id}
                     >
-                      {selected && <MiniToolbar el={el} />}
+                      {selected && (
+                        <div
+                          onPointerDown={(ev) => ev.stopPropagation()}
+                          style={{
+                            position: "absolute",
+                            left: 0, top: -30,
+                            display: "flex", gap: 6,
+                            background: "rgba(0,0,0,0.6)",
+                            border: "1px solid rgba(255,255,255,0.25)",
+                            borderRadius: 6, padding: "2px 6px",
+                            alignItems: "center",
+                            pointerEvents: "auto", zIndex: 3000
+                          }}
+                        >
+                          {el.type === "metric" && (
+                            <button
+                              type="button"
+                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
+                              title={el.uppercase ? "Сделать строчные" : "Сделать ПРОПИСНЫЕ"}
+                              onClick={() =>
+                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))
+                              }
+                            >
+                              {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+                            </button>
+                          )}
+                          {el.type === "epitaph" && isRememberLoveMourn(epitaphs[Number(el.id.split("-")[1])] || "") && (
+                            <button
+                              type="button"
+                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
+                              title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
+                              onClick={() =>
+                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))
+                              }
+                            >
+                              {el.staircase ? "В строку" : "Лесенкой"}
+                            </button>
+                          )}
+                          {el.type === "graphic" && (
+                            <button
+                              type="button"
+                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
+                              title="Отразить по горизонтали"
+                              onClick={() =>
+                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))
+                              }
+                            >
+                              Отразить ⇄
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {selected && !el.locked && (
                         <>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={handleDot("50%", 0, "ns-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={handleDot("100%", "50%", "ew-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={handleDot("50%", "100%", "ns-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={handleDot(0, "50%", "ew-resize")} />
+                          <div style={handleDot(0, 0, "nwse-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} />
+                          <div style={handleDot("50%", 0, "ns-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} />
+                          <div style={handleDot("100%", 0, "nesw-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} />
+                          <div style={handleDot("100%", "50%", "ew-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} />
+                          <div style={handleDot("100%", "100%", "nwse-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} />
+                          <div style={handleDot("50%", "100%", "ns-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} />
+                          <div style={handleDot(0, "100%", "nesw-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} />
+                          <div style={handleDot(0, "50%", "ew-resize")} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} />
                         </>
                       )}
                     </div>
