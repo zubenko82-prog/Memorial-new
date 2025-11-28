@@ -1,17 +1,15 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Требования соблюдены:
-// - Ни один элемент не выходит за пределы поля эскиза.
-// - При нехватке места соответствующий блок компактируется (уменьшается):
-//   • Графика: уменьшаем высоту контейнера графики — влияет на уже размещённую и добавляемую графику.
-//   • Эпитафия: уменьшаем масштаб эпитафии.
-//   • Метрика (горизонтальный шаблон на одного): уменьшаем масштаб метрики (как и раньше).
-// - Совместное сжатие: если суммарная высота «Эпитафия + Графика» не помещается, делим доступное
-//   пространство пропорционально между эпитафией (scale) и графикой (maxHeight) и обе части уменьшаются.
-// - Защита от бесконечных ререндеров: setState по результатам измерений производится только при
-//   реальном изменении значений (с порогом), чтобы избежать Maximum update depth exceeded.
-// - Везде безопасное центрирование текста (не читаем .align из конфигураций).
+// Что исправлено для устранения "Maximum update depth exceeded":
+// - Измерения (metricBottomPx, epitaphScale, metricScaleH1) выполняются не чаще одного кадра
+//   и только при реальном изменении входных параметров/результатов (с порогом).
+// - Введены «сигнатуры» для измерений (refs): если входные данные не менялись — повторно не меряем.
+// - Все вычисления завязаны на стабильные числа (H/W и сигнатуры people/epitaphs), нет скрытых зависимостей.
+// - Выравнивание текста всегда center, .align из конфигурации не используется.
+// - Ни один элемент не выходит за пределы поля эскиза: при нехватке места блоки компактируются:
+//   • HorizontalOne: метрика — scale; даты в одну строку (nowrap).
+//   • Эпитафия/Графика: совместное сжатие по доступному месту (эпитафия — scale, графика — maxHeight).
 //
 // Порядок блоков: Метрика → Эпитафия → Графика (у нижнего края).
 
@@ -66,6 +64,10 @@ function pickTplKey(n: number): "one" | "two" | "many" {
   return "many";
 }
 
+// Порог для сравнений, чтобы избегать «дребезга»
+const EPS = 0.0005;
+const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
+
 export default function SketchTemplate({
   item,
   peopleBlocks,
@@ -80,14 +82,19 @@ export default function SketchTemplate({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Измерители
+  // Измерители (с защитами)
   const [metricBottomPx, setMetricBottomPx] = useState(0);
+  const metricMeasureSigRef = useRef<string>(""); // сигнатура измерения метрики
+  const metricRafRef = useRef<number | null>(null);
+
   const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
   const [epitaphScale, setEpitaphScale] = useState(1);
+  const epitaphSigRef = useRef<string>(""); // сигнатура измерения эпитафии
 
   // HorizontalOne: масштаб метрики
   const metricMeasureRef = useRef<HTMLDivElement | null>(null);
   const [metricScaleH1, setMetricScaleH1] = useState(1);
+  const metricH1SigRef = useRef<string>(""); // сигнатура H1
 
   const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
 
@@ -133,11 +140,10 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  /* ===== Метрики (безопасно, text-align: center) ===== */
+  // Метрика: безопасное выравнивание center
   function MetricThreeLines({ lines }: { lines: string[] }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
-
     return (
       <div style={{ width: "100%", display: "grid", gap: 6, textAlign: "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
         {!!L[0] && <div style={{ font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" }}>{toUp(L[0])}</div>}
@@ -164,7 +170,6 @@ export default function SketchTemplate({
   function PersonMetricText({ lines }: { lines: string[] }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
-
     return (
       <div style={{ width: "100%", display: "grid", gap: 6, textAlign: "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
         {!!L[0] && <div style={{ font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" }}>{toUp(L[0])}</div>}
@@ -174,11 +179,25 @@ export default function SketchTemplate({
     );
   }
 
-  /* ===== Нижняя граница метрик (для позиции эпитафии) — setState только при изменении ===== */
+  /* ===== Измерение нижней границы метрики — не чаще одного кадра, только при изменении ===== */
   useEffect(() => {
+    if (!H || !W) return;
     const root = containerRef.current;
     if (!root) return;
-    const t = setTimeout(() => {
+
+    const sig = [
+      H,
+      W,
+      isVertical ? "v" : "h",
+      tplKey,
+      peopleBlocks.map((p) => p.lines.join("|")).join("||")
+    ].join("::");
+
+    if (metricMeasureSigRef.current === sig) return; // уже измеряли для этой сигнатуры
+    metricMeasureSigRef.current = sig;
+
+    if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
+    metricRafRef.current = requestAnimationFrame(() => {
       const rootRect = root.getBoundingClientRect();
       const nodes = root.querySelectorAll('[data-sketch-el="metric"]');
       let maxBottom = 0;
@@ -188,10 +207,14 @@ export default function SketchTemplate({
         if (bottom > maxBottom) maxBottom = bottom;
       });
       const next = Math.max(0, Math.min(maxBottom, H));
-      setMetricBottomPx((prev) => (prev !== next ? next : prev));
-    }, 0);
-    return () => clearTimeout(t);
-  }, [H, W, isVertical, tplKey, peopleBlocks.map((p) => p.lines.join("|")).join("||")]);
+      setMetricBottomPx((prev) => (pxChanged(prev, next) ? next : prev));
+    });
+
+    return () => {
+      if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
+      metricRafRef.current = null;
+    };
+  }, [H, W, isVertical, tplKey, peopleBlocks]);
 
   /* ===== Горизонтальный 1: вычисления портрета/метрики (без сетки) ===== */
   const h1 = useMemo(() => {
@@ -209,22 +232,28 @@ export default function SketchTemplate({
     const metricTargetH = Math.max(24, Math.round(0.20 * H));
     const metricTop = portraitTop + portraitH + gap;
     const metricW = Math.round(W * 0.8);
-    return { gap, topOffset, portraitH, portraitW, portraitTop, metricTargetH, metricTop, metricW };
+    return { gap, portraitH, portraitW, portraitTop, metricTargetH, metricTop, metricW };
   }, [isVertical, tplKey, H, W]);
 
-  // Масштаб метрики (HorizontalOne) — с припуском и без «дребезга»
+  // Масштаб метрики (HorizontalOne) — только при изменении сигнатуры
   useEffect(() => {
     if (!h1) return;
     const holder = metricMeasureRef.current;
     if (!holder) return;
-    const t = setTimeout(() => {
+
+    const sig = [h1.metricTargetH, peopleBlocks[0]?.lines?.join("|") || ""].join("::");
+    if (metricH1SigRef.current === sig) return;
+    metricH1SigRef.current = sig;
+
+    const t = requestAnimationFrame(() => {
       const natural = holder.scrollHeight || holder.offsetHeight || 1;
       const available = Math.max(1, h1.metricTargetH - 2);
       const next = Math.min(1, available / natural);
-      setMetricScaleH1((prev) => (Math.abs(prev - next) > 0.0005 ? next : prev));
-    }, 0);
-    return () => clearTimeout(t);
-  }, [h1, peopleBlocks[0]?.lines?.join("|")]);
+      setMetricScaleH1((prev) => (Math.abs(prev - next) > EPS ? next : prev));
+    });
+
+    return () => cancelAnimationFrame(t);
+  }, [h1, peopleBlocks]);
 
   /* ===== Кресты ===== */
   const CrossOverlay = () => {
@@ -282,7 +311,7 @@ export default function SketchTemplate({
   /* ===== PEOPLE ===== */
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
-    if (!H || !W) return null;
+    if (!H || !W || !p) return null;
     const s = h1!;
     return (
       <>
@@ -429,6 +458,7 @@ export default function SketchTemplate({
 
   const VerticalOne = () => {
     const p = peopleBlocks[0];
+    if (!p) return null;
     return (
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -540,45 +570,40 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика: совместное сжатие по доступному месту ===== */
+  /* ===== Эпитафия + графика: совместное сжатие, строго в пределах эскиза ===== */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
     const gap = Math.round(0.015 * H);
     const bottomPadPx = Math.max(8, Math.round(0.02 * H));
+    const epW = Math.round(W * 0.88);
 
-    // Базовая верхняя позиция эпитафии: сразу под метрикой
+    // Верх эпитафии — сразу под метрикой
     const epTop = Math.max(metricBottomPx + gap, 0);
 
     // Естественная высота эпитафии (без масштаба)
     const epNatural = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
-
-    // Базовое желаемое: scaleEp = 1, gfxH = graphicsMaxHDefault
-    const desiredEp = epNatural;
     const desiredGfx = others.length > 0 ? Math.round(0.18 * H) : 0;
 
-    // Доступно от epTop до низа (с учётом нижнего паддинга)
+    // Доступно от epTop до низа с учётом отступа
     const available = Math.max(0, H - bottomPadPx - epTop);
 
-    // Если места достаточно — оставляем как есть (scale=1, gfxH=desiredGfx)
+    // Определяем scale для эпитафии и высоту графики так, чтобы суммарно уложиться в available
     let scaleEp = 1;
-    let gfxH = Math.min(desiredGfx, available); // графику лишней не делаем
+    let gfxH = Math.min(desiredGfx, available);
 
-    if (desiredEp + desiredGfx > available) {
+    if (epNatural + desiredGfx > available) {
       if (others.length > 0) {
-        // Есть эпитафия и графика — делим доступное пропорционально
-        const sum = desiredEp + desiredGfx;
-        const k = available / sum; // общий коэффициент ужатия
-        scaleEp = Math.max(0, Math.min(1, k));        // масштаб эпитафии
-        gfxH = Math.max(0, Math.floor(desiredGfx * k)); // высота блока графики
+        const sum = epNatural + desiredGfx;
+        const k = available / sum;
+        scaleEp = Math.max(0, Math.min(1, k));
+        gfxH = Math.max(0, Math.floor(desiredGfx * k));
       } else {
-        // Только эпитафия — ужимаем эпитафию
-        scaleEp = Math.max(0, Math.min(1, available / desiredEp));
+        scaleEp = Math.max(0, Math.min(1, available / epNatural));
         gfxH = 0;
       }
     }
 
-    // Позиция графики: сразу после эпитафии с учётом масштабированной высоты
     const epScaledHeight = Math.floor(epNatural * scaleEp);
     const gfxTop = epTop + (epScaledHeight > 0 ? epScaledHeight + gap : 0);
 
@@ -593,7 +618,7 @@ export default function SketchTemplate({
               left: "50%",
               transform: `translateX(-50%) scale(${scaleEp})`,
               transformOrigin: "top center",
-              width: Math.round(W * 0.88),
+              width: epW,
               color: "#fff",
               textAlign: "center" as const,
               textShadow: "0 1px 2px rgba(0,0,0,0.6)",
@@ -622,7 +647,7 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Графика — контейнерной высотой управляем (уменьшаем общий блок) */}
+        {/* Графика — контейнерная высота по расчету */}
         {others.length > 0 && gfxH > 0 && (
           <div
             style={{
@@ -652,7 +677,7 @@ export default function SketchTemplate({
                 style={{
                   width: "auto",
                   height: "auto",
-                  maxHeight: Math.max(16, Math.floor(gfxH * 0.9)), // изображения «подстраиваются»
+                  maxHeight: Math.max(16, Math.floor(gfxH * 0.9)),
                   objectFit: "contain",
                   filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
                   flex: "0 0 auto"
@@ -663,9 +688,9 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Offscreen измеритель эпитафии */}
-        <div style={{ position: "absolute", left: -99999, top: -99999, width: Math.round(W * 0.88) }}>
-          <div ref={epitaphMeasureRef} style={{ width: Math.round(W * 0.88) }}>
+        {/* Offscreen: измеритель эпитафии (натуральная высота) */}
+        <div style={{ position: "absolute", left: -99999, top: -99999, width: epW }}>
+          <div ref={epitaphMeasureRef} style={{ width: epW }}>
             <div
               style={{
                 fontStyle: "italic",
@@ -731,7 +756,7 @@ export default function SketchTemplate({
           alt={item?.name || "Изделие"}
           style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
           draggable={false}
-          onLoad={() => setTimeout(recalc, 0)}
+          onLoad={() => requestAnimationFrame(recalc)}
         />
 
         {/* Контент */}
