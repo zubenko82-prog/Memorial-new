@@ -271,7 +271,127 @@ export default function SketchTemplate({
       const [cL, cR] = [crosses[0], crosses[1]];
       return (
         <>
-          <img data-sketch-el="cross" data-sketch-key="0" src={ perCol = Math.min(260, Math.max(CFG.horizontal.layout.columnMinW, Math.floor((W - 32) / cols)));
+          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />
+          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topRightPos }} draggable={false} />
+        </>
+      );
+    }
+    return null;
+  };
+
+  /* ===== PEOPLE ===== */
+  const HorizontalOne = () => {
+    const p = peopleBlocks[0];
+    if (!H || !W) return null;
+    const s = h1!;
+    return (
+      <>
+        {/* Портрет */}
+        <div
+          style={{
+            position: "absolute",
+            top: s.portraitTop,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: s.portraitW,
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none"
+          }}
+        >
+          <div
+            data-sketch-el="portrait"
+            data-sketch-key={p.id}
+            style={{
+              width: s.portraitW,
+              height: s.portraitH,
+              borderRadius: 4,
+              overflow: "hidden",
+              background: "rgba(255,255,255,0.04)",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+            }}
+          >
+            {p.photo ? (
+              <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+            ) : (
+              <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+            )}
+          </div>
+        </div>
+
+        {/* Метрика */}
+        <div
+          data-sketch-el="metric"
+          data-sketch-key={p.id}
+          style={{
+            position: "absolute",
+            top: s.metricTop,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: s.metricW,
+            height: s.metricTargetH,
+            overflow: "hidden",
+            pointerEvents: "none",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-start"
+          }}
+        >
+          <div style={{ transform: `scale(${metricScaleH1})`, transformOrigin: "top center", width: "100%" }}>
+            <MetricThreeLines lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]} />
+          </div>
+        </div>
+
+        {/* Offscreen измеритель метрики */}
+        <div style={{ position: "absolute", left: -99999, top: -99999, width: s.metricW }}>
+          <div ref={metricMeasureRef} style={{ width: s.metricW }}>
+            <MetricThreeLines lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]} />
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  const HorizontalTwo = () => {
+    const colW = Math.min(320, Math.max(CFG.horizontal.layout.columnMinW, Math.floor((W - 32 - CFG.horizontal.layout.gap) / 2)));
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: 16,
+          right: 16,
+          top: "8%",
+          display: "grid",
+          gridTemplateColumns: `repeat(2, ${colW}px)`,
+          gap: CFG.horizontal.layout.gap,
+          justifyContent: "center",
+          alignItems: "start",
+          pointerEvents: "none"
+        }}
+      >
+        {peopleBlocks.slice(0, 2).map((p) => (
+          <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ width: "100%" }}>
+              <div
+                data-sketch-el="portrait"
+                data-sketch-key={p.id}
+                style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
+              >
+                {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+              </div>
+            </div>
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%" }}>
+              <PersonMetricText lines={p.lines} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const HorizontalMany = () => {
+    const cols = Math.min(4, Math.max(3, peopleBlocks.length));
+    const perCol = Math.min(260, Math.max(CFG.horizontal.layout.columnMinW, Math.floor((W - 32) / cols)));
     return (
       <div
         style={{
@@ -398,4 +518,227 @@ export default function SketchTemplate({
 
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
               <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "92%" }}>
-                <PersonMetricText lines={
+                <PersonMetricText lines={p.lines} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderPeople = () => {
+    const n = peopleBlocks.length;
+    if (n === 0) return null;
+    if (!isVertical) {
+      if (tplKey === "one") return <HorizontalOne />;
+      if (tplKey === "two") return <HorizontalTwo />;
+      return <HorizontalMany />;
+    }
+    if (tplKey === "one") return <VerticalOne />;
+    if (tplKey === "two") return <VerticalTwo />;
+    return <VerticalMany />;
+  };
+
+  /* ===== Эпитафия + графика: совместное сжатие по доступному месту ===== */
+  const EpitaphAndGraphics = () => {
+    if (!H || !W) return null;
+
+    const gap = Math.round(0.015 * H);
+    const bottomPadPx = Math.max(8, Math.round(0.02 * H));
+
+    // Базовая верхняя позиция эпитафии: сразу под метрикой
+    const epTop = Math.max(metricBottomPx + gap, 0);
+
+    // Естественная высота эпитафии (без масштаба)
+    const epNatural = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
+
+    // Базовое желаемое: scaleEp = 1, gfxH = graphicsMaxHDefault
+    const desiredEp = epNatural;
+    const desiredGfx = others.length > 0 ? Math.round(0.18 * H) : 0;
+
+    // Доступно от epTop до низа (с учётом нижнего паддинга)
+    const available = Math.max(0, H - bottomPadPx - epTop);
+
+    // Если места достаточно — оставляем как есть (scale=1, gfxH=desiredGfx)
+    let scaleEp = 1;
+    let gfxH = Math.min(desiredGfx, available); // графику лишней не делаем
+
+    if (desiredEp + desiredGfx > available) {
+      if (others.length > 0) {
+        // Есть эпитафия и графика — делим доступное пропорционально
+        const sum = desiredEp + desiredGfx;
+        const k = available / sum; // общий коэффициент ужатия
+        scaleEp = Math.max(0, Math.min(1, k));        // масштаб эпитафии
+        gfxH = Math.max(0, Math.floor(desiredGfx * k)); // высота блока графики
+      } else {
+        // Только эпитафия — ужимаем эпитафию
+        scaleEp = Math.max(0, Math.min(1, available / desiredEp));
+        gfxH = 0;
+      }
+    }
+
+    // Позиция графики: сразу после эпитафии с учётом масштабированной высоты
+    const epScaledHeight = Math.floor(epNatural * scaleEp);
+    const gfxTop = epTop + (epScaledHeight > 0 ? epScaledHeight + gap : 0);
+
+    return (
+      <>
+        {/* Эпитафия (масштабируем) */}
+        {Array.isArray(epitaphs) && epitaphs.length > 0 && scaleEp > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: epTop,
+              left: "50%",
+              transform: `translateX(-50%) scale(${scaleEp})`,
+              transformOrigin: "top center",
+              width: Math.round(W * 0.88),
+              color: "#fff",
+              textAlign: "center" as const,
+              textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              zIndex: 4,
+              overflow: "hidden"
+            }}
+          >
+            <div
+              style={{
+                fontStyle: "italic",
+                textTransform: "uppercase",
+                fontFamily: FONT_CENTURY,
+                lineHeight: 1.2,
+                letterSpacing: "0.3px",
+                fontSize: "clamp(10px, 3.0vw, 22px)",
+                display: "grid",
+                gap: 8
+              }}
+            >
+              {epitaphs.slice(0, 8).map((t, idx) => (
+                <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Графика — контейнерной высотой управляем (уменьшаем общий блок) */}
+        {others.length > 0 && gfxH > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              transform: "translateX(-50%)",
+              top: gfxTop,
+              width: "90%",
+              height: gfxH,
+              maxHeight: gfxH,
+              overflow: "hidden",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: "10px",
+              flexWrap: "wrap",
+              zIndex: 3
+            }}
+          >
+            {others.map((g, i) => (
+              <img
+                key={`other-bottom-${i}`}
+                data-sketch-el="graphic"
+                data-sketch-key={`${i}`}
+                src={g.url}
+                alt={g.name || "Графика"}
+                style={{
+                  width: "auto",
+                  height: "auto",
+                  maxHeight: Math.max(16, Math.floor(gfxH * 0.9)), // изображения «подстраиваются»
+                  objectFit: "contain",
+                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                  flex: "0 0 auto"
+                }}
+                draggable={false}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Offscreen измеритель эпитафии */}
+        <div style={{ position: "absolute", left: -99999, top: -99999, width: Math.round(W * 0.88) }}>
+          <div ref={epitaphMeasureRef} style={{ width: Math.round(W * 0.88) }}>
+            <div
+              style={{
+                fontStyle: "italic",
+                textTransform: "uppercase",
+                fontFamily: FONT_CENTURY,
+                lineHeight: 1.2,
+                letterSpacing: "0.3px",
+                fontSize: "clamp(10px, 3.0vw, 22px)",
+                display: "grid",
+                gap: 8
+              }}
+            >
+              {epitaphs?.slice(0, 8).map((t, idx) => (
+                <div key={`ep-measure-${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  return (
+    <>
+      {/* Пояснение над эскизом */}
+      <div
+        style={{
+          color: "#fff",
+          opacity: 0.9,
+          fontSize: 13,
+          lineHeight: 1.25,
+          margin: "6px 0 8px",
+          textAlign: "center"
+        }}
+      >
+        Предварительный макет. Финальное расположение сделает специалист. Принципиальные моменты скорректируем позже.
+      </div>
+
+      <div
+        ref={containerRef}
+        style={{
+          ...bottomUnderlayGradient(),
+          borderRadius: 10,
+          position: "relative",
+          width: "100%",
+          height: Math.max(CFG.general.minContainerHeight, H + CFG.general.containerPadding * 2),
+          overflow: "hidden",
+          userSelect: "none",
+          padding: CFG.general.containerPadding,
+          boxSizing: "border-box",
+          color: "#fff",
+          ...style
+        }}
+        data-sketch-orient={isVertical ? "vertical" : "horizontal"}
+        data-sketch-orient-source={orientation ? "draft" : "image"}
+      >
+        {/* Фоновое изображение изделия */}
+        <img
+          ref={imgRef}
+          src={item?.url || ""}
+          alt={item?.name || "Изделие"}
+          style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
+          draggable={false}
+          onLoad={() => setTimeout(recalc, 0)}
+        />
+
+        {/* Контент */}
+        {renderPeople()}
+        <CrossOverlay />
+        <EpitaphAndGraphics />
+      </div>
+    </>
+  );
+}
