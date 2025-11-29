@@ -1,21 +1,20 @@
 // src/screens/EditorStep.tsx
 // Редактор элементов с надёжной инициализацией по правилам шаблона (без чтения DOM и без align).
 //
-// Что исправлено (по вашим замечаниям):
-// 1) Фрейм с графикой: предсказуемое поведение — в шаблоне графические элементы раскладываются
-//    в одну горизонтальную строку (row), каждый получает свой бокс (ширина рассчитана из доступной,
-//    с зазором). Больше нет «наслоения» друг на друга при перестройке.
-// 2) Крест: увеличен базовый размер (H: 10% ширины, V: 16% ширины) в расчёте раскладки; в canvas-превью
-//    исправлена формула вписывания (раньше была ошибка: ww = hh / sr → давала сплющивание/выход за поле).
-// 3) Портрет в мини-эскизе: теперь рисуется, если есть фото (раньше стоял «continue» и портреты не рисовались).
-//    Вписывание портрета в рамку — по принципу «cover» (как в WYSIWYG).
-// 4) Эпитафии: если несколько, их высота делится поровну по вертикали (с небольшими отступами),
-//    поэтому не накладываются друг на друга. Переключатель «В строку / Лесенкой» работает в обеих отрисовках.
-// 5) Обновление после изменений шаблона: LAYOUT_VERSION включена в hash и сохраняется в драфт.
-//    При входе в редактор раскладка пересчитается. После применения раскладки сразу обновляем mini-превью,
-//    чтобы TopBar показывал актуальный эскиз.
+// Исправления по вашим пунктам:
+// - Ручка ресайза «верх-центр» теперь корректно меняет высоту (была ошибка: nh уменьшали на dx вместо dy).
+// - «Нельзя выбрать нижний фрейм»: добавлен выбор перекрытых рамок по Alt+Click — циклический выбор элементов под курсором
+//   от верхнего к нижнему; также можно Alt+Click продолжать цикл. Так можно выбрать нижнюю рамку под перекрытием.
+// - Сохранение пользовательских изменений при возврате в редактор: раскладка НЕ пересчитывается при изменении размеров контейнера.
+//   Пересчёт только если изменился контент (стела, ориентация, список/текст метрик и эпитафий, набор графики/крестов)
+//   или версия шаблона (LAYOUT_VERSION). При пересчёте координаты существующих рамок НЕ перезаписываются — сохраняются ручные правки.
+// - Фрейм с графикой ведёт себя предсказуемо: в раскладке все графические элементы кладём в один ряд с равной шириной,
+//   с зазорами — нет наложений друг на друга при перестройке.
+// - Крест: увеличен базовый размер; в canvas-превью исправлен расчёт вписывания (contain), больше не сплющивается/не вылезает.
+// - Портрет: рисуем в мини-эскизе (canvas) по принципу cover с клипом — не выходит за рамку.
+// - Топбар: после применения новой раскладки делаем мгновенное обновление мини-превью (без дебаунса), чтобы в заголовке всегда актуальный эскиз.
 //
-// Примечание: все координаты рассчитываются программно (computeSketchLayout), синхронно с SketchTemplate.
+// Подсказка: Alt+Click по рамке — выбрать следующий элемент под курсором (циклически).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -125,8 +124,33 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Версионирование раскладки, чтобы переинициализироваться при изменениях шаблона ===== */
-const LAYOUT_VERSION = "2025-01-EditorStep-graphics-row-v4";
+/* ===== Версионирование раскладки ===== */
+const LAYOUT_VERSION = "2025-01-EditorStep-graphics-row-v5";
+
+/* ====== сигнатуры контента (без размеров контейнера, чтобы не пересчитывать из-за ресайза) ====== */
+function peopleSignature(engr: any): string {
+  if (Array.isArray(engr?.persons) && engr.persons.length) {
+    return engr.persons
+      .map((p: any, i: number) => {
+        const id = p.id || `person-${i}`;
+        const lines = linesFromPerson(p).join("|");
+        const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || "";
+        return `${id}::${lines}::${photo ? "1" : "0"}`;
+      })
+      .join("||");
+  }
+  const legacy: string[] = [];
+  if (engr?.fullName) legacy.push(String(engr.fullName));
+  if (engr?.birthDate || engr?.deathDate) legacy.push([engr?.birthDate || "", engr?.deathDate || ""].join("—"));
+  if (Array.isArray(engr?.lines)) legacy.push(...(engr.lines as string[]).filter(Boolean));
+  const photo = engr?.photoPreview || engr?.photoDataUrl || engr?.photoUrl || engr?.photo || "";
+  return `legacy::${legacy.join("|")}::${photo ? "1" : "0"}`;
+}
+function graphicsSignature(items: any[]): string {
+  return items
+    .map((g, i) => `${i}:${g.id || g.url || g.name || ""}:${g.catSlug || g.catName || ""}`)
+    .join("|");
+}
 
 /* =========================================================================================
    computeSketchLayout: программная раскладка (синхронизирована с SketchTemplate)
@@ -156,16 +180,15 @@ function computeSketchLayout({
 
   const gapY = Math.round(0.015 * stageH);
   const gapSmall = Math.round(0.008 * stageH);
-  const rowGap = Math.round(0.012 * stageW); // горизонтальные зазоры в ряду графики
+  const rowGap = Math.round(0.012 * stageW);
   const top6 = Math.round(0.06 * stageH);
   const bottomPad = Math.max(8, Math.round(0.02 * stageH));
   const add = (id: string, x: number, y: number, w: number, h: number) => m.set(id, toBox(x, y, w, h));
 
-  // Кресты — сделаем немного крупнее
+  // Кресты — чуть крупнее, чем было
   const crossWpx = Math.round(stageW * (orientation === "vertical" ? 0.16 : 0.10));
   const crossHpx = crossWpx;
 
-  // Вспомогательные: равномерная раскладка эпитафий (по вертикали) и графики (в строку)
   const placeEpitaphsStack = (left: number, top: number, width: number, totalHeight: number) => {
     const count = Math.max(0, epitaphs.length);
     if (count === 0) return;
@@ -258,7 +281,6 @@ function computeSketchLayout({
     placeEpitaphsStack(epX, epTop, epW, epH);
     placeGraphicsRow(Math.round((stageW - Math.round(stageW * 0.9)) / 2), gfxTop, Math.round(stageW * 0.9), gfxH);
 
-    // Кресты: 1 — центр, 2 — края
     if (crosses.length === 1) add(`cross-0`, Math.round((stageW - crossWpx) / 2), Math.round(0.06 * stageH), crossWpx, crossHpx);
     if (crosses.length >= 2) {
       add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
@@ -399,14 +421,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const previewTimerRef = useRef<number | null>(null);
   const wishesTimerRef = useRef<number | null>(null);
 
-  const [containerW, setContainerW] = useState(1);
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const aspect = useMemo(
     () => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined),
     [imgWH]
   );
 
-  // live reload draft
+  // live reload draft (без бесконечных циклов)
   useEffect(() => {
     const reload = () => setDraft(loadOrderDraft());
     const onFocus = () => reload();
@@ -467,22 +488,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [graphics]
   );
 
-  // watch wrapper width
-  useEffect(() => {
-    const measure = () => {
-      const r = wrapperRef.current?.getBoundingClientRect();
-      setContainerW(Math.max(1, Math.floor(r?.width || 1)));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (wrapperRef.current) ro.observe(wrapperRef.current);
-    window.addEventListener("resize", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, []);
-
   /* ===== DnD/Resize ===== */
   const dragRef = useRef<{
     id: string;
@@ -491,13 +496,16 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     start: EditorEl;
   } | null>(null);
 
-  const contentWH = () => {
-    const r = wrapperRef.current?.getBoundingClientRect();
-    if (!r) return { w: 1, h: 1 };
-    const w = Math.max(1, r.width - SKETCH_PAD * 2);
-    const h = Math.max(1, r.height - SKETCH_PAD * 2);
-    return { w, h };
-  };
+  function contentRect() {
+    const host = wrapperRef.current?.getBoundingClientRect();
+    if (!host) return null;
+    return {
+      x: host.left + SKETCH_PAD,
+      y: host.top + SKETCH_PAD,
+      w: Math.max(1, host.width - SKETCH_PAD * 2),
+      h: Math.max(1, host.height - SKETCH_PAD * 2)
+    };
+  }
 
   const onPointerDownBox = (
     e: React.PointerEvent,
@@ -505,6 +513,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
   ) => {
     e.stopPropagation();
+
+    // Alt+Click — циклический выбор элемента под курсором (решает проблему выбора нижней рамки)
+    if (e.altKey && wrapperRef.current) {
+      const hitId = pickElementUnderPointer(e.clientX, e.clientY, id);
+      if (hitId) setSelectedId(hitId);
+      return;
+    }
+
     const el = elements.find((x) => x.id === id);
     if (!el || el.locked) return;
     setSelectedId(id);
@@ -518,9 +534,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     const d = dragRef.current;
     if (!d) return;
     e.preventDefault();
-    const { w: cw, h: ch } = contentWH();
-    const dxPct = ((e.clientX - d.startX) / cw) * 100;
-    const dyPct = ((e.clientY - d.startY) / ch) * 100;
+    const rect = contentRect();
+    if (!rect) return;
+
+    const dxPct = ((e.clientX - d.startX) / rect.w) * 100;
+    const dyPct = ((e.clientY - d.startY) / rect.h) * 100;
     const withSnap = !e.altKey;
     const snapStep = e.shiftKey ? 1.5 : 1;
 
@@ -539,7 +557,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           return { ...el, ...clampBox(nx, ny, w, h) };
         }
 
-        // resize
+        // resize (фикс: для "n" высота меняется на dyPct, а не на dxPct)
         const keepRatio = e.shiftKey;
         let nx = x, ny = y, nw = w, nh = h;
         const startRatio = w / h || 1;
@@ -547,7 +565,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (d.mode.includes("e")) nw = w + dxPct;
         if (d.mode.includes("s")) nh = h + dyPct;
         if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
-        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dxPct; }
+        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dyPct; }
 
         if (keepRatio) {
           if (["e", "w"].some((k) => d.mode.includes(k))) nh = nw / startRatio;
@@ -569,6 +587,30 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const onPointerUp = () => {
     dragRef.current = null;
   };
+
+  // Выбрать элемент под курсором. Если текущий topId указан — вернём следующий ниже (Alt+Click цикл)
+  function pickElementUnderPointer(clientX: number, clientY: number, currentTopId?: string | null): string | null {
+    const rect = contentRect();
+    if (!rect) return null;
+    const px = clientX - rect.x;
+    const py = clientY - rect.y;
+    const list = elements
+      .slice()
+      .sort((a, b) => b.z - a.z) // сверху вниз
+      .filter((el) => {
+        const ex = (el.x / 100) * rect.w;
+        const ey = (el.y / 100) * rect.h;
+        const ew = (el.w / 100) * rect.w;
+        const eh = (el.h / 100) * rect.h;
+        return px >= ex && px <= ex + ew && py >= ey && py <= ey + eh;
+      })
+      .map((el) => el.id);
+
+    if (list.length === 0) return null;
+    if (!currentTopId || !list.includes(currentTopId)) return list[0];
+    const idx = list.indexOf(currentTopId);
+    return list[(idx + 1) % list.length];
+  }
 
   /* ===== Автосохранение и wishes ===== */
   useEffect(() => {
@@ -608,39 +650,37 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [wishes]);
 
-  /* ===== Инициализация рамок по программной раскладке (без align/DOM) ===== */
+  /* ===== Инициализация: раскладка только при изменении КОНТЕНТА (не размеров) ===== */
   const [layoutAppliedHash, setLayoutAppliedHash] = useState<string | null>(
     () => (draft as any)?.editor?.sketchInitHash || null
   );
 
-  // Пересчёт раскладки при изменении входных данных/версии
   useEffect(() => {
-    const r = wrapperRef.current?.getBoundingClientRect();
-    if (!r) return;
-
-    const stageW = Math.max(1, r.width - SKETCH_PAD * 2);
-    const stageH = Math.max(1, r.height - SKETCH_PAD * 2);
-    if (stageW < 10 || stageH < 10) return;
+    const host = wrapperRef.current;
+    if (!host) return;
 
     const orientation: Orientation =
       (draft.size?.orientation as Orientation | undefined) ??
       ((draft as any).orientation as Orientation | undefined) ??
       (imgWH.w > imgWH.h ? "horizontal" : "vertical");
 
-    const hash =
-      [
-        LAYOUT_VERSION,
-        item?.url || "",
-        orientation,
-        peopleBlocks.map((p) => p.id).join(","),
-        crosses.length,
-        others.length,
-        epitaphs.join("|"),
-        Math.round(stageW),
-        Math.round(stageH)
-      ].join("::");
+    const contentHash = [
+      LAYOUT_VERSION,
+      item?.url || "",
+      orientation,
+      peopleSignature(engr),
+      epitaphs.join("||"),
+      graphicsSignature(crosses),
+      graphicsSignature(others)
+    ].join("::");
 
-    if (layoutAppliedHash === hash) return;
+    if (layoutAppliedHash === contentHash) return;
+
+    // Габариты области контента
+    const hostRect = host.getBoundingClientRect();
+    const stageW = Math.max(1, Math.floor(hostRect.width - SKETCH_PAD * 2));
+    const stageH = Math.max(1, Math.floor(hostRect.height - SKETCH_PAD * 2));
+    if (stageW < 10 || stageH < 10) return;
 
     const layout = computeSketchLayout({
       stageW,
@@ -673,28 +713,44 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (pb) {
           const safe = ensureMin(pb, 6, 8);
           const old = prevMap.get(pid);
-          next.push(old ? { ...old, ...safe } : { id: pid, type: "portrait", ...safe, z: i * 10 + 1, title: pid, bw: true });
+          next.push(
+            old
+              ? { ...safe, ...old } // ВАЖНО: сохраняем ручные x/y/w/h/z из old
+              : { id: pid, type: "portrait", ...safe, z: i * 10 + 1, title: pid, bw: true }
+          );
           used.add(pid);
         }
         if (mb) {
           const safe = ensureMin(mb, 12, 10);
           const old = prevMap.get(mid);
-          next.push(old ? { ...old, ...safe } : { id: mid, type: "metric", ...safe, z: i * 10 + 2, title: mid, uppercase: true });
+          next.push(
+            old
+              ? { ...safe, ...old }
+              : { id: mid, type: "metric", ...safe, z: i * 10 + 2, title: mid, uppercase: true }
+          );
           used.add(mid);
         }
       });
 
-      // Эпитафии (стыкуем по вертикали)
+      // Эпитафии
       epitaphs.forEach((_, idx) => {
         const id = `epitaph-${idx}`;
         const b = layout.get(id);
         if (!b) return;
         const safe = ensureMin(b, 16, 12);
         const old = prevMap.get(id);
-        const base: EditorEl = old
-          ? { ...old, ...safe }
-          : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined };
-        next.push(base);
+        next.push(
+          old
+            ? { ...safe, ...old }
+            : {
+                id,
+                type: "epitaph",
+                ...safe,
+                z: 100 + idx,
+                title: id,
+                staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined
+              }
+        );
         used.add(id);
       });
 
@@ -705,22 +761,22 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (!b) return;
         const safe = ensureMin(b, 8, 8);
         const old = prevMap.get(id);
-        next.push(old ? { ...old, ...safe } : { id, type: "cross", ...safe, z: 200 + idx, title: id });
+        next.push(old ? { ...safe, ...old } : { id, type: "cross", ...safe, z: 200 + idx, title: id });
         used.add(id);
       });
 
-      // Графика — в одну строку, каждый элемент получает свой бокс
+      // Графика (в строку)
       others.forEach((_, idx) => {
         const id = `graphic-${idx}`;
         const b = layout.get(id);
         if (!b) return;
         const safe = ensureMin(b, 12, 12);
         const old = prevMap.get(id);
-        next.push(old ? { ...old, ...safe } : { id, type: "graphic", ...safe, z: 300 + idx, title: id, flipH: false });
+        next.push(old ? { ...safe, ...old } : { id, type: "graphic", ...safe, z: 300 + idx, title: id, flipH: false });
         used.add(id);
       });
 
-      // Прочие — переносим как есть
+      // Прочие (кастомные) — переносим как есть
       prev.forEach((el) => {
         if (!used.has(el.id)) next.push(el);
       });
@@ -728,23 +784,21 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       return next;
     });
 
-    setLayoutAppliedHash(hash);
+    setLayoutAppliedHash(contentHash);
     const prevDraft = loadOrderDraft();
     saveOrderDraft({
       ...prevDraft,
       editor: {
         ...(prevDraft.editor || {}),
-        sketchInitHash: hash,
+        sketchInitHash: contentHash,
         layoutVersion: LAYOUT_VERSION,
         updatedAt: Date.now()
       }
     });
 
-    // Сразу обновим mini-превью (для TopBar)
+    // Сразу обновим мини-превью (для TopBar)
     (async () => {
-      const wrap = wrapperRef.current;
-      if (!wrap) return;
-      const r = wrap.getBoundingClientRect();
+      const r = host.getBoundingClientRect();
       const miniW = Math.max(320, Math.floor(r.width));
       const miniH = Math.max(320, Math.floor(r.height));
       const mini = await renderPreview(miniW, miniH);
@@ -762,7 +816,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         });
       }
     })();
-  }, [item?.url, peopleBlocks, crosses, others, epitaphs, imgWH, draft?.size?.orientation, layoutAppliedHash]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.url, engr, crosses, others, epitaphs, draft?.size?.orientation, imgWH]); // без размеров контента и без layoutAppliedHash
 
   /* ===== Превью (canvas) ===== */
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
@@ -800,7 +855,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
     const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
     const els = elements.slice().sort((a, b) => a.z - b.z);
-
     for (const el of els) {
       const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
       const key = el.id.split("-").slice(1).join("-");
@@ -810,7 +864,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (!p?.photo) continue;
         const im = await loadImageSafe(p.photo);
         if (!im) continue;
-        // cover
+        // cover + clip
         const sr = im.width / im.height, dr = r.w / r.h;
         ctx.save();
         ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
@@ -837,7 +891,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           ctx.translate(-(r.x + r.w / 2), -(r.y + r.h / 2));
         }
         const sr = im.width / im.height, dr = r.w / r.h;
-        // contain
         if (sr > dr) {
           const ww = r.w, hh = Math.round(ww / sr), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
           ctx.drawImage(im, xx, yy, ww, hh);
@@ -853,7 +906,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const im = await loadImageSafe(c.url);
         if (!im) continue;
         const sr = im.width / im.height, dr = r.w / r.h;
-        // contain (исправлено: ширина = h * sr, а не h / sr)
         if (sr > dr) {
           const ww = r.w, hh = Math.round(ww / sr), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
           ctx.drawImage(im, xx, yy, ww, hh);
@@ -953,7 +1005,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return () => {
       if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     };
-  }, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, containerW, wishes, layoutAppliedHash]);
+  }, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, wishes, layoutAppliedHash]);
 
   /* ===== Back/Continue ===== */
   const handleBack = () => {
@@ -983,7 +1035,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     setTimeout(() => go({ elements, wishes }), 150);
   };
 
-  /* ===== Мини тулбар и контент ===== */
+  /* ===== Тулбар и контент ===== */
   const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
     position: "absolute",
     left,
@@ -1074,8 +1126,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
 
   const ContentOverlay = () => {
-    const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
-    const { h: ch } = contentWH();
+    const { h: ch } = (function () {
+      const r = wrapperRef.current?.getBoundingClientRect();
+      if (!r) return { h: 1 };
+      return { h: Math.max(1, r.height - SKETCH_PAD * 2) };
+    })();
 
     return (
       <>
@@ -1112,7 +1167,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                     width: "100%", height: "100%", color: "#fff",
                     display: "grid", placeItems: "center",
                     textAlign: "center",
-                    fontFamily, fontStyle: el.italic ? "italic" : "normal",
+                    fontFamily: `"Century Schoolbook","Times New Roman",serif`,
+                    fontStyle: el.italic ? "italic" : "normal",
                     lineHeight: 1.12, textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                   }}
                 >
@@ -1137,7 +1193,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                     style={{
                       position: "relative",
                       width: "100%", height: "100%", color: "#fff",
-                      fontFamily, fontStyle: el.italic ? "italic" : "normal",
+                      fontFamily: `"Century Schoolbook","Times New Roman",serif`,
+                      fontStyle: el.italic ? "italic" : "normal",
                       textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                     }}
                   >
@@ -1153,7 +1210,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       width: "100%", height: "100%", color: "#fff",
                       display: "grid", placeItems: "center",
                       textAlign: "center",
-                      fontFamily, fontStyle: el.italic ? "italic" : "normal",
+                      fontFamily: `"Century Schoolbook","Times New Roman",serif`,
+                      fontStyle: el.italic ? "italic" : "normal",
                       lineHeight: 1.2, textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                     }}
                   >
@@ -1226,16 +1284,25 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         <TopBarWithIntro title="Memorial - редактор" />
 
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
-          Не старайтесь идеально расположить элементы — эскиз схематичный. Исправьте ключевые позиции
-          (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ, «лесенка») и опишите пожелания. Финальную обработку выполнит специалист.
+          Подсказка: Alt+клик по рамке — выбрать следующий элемент под курсором (если рамки перекрываются).
+          Строчные/ПРОПИСНЫЕ и «лесенка» переключаются в мини-панели рамки.
         </section>
 
+        {/* Эскиз */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={wrapperRef}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
-            onPointerDown={() => setSelectedId(null)}
+            onPointerDown={(e) => {
+              // Alt+клик в зоне эскиза — выбрать верхний под курсором
+              if (e.altKey) {
+                const hit = pickElementUnderPointer(e.clientX, e.clientY, null);
+                if (hit) setSelectedId(hit);
+              } else {
+                setSelectedId(null);
+              }
+            }}
             style={{
               position: "relative",
               width: "100%",
@@ -1291,17 +1358,73 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       }}
                       title={el.title || el.id}
                     >
-                      {selected && <MiniToolbar el={el} />}
+                      {/* Мини-панель для выбранного */}
+                      {selected && (
+                        <div
+                          onPointerDown={(ev) => ev.stopPropagation()}
+                          style={{
+                            position: "absolute",
+                            left: 0, top: -30,
+                            display: "flex", gap: 6,
+                            background: "rgba(0,0,0,0.6)",
+                            border: "1px solid rgba(255,255,255,0.25)",
+                            borderRadius: 6, padding: "2px 6px",
+                            alignItems: "center",
+                            pointerEvents: "auto", zIndex: 3000
+                          }}
+                        >
+                          {el.type === "metric" && (
+                            <button
+                              type="button"
+                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
+                              title={el.uppercase ? "Сделать строчные" : "Сделать ПРОПИСНЫЕ"}
+                              onClick={() =>
+                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))
+                              }
+                            >
+                              {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+                            </button>
+                          )}
+                          {el.type === "epitaph" && isRememberLoveMourn(epitaphs[Number(el.id.split("-")[1])] || "") && (
+                            <button
+                              type="button"
+                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
+                              title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
+                              onClick={() =>
+                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))
+                              }
+                            >
+                              {el.staircase ? "В строку" : "Лесенкой"}
+                            </button>
+                          )}
+                          {el.type === "graphic" && (
+                            <button
+                              type="button"
+                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
+                              title="Отразить по горизонтали"
+                              onClick={() =>
+                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))
+                              }
+                            >
+                              Отразить ⇄
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Ручки ресайза */}
                       {selected && !el.locked && (
                         <>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={{ position: "absolute", left: 0, top: 0, ...handleDot(0, 0, "nwse-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={{ position: "absolute", left: "50%", top: 0, ...handleDot("50%", 0, "ns-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={{ position: "absolute", left: "100%", top: 0, ...handleDot("100%", 0, "nesw-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={{ position: "absolute", left: "100%", top: "50%", ...handleDot("100%", "50%", "ew-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={{ position: "absolute", left: "100%", top: "100%", ...handleDot("100%", "100%", "nwse-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={{ position: "absolute", left: "50%", top: "100%", ...handleDot("50%", "100%", "ns-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={{ position: "absolute", left: 0, top: "100%", ...handleDot(0, "100%", "nesw-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={{ position: "absolute", left: 0, top: "50%", ...handleDot(0, "50%", "ew-resize") }} />
+                          {/* углы */}
+                          <div style={{ position: "absolute", left: 0, top: 0, ...handleDot(0, 0, "nwse-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} />
+                          <div style={{ position: "absolute", left: "100%", top: 0, ...handleDot("100%", 0, "nesw-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} />
+                          <div style={{ position: "absolute", left: "100%", top: "100%", ...handleDot("100%", "100%", "nwse-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} />
+                          <div style={{ position: "absolute", left: 0, top: "100%", ...handleDot(0, "100%", "nesw-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} />
+                          {/* стороны */}
+                          <div style={{ position: "absolute", left: "50%", top: 0, ...handleDot("50%", 0, "ns-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} />
+                          <div style={{ position: "absolute", left: "100%", top: "50%", ...handleDot("100%", "50%", "ew-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} />
+                          <div style={{ position: "absolute", left: "50%", top: "100%", ...handleDot("50%", "100%", "ns-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} />
+                          <div style={{ position: "absolute", left: 0, top: "50%", ...handleDot(0, "50%", "ew-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} />
                         </>
                       )}
                     </div>
