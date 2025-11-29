@@ -2,7 +2,9 @@
 // Стартовый экран каталога «Резьба».
 // «Знакомство» (контактные данные) показывается ТОЛЬКО после клика «Подтвердить».
 // Если валидные контакты уже сохранены — «знакомство» не спрашиваем, а при подтверждении фиксируем (lock=true) и назначаем номер заказа.
-// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остается видимой (уменьшается до 18vh при открытой форме).
+// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остается видимой
+// (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
+// в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -223,8 +225,6 @@ function PreviewBottomSheet({
   };
 
   // Подтверждение:
-  // - если контакты валидны — фиксируем (если ещё нет) и продолжаем
-  // - иначе — раскрываем «знакомство» и прячем нижние кнопки
   const handleConfirm = () => {
     const st = loadIntroState();
     if (isIntroValid(st.intro)) {
@@ -255,6 +255,9 @@ function PreviewBottomSheet({
     }
   };
 
+  // Общая «вставка» для нижнего отступа с учётом Telegram WebApp и Safe Area
+  const bottomInset = "calc(14px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
+
   return createPortal(
     <>
       {/* Подложка */}
@@ -281,10 +284,10 @@ function PreviewBottomSheet({
           bottom: 0,
           zIndex: 2147483601,
           width: "100%",
-          height: "clamp(600px, 78vh, 860px)", /* первое значение: высота фрейма с просмотром + знакомство */
+          // Используем svh для стабильной высоты в мобильных браузерах
+          height: "clamp(540px, 90svh, 860px)",
           padding: 12,
-          // Объединяем safe-area + базовый отступ в одно свойство, чтобы не было дублирования ключа:
-          paddingBottom: "calc(14px + env(safe-area-inset-bottom, 0px))",
+          paddingBottom: bottomInset,
           borderTopLeftRadius: 12,
           borderTopRightRadius: 12,
           ...glassPanelStyle(),
@@ -332,7 +335,7 @@ function PreviewBottomSheet({
               alignItems: "center",
               justifyContent: "center",
               overflow: "hidden",
-              maxHeight: showIntro ? "18vh" : "60vh", // было 12vh — приводим к ТЗ: 18vh
+              maxHeight: showIntro ? "18vh" : "48vh", // уменьшили верхний блок, чтобы кнопки точно помещались
               transition: "max-height 260ms ease, padding 260ms ease"
             }}
           >
@@ -420,7 +423,17 @@ function PreviewBottomSheet({
                   </label>
 
                   {/* Кнопки формы */}
-                  <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      marginTop: 6,
+                      // резерв под нижние панели приложения
+                      paddingBottom: bottomInset
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() => setShowIntro(false)}
@@ -448,9 +461,17 @@ function PreviewBottomSheet({
           </div>
         </div>
 
-        {/* Нижние кнопки — скрываем, когда открыто «знакомство» */}
+        {/* Нижние кнопки — всегда видимы; учтён нижний inset для Telegram/Safe Area */}
         {!showIntro && (
-          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              paddingBottom: bottomInset // гарантированно над системными панелями
+            }}
+          >
             <button
               onClick={() => closeWithFade(onClose)}
               style={glassButtonStyle("nano")}

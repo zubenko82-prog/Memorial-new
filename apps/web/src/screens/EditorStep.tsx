@@ -1,17 +1,18 @@
 // src/screens/EditorStep.tsx
 // Редактор элементов с надёжной инициализацией по правилам шаблона (без чтения DOM и без align).
 //
-// Исправления по ошибке "Cannot read properties of undefined (reading 'align')":
-// - В этом файле полностью исключено чтение любых свойств вида .align у конфигураций.
-// - Вся разметка и отрисовка текста используют безопасные значения по умолчанию.
-// - Инициализация позиций делается программно (computeSketchLayout), без скрытого рендера и чтения DOM,
-//   что устраняет расхождения и гонки с реальным SketchTemplate.
+// Что исправлено:
+// - Обновление после изменений шаблона: введён LAYOUT_VERSION, включён в hash и сохраняется в драфт,
+//   поэтому при переходе в редактор раскладка пересчитается даже если входные данные не менялись.
+// - Графика: корректно отображается (позиции берутся из программного расчёта), видна в WYSIWYG и превью.
+// - Эпитафии: на шаблонах c несколькими эпитафиями высота делится поровну (с зазором), нет наложений.
+// - Топбар: после применения раскладки сразу рендерится и сохраняется актуальное превью (без дебаунса),
+//   чтобы в TopBar показывался свежий эскиз.
+// - «В строку / лесенкой» для «Помним, любим, скорбим…»: переключатель работает (WYSIWYG и canvas).
 //
-// Сценарий:
-// - computeSketchLayout вычисляет стартовые рамки (в процентах), ориентируясь на правила из SketchTemplate
-//   (портрет/метрика/эпитафия/графика/кресты для разных ориентаций и числа людей).
-// - Применяем рамки один раз по хэшу входных данных и размеров контейнера (не затираем ручные правки).
-// - DnD/resize, мини-кнопки, предпросмотр, «лесенка», авто-сейв — без изменений.
+// Примечание:
+// - Позиции рассчитываются программно (computeSketchLayout), синхронно с SketchTemplate.
+// - Раскладка людей/графики оставлена прежней; переработано распределение высоты эпитафий.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -102,6 +103,27 @@ async function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
 const normRemember = (t?: string) =>
   (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
 const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
+function splitRememberPreserve(text: string) {
+  const t = (text || "").trim();
+  const parts: string[] = [];
+  let buf = "";
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    buf += ch;
+    if (ch === ",") {
+      parts.push(buf.trim());
+      buf = "";
+    }
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  const top = parts[0] || "Помним,";
+  const mid = parts[1] || "любим,";
+  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим...").trim();
+  return { top, mid, bot };
+}
+
+/* ===== Версионирование раскладки, чтобы переинициализироваться при изменениях шаблона ===== */
+const LAYOUT_VERSION = "2025-01-EditorStep-epitaph-stack-v3";
 
 /* =========================================================================================
    computeSketchLayout: программная раскладка, синхронизированная с правилами SketchTemplate
@@ -130,6 +152,7 @@ function computeSketchLayout({
   const tplKey: "one" | "two" | "many" = n <= 1 ? "one" : n === 2 ? "two" : "many";
 
   const gapY = Math.round(0.015 * stageH);
+  const gapSmall = Math.round(0.008 * stageH);
   const top6 = Math.round(0.06 * stageH);
   const bottomPad = Math.max(8, Math.round(0.02 * stageH));
   const add = (id: string, x: number, y: number, w: number, h: number) => m.set(id, toBox(x, y, w, h));
@@ -137,6 +160,19 @@ function computeSketchLayout({
   // Кресты размеры
   const crossWpx = Math.round(stageW * (orientation === "vertical" ? 0.14 : 0.08));
   const crossHpx = crossWpx;
+
+  // Вспомогательная функция распределения высоты эпитафий
+  const placeEpitaphsStack = (left: number, top: number, width: number, totalHeight: number) => {
+    const count = Math.max(0, epitaphs.length);
+    if (count === 0) return;
+    const gaps = Math.max(0, count - 1) * gapSmall;
+    const per = Math.max(10, Math.floor((totalHeight - gaps) / count));
+    let y = top;
+    epitaphs.forEach((_, i) => {
+      add(`epitaph-${i}`, left, y, width, per);
+      y += per + gapSmall;
+    });
+  };
 
   if (orientation === "horizontal" && tplKey === "one") {
     // Портрет
@@ -157,7 +193,7 @@ function computeSketchLayout({
     const my = py + ph + gapY;
     if (people[0]) add(`metric-${people[0].id}`, mx, my, mw, mh);
 
-    // Эпитафия (сразу под метрикой), графика внизу
+    // Эпитафии (под метрикой) и графика внизу
     const epTop = my + mh + gapY;
     const graphicsMaxH = Math.round(0.18 * stageH);
     const gfxH = Math.max(0, Math.min(graphicsMaxH, stageH - bottomPad - epTop - gapY));
@@ -165,7 +201,8 @@ function computeSketchLayout({
     const epW = Math.round(stageW * 0.88);
     const epX = Math.round((stageW - epW) / 2);
     const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-    epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
+
+    placeEpitaphsStack(epX, epTop, epW, epH);
 
     if (graphics.length > 0 && gfxH > 0) {
       const gw = Math.round(stageW * 0.9);
@@ -207,7 +244,9 @@ function computeSketchLayout({
     const epW = Math.round(stageW * 0.88);
     const epX = Math.round((stageW - epW) / 2);
     const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-    epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
+
+    placeEpitaphsStack(epX, epTop, epW, epH);
+
     if (graphics.length > 0 && gfxH > 0) {
       const gw = Math.round(stageW * 0.9);
       const gx = Math.round((stageW - gw) / 2);
@@ -252,7 +291,9 @@ function computeSketchLayout({
     const epW = Math.round(stageW * 0.88);
     const epX = Math.round((stageW - epW) / 2);
     const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-    epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
+
+    placeEpitaphsStack(epX, epTop, epW, epH);
+
     if (graphics.length > 0 && gfxH > 0) {
       const gw = Math.round(stageW * 0.9);
       const gx = Math.round((stageW - gw) / 2);
@@ -285,7 +326,9 @@ function computeSketchLayout({
       const epW = Math.round(stageW * 0.88);
       const epX = Math.round((stageW - epW) / 2);
       const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-      epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
+
+      placeEpitaphsStack(epX, epTop, epW, epH);
+
       if (graphics.length > 0 && gfxH > 0) {
         const gw = Math.round(stageW * 0.9);
         const gx = Math.round((stageW - gw) / 2);
@@ -324,7 +367,9 @@ function computeSketchLayout({
       const epW = Math.round(stageW * 0.88);
       const epX = Math.round((stageW - epW) / 2);
       const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-      epitaphs.forEach((_, i) => add(`epitaph-${i}`, epX, epTop, epW, epH));
+
+      placeEpitaphsStack(epX, epTop, epW, epH);
+
       if (graphics.length > 0 && gfxH > 0) {
         const gw = Math.round(stageW * 0.9);
         const gx = Math.round((stageW - gw) / 2);
@@ -575,6 +620,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     () => (draft as any)?.editor?.sketchInitHash || null
   );
 
+  // Пересчёт раскладки при изменении входных данных/версии
   useEffect(() => {
     const r = wrapperRef.current?.getBoundingClientRect();
     if (!r) return;
@@ -590,6 +636,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
     const hash =
       [
+        LAYOUT_VERSION,      // ВЕРСИЯ РАСКЛАДКИ
         item?.url || "",
         orientation,
         peopleBlocks.map((p) => p.id).join(","),
@@ -644,18 +691,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         }
       });
 
-      // Эпитафии
+      // Эпитафии (раскладываем по вертикали)
       epitaphs.forEach((_, idx) => {
         const id = `epitaph-${idx}`;
         const b = layout.get(id);
         if (!b) return;
         const safe = ensureMin(b, 16, 12);
         const old = prevMap.get(id);
-        next.push(
-          old
-            ? { ...old, ...safe }
-            : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined }
-        );
+        const base: EditorEl = old
+          ? { ...old, ...safe }
+          : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined };
+        next.push(base);
         used.add(id);
       });
 
@@ -696,9 +742,33 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       editor: {
         ...(prevDraft.editor || {}),
         sketchInitHash: hash,
+        layoutVersion: LAYOUT_VERSION,
         updatedAt: Date.now()
       }
     });
+
+    // Сразу обновим мини-превью для TopBar
+    (async () => {
+      const wrap = wrapperRef.current;
+      if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const miniW = Math.max(320, Math.floor(r.width));
+      const miniH = Math.max(320, Math.floor(r.height));
+      const mini = await renderPreview(miniW, miniH);
+      const prev = loadOrderDraft();
+      if (mini && mini !== (prev as any).editor?.previewUrl) {
+        saveOrderDraft({
+          ...prev,
+          editor: {
+            ...(prev.editor || {}),
+            previewUrl: mini,
+            previewUpdatedAt: Date.now(),
+            elements,
+            wishes
+          }
+        });
+      }
+    })();
   }, [item?.url, peopleBlocks, crosses, others, epitaphs, imgWH, draft?.size?.orientation, layoutAppliedHash]);
 
   /* ===== Превью (canvas) ===== */
@@ -742,8 +812,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const key = el.id.split("-").slice(1).join("-");
 
       if (el.type === "portrait") {
-        // Не рисуем пустой портрет без фото
-        continue;
+        continue; // если нет фото, ничего не рисуем
       } else if (el.type === "graphic") {
         const idx = Number(key);
         const g = Number.isFinite(idx) ? others[idx] : undefined;
@@ -803,20 +872,43 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const idx = Number(key);
         const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
         const text = el.uppercase ? tRaw.toUpperCase() : tRaw;
-        ctx.save();
-        ctx.fillStyle = "#fff";
-        ctx.textBaseline = "middle";
-        ctx.textAlign = "center";
-        const f = Math.max(10, Math.round(r.h * 0.32));
-        ctx.font = `${el.italic ? "italic " : ""}${f}px ${fontFamily}`;
-        ctx.fillText(text, r.x + r.w / 2, r.y + r.h / 2, r.w - 8);
-        ctx.restore();
+
+        if (el.staircase && isRememberLoveMourn(text)) {
+          const { top, mid, bot } = splitRememberPreserve(text);
+          ctx.save();
+          ctx.fillStyle = "#fff";
+          const f = Math.max(10, Math.round(r.h * 0.28));
+          ctx.font = `${el.italic ? "italic " : ""}${f}px ${fontFamily}`;
+          // Лево-верх
+          ctx.textAlign = "left";
+          ctx.textBaseline = "top";
+          ctx.fillText(top, r.x + 4, r.y + 2, r.w - 8);
+          // Центр
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(mid, r.x + r.w / 2, r.y + r.h / 2, r.w - 8);
+          // Право-низ
+          ctx.textAlign = "right";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(bot, r.x + r.w - 4, r.y + r.h - 2, r.w - 8);
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.fillStyle = "#fff";
+          ctx.textBaseline = "middle";
+          ctx.textAlign = "center";
+          const f = Math.max(10, Math.round(r.h * 0.32));
+          ctx.font = `${el.italic ? "italic " : ""}${f}px ${fontFamily}`;
+          ctx.fillText(text, r.x + r.w / 2, r.y + r.h / 2, r.w - 8);
+          ctx.restore();
+        }
       }
     }
 
     return canvas.toDataURL("image/jpeg", 0.9);
   };
 
+  // Дебаунс-генерация превью
   useEffect(() => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -852,12 +944,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           }
         });
       }
-    }, 300) as unknown as number;
+    }, 250) as unknown as number;
 
     return () => {
       if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     };
-  }, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, containerW, wishes]);
+  }, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, containerW, wishes, layoutAppliedHash]);
 
   /* ===== Back/Continue ===== */
   const handleBack = () => {
@@ -952,7 +1044,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             style={btn}
             title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
             onClick={() =>
-              setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))
+              setElements((prev) =>
+                prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e))
+              )
             }
           >
             {el.staircase ? "В строку" : "Лесенкой"}
@@ -1032,19 +1126,37 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               const boxHpx = (el.h / 100) * ch;
               const f = Math.max(10, Math.round(boxHpx * 0.32));
 
-              content = (
-                <div
-                  style={{
-                    width: "100%", height: "100%", color: "#fff",
-                    display: "grid", placeItems: "center",
-                    textAlign: "center",
-                    fontFamily, fontStyle: el.italic ? "italic" : "normal",
-                    lineHeight: 1.2, textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: f, padding: "0 4px", whiteSpace: "pre-wrap" }}>{txt}</div>
-                </div>
-              );
+              if (el.staircase && isRememberLoveMourn(txt)) {
+                const { top, mid, bot } = splitRememberPreserve(txt);
+                content = (
+                  <div
+                    style={{
+                      position: "relative",
+                      width: "100%", height: "100%", color: "#fff",
+                      fontFamily, fontStyle: el.italic ? "italic" : "normal",
+                      textShadow: "0 1px 2px rgba(0,0,0,0.6)"
+                    }}
+                  >
+                    <div style={{ position: "absolute", top: 0, left: 4, fontWeight: 600, fontSize: f }}>{top}</div>
+                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontWeight: 600, fontSize: f }}>{mid}</div>
+                    <div style={{ position: "absolute", right: 4, bottom: 0, fontWeight: 600, fontSize: f }}>{bot}</div>
+                  </div>
+                );
+              } else {
+                content = (
+                  <div
+                    style={{
+                      width: "100%", height: "100%", color: "#fff",
+                      display: "grid", placeItems: "center",
+                      textAlign: "center",
+                      fontFamily, fontStyle: el.italic ? "italic" : "normal",
+                      lineHeight: 1.2, textShadow: "0 1px 2px rgba(0,0,0,0.6)"
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: f, padding: "0 4px", whiteSpace: "pre-wrap" }}>{txt}</div>
+                  </div>
+                );
+              }
             } else if (el.type === "cross") {
               const idx = Number(key);
               const c = Number.isFinite(idx) ? crosses[idx] : undefined;
@@ -1111,9 +1223,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
         {/* Подсказка */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
-          Не старайтесь идеально расположить элементы, не страшно если они пересекаются или вызодят за край — эскиз схематичный. Исправьте ключевые позиции
-          (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ) и опишите пожелания.
-          Финальную обработку выполнит специалист.
+          Не старайтесь идеально расположить элементы, не страшно если они пересекаются или выходят за край — эскиз схематичный. Исправьте ключевые позиции
+          (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ, «лесенка») и опишите пожелания. Финальную обработку выполнит специалист.
         </section>
 
         {/* Эскиз */}
@@ -1179,60 +1290,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       title={el.title || el.id}
                     >
                       {/* Мини-панель */}
-                      {selected && (
-                        <div
-                          onPointerDown={(ev) => ev.stopPropagation()}
-                          style={{
-                            position: "absolute",
-                            left: 0, top: -30,
-                            display: "flex", gap: 6,
-                            background: "rgba(0,0,0,0.6)",
-                            border: "1px solid rgba(255,255,255,0.25)",
-                            borderRadius: 6, padding: "2px 6px",
-                            alignItems: "center",
-                            pointerEvents: "auto", zIndex: 3000
-                          }}
-                        >
-                          {el.type === "metric" && (
-                            <button
-                              type="button"
-                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
-                              title={el.uppercase ? "Сделать строчные" : "Сделать ПРОПИСНЫЕ"}
-                              onClick={() =>
-                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))
-                              }
-                            >
-                              {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
-                            </button>
-                          )}
-
-                          {el.type === "epitaph" && isRememberLoveMourn(epitaphs[Number(el.id.split("-")[1])] || "") && (
-                            <button
-                              type="button"
-                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
-                              title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
-                              onClick={() =>
-                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))
-                              }
-                            >
-                              {el.staircase ? "В строку" : "Лесенкой"}
-                            </button>
-                          )}
-
-                          {el.type === "graphic" && (
-                            <button
-                              type="button"
-                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
-                              title="Отразить по горизонтали"
-                              onClick={() =>
-                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))
-                              }
-                            >
-                              Отразить ⇄
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      {selected && <MiniToolbar el={el} />}
 
                       {/* Ручки ресайза */}
                       {selected && !el.locked && (
