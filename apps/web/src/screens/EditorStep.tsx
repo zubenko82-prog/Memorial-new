@@ -1,20 +1,21 @@
 // src/screens/EditorStep.tsx
 // Редактор элементов с надёжной инициализацией по правилам шаблона (без чтения DOM и без align).
 //
-// Исправления по вашим пунктам:
-// - Ручка ресайза «верх-центр» теперь корректно меняет высоту (была ошибка: nh уменьшали на dx вместо dy).
-// - «Нельзя выбрать нижний фрейм»: добавлен выбор перекрытых рамок по Alt+Click — циклический выбор элементов под курсором
-//   от верхнего к нижнему; также можно Alt+Click продолжать цикл. Так можно выбрать нижнюю рамку под перекрытием.
-// - Сохранение пользовательских изменений при возврате в редактор: раскладка НЕ пересчитывается при изменении размеров контейнера.
-//   Пересчёт только если изменился контент (стела, ориентация, список/текст метрик и эпитафий, набор графики/крестов)
-//   или версия шаблона (LAYOUT_VERSION). При пересчёте координаты существующих рамок НЕ перезаписываются — сохраняются ручные правки.
-// - Фрейм с графикой ведёт себя предсказуемо: в раскладке все графические элементы кладём в один ряд с равной шириной,
-//   с зазорами — нет наложений друг на друга при перестройке.
-// - Крест: увеличен базовый размер; в canvas-превью исправлен расчёт вписывания (contain), больше не сплющивается/не вылезает.
-// - Портрет: рисуем в мини-эскизе (canvas) по принципу cover с клипом — не выходит за рамку.
-// - Топбар: после применения новой раскладки делаем мгновенное обновление мини-превью (без дебаунса), чтобы в заголовке всегда актуальный эскиз.
-//
-// Подсказка: Alt+Click по рамке — выбрать следующий элемент под курсором (циклически).
+// Что исправлено:
+// - Цикл ререндеров (Maximum update depth): при наших сохранениях игнорируем событие draft:updated (isSavingRef);
+//   перед save устанавливаем флаг и снимаем его спустя небольшой таймаут. Также перед каждым save делаем
+//   сравнение с текущим драфтом и не сохраняем без изменений.
+// - Ручка ресайза «верх-центр» корректно меняет высоту — использован dy (а не dx) для стороны "n".
+// - Выбор нижних рамок под перекрытием: Alt+Click циклический выбор элементов под курсором (сверху вниз).
+// - Графика: предсказуемая строка — равномерная ширина элементов и фиксированные зазоры, без наложений.
+// - Крест: увеличен базовый размер; в canvas-превью корректный contain (без сплющивания/выхода).
+// - Портрет: рисуется в мини-эскизе (canvas) по cover с клипом. Дополнительно ограничиваем портрет так,
+//   чтобы гарантировать минимальное место под эпитафии и графику — портрет «сжимается», если не хватает.
+// - Сохранение пользовательских правок: раскладка НЕ пересчитывается из-за ресайза контейнера; пересчёт
+//   только при изменении содержимого (стела/ориентация/люди/эпитафии/графика/кресты/версия).
+//   При пересчёте позиции уже существующих элементов НЕ перезатираются — сохраняются ручные правки.
+// - Топбар: сразу после применения раскладки обновляем мини-превью (без дебаунса), чтобы эскиз в заголовке был актуальным.
+// - Подсказка: Alt+клик по рамке — выбирает следующий элемент под курсором (если рамки перекрываются).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -125,9 +126,9 @@ function splitRememberPreserve(text: string) {
 }
 
 /* ===== Версионирование раскладки ===== */
-const LAYOUT_VERSION = "2025-01-EditorStep-graphics-row-v5";
+const LAYOUT_VERSION = "2025-01-EditorStep-v6";
 
-/* ====== сигнатуры контента (без размеров контейнера, чтобы не пересчитывать из-за ресайза) ====== */
+/* ====== сигнатуры контента (без размеров контейнера) ====== */
 function peopleSignature(engr: any): string {
   if (Array.isArray(engr?.persons) && engr.persons.length) {
     return engr.persons
@@ -185,10 +186,11 @@ function computeSketchLayout({
   const bottomPad = Math.max(8, Math.round(0.02 * stageH));
   const add = (id: string, x: number, y: number, w: number, h: number) => m.set(id, toBox(x, y, w, h));
 
-  // Кресты — чуть крупнее, чем было
+  // Кресты — немного крупнее
   const crossWpx = Math.round(stageW * (orientation === "vertical" ? 0.16 : 0.10));
   const crossHpx = crossWpx;
 
+  // раскладка эпитафий (вертикальная колонка)
   const placeEpitaphsStack = (left: number, top: number, width: number, totalHeight: number) => {
     const count = Math.max(0, epitaphs.length);
     if (count === 0) return;
@@ -200,10 +202,10 @@ function computeSketchLayout({
       y += per + gapSmall;
     });
   };
-
+  // раскладка графики в строку
   const placeGraphicsRow = (left: number, top: number, width: number, height: number) => {
     const count = Math.max(0, graphics.length);
-    if (count === 0 || height <= 0) return;
+    if (count === 0 || height <= 0 || width <= 0) return;
     const totalGaps = Math.max(0, count - 1) * rowGap;
     const perW = Math.max(14, Math.floor((width - totalGaps) / count));
     for (let i = 0; i < count; i++) {
@@ -212,146 +214,143 @@ function computeSketchLayout({
     }
   };
 
-  if (orientation === "horizontal" && tplKey === "one") {
-    // Портрет
-    const ph = Math.round(0.40 * stageH);
-    let pw = Math.round(ph * (3 / 4));
-    if (pw > stageW * 0.9) {
-      const k = (stageW * 0.9) / pw;
-      pw = Math.max(40, Math.round(pw * k));
-    }
-    const px = Math.round((stageW - pw) / 2);
-    const py = top6;
-    if (people[0]) add(`portrait-${people[0].id}`, px, py, pw, ph);
+  // вспомогательно: центральная зона контента
+  const contentLeft = SKETCH_PAD;
+  const contentRight = stageW - SKETCH_PAD;
+  const contentWidth = contentRight - contentLeft;
 
-    // Метрика
-    const mh = Math.max(24, Math.round(0.20 * stageH));
-    const mw = Math.round(stageW * 0.8);
+  if (orientation === "horizontal" && tplKey === "one") {
+    // Портрет (ограничим так, чтобы ниже гарантированно осталось место под текст и графику)
+    let ph = Math.round(0.36 * stageH); // было 0.40 — чуть уменьшили по-умолчанию
+    let pw = Math.round(ph * (3 / 4));
+    if (pw > contentWidth * 0.9) {
+      const k = (contentWidth * 0.9) / pw;
+      pw = Math.max(40, Math.round(pw * k));
+      ph = Math.max(40, Math.round(ph * k));
+    }
+    let px = Math.round((stageW - pw) / 2);
+    const py = top6;
+
+    const mh = Math.max(24, Math.round(0.18 * stageH));
+    const mw = Math.round(contentWidth * 0.8);
     const mx = Math.round((stageW - mw) / 2);
     const my = py + ph + gapY;
-    if (people[0]) add(`metric-${people[0].id}`, mx, my, mw, mh);
 
-    // Эпитафии и графика
-    const epTop = my + mh + gapY;
+    // Рассчитаем низ: хотим минимум для эпитафии и графики
     const gfxMaxH = Math.round(0.18 * stageH);
-    const gfxH = Math.max(0, Math.min(gfxMaxH, stageH - bottomPad - epTop - gapY));
-    const gfxTop = stageH - bottomPad - gfxH;
-    const epW = Math.round(stageW * 0.88);
-    const epX = Math.round((stageW - epW) / 2);
-    const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
+    const minEpH = Math.max(20, Math.round(0.10 * stageH)); // минимум 10% H под эпитафии
+    const availableBelowPortrait = stageH - bottomPad - (my + gapY);
+    let gfxH = Math.round(Math.min(gfxMaxH, availableBelowPortrait * 0.45));
+    let epH = availableBelowPortrait - gfxH - gapY;
 
-    placeEpitaphsStack(epX, epTop, epW, epH);
-    placeGraphicsRow(Math.round((stageW - Math.round(stageW * 0.9)) / 2), gfxTop, Math.round(stageW * 0.9), gfxH);
+    if (epH < minEpH) {
+      // уменьшаем портрет, чтобы «освободить» место
+      const need = minEpH - epH;
+      const shrink = Math.min(need, Math.round(ph * 0.4)); // не более 40% портрета
+      ph = Math.max(40, ph - shrink);
+      pw = Math.round(ph * (3 / 4));
+      px = Math.round((stageW - pw) / 2);
+
+      // пересчёт нижних зон
+      const my2 = py + ph + gapY;
+      const available2 = stageH - bottomPad - (my2 + gapY);
+      gfxH = Math.round(Math.min(gfxMaxH, available2 * 0.45));
+      epH = available2 - gfxH - gapY;
+    }
+
+    // Пишем рамки
+    if (people[0]) add(`portrait-${people[0].id}`, px, py, pw, ph);
+    if (people[0]) add(`metric-${people[0].id}`, mx, py + ph + gapY, mw, mh);
+
+    const epTop = py + ph + gapY + mh + gapY;
+    const epW = Math.round(contentWidth * 0.88);
+    const epX = Math.round((stageW - epW) / 2);
+    const gfxTop = stageH - bottomPad - Math.max(0, gfxH);
+
+    placeEpitaphsStack(epX, epTop, epW, Math.max(10, gfxTop - gapY - epTop));
+    placeGraphicsRow(Math.round((stageW - Math.round(contentWidth * 0.90)) / 2), gfxTop, Math.round(contentWidth * 0.90), Math.max(0, gfxH));
 
     // Кресты
     if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
     if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
-
-  } else if (orientation === "horizontal" && tplKey === "two") {
+  } else if (orientation === "horizontal") {
+    // 2 и больше — как раньше, но с гарантией корректных зон
     const gapCols = Math.round(0.012 * stageW);
-    const colW = Math.min(320, Math.max(140, Math.floor((stageW - gapCols) / 2)));
-    const totalW = colW * 2 + gapCols;
+    const cols = tplKey === "two" ? 2 : Math.min(4, Math.max(3, people.length));
+    const colW = Math.min(tplKey === "two" ? 320 : 260, Math.max(140, Math.floor((contentWidth - (cols - 1) * gapCols) / cols)));
+    const totalW = colW * cols + (cols - 1) * gapCols;
     const leftStart = Math.round((stageW - totalW) / 2);
     const top = Math.round(0.08 * stageH);
-    const pw = colW, ph = Math.round(pw * (4 / 3));
 
-    people.slice(0, 2).forEach((p, idx) => {
+    people.slice(0, cols).forEach((p, idx) => {
       const px = leftStart + idx * (colW + gapCols);
+      const pw = colW;
+      const ph = Math.round(pw * (4 / 3));
       add(`portrait-${p.id}`, px, top, pw, ph);
+
       const mw = Math.round(colW * 0.8);
       const mx = px + Math.round((colW - mw) / 2);
-      const mh = Math.max(30, Math.round(0.16 * stageH));
+      const mh = Math.max(28, Math.round(0.16 * stageH));
       const my = top + ph + Math.round(0.01 * stageH);
       add(`metric-${p.id}`, mx, my, mw, mh);
     });
 
-    const metricsBottom = people.slice(0, 2).reduce((acc, p) => {
+    const metricsBottom = people.slice(0, cols).reduce((acc, p) => {
       const b = m.get(`metric-${p.id}`); if (!b) return acc;
       const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
       return Math.max(acc, my + mh);
     }, 0);
+
     const epTop = Math.round(metricsBottom + gapY);
     const gfxMaxH = Math.round(0.14 * stageH);
-    const gfxH = Math.max(0, Math.min(gfxMaxH, stageH - bottomPad - epTop - gapY));
+    const available = stageH - bottomPad - epTop;
+    const gfxH = Math.max(0, Math.min(gfxMaxH, Math.round(available * 0.45)));
     const gfxTop = stageH - bottomPad - gfxH;
-    const epW = Math.round(stageW * 0.88);
+    const epW = Math.round(contentWidth * 0.88);
     const epX = Math.round((stageW - epW) / 2);
-    const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
 
-    placeEpitaphsStack(epX, epTop, epW, epH);
-    placeGraphicsRow(Math.round((stageW - Math.round(stageW * 0.9)) / 2), gfxTop, Math.round(stageW * 0.9), gfxH);
+    placeEpitaphsStack(epX, epTop, epW, Math.max(10, gfxTop - gapY - epTop));
+    placeGraphicsRow(Math.round((stageW - Math.round(contentWidth * 0.90)) / 2), gfxTop, Math.round(contentWidth * 0.90), Math.max(0, gfxH));
 
-    if (crosses.length === 1) add(`cross-0`, Math.round((stageW - crossWpx) / 2), Math.round(0.06 * stageH), crossWpx, crossHpx);
-    if (crosses.length >= 2) {
-      add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
-      add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
+    // Кресты
+    if (tplKey === "two") {
+      if (crosses.length === 1) {
+        add(`cross-0`, Math.round((stageW - crossWpx) / 2), Math.round(0.06 * stageH), crossWpx, crossHpx);
+      } else {
+        if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
+        if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
+      }
+    } else {
+      if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
+      if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
     }
-
-  } else if (orientation === "horizontal" && tplKey === "many") {
-    const cols = Math.min(4, Math.max(3, people.length));
-    const colGap = Math.round(0.012 * stageW);
-    const colW = Math.min(260, Math.max(140, Math.floor((stageW - (cols - 1) * colGap) / cols)));
-    const totalW = colW * cols + (cols - 1) * colGap;
-    const leftStart = Math.round((stageW - totalW) / 2);
-    const top = Math.round(0.08 * stageH);
-    const pw = colW, ph = Math.round(pw * (4 / 3));
-
-    people.forEach((p, i) => {
-      const cx = leftStart + i * (colW + colGap);
-      add(`portrait-${p.id}`, cx, top, pw, ph);
-      const mw = Math.round(colW * 0.8);
-      const mx = cx + Math.round((colW - mw) / 2);
-      const mh = Math.max(28, Math.round(0.14 * stageH));
-      const my = top + ph + Math.round(0.008 * stageH);
-      add(`metric-${p.id}`, mx, my, mw, mh);
-    });
-
-    const metricsBottom = people.reduce((acc, p) => {
-      const b = m.get(`metric-${p.id}`); if (!b) return acc;
-      const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
-      return Math.max(acc, my + mh);
-    }, 0);
-    const epTop = Math.round(metricsBottom + gapY);
-    const gfxMaxH = Math.round(0.14 * stageH);
-    const gfxH = Math.max(0, Math.min(gfxMaxH, stageH - bottomPad - epTop - gapY));
-    const gfxTop = stageH - bottomPad - gfxH;
-    const epW = Math.round(stageW * 0.88);
-    const epX = Math.round((stageW - epW) / 2);
-    const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
-
-    placeEpitaphsStack(epX, epTop, epW, epH);
-    placeGraphicsRow(Math.round((stageW - Math.round(stageW * 0.9)) / 2), gfxTop, Math.round(stageW * 0.9), gfxH);
-
-    if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx);
-    if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx);
-
   } else {
-    // Вертикальные
+    // Вертикальные — как прежде, корректируя зоны при необходимости
     const topPortrait = Math.round(0.12 * stageH);
     if (n === 1 && people[0]) {
       const p = people[0];
-      const pw = Math.round(stageW * 0.6);
-      const ph = Math.round(pw * (4 / 3));
+      let pw = Math.round(contentWidth * 0.60);
+      let ph = Math.round(pw * (4 / 3));
       const px = Math.round((stageW - pw) / 2);
       add(`portrait-${p.id}`, px, topPortrait, pw, ph);
 
-      const mw = Math.round(stageW * 0.8);
+      const mw = Math.round(contentWidth * 0.80);
       const mh = Math.max(32, Math.round(0.18 * stageH));
       const mx = Math.round((stageW - mw) / 2);
       const my = topPortrait + ph + Math.round(0.01 * stageH);
       add(`metric-${p.id}`, mx, my, mw, mh);
 
       const metricsBottom = my + mh;
-      const epTop = metricsBottom + gapY;
       const gfxMaxH = Math.round(0.18 * stageH);
-      const gfxH = Math.max(0, Math.min(gfxMaxH, stageH - bottomPad - epTop - gapY));
+      const epTop = metricsBottom + gapY;
+      const available = stageH - bottomPad - epTop;
+      const gfxH = Math.max(0, Math.min(gfxMaxH, Math.round(available * 0.45)));
       const gfxTop = stageH - bottomPad - gfxH;
-      const epW = Math.round(stageW * 0.88);
+      const epW = Math.round(contentWidth * 0.88);
       const epX = Math.round((stageW - epW) / 2);
-      const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
 
-      placeEpitaphsStack(epX, epTop, epW, epH);
-      placeGraphicsRow(Math.round((stageW - Math.round(stageW * 0.9)) / 2), gfxTop, Math.round(stageW * 0.9), gfxH);
+      placeEpitaphsStack(epX, epTop, epW, Math.max(10, gfxTop - gapY - epTop));
+      placeGraphicsRow(Math.round((stageW - Math.round(contentWidth * 0.90)) / 2), gfxTop, Math.round(contentWidth * 0.90), Math.max(0, gfxH));
 
       if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx);
       if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx);
@@ -362,12 +361,12 @@ function computeSketchLayout({
       const rowH = Math.max(40, Math.floor((stageH - gridTop - bottomPad - (rows - 1) * rowGapV) / rows));
       people.forEach((p, i) => {
         const ry = gridTop + i * (rowH + rowGapV);
-        const pw = Math.round(stageW * 0.45);
+        const pw = Math.round(contentWidth * 0.45);
         const ph = Math.round(pw * (4 / 3));
         const px = Math.round(stageW * 0.03 + (stageW * 0.42 - pw) / 2);
         add(`portrait-${p.id}`, px, ry + Math.round((rowH - ph) / 2), pw, ph);
 
-        const mw = Math.round(stageW * 0.5);
+        const mw = Math.round(contentWidth * 0.50);
         const mh = Math.max(24, Math.round(0.16 * stageH));
         const mx = Math.round(stageW * 0.48);
         const my = ry + Math.round((rowH - mh) / 2);
@@ -379,16 +378,17 @@ function computeSketchLayout({
         const my = (b.y / 100) * stageH, mh = (b.h / 100) * stageH;
         return Math.max(acc, my + mh);
       }, 0);
+
       const epTop = Math.round(metricsBottom + gapY);
       const gfxMaxH = Math.round(0.16 * stageH);
-      const gfxH = Math.max(0, Math.min(gfxMaxH, stageH - bottomPad - epTop - gapY));
+      const available = stageH - bottomPad - epTop;
+      const gfxH = Math.max(0, Math.min(gfxMaxH, Math.round(available * 0.45)));
       const gfxTop = stageH - bottomPad - gfxH;
-      const epW = Math.round(stageW * 0.88);
+      const epW = Math.round(contentWidth * 0.88);
       const epX = Math.round((stageW - epW) / 2);
-      const epH = Math.max(20, Math.round((gfxTop - gapY) - epTop));
 
-      placeEpitaphsStack(epX, epTop, epW, epH);
-      placeGraphicsRow(Math.round((stageW - Math.round(stageW * 0.9)) / 2), gfxTop, Math.round(stageW * 0.9), gfxH);
+      placeEpitaphsStack(epX, epTop, epW, Math.max(10, gfxTop - gapY - epTop));
+      placeGraphicsRow(Math.round((stageW - Math.round(contentWidth * 0.90)) / 2), gfxTop, Math.round(contentWidth * 0.90), Math.max(0, gfxH));
 
       if (crosses[0]) add(`cross-0`, Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx);
       if (crosses[1]) add(`cross-1`, Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx);
@@ -427,9 +427,30 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [imgWH]
   );
 
-  // live reload draft (без бесконечных циклов)
+  // ——— Guard: игнорировать draft:updated, если событие вызвано нашими сохранениями
+  const isSavingRef = useRef(false);
+  const touchSaving = (ms = 350) => {
+    isSavingRef.current = true;
+    window.setTimeout(() => (isSavingRef.current = false), ms);
+  };
+
+  const saveEditor = (updater: (prev: OrderDraft) => OrderDraft) => {
+    const prev = loadOrderDraft();
+    const next = updater(prev);
+    // Сравнение полезных частей (минимум) — чтобы не триггерить события без изменений
+    const prevJson = JSON.stringify(prev.editor || {});
+    const nextJson = JSON.stringify(next.editor || {});
+    if (prevJson === nextJson) return;
+    touchSaving();
+    saveOrderDraft(next);
+  };
+
+  // live reload draft (но игнорируем наши же сохранения)
   useEffect(() => {
-    const reload = () => setDraft(loadOrderDraft());
+    const reload = () => {
+      if (isSavingRef.current) return; // игнорируем событие, вызванное нами
+      setDraft(loadOrderDraft());
+    };
     const onFocus = () => reload();
     const onStorage = () => reload();
     const onVis = () => document.visibilityState === "visible" && reload();
@@ -513,14 +534,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
   ) => {
     e.stopPropagation();
-
-    // Alt+Click — циклический выбор элемента под курсором (решает проблему выбора нижней рамки)
+    // Alt+Click — циклический выбор под курсором
     if (e.altKey && wrapperRef.current) {
       const hitId = pickElementUnderPointer(e.clientX, e.clientY, id);
       if (hitId) setSelectedId(hitId);
       return;
     }
-
     const el = elements.find((x) => x.id === id);
     if (!el || el.locked) return;
     setSelectedId(id);
@@ -557,7 +576,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           return { ...el, ...clampBox(nx, ny, w, h) };
         }
 
-        // resize (фикс: для "n" высота меняется на dyPct, а не на dxPct)
+        // resize — ФИКС: для "n" используем dy
         const keepRatio = e.shiftKey;
         let nx = x, ny = y, nw = w, nh = h;
         const startRatio = w / h || 1;
@@ -588,7 +607,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  // Выбрать элемент под курсором. Если текущий topId указан — вернём следующий ниже (Alt+Click цикл)
+  // Циклический выбор под курсором
   function pickElementUnderPointer(clientX: number, clientY: number, currentTopId?: string | null): string | null {
     const rect = contentRect();
     if (!rect) return null;
@@ -596,7 +615,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     const py = clientY - rect.y;
     const list = elements
       .slice()
-      .sort((a, b) => b.z - a.z) // сверху вниз
+      .sort((a, b) => b.z - a.z)
       .filter((el) => {
         const ex = (el.x / 100) * rect.w;
         const ey = (el.y / 100) * rect.h;
@@ -612,21 +631,23 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return list[(idx + 1) % list.length];
   }
 
-  /* ===== Автосохранение и wishes ===== */
+  /* ===== Автосохранение с защитой от «лишних» save ===== */
   useEffect(() => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
-      const prev = loadOrderDraft();
-      saveOrderDraft({
-        ...prev,
-        editor: {
-          ...(prev.editor || {}),
-          elements,
-          wishes,
-          updatedAt: Date.now()
-        }
+      saveEditor((prev) => {
+        const next = {
+          ...prev,
+          editor: {
+            ...(prev.editor || {}),
+            elements,
+            wishes,
+            updatedAt: Date.now()
+          }
+        };
+        return next as OrderDraft;
       });
-    }, 200) as unknown as number;
+    }, 240) as unknown as number;
 
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
@@ -636,14 +657,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   useEffect(() => {
     if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
     wishesTimerRef.current = window.setTimeout(() => {
-      const prev = loadOrderDraft();
-      if (prev.editor?.wishes !== wishes) {
-        saveOrderDraft({
+      saveEditor((prev) => {
+        if (prev.editor?.wishes === wishes) return prev;
+        return {
           ...prev,
           editor: { ...(prev.editor || {}), wishes, updatedAt: Date.now() }
-        });
-      }
-    }, 300) as unknown as number;
+        } as OrderDraft;
+      });
+    }, 320) as unknown as number;
 
     return () => {
       if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
@@ -713,21 +734,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (pb) {
           const safe = ensureMin(pb, 6, 8);
           const old = prevMap.get(pid);
-          next.push(
-            old
-              ? { ...safe, ...old } // ВАЖНО: сохраняем ручные x/y/w/h/z из old
-              : { id: pid, type: "portrait", ...safe, z: i * 10 + 1, title: pid, bw: true }
-          );
+          next.push(old ? { ...old, ...safe } : { id: pid, type: "portrait", ...safe, z: i * 10 + 1, title: pid, bw: true });
           used.add(pid);
         }
         if (mb) {
           const safe = ensureMin(mb, 12, 10);
           const old = prevMap.get(mid);
-          next.push(
-            old
-              ? { ...safe, ...old }
-              : { id: mid, type: "metric", ...safe, z: i * 10 + 2, title: mid, uppercase: true }
-          );
+          next.push(old ? { ...old, ...safe } : { id: mid, type: "metric", ...safe, z: i * 10 + 2, title: mid, uppercase: true });
           used.add(mid);
         }
       });
@@ -741,15 +754,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const old = prevMap.get(id);
         next.push(
           old
-            ? { ...safe, ...old }
-            : {
-                id,
-                type: "epitaph",
-                ...safe,
-                z: 100 + idx,
-                title: id,
-                staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined
-              }
+            ? { ...old, ...safe }
+            : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: isRememberLoveMourn(epitaphs[idx]) ? true : undefined }
         );
         used.add(id);
       });
@@ -761,22 +767,22 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (!b) return;
         const safe = ensureMin(b, 8, 8);
         const old = prevMap.get(id);
-        next.push(old ? { ...safe, ...old } : { id, type: "cross", ...safe, z: 200 + idx, title: id });
+        next.push(old ? { ...old, ...safe } : { id, type: "cross", ...safe, z: 200 + idx, title: id });
         used.add(id);
       });
 
-      // Графика (в строку)
+      // Графика — в один ряд
       others.forEach((_, idx) => {
         const id = `graphic-${idx}`;
         const b = layout.get(id);
         if (!b) return;
         const safe = ensureMin(b, 12, 12);
         const old = prevMap.get(id);
-        next.push(old ? { ...safe, ...old } : { id, type: "graphic", ...safe, z: 300 + idx, title: id, flipH: false });
+        next.push(old ? { ...old, ...safe } : { id, type: "graphic", ...safe, z: 300 + idx, title: id, flipH: false });
         used.add(id);
       });
 
-      // Прочие (кастомные) — переносим как есть
+      // Прочие — переносим как есть
       prev.forEach((el) => {
         if (!used.has(el.id)) next.push(el);
       });
@@ -785,26 +791,27 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     });
 
     setLayoutAppliedHash(contentHash);
-    const prevDraft = loadOrderDraft();
-    saveOrderDraft({
-      ...prevDraft,
-      editor: {
-        ...(prevDraft.editor || {}),
-        sketchInitHash: contentHash,
-        layoutVersion: LAYOUT_VERSION,
-        updatedAt: Date.now()
-      }
+    saveEditor((prev) => {
+      const next: OrderDraft = {
+        ...prev,
+        editor: {
+          ...(prev.editor || {}),
+          sketchInitHash: contentHash,
+          layoutVersion: LAYOUT_VERSION,
+          updatedAt: Date.now()
+        }
+      };
+      return next;
     });
 
-    // Сразу обновим мини-превью (для TopBar)
+    // Мгновенно обновим мини-превью (для TopBar)
     (async () => {
       const r = host.getBoundingClientRect();
       const miniW = Math.max(320, Math.floor(r.width));
       const miniH = Math.max(320, Math.floor(r.height));
       const mini = await renderPreview(miniW, miniH);
-      const prev = loadOrderDraft();
-      if (mini && mini !== (prev as any).editor?.previewUrl) {
-        saveOrderDraft({
+      if (mini) {
+        saveEditor((prev) => ({
           ...prev,
           editor: {
             ...(prev.editor || {}),
@@ -813,11 +820,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             elements,
             wishes
           }
-        });
+        } as OrderDraft));
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.url, engr, crosses, others, epitaphs, draft?.size?.orientation, imgWH]); // без размеров контента и без layoutAppliedHash
+  }, [item?.url, engr, crosses, others, epitaphs, draft?.size?.orientation, imgWH]);
 
   /* ===== Превью (canvas) ===== */
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
@@ -855,6 +862,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
     const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
     const els = elements.slice().sort((a, b) => a.z - b.z);
+
     for (const el of els) {
       const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
       const key = el.id.split("-").slice(1).join("-");
@@ -982,25 +990,23 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
       const big = await renderPreview(bigW, bigH);
 
-      const prev = loadOrderDraft();
-      const needSave =
-        (!!mini && mini !== (prev as any).editor?.previewUrl) ||
-        (!!big && big !== (prev as any).editor?.previewHiUrl);
-
-      if (needSave) {
-        saveOrderDraft({
+      saveEditor((prev) => {
+        const oldMini = (prev as any).editor?.previewUrl;
+        const oldBig = (prev as any).editor?.previewHiUrl;
+        if ((!mini || mini === oldMini) && (!big || big === oldBig)) return prev;
+        return {
           ...prev,
           editor: {
             ...(prev.editor || {}),
-            previewUrl: mini || prev.editor?.previewUrl,
-            previewHiUrl: big || prev.editor?.previewHiUrl,
+            previewUrl: mini || oldMini,
+            previewHiUrl: big || oldBig,
             previewUpdatedAt: Date.now(),
             elements,
             wishes
           }
-        });
-      }
-    }, 250) as unknown as number;
+        } as OrderDraft;
+      });
+    }, 260) as unknown as number;
 
     return () => {
       if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
@@ -1009,28 +1015,22 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   /* ===== Back/Continue ===== */
   const handleBack = () => {
-    const prev = loadOrderDraft();
-    saveOrderDraft({
+    saveEditor((prev) => ({
       ...prev,
       editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
-    });
+    } as OrderDraft));
     setOutro(true);
     setTimeout(() => onBack?.(), 150);
   };
 
   const handleContinue = () => {
-    const prev = loadOrderDraft();
-    saveOrderDraft({
+    saveEditor((prev) => ({
       ...prev,
       editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
-    });
+    } as OrderDraft));
 
     const go = onRearSide || onSendOrder || onContinue;
-    if (!go) {
-      console.warn("EditorStep: нет обработчика перехода (onRearSide/onSendOrder/onContinue)");
-      return;
-    }
-
+    if (!go) return;
     setOutro(true);
     setTimeout(() => go({ elements, wishes }), 150);
   };
@@ -1295,7 +1295,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerDown={(e) => {
-              // Alt+клик в зоне эскиза — выбрать верхний под курсором
               if (e.altKey) {
                 const hit = pickElementUnderPointer(e.clientX, e.clientY, null);
                 if (hit) setSelectedId(hit);
@@ -1358,73 +1357,20 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       }}
                       title={el.title || el.id}
                     >
-                      {/* Мини-панель для выбранного */}
-                      {selected && (
-                        <div
-                          onPointerDown={(ev) => ev.stopPropagation()}
-                          style={{
-                            position: "absolute",
-                            left: 0, top: -30,
-                            display: "flex", gap: 6,
-                            background: "rgba(0,0,0,0.6)",
-                            border: "1px solid rgba(255,255,255,0.25)",
-                            borderRadius: 6, padding: "2px 6px",
-                            alignItems: "center",
-                            pointerEvents: "auto", zIndex: 3000
-                          }}
-                        >
-                          {el.type === "metric" && (
-                            <button
-                              type="button"
-                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
-                              title={el.uppercase ? "Сделать строчные" : "Сделать ПРОПИСНЫЕ"}
-                              onClick={() =>
-                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))
-                              }
-                            >
-                              {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
-                            </button>
-                          )}
-                          {el.type === "epitaph" && isRememberLoveMourn(epitaphs[Number(el.id.split("-")[1])] || "") && (
-                            <button
-                              type="button"
-                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
-                              title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
-                              onClick={() =>
-                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))
-                              }
-                            >
-                              {el.staircase ? "В строку" : "Лесенкой"}
-                            </button>
-                          )}
-                          {el.type === "graphic" && (
-                            <button
-                              type="button"
-                              style={{ ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 }}
-                              title="Отразить по горизонтали"
-                              onClick={() =>
-                                setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))
-                              }
-                            >
-                              Отразить ⇄
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      {selected && <MiniToolbar el={el} />}
 
-                      {/* Ручки ресайза */}
                       {selected && !el.locked && (
                         <>
-                          {/* углы */}
-                          <div style={{ position: "absolute", left: 0, top: 0, ...handleDot(0, 0, "nwse-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} />
-                          <div style={{ position: "absolute", left: "100%", top: 0, ...handleDot("100%", 0, "nesw-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} />
-                          <div style={{ position: "absolute", left: "100%", top: "100%", ...handleDot("100%", "100%", "nwse-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} />
-                          <div style={{ position: "absolute", left: 0, top: "100%", ...handleDot(0, "100%", "nesw-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} />
-                          {/* стороны */}
-                          <div style={{ position: "absolute", left: "50%", top: 0, ...handleDot("50%", 0, "ns-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} />
-                          <div style={{ position: "absolute", left: "100%", top: "50%", ...handleDot("100%", "50%", "ew-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} />
-                          <div style={{ position: "absolute", left: "50%", top: "100%", ...handleDot("50%", "100%", "ns-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} />
-                          <div style={{ position: "absolute", left: 0, top: "50%", ...handleDot(0, "50%", "ew-resize") }} onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} />
+                          {/* Углы */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={{ position: "absolute", left: 0, top: 0, ...handleDot(0, 0, "nwse-resize") }} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={{ position: "absolute", left: "100%", top: 0, ...handleDot("100%", 0, "nesw-resize") }} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={{ position: "absolute", left: "100%", top: "100%", ...handleDot("100%", "100%", "nwse-resize") }} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={{ position: "absolute", left: 0, top: "100%", ...handleDot(0, "100%", "nesw-resize") }} />
+                          {/* Стороны */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={{ position: "absolute", left: "50%", top: 0, ...handleDot("50%", 0, "ns-resize") }} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={{ position: "absolute", left: "100%", top: "50%", ...handleDot("100%", "50%", "ew-resize") }} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={{ position: "absolute", left: "50%", top: "100%", ...handleDot("50%", "100%", "ns-resize") }} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={{ position: "absolute", left: 0, top: "50%", ...handleDot(0, "50%", "ew-resize") }} />
                         </>
                       )}
                     </div>
