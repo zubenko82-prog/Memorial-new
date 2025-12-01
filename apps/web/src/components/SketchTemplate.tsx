@@ -1,18 +1,19 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Изменения по запросу:
-// - На вертикальных шаблонах графика привязана к низу (с отступом), уменьшена (~12% высоты),
-//   эпитафии строго над графикой и масштабируются, чтобы поместиться между метрикой и графикой.
-// - Метрика на вертикальных шаблонах немного крупнее.
-// Стабильность:
-// - Без бесконечных ререндеров: измерения (metricBottomPx, metricScaleH1) по сигнатурам,
-//   setState — только при реальных изменениях.
-// - Выравнивание всегда по центру (без align из конфигураций).
-// - Графика — в одну строку; ширина элемента рассчитывается так, чтобы вся строка влезала в контейнер,
-//   высота — не больше контейнера.
+// Что изменено:
+// - Эпитафии «привязаны» к графике: размещаем строго над графикой с отступом (gap). Эпитафия масштабируется,
+//   чтобы уместиться между метрикой и графикой, без выхода за пределы поля.
+// - Графика всегда прижата к низу (у вертикальных и горизонтальных шаблонов), высота — адаптивная
+//   (по умолчанию ~18% H для горизонтальных, ~12% H для вертикальных). Если места мало — графика ужимается.
+// - В шаблоне с 2 людьми (и горизонтальном, и вертикальном) метрика уменьшена (уменьшен кегль через sizeMult=0.9).
 //
-// Порядок блоков: Метрика → Эпитафия → Графика (у нижнего края).
+// Стабильность:
+// - Измерения (metricBottomPx, metricScaleH1) по сигнатурам; setState только при реальном изменении.
+// - Выравнивание — центр, без align из конфигураций.
+// - Графика — в одну строку; ширина каждого элемента рассчитывается так, чтобы вся строка влезала, высота ограничена.
+//
+// Порядок блоков: Метрика → Эпитафия (над графикой) → Графика (прижата к низу).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -139,7 +140,7 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  // Метрика: три строки по центру, третья строка nowrap
+  // Метрика (общая версия + увеличенная/уменьшенная)
   function MetricThreeLines({ lines }: { lines: string[] }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
@@ -166,7 +167,6 @@ export default function SketchTemplate({
     );
   }
 
-  // Метрика c возможным увеличением шрифта (для вертикальных шаблонов)
   function PersonMetricText({ lines, sizeMult = 1 }: { lines: string[]; sizeMult?: number }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
@@ -403,8 +403,9 @@ export default function SketchTemplate({
                 {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
               </div>
             </div>
+            {/* Уменьшенная метрика для двух людей */}
             <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%" }}>
-              <PersonMetricText lines={p.lines} />
+              <PersonMetricText lines={p.lines} sizeMult={0.9} />
             </div>
           </div>
         ))}
@@ -503,8 +504,9 @@ export default function SketchTemplate({
             </div>
 
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+              {/* Уменьшенная метрика для двух людей */}
               <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "92%" }}>
-                <PersonMetricText lines={p.lines} sizeMult={1.12} />
+                <PersonMetricText lines={p.lines} sizeMult={0.9} />
               </div>
             </div>
           </div>
@@ -543,7 +545,7 @@ export default function SketchTemplate({
 
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
               <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "92%" }}>
-                <PersonMetricText lines={p.lines} sizeMult={1.12} />
+                <PersonMetricText lines={p.lines} />
               </div>
             </div>
           </div>
@@ -566,58 +568,43 @@ export default function SketchTemplate({
   };
 
   /* ===== Эпитафия + графика =====
-     Вертикальные шаблоны: графика — всегда у самого низа (с отступом), эпитафия — над графикой и масштабируется.
-     Горизонтальные: как раньше (адаптивное распределение). */
+     Унифицировано для всех шаблонов:
+     - Графика всегда прижата к низу (с bottomPad); желаемая высота: horiz ~18%H, vert ~12%H (ужимается при нехватке).
+     - Эпитафии размещаем над графикой с отступом (gap), масштабируем, чтобы поместиться между метрикой и графикой. */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
     const gap = Math.round(0.015 * H);
     const bottomPadPx = Math.max(8, Math.round(0.02 * H));
     const epW = Math.round(W * 0.88);
-    const epTopStart = Math.max(metricBottomPx + gap, 0);
 
-    // Натуральная высота эпитафии (без масштаба)
+    // Натуральная высота эпитафии
     const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
 
-    // Горизонтальные — прежняя логика; Вертикальные — графика внизу фикс и меньше
-    const desiredGfxH = !isVertical ? Math.round(0.18 * H) : Math.round(0.12 * H);
+    // Желаемая высота графики (ужмем при нехватке)
+    const desiredGfxH = isVertical ? Math.round(0.12 * H) : Math.round(0.18 * H);
 
-    let gfxH = 0;
-    let gfxTop = 0;
-    let finalEpitaphScale = 1;
+    // Графика прижата к низу
+    // Минимум места для эпитафии — 16px
+    const minEpPx = 16;
 
-    if (others.length > 0) {
-      if (isVertical) {
-        // Привязка графики к низу с фиксированной высотой (чуть меньше)
-        // Если не хватает места — ужмём графику, но оставим минимум под эпитафию (16px + gap)
-        const minEpPx = 16;
-        const maxGfxHByBottom = Math.max(0, H - bottomPadPx - (epTopStart + gap + minEpPx));
-        gfxH = Math.max(0, Math.min(desiredGfxH, maxGfxHByBottom));
-        gfxTop = H - bottomPadPx - gfxH;
+    // Весь доступный «контент» для эпитафии+графики: от низа метрики до низа изображения
+    const topAfterMetric = Math.max(metricBottomPx + gap, 0);
+    const availableContent = Math.max(0, H - bottomPadPx - topAfterMetric);
 
-        const availableForEpitaph = Math.max(0, gfxTop - gap - epTopStart);
-        finalEpitaphScale = Math.min(1, availableForEpitaph / naturalEp);
-      } else {
-        // Горизонтальные — совместное сжатие
-        const available = Math.max(0, H - bottomPadPx - epTopStart);
-        const naturalEpH = naturalEp;
-        if (naturalEpH + desiredGfxH <= available) {
-          gfxH = desiredGfxH;
-          gfxTop = H - bottomPadPx - gfxH;
-          finalEpitaphScale = 1;
-        } else {
-          const k = available / (naturalEpH + desiredGfxH);
-          gfxH = Math.max(0, Math.floor(desiredGfxH * k));
-          gfxTop = H - bottomPadPx - gfxH;
-          finalEpitaphScale = Math.min(1, (gfxTop - gap - epTopStart) / naturalEpH);
-        }
-      }
-    } else {
-      // Нет графики — вся нижняя часть под эпитафию
-      gfxH = 0;
-      gfxTop = H - bottomPadPx;
-      finalEpitaphScale = Math.min(1, (gfxTop - gap - epTopStart) / naturalEp);
-    }
+    // Высота графики — не больше желаемой и не больше available - (minEpPx + gap)
+    let gfxH = Math.max(0, Math.min(desiredGfxH, availableContent - (minEpPx + gap)));
+    const gfxTop = H - bottomPadPx - gfxH;
+
+    // Сколько осталось под эпитафии
+    const availableForEpitaph = Math.max(0, gfxTop - gap - topAfterMetric);
+
+    // Масштаб эпитафии
+    const finalEpitaphScale = naturalEp > 0 ? Math.min(1, availableForEpitaph / naturalEp) : 1;
+
+    // Эпитафия привязана к графике: топ = gfxTop - gap - scaledEpH
+    const scaledEpH = Math.floor(naturalEp * finalEpitaphScale);
+    const epTop = gfxTop - gap - scaledEpH;
 
     // Для раскладки графики в строку
     const gfxWrapW = Math.floor(W * 0.9);
@@ -632,12 +619,12 @@ export default function SketchTemplate({
 
     return (
       <>
-        {/* Эпитафия — над графикой, масштаб под доступное место */}
+        {/* Эпитафии — строго над графикой с отступом (масштабируем под доступное пространство) */}
         {Array.isArray(epitaphs) && epitaphs.length > 0 && finalEpitaphScale > 0 && (
           <div
             style={{
               position: "absolute",
-              top: epTopStart,
+              top: epTop,
               left: "50%",
               transform: `translateX(-50%) scale(${finalEpitaphScale})`,
               transformOrigin: "top center",
@@ -670,7 +657,7 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Графика — у самого низа (на вертикальных), либо адаптивная высота (горизонтальные) */}
+        {/* Графика — у самого низа */}
         {others.length > 0 && gfxH > 0 && (
           <div
             style={{
@@ -778,7 +765,7 @@ export default function SketchTemplate({
           src={item?.url || ""}
           alt={item?.name || "Изделие"}
           style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-          draggable={false}
+        draggable={false}
           onLoad={() => requestAnimationFrame(recalc)}
         />
 
