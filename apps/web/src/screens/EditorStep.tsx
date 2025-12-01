@@ -361,7 +361,8 @@ function computeSketchLayout({
       const px = Math.round((stageW - pw) / 2);
 
       const mw = Math.round(contentWidth * 0.66);
-      const mh = Math.max(22, Math.round(0s: string) => s;
+const mh = Math.max(22, Math.round(0.12 * stageH));
+
         ctx.save();
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center";
