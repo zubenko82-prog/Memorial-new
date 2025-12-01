@@ -985,42 +985,46 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   // Дебаунс-генерация превью
   useEffect(() => {
+  if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+
+  previewTimerRef.current = window.setTimeout(async () => {
+    const wrap = wrapperRef.current;
+    if (!wrap) return;
+
+    const r = wrap.getBoundingClientRect();
+    const miniW = Math.max(320, Math.floor(r.width));
+    const miniH = Math.max(320, Math.floor(r.height));
+    const mini = await renderPreview(miniW, miniH);
+
+    const maxSide = 1600;
+    const ratio = r.width / (r.height || 1);
+    const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+    const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+    const big = await renderPreview(bigW, bigH);
+
+    saveEditor((prev) => {
+      const oldMini = (prev as any).editor?.previewUrl;
+      const oldBig = (prev as any).editor?.previewHiUrl;
+      if ((!mini || mini === oldMini) && (!big || big === oldBig)) return prev;
+      return {
+        ...prev,
+        editor: {
+          ...(prev.editor || {}),
+          previewUrl: mini || oldMini,
+          previewHiUrl: big || oldBig,
+          previewUpdatedAt: Date.now(),
+          elements,
+          wishes
+        }
+      } as OrderDraft;
+    });
+  }, 260) as unknown as number; // ВАЖНО: без лишней закрывающей скобки
+
+  return () => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
-    previewTimerRef.current = window.setTimeout(async () => {
-      const wrap = wrapperRef.current;
-      if (!wrap) return;
-      const r = wrap.getBoundingClientRect();
-      const miniW = Math.max(320, Math.floor(r.width));
-      const miniH = Math.max(320, Math.floor(r.height));
-      const mini = await renderPreview(miniW, miniH);
+  };
+}, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, wishes, layoutAppliedHash]);
 
-      const maxSide = 1600;
-      const ratio = r.width / (r.height || 1);
-      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
-      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
-      const big = await renderPreview(bigW, bigH);
-
-      saveEditor((prev) => {
-        const oldMini = (prev as any).editor?.previewUrl;
-        const oldBig = (prev as any).editor?.previewHiUrl;
-        if ((!mini || mini === oldMini) && (!big || big === oldBig)) return prev;
-        return {
-          ...prev,
-          editor: {
-            ...(prev.editor || {}),
-            previewUrl: mini || oldMini,
-            previewHiUrl: big || oldBig,
-            previewUpdatedAt: Date.now(),
-            elements,
-            wishes
-          }
-        } as OrderDraft;
-      });
-    }, 260) as unknown as number);
-    return () => {
-      if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
-    };
-  }, [elements, item?.url, peopleBlocks, crosses, others, epitaphs, wishes, layoutAppliedHash]);
 
   /* ===== Навигация ===== */
   const handleBack = () => {
