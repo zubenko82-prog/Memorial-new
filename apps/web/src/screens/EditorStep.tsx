@@ -508,14 +508,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     window.setTimeout(() => (isSavingRef.current = false), ms);
   };
   const saveEditor = (updater: (prev: OrderDraft) => OrderDraft) => {
-    const prev = loadOrderDraft();
-    const next = updater(prev);
-    const prevJson = JSON.stringify(prev.editor || {});
-    theconst nextJson = JSON.stringify(next.editor || {});
-    if (prevJson === nextJson) return;
-    touchSaving();
-    saveOrderDraft(next);
-  };
+  const prev = loadOrderDraft();
+  const next = updater(prev);
+  const prevJson = JSON.stringify(prev.editor || {});
+  const nextJson = JSON.stringify(next.editor || {}); // исправлено
+  if (prevJson === nextJson) return;
+  touchSaving();
+  saveOrderDraft(next);
+};
 
   // Live reload — только при реальных изменениях
   const lastDraftSigRef = useRef<string>("");
