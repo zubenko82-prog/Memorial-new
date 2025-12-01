@@ -1,16 +1,13 @@
 // src/screens/EditorStep.tsx
 // Редактор элементов с надёжной инициализацией по правилам шаблона (без чтения DOM и без align).
 //
-// Что сделано:
-// - Портрет строго 3:4 (ширина:высота = 3:4), компактнее по высоте, не «выталкивает» низ.
-// - «Помним, любим, скорбим…» по умолчанию В СТРОКУ (лесенка только по переключателю).
-// - Фреймы «плотно» вокруг контента: метрика и эпитафия — ниже и уже без лишнего воздуха.
-// - Графика всегда прижата к нижнему краю; эпитафии строго над графикой с зазором и гарантированным минимумом высоты.
-// - Исключены наложения фреймов (anti-overlap): после раскладки выполняется разводка пересечений, чтобы не мешать управлению.
-// - DnD/resize, Alt+клик для выбора нижних элементов, автосейв и превью.
-// - Исправлена «Maximum update depth exceeded»:
-//   • Live-reload драфта не вызывает setDraft без фактических изменений (сигнатура драфта в ref).
-//   • Эффект генерации превью ставится только при изменении входов (сигнатура входов), не сохраняем превью, если оно не менялось.
+// Важно:
+// - Портрет строго 3:4 (ширина:высота), компактнее по высоте.
+// - «Помним, любим, скорбим…» по умолчанию в строку (лесенка — только если включить вручную).
+// - «Плотные» рамки: метрика и эпитафия — уже и ниже, без лишних пустот.
+// - Графика прижата к низу; эпитафии строго над графикой с зазором и гарантированным минимумом высоты.
+// - Исключены наложения фреймов: после раскладки выполняется разводка пересечений (anti-overlap).
+// - Исправлена «Maximum update depth exceeded»: live-reload по сигнатуре драфта, превью — только при реальных изменениях входов.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -120,10 +117,10 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Версионирование раскладки (для реинициализации при изменениях логики) ===== */
+/* ===== Версионирование раскладки ===== */
 const LAYOUT_VERSION = "2025-01-EditorStep-v11";
 
-/* ===== Сигнатуры контента (без размеров контейнера) ===== */
+/* ===== Сигнатуры контента ===== */
 function peopleSignature(engr: any): string {
   if (Array.isArray(engr?.persons) && engr.persons.length) {
     return engr.persons
@@ -143,9 +140,7 @@ function peopleSignature(engr: any): string {
   return `legacy::${legacy.join("|")}::${photo ? "1" : "0"}`;
 }
 function graphicsSignature(items: any[]): string {
-  return items
-    .map((g, i) => `${i}:${g.id || g.url || g.name || ""}:${g.catSlug || g.catName || ""}`)
-    .join("|");
+  return items.map((g, i) => `${i}:${g.id || g.url || g.name || ""}:${g.catSlug || g.catName || ""}`).join("|");
 }
 
 /* =========================================================================================
@@ -253,8 +248,8 @@ function computeSketchLayout({
       }
     }
 
-    m.set(`portrait-${people[0]?.id}`, toBox(px, py, pw, ph));
-    m.set(`metric-${people[0]?.id}`, toBox(Math.round((stageW - mw) / 2), py + ph + gapY, mw, mh));
+    m.set(`portrait-${people[0]?.id || "p0"}`, toBox(px, py, pw, ph));
+    m.set(`metric-${people[0]?.id || "p0"}`, toBox(Math.round((stageW - mw) / 2), py + ph + gapY, mw, mh));
     placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.86)) / 2), epTop, Math.round(contentWidth * 0.86), epTotal);
     placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
 
@@ -336,33 +331,259 @@ function computeSketchLayout({
 
     const epTop = metricsBottom + gapY;
     let gfxH = Math.max(0, Math.min(desiredGfxH, stageH - bottomPad - (epTop + minEpTotal + gapY)));
-    let gfxTop = stageH - bottomPad - gfxH;
-    let epTotal = gfxTop - gapY - epTop;
-    if (epTotal < minEpTotal) {
-      const dec = Math.min(minEpTotal - epTotal, gfxH);
-      gfxH -= dec;
-      gfxTop = stageH - bottomPad - gfxH;
-      epTotal = gfxTop - gapY - epTop;
+    let gfxTop = stageH - bottomPad - gfxH * rect.h;
+        return px >= ex && px <= ex + ew && py >= ey && py <= ey + eh;
+      })
+      .map((el) => el.id);
+
+    if (list.length === 0) return null;
+    if (!currentTopId || !list.includes(currentTopId)) return list[0];
+    const idx = list.indexOf(currentTopId);
+    return list[(idx + 1) % list.length];
+  }
+
+  /* ===== Автосохранение ===== */
+  useEffect(() => {
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveEditor((prev) => {
+        const next = {
+          ...prev,
+          editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+        };
+        return next as OrderDraft;
+      });
+    }, 240) as unknown as number;
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [elements, wishes]);
+
+  useEffect(() => {
+    if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
+    wishesTimerRef.current = window.setTimeout(() => {
+      saveEditor((prev) => {
+        if (prev.editor?.wishes === wishes) return prev;
+        return { ...prev, editor: { ...(prev.editor || {}), wishes, updatedAt: Date.now() } } as OrderDraft;
+      });
+    }, 320) as unknown as number;
+    return () => {
+      if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
+    };
+  }, [wishes]);
+
+  /* ===== Инициализация — пересчёт раскладки только при изменении контента ===== */
+  const [layoutAppliedHash, setLayoutAppliedHash] = useState<string | null>(
+    () => (draft as any)?.editor?.sketchInitHash || null
+  );
+
+  useEffect(() => {
+    const host = wrapperRef.current;
+    if (!host) return;
+
+    const orientation: Orientation =
+      (draft.size?.orientation as Orientation | undefined) ??
+      ((draft as any).orientation as Orientation | undefined) ??
+      (imgWH.w > imgWH.h ? "horizontal" : "vertical");
+
+    const contentHash = [
+      LAYOUT_VERSION,
+      item?.url || "",
+      orientation,
+      peopleSignature(engr),
+      epitaphs.join("||"),
+      graphicsSignature(crosses),
+      graphicsSignature(others)
+    ].join("::");
+
+    if (layoutAppliedHash === contentHash) return;
+
+    const hostRect = host.getBoundingClientRect();
+    const stageW = Math.max(1, Math.floor(hostRect.width - SKETCH_PAD * 2));
+    const stageH = Math.max(1, Math.floor(hostRect.height - SKETCH_PAD * 2));
+    if (stageW < 10 || stageH < 10) return;
+
+    const layout = computeSketchLayout({
+      stageW, stageH, orientation,
+      people: peopleBlocks,
+      crosses, graphics: others, epitaphs
+    });
+    if (layout.size === 0) return;
+
+    const ensureMin = (b: { x: number; y: number; w: number; h: number }, minW = 3, minH = 3) => ({
+      ...b, w: Math.max(b.w, minW), h: Math.max(b.h, minH)
+    });
+
+    setElements((prev) => {
+      const prevMap = new Map(prev.map((e) => [e.id, e]));
+      const used = new Set<string>();
+      const next: EditorEl[] = [];
+
+      // Люди
+      peopleBlocks.forEach((p, i) => {
+        const pid = `portrait-${p.id}`;
+        const mid = `metric-${p.id}`;
+        const pb = layout.get(pid);
+        const mb = layout.get(mid);
+        if (pb) {
+          const safe = ensureMin(pb, 6, 8);
+          const old = prevMap.get(pid);
+          next.push(old ? { ...old, ...safe } : { id: pid, type: "portrait", ...safe, z: i * 10 + 1, title: pid, bw: true });
+          used.add(pid);
+        }
+        if (mb) {
+          const safe = ensureMin(mb, 12, 10);
+          const old = prevMap.get(mid);
+          next.push(old ? { ...old, ...safe } : { id: mid, type: "metric", ...safe, z: i * 10 + 2, title: mid, uppercase: true });
+          used.add(mid);
+        }
+      });
+
+      // Эпитафии (по умолчанию — В СТРОКУ)
+      epitaphs.forEach((_, idx) => {
+        const id = `epitaph-${idx}`;
+        const b = layout.get(id);
+        if (!b) return;
+        const safe = ensureMin(b, 12, 8);
+        const old = prevMap.get(id);
+        next.push(
+          old
+            ? { ...old, ...safe, staircase: old.staircase ?? false }
+            : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: false }
+        );
+        used.add(id);
+      });
+
+      // Кресты
+      crosses.forEach((_, idx) => {
+        const id = `cross-${idx}`;
+        const b = layout.get(id);
+        if (!b) return;
+        const safe = ensureMin(b, 8, 8);
+        const old = prevMap.get(id);
+        next.push(old ? { ...old, ...safe } : { id, type: "cross", ...safe, z: 200 + idx, title: id });
+        used.add(id);
+      });
+
+      // Графика — внизу
+      others.forEach((_, idx) => {
+        const id = `graphic-${idx}`;
+        const b = layout.get(id);
+        if (!b) return;
+        const safe = ensureMin(b, 12, 12);
+        const old = prevMap.get(id);
+        next.push(old ? { ...old, ...safe } : { id, type: "graphic", ...safe, z: 300 + idx, title: id, flipH: false });
+        used.add(id);
+      });
+
+      // Остальные переносим
+      prev.forEach((el) => { if (!used.has(el.id)) next.push(el); });
+
+      return next;
+    });
+
+    setLayoutAppliedHash(contentHash);
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), sketchInitHash: contentHash, layoutVersion: LAYOUT_VERSION, updatedAt: Date.now() }
+    } as OrderDraft));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.url, engr, crosses, others, epitaphs, draft?.size?.orientation, imgWH]);
+
+  /* ===== Превью (canvas) и дебаунс без петель ===== */
+  const renderPreview = async (W: number, H: number): Promise<string | null> => {
+    if (W <= 0 || H <= 0) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "#6e6e6e");
+    grad.addColorStop(0.2, "#464545");
+    grad.addColorStop(0.4, "#424242");
+    grad.addColorStop(0.7, "#888888");
+    grad.addColorStop(1.0, "#ffffff");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    const pad = SKETCH_PAD;
+    const CX = pad, CY = pad, CW = W - pad * 2, CH = H - pad * 2;
+
+    const base = await loadImageSafe(item?.url);
+    if (base) {
+      const sr = base.width / base.height, dr = CW / CH;
+      ctx.globalAlpha = 0.35;
+      if (sr > dr) {
+        const rw = CW, rh = Math.round(CW / sr), rx = CX, ry = CY + Math.round((CH - rh) / 2);
+        ctx.drawImage(base, rx, ry, rw, rh);
+      } else {
+        const rh = CH, rw = Math.round(CH * sr), ry = CY, rx = CX + Math.round((CW - rw) / 2);
+        ctx.drawImage(base, rx, ry, rw, rh);
+      }
+      ctx.globalAlpha = 1;
     }
 
-    placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.86)) / 2), epTop, Math.round(contentWidth * 0.86), epTotal);
-    placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
+    const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
+    const els = elements.slice().sort((a, b) => a.z - b.z);
 
-    if (crosses[0]) m.set("cross-0", toBox(Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx));
-    if (crosses[1]) m.set("cross-1", toBox(Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx));
-  } else {
-    /* ===== Вертикальные ===== */
-    const topPortrait = Math.round(0.12 * stageH);
+    for (const el of els) {
+      const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
+      const key = el.id.split("-").slice(1).join("-");
 
-    if (tplKey === "one" && people[0]) {
-      // Портрет 3:4 — из ширины (узко)
-      let pw = Math.round(contentWidth * 0.42);
-      let ph = Math.round(pw * (4 / 3));
-      const px = Math.round((stageW - pw) / 2);
-
-      const mw = Math.round(contentWidth * 0.66);
-const mh = Math.max(22, Math.round(0.12 * stageH));
-
+      if (el.type === "portrait") {
+        const p = peopleBlocks.find((pp) => pp.id === key);
+        if (!p?.photo) continue;
+ ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+        ctx.filter = el.bw ? "grayscale(100%)" : "none";
+        if (sr2 > dr2) {
+          const hh = r.h, ww = Math.round(hh * sr2), xx = Math.round(r.x + (r.w - ww) / 2), yy = r.y;
+          ctx.drawImage(im, xx, yy, ww, hh);
+        } else {
+          const ww = r.w, hh = Math.round(ww / sr2), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
+          ctx.drawImage(im, xx, yy, ww, hh);
+        }
+        ctx.restore();
+        ctx.filter = "none";
+      } else if (el.type === "graphic") {
+        const idx = Number(key);
+        const g = Number.isFinite(idx) ? others[idx] : undefined;
+        if (!g?.url) continue;
+        const im = await loadImageSafe(g.url);
+        if (!im) continue;
+        ctx.save();
+        if (el.flipH) {
+          ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
+          ctx.scale(-1, 1);
+          ctx.translate(-(r.x + r.w / 2), -(r.y + r.h / 2));
+        }
+        const sr2 = im.width / im.height, dr2 = r.w / r.h;
+        if (sr2 > dr2) {
+          const ww = r.w, hh = Math.round(ww / sr2), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
+          ctx.drawImage(im, xx, yy, ww, hh);
+        } else {
+          const hh = r.h, ww = Math.round(hh * sr2), xx = r.x + Math.round((r.w - ww) / 2), yy = r.y;
+          ctx.drawImage(im, xx, yy, ww, hh);
+        }
+        ctx.restore();
+      } else if (el.type === "cross") {
+        const idx = Number(key);
+        const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+        if (!c?.url) continue;
+        const im = await loadImageSafe(c.url);
+        if (!im) continue;
+        const sr2 = im.width / im.height, dr2 = r.w / r.h;
+        if (sr2 > dr2) {
+          const ww = r.w, hh = Math.round(ww / sr2), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
+          ctx.drawImage(im, xx, yy, ww, hh);
+        } else {
+          const hh = r.h, ww = Math.round(hh * sr2), xx = r.x + Math.round((r.w - ww) / 2), yy = r.y;
+          ctx.drawImage(im, xx, yy, ww, hh);
+        }
+      } else if (el.type === "metric") {
+        const p = peopleBlocks.find((pp) => pp.id === key);
+        const lines = (p?.lines || []).filter(Boolean);
+        const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
         ctx.save();
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center";
@@ -480,15 +701,241 @@ const mh = Math.max(22, Math.round(0.12 * stageH));
   const handleContinue = () => {
     saveEditor((prev) => ({
       ...prev,
-      editor: { ...(prev.editor || {}), elements, wishes, updatedAt, margin: "12px 0" }}>
-          <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>Пожелания по эскизу</label>
-          <textarea
-            id="wishes"
-            value={wishes}
-            onChange={(e) => setWishes(e.target.value)}
-            rows={4}
-            placeholder="Например: ещё уменьшить портрет, метрику сузить, эпитафию сделать лесенкой…"
-            style={{ width: "100%", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(0,0,0,0.35)", color: "#fff", padding: 10, resize: "vertical", outline: "none", boxSizing: "border-box" }}
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft));
+    const go = onRearSide || onSendOrder || onContinue;
+    if (!go) return;
+    setOutro(true);
+    setTimeout(() => go({ elements, wishes }), 150);
+  };
+
+  /* ===== Рамки и мини‑панель ===== */
+  const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
+    position: "absolute",
+    left, top,
+    width: 10, height: 10,
+    background: "#fff", border: "1px solid #000",
+    borderRadius: 2, transform: "translate(-50%, -50%)",
+    cursor
+  });
+
+  const MiniToolbar = ({ el }: { el: EditorEl }) => {
+    const key = el.id.split("-").slice(1).join("-");
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 0.6)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6, padding: "2px 6px",
+          alignItems: "center", pointerEvents: "auto", zIndex: 3000
+        }}
+      >
+        {isMetric && (
+          <button
+            type="button"
+            style={btn}
+            title={el.uppercase ? "Сделать строчные" : "Сделать ПРОПИСНЫЕ"}
+            onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))}
+          >
+            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+          </button>
+        )}
+        {isEpitaph && showStair && (
+          <button
+            type="button"
+            style={btn}
+            title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
+            onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))}
+          >
+            {el.staircase ? "В строку" : "Лесенкой"}
+          </button>
+        )}
+        {isGraphic && (
+          <button
+            type="button"
+            style={btn}
+            title="Отразить по горизонтали"
+            onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))}
+          >
+            Отразить ⇄
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const ContentOverlay = () => {
+    const { h: ch } = (function () {
+      const r = wrapperRef.current?.getBoundingClientRect();
+      if (!r) return { h: 1 };
+      return { h: Math.max(1, r.height - SKETCH_PAD * 2) };
+    })();
+
+    return (
+      <>
+        {elements
+          .slice()
+          .sort((a, b) => a.z - b.z)
+          .map((el) => {
+            const key = el.id.split("-").slice(1).join("-");
+            let content: React.ReactNode = null;
+
+            if (el.type === "portrait") {
+              const p = peopleBlocks.find((pp) => pp.id === key);
+              const url = p?.photo || "";
+              const filt = el.bw ? "grayscale(100%)" : "none";
+              content = <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block", userSelect: "none", pointerEvents: "none" }} draggable={false} />;
+            } else if (el.type === "metric") {
+              const p = peopleBlocks.find((pp) => pp.id === key);
+              const lines = (p?.lines || []).filter(Boolean);
+              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+              const boxHpx = (el.h / 100) * ch;
+              const f1 = Math.max(10, Math.round(boxHpx * 0.28));
+              const f2 = Math.max(10, Math.round(boxHpx * 0.24));
+              const f3 = Math.max(10, Math.round(boxHpx * 0.20));
+              content = (
+                <div style={{ width: "100%", height: "100%", color: "#fff", display: "grid", placeItems: "center", textAlign: "center", fontFamily: `"Century Schoolbook","Times New Roman",serif`, fontStyle: el.italic ? "italic" : "normal", lineHeight: 1.12, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                  <div style={{ display: "grid", gap: 2, width: "100%" }}>
+                    {lines[0] && <div style={{ fontWeight: 700, fontSize: f1 }}>{tf(lines[0])}</div>}
+                    {lines[1] && <div style={{ fontWeight: 600, fontSize: f2 }}>{tf(lines[1])}</div>}
+                    {lines[2] && <div style={{ fontWeight: 400, fontSize: f3, opacity: 0.95 }}>{tf(lines[2])}</div>}
+                  </div>
+                </div>
+              );
+            } else if (el.type === "epitaph") {
+              const idx = Number(key);
+              const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+              const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const boxHpx = (el.h / 100) * ch;
+              const f = Math.max(10, Math.round(boxHpx * 0.34));
+
+              if (el.staircase) {
+                const { top, mid, bot } = splitRememberPreserve(txt);
+                content = (
+                  <div style={{ position: "relative", width: "100%", height: "100%", color: "#fff", fontFamily: `"Century Schoolbook","Times New Roman",serif`, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ position: "absolute", top: 0, left: 4, fontWeight: 600, fontSize: f }}>{top}</div>
+                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontWeight: 600, fontSize: f }}>{mid}</div>
+                    <div style={{ position: "absolute", right: 4, bottom: 0, fontWeight: 600, fontSize: f }}>{bot}</div>
+                  </div>
+                );
+              } else {
+                content = (
+                  <div style={{ width: "100%", height: "100%", color: "#fff", display: "grid", placeItems: "center", textAlign: "center", fontFamily: `"Century Schoolbook","Times New Roman",serif`, fontStyle: el.italic ? "italic" : "normal", lineHeight: 1.2, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ fontWeight: 600, fontSize: f, padding: "0 2px", whiteSpace: "pre-wrap" }}>{txt}</div>
+                  </div>
+                );
+              }
+            } else if (el.type === "cross") {
+              const idx = Number(key);
+              const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+              if (c?.url) content = <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none", pointerEvents: "none", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} />;
+            } else if (el.type === "graphic") {
+              const idx = Number(key);
+              const g = Number.isFinite(idx) ? others[idx] : undefined;
+              if (g?.url) {
+                const tr = el.flipH ? "scaleX(-1)" : "none";
+                content = <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none", pointerEvents: "none", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} />;
+              }
+            }
+
+            return (
+              <div
+                key={`content-${el.id}`}
+                style={{
+                  position: "absolute",
+                  left: `${el.x}%`, top: `${el.y}%`,
+                  width: `${el.w}%`, height: `${el.h}%`,
+                  zIndex: el.z, pointerEvents: "none"
+                }}
+              >
+                {content}
+              </div>
+            );
+          })}
+      </>
+    );
+  };
+
+  const MAX_W = 600;
+
+  return (
+    <div
+      style={{
+        color: "#fff",
+        padding: 12,
+        opacity: outro ? 0 : 1,
+        transition: "opacity 240ms ease",
+        backgroundImage: `url(/data/bg.svg)`,
+        backgroundSize: "cover",
+        backgroundPosition: "center center",
+        backgroundAttachment: "fixed"
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
+        <TopBarWithIntro title="Memorial - редактор" />
+
+        <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
+          Портрет — 3:4. «Помним, любим, скорбим…» — изначально в строку. Alt+клик — выбрать нижний объект под курсором.
+        </section>
+
+        {/* Эскиз */}
+        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+          <div
+            ref={wrapperRef}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerDown={(e) => {
+              if (e.altKey) {
+                const hit = pickElementUnderPointer(e.clientX, e.clientY, null);
+                if (hit) setSelectedId(hit);
+              } else {
+                setSelectedId(null);
+              }
+            }}
+            style={{
+              position: "relative",
+              width: "100%",
+              borderRadius: 10,
+              overflow: "hidden",
+              userSelect: "none",
+              ...bottomUnderlayGradient(),
+              aspectRatio: aspect,
+              minHeight: aspect ? undefined : 540
+            }}
+          >
+            {/* Фон — фото изделия (полупрозрачное) */}
+            <img
+              src={item?.url || ""}
+              alt={item?.name || "Изделие"}
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", opacity: 0.35, userSelect: "none", pointerEvents: "none" }}
+              draggable={false}
+              onLoad={(e) => {
+                const im = e.currentTarget;
+                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
+              }}
+              onError={() => {
+                if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
+              }}
+            />
+
+            {/* Контент поверх */}
+            <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
+              <ContentOverlay />
+            </div>
+
+            {/* Рамки + мини‑панели */}
+            <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1000, pointerEvents: "none" }}>
+              {elements
+                .slice()
+                .sort((a, b) => a.z - b.z)
+                .map((el) => {
+                  const selected = el.id === selectedId;
+                  return (
+                    <div
+                      key={el.id}
+                      onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")}
+                      style={{
+                        position: "absolute",
+                        left: `${el.x}%`, top: `${el.y}%`,
+                        width: `${el.w}%`, height: `${el.h}%`,
+                        border: selected ? "2px solid #8ab4ff" : "1pxpx solid rgba(255,255,255,0.25)", background: "rgba(0,0,0,0.35)", color: "#fff", padding: 10, resize: "vertical", outline: "none", boxSizing: "border-box" }}
           />
           <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>Пожелания будут учтены при подготовке финального макета.</div>
         </section>
