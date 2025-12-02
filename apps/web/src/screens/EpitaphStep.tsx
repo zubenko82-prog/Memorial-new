@@ -6,6 +6,11 @@
 // - Live-обновление предпросмотра при внешних изменениях (подписка на DRAFT_UPDATED_EVENT).
 // - Предпросмотр использует общий компонент SketchTemplate (горизонтальный/вертикальный шаблон) + слой эпитафий;
 // - Прозрачность резной работы настраивается через carvingOpacity (по умолчанию 0.4).
+//
+// ВАЖНО (исправлено):
+// - Многострочная эпитафия — это ОДНА эпитафия. Мы НЕ делим её по переводам строки ни при инициализации,
+//   ни при сохранении. Внутренние проверки на наличие эпитафии выполняются по нормализованному тексту
+//   (сведены \r\n к \n, обрезаны пробелы).
 
 import React, {
   useCallback,
@@ -130,6 +135,31 @@ function linesFromPerson(p: any) {
   return [l1, l2, l3].filter(Boolean);
 }
 
+/* ===== Нормализация эпитафий (для сравнения/уникальности) ===== */
+const normEpitaph = (t: string) =>
+  (t || "")
+    .replace(/\r\n?/g, "\n")       // Windows -> \n
+    .replace(/[ \t]+$/gm, "")      // хвостовые пробелы по строкам
+    .trim();
+
+function indexOfByNorm(list: string[], needle: string): number {
+  const n = normEpitaph(needle);
+  for (let i = 0; i < list.length; i++) {
+    if (normEpitaph(list[i]) === n) return i;
+  }
+  return -1;
+}
+function hasByNorm(list: string[], needle: string) {
+  return indexOfByNorm(list, needle) !== -1;
+}
+function uniqueByNorm(list: string[]): string[] {
+  const out: string[] = [];
+  for (const t of list) {
+    if (!hasByNorm(out, t)) out.push(t);
+  }
+  return out;
+}
+
 /* ===== Компонент ===== */
 export default function EpitaphStep(props: any) {
   const { item, engraving, initial, onBack, onDone, onSaveDraft } = props;
@@ -174,45 +204,77 @@ export default function EpitaphStep(props: any) {
   };
   const scrollToPreview = () => scrollToById(previewSectionId);
 
-  // Инициализация выбранных эпитафий
-  const draftEpitaphs: string[] =
-    (Array.isArray(draft.engraving?.epitaphs) && (draft.engraving!.epitaphs as string[])) ||
-    (typeof draft.engraving?.epitaphText === "string" && draft.engraving!.epitaphText!.trim()
-      ? draft.engraving!.epitaphText!.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-      : []);
-  const initialEpitaphsFromProps: string[] =
-    Array.isArray(initial?.epitaphs)
-      ? initial!.epitaphs!
-      : typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()
-      ? initial!.epitaphText!.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-      : [];
-  const [showMore, setShowMore] = useState(false);
-  const [customText, setCustomText] = useState("");
-  const [selectedEpitaphs, setSelectedEpitaphs] = useState<string[]>(
-    draftEpitaphs.length ? draftEpitaphs : initialEpitaphsFromProps
+  // Инициализация выбранных эпитафий (НЕ делим многострочные на строки)
+  const draftEpitaphsArray: string[] | undefined = Array.isArray(draft.engraving?.epitaphs)
+    ? (draft.engraving!.epitaphs as string[])
+    : undefined;
+  const draftEpitaphText: string | undefined =
+    typeof draft.engraving?.epitaphText === "string" && draft.engraving!.epitaphText!.trim()
+      ? draft.engraving!.epitaphText!.trim()
+      : undefined;
+
+  const initialEpitaphsArray: string[] | undefined = Array.isArray(initial?.epitaphs)
+    ? (initial!.epitaphs as string[])
+    : undefined;
+  const initialEpitaphText: string | undefined =
+    typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()
+      ? initial!.epitaphText!.trim()
+      : undefined;
+
+  // Приоритет: массив -> одиночный текст -> пусто
+  const initialSelected = uniqueByNorm(
+    (draftEpitaphsArray && draftEpitaphsArray.length
+      ? draftEpitaphsArray
+      : draftEpitaphText
+      ? [draftEpitaphText]
+      : initialEpitaphsArray && initialEpitaphsArray.length
+      ? initialEpitaphsArray
+      : initialEpitaphText
+      ? [initialEpitaphText]
+      : []) as string[]
   );
 
+  const [showMore, setShowMore] = useState(false);
+  const [customText, setCustomText] = useState("");
+  const [selectedEpitaphs, setSelectedEpitaphs] = useState<string[]>(initialSelected);
+
+  // Тогглер с нормализацией: одна и та же (по норме) эпитафия не добавляется дважды
   const toggleEpitaph = (text: string) => {
-    const t = (text || "").trim();
+    const t = normEpitaph(text);
     if (!t) return;
-    setSelectedEpitaphs((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : prev.concat([t])));
+    setSelectedEpitaphs((prev) => {
+      const idx = indexOfByNorm(prev, t);
+      if (idx !== -1) return prev.filter((_, i) => i !== idx);
+      return prev.concat([text]); // сохраняем исходную форму (с переносами), но сравниваем по норме
+    });
   };
+
   const addCustom = () => {
-    const t = (customText || "").trim();
+    const tRaw = (customText || "").trim();
+    const t = normEpitaph(tRaw);
     if (!t) return;
-    setSelectedEpitaphs((p) => (p.includes(t) ? p : p.concat([t])));
+    setSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([tRaw])));
     setCustomText("");
   };
-  const removeEpitaph = (t: string) => setSelectedEpitaphs((p) => p.filter((x) => x !== t));
+
+  const removeEpitaph = (text: string) =>
+    setSelectedEpitaphs((prev) => {
+      const idx = indexOfByNorm(prev, text);
+      return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
+    });
+
   const clearEpitaphs = () => setSelectedEpitaphs([]);
 
-  // Сохранение эпитафий в драфт (+ onSaveDraft) с защитой от зацикливания
+  // Сохранение эпитафий в драфт (+ onSaveDraft) с защитой от зацикливания.
+  // Если выбрана 1 — пишем в epitaphText (как одна многострочная строка).
+  // Если >1 — пишем массив epitaphs (каждый элемент — целиком, даже если многострочный).
   const prevJsonRef = useRef<string>("");
   useEffect(() => {
+    const list = uniqueByNorm(selectedEpitaphs);
     const payloadEngr = {
       ...(loadOrderDraft().engraving || {}),
-      epitaphs: selectedEpitaphs.length > 1 ? selectedEpitaphs.slice() : undefined,
-      epitaphText: selectedEpitaphs.length === 1 ? selectedEpitaphs[0] : undefined
+      epitaphs: list.length > 1 ? list.slice() : undefined,
+      epitaphText: list.length === 1 ? list[0] : undefined
     };
     const prevAll = loadOrderDraft();
     const snapshot = JSON.stringify({ engraving: payloadEngr });
@@ -220,7 +282,7 @@ export default function EpitaphStep(props: any) {
     if (snapshot !== prevJsonRef.current) {
       prevJsonRef.current = snapshot;
       saveOrderDraft({ ...prevAll, engraving: payloadEngr });
-      onSaveDraft?.({ epitaphs: selectedEpitaphs, epitaphText: selectedEpitaphs.join("\n") });
+      onSaveDraft?.({ epitaphs: list, epitaphText: list.length === 1 ? list[0] : list.join("\n\n") });
     }
   }, [selectedEpitaphs, onSaveDraft]);
 
@@ -269,7 +331,8 @@ export default function EpitaphStep(props: any) {
     setTimeout(() => onBack && onBack(), 320);
   };
   const handleContinue = () => {
-    const data = { epitaphs: selectedEpitaphs, epitaphText: selectedEpitaphs.join("\n") };
+    const list = uniqueByNorm(selectedEpitaphs);
+    const data = { epitaphs: list, epitaphText: list.length === 1 ? list[0] : undefined };
     setOutro(true);
     setTimeout(() => onDone && onDone(data), 320);
   };
@@ -324,7 +387,7 @@ export default function EpitaphStep(props: any) {
           <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             {QUICK_EPITAPHS.map((t) => {
-              const active = selectedEpitaphs.includes(t);
+              const active = hasByNorm(selectedEpitaphs, t);
               return (
                 <button
                   key={t}
@@ -355,7 +418,7 @@ export default function EpitaphStep(props: any) {
                 }}
               >
                 {MORE_EPITAPHS.map((t, idx) => {
-                  const active = selectedEpitaphs.includes(t);
+                  const active = hasByNorm(selectedEpitaphs, t);
                   return (
                     <button
                       key={idx}
@@ -448,7 +511,7 @@ export default function EpitaphStep(props: any) {
 
       {/* Предпросмотр — общий SketchTemplate с эпитафиями */}
       <section id={previewSectionId} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-          <SketchTemplate
+        <SketchTemplate
           item={item}
           peopleBlocks={peopleBlocks}
           crosses={selectedCrosses}
