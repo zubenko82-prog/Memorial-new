@@ -1,19 +1,17 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Что изменено:
-// - Эпитафии «привязаны» к графике: размещаем строго над графикой с отступом (gap). Эпитафия масштабируется,
-//   чтобы уместиться между метрикой и графикой, без выхода за пределы поля.
-// - Графика всегда прижата к низу (у вертикальных и горизонтальных шаблонов), высота — адаптивная
-//   (по умолчанию ~18% H для горизонтальных, ~12% H для вертикальных). Если места мало — графика ужимается.
-// - В шаблоне с 2 людьми (и горизонтальном, и вертикальном) метрика уменьшена (уменьшен кегль через sizeMult=0.9).
+// Исправлено (горизонтальные шаблоны для 2+ людей):
+// - Портреты больше НЕ растягивают колонку по высоте: их высота ограничена долей H (экрана шаблона),
+//   а ширина вычисляется из соотношения 3:4 (pw = ph*0.75). Это предотвращает «выталкивание» метрики и нижних блоков.
+// - Для 2 людей maxPortraitH ≈ 32% H, для 3+ — ≈ 28% H. При узких колонках портрет также ограничен colW/0.75.
+// - Метрики остаются под портретами, их размер регулируется, чтобы не выходить из границ (как и раньше).
 //
-// Стабильность:
-// - Измерения (metricBottomPx, metricScaleH1) по сигнатурам; setState только при реальном изменении.
-// - Выравнивание — центр, без align из конфигураций.
-// - Графика — в одну строку; ширина каждого элемента рассчитывается так, чтобы вся строка влезала, высота ограничена.
-//
-// Порядок блоков: Метрика → Эпитафия (над графикой) → Графика (прижата к низу).
+// Также:
+// - Эпитафии «привязаны» к графике: размещаем строго над графикой с отступом (gap), масштабируем
+//   под доступное пространство между метрикой и графикой.
+// - Графика всегда прижата к низу, высота адаптивная (горизонтальные ~18% H, вертикальные ~12% H).
+// - Анти-дребезг измерений: setState только при реальном изменении.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -53,7 +51,6 @@ const CFG = {
   }
 } as const;
 
-// Порог для сравнений, чтобы избежать «дребезга»
 const EPS = 0.0005;
 const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
 
@@ -303,6 +300,7 @@ export default function SketchTemplate({
   };
 
   /* ===== PEOPLE ===== */
+
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
     if (!H || !W || !p) return null;
@@ -375,78 +373,130 @@ export default function SketchTemplate({
     );
   };
 
+  // Исправлено: ограничиваем высоту портретов, чтобы они не выталкивали метрики/эпитафии/графику
   const HorizontalTwo = () => {
-    const colW = Math.min(320, Math.max(CFG.horizontal.layout.columnMinW, Math.floor((W - 32 - CFG.horizontal.layout.gap) / 2)));
+    if (!H || !W) return null;
+    const gapSide = 16;
+    const colGap = CFG.horizontal.layout.gap;
+    const availableW = Math.max(0, W - gapSide * 2 - colGap);
+    const colW = Math.min(320, Math.max(CFG.horizontal.layout.columnMinW, Math.floor(availableW / 2)));
+
+    // Портреты: не выше 32% H; и не шире, чем позволяет колонка (через 3:4)
+    const maxPortraitH = Math.round(0.32 * H);
+
     return (
       <div
         style={{
           position: "absolute",
-          left: 16,
-          right: 16,
-          top: "8%",
+          left: gapSide,
+          right: gapSide,
+          top: Math.round(0.06 * H),
           display: "grid",
           gridTemplateColumns: `repeat(2, ${colW}px)`,
-          gap: CFG.horizontal.layout.gap,
+          gap: colGap,
           justifyContent: "center",
           alignItems: "start",
           pointerEvents: "none"
         }}
       >
-        {peopleBlocks.slice(0, 2).map((p) => (
-          <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: "100%" }}>
-              <div
-                data-sketch-el="portrait"
-                data-sketch-key={p.id}
-                style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
-              >
-                {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+        {peopleBlocks.slice(0, 2).map((p) => {
+          const ph = Math.min(Math.round(colW / 0.75), maxPortraitH); // ограничение по H и по колоночной ширине
+          const pw = Math.round(ph * 0.75);
+          return (
+            <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              {/* Портрет фиксированного размера (не тянет колонку) */}
+              <div style={{ width: pw }}>
+                <div
+                  data-sketch-el="portrait"
+                  data-sketch-key={p.id}
+                  style={{
+                    width: pw,
+                    height: ph,
+                    borderRadius: 4,
+                    overflow: "hidden",
+                    background: "rgba(255,255,255,0.04)",
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                  }}
+                >
+                  {p.photo ? (
+                    <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                  ) : (
+                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Метрика (уменьшенная для двоих) */}
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%" }}>
+                <PersonMetricText lines={p.lines} sizeMult={0.9} />
               </div>
             </div>
-            {/* Уменьшенная метрика для двух людей */}
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%" }}>
-              <PersonMetricText lines={p.lines} sizeMult={0.9} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
 
   const HorizontalMany = () => {
+    if (!H || !W) return null;
+    const gapSide = 16;
+    const colGap = CFG.horizontal.layout.gap;
     const cols = Math.min(4, Math.max(3, peopleBlocks.length));
-    const perCol = Math.min(260, Math.max(CFG.horizontal.layout.columnMinW, Math.floor((W - 32) / cols)));
+    const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
+    const perCol = Math.min(260, Math.max(CFG.horizontal.layout.columnMinW, Math.floor(availableW / cols)));
+
+    // Портреты: не выше 28% H; и не шире, чем позволяет колонка
+    const maxPortraitH = Math.round(0.28 * H);
+
     return (
       <div
         style={{
           position: "absolute",
-          left: 16,
-          right: 16,
-          top: "8%",
+          left: gapSide,
+          right: gapSide,
+          top: Math.round(0.06 * H),
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, ${perCol}px)`,
-          gap: CFG.horizontal.layout.gap,
+          gap: colGap,
           alignItems: "start",
           justifyContent: "center",
           pointerEvents: "none"
         }}
       >
-        {peopleBlocks.map((p) => (
-          <div key={p.id} style={{ width: perCol, display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: "100%" }}>
-              <div
-                data-sketch-el="portrait"
-                data-sketch-key={p.id}
-                style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
-              >
-                {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+        {peopleBlocks.map((p) => {
+          const ph = Math.min(Math.round(perCol / 0.75), maxPortraitH);
+          const pw = Math.round(ph * 0.75);
+          return (
+            <div key={p.id} style={{ width: perCol, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              {/* Портрет фиксированного размера */}
+              <div style={{ width: pw }}>
+                <div
+                  data-sketch-el="portrait"
+                  data-sketch-key={p.id}
+                  style={{
+                    width: pw,
+                    height: ph,
+                    borderRadius: 4,
+                    overflow: "hidden",
+                    background: "rgba(255,255,255,0.04)",
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                  }}
+                >
+                  {p.photo ? (
+                    <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                  ) : (
+                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Метрика (обычная для 3+) */}
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%" }}>
+                <PersonMetricText lines={p.lines} />
               </div>
             </div>
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "100%" }}>
-              <PersonMetricText lines={p.lines} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -567,10 +617,7 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика =====
-     Унифицировано для всех шаблонов:
-     - Графика всегда прижата к низу (с bottomPad); желаемая высота: horiz ~18%H, vert ~12%H (ужимается при нехватке).
-     - Эпитафии размещаем над графикой с отступом (gap), масштабируем, чтобы поместиться между метрикой и графикой. */
+  /* ===== Эпитафия + графика ===== */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
@@ -578,35 +625,25 @@ export default function SketchTemplate({
     const bottomPadPx = Math.max(8, Math.round(0.02 * H));
     const epW = Math.round(W * 0.88);
 
-    // Натуральная высота эпитафии
     const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
 
-    // Желаемая высота графики (ужмем при нехватке)
     const desiredGfxH = isVertical ? Math.round(0.12 * H) : Math.round(0.18 * H);
 
-    // Графика прижата к низу
-    // Минимум места для эпитафии — 16px
     const minEpPx = 16;
 
-    // Весь доступный «контент» для эпитафии+графики: от низа метрики до низа изображения
     const topAfterMetric = Math.max(metricBottomPx + gap, 0);
     const availableContent = Math.max(0, H - bottomPadPx - topAfterMetric);
 
-    // Высота графики — не больше желаемой и не больше available - (minEpPx + gap)
     let gfxH = Math.max(0, Math.min(desiredGfxH, availableContent - (minEpPx + gap)));
     const gfxTop = H - bottomPadPx - gfxH;
 
-    // Сколько осталось под эпитафии
     const availableForEpitaph = Math.max(0, gfxTop - gap - topAfterMetric);
 
-    // Масштаб эпитафии
     const finalEpitaphScale = naturalEp > 0 ? Math.min(1, availableForEpitaph / naturalEp) : 1;
 
-    // Эпитафия привязана к графике: топ = gfxTop - gap - scaledEpH
     const scaledEpH = Math.floor(naturalEp * finalEpitaphScale);
     const epTop = gfxTop - gap - scaledEpH;
 
-    // Для раскладки графики в строку
     const gfxWrapW = Math.floor(W * 0.9);
     const gfxGap = 10;
     const n = others.length;
@@ -619,7 +656,6 @@ export default function SketchTemplate({
 
     return (
       <>
-        {/* Эпитафии — строго над графикой с отступом (масштабируем под доступное пространство) */}
         {Array.isArray(epitaphs) && epitaphs.length > 0 && finalEpitaphScale > 0 && (
           <div
             style={{
@@ -657,7 +693,6 @@ export default function SketchTemplate({
           </div>
         )}
 
-        {/* Графика — у самого низа */}
         {others.length > 0 && gfxH > 0 && (
           <div
             style={{
@@ -765,7 +800,7 @@ export default function SketchTemplate({
           src={item?.url || ""}
           alt={item?.name || "Изделие"}
           style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-        draggable={false}
+          draggable={false}
           onLoad={() => requestAnimationFrame(recalc)}
         />
 
