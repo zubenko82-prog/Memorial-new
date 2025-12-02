@@ -1,19 +1,18 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Что изменено:
-// - Эпитафии «привязаны» к графике: размещаем строго над графикой с отступом (gap). Эпитафия масштабируется,
-//   чтобы уместиться между метрикой и графикой, без выхода за пределы поля.
-// - Графика всегда прижата к низу (у вертикальных и горизонтальных шаблонов), высота — адаптивная
-//   (по умолчанию ~18% H для горизонтальных, ~12% H для вертикальных). Если места мало — графика ужимается.
-// - В шаблоне с 2 людьми (и горизонтальном, и вертикальном) метрика уменьшена (уменьшен кегль через sizeMult=0.9).
+// Что делает:
+// - Портреты 3:4, метрики, эпитафии (могут быть многострочными в рамках одного элемента), графика и кресты.
+// - Эпитафии размещаем строго над графикой (прижатой к низу), масштабируем под доступную высоту.
+// - Для 2 человек метрика немного уменьшена.
+// - Возвращаем раскладку через onLayout (в процентах 0..100), чтобы EditorStep навесил рамки.
 //
-// Порядок блоков: Метрика → Эпитафия (над графикой) → Графика (прижата к низу).
-//
-// ВАЖНО (для EditorStep):
-// - Возвращаем раскладку через onLayout: проценты 0..100 от области шаблона для каждого элемента.
-//   Идентификаторы стабильные: portrait-<personId>, metric-<personId>, epitaph-<i>, cross-<i>, graphic-<i>.
-// - Одна эпитафия может быть многострочной (whiteSpace: pre-wrap) — это один элемент.
+// Исправлено:
+// - Добавлен clamp (раньше падало "clamp is not defined").
+// - onLayout больше не вызывает «Maximum update depth exceeded»:
+//   • Не зависит от изменяющейся каждый рендер ссылки onLayout — используем ref.
+//   • Перед вызовом сравниваем сигнатуру layout; одинаковый layout не отправляем повторно.
+//   • Вызов onLayout обёрнут в requestAnimationFrame.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -59,9 +58,10 @@ const CFG = {
   }
 } as const;
 
-// Пороги для сравнений, чтобы избежать «дребезга»
+// Утилиты
 const EPS = 0.0005;
 const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
@@ -104,6 +104,12 @@ export default function SketchTemplate({
   const metricH1SigRef = useRef<string>("");
 
   const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
+
+  // onLayout ref, чтобы не триггерить эффект из-за смены ссылки
+  const onLayoutRef = useRef<typeof onLayout>();
+  useEffect(() => {
+    onLayoutRef.current = onLayout;
+  }, [onLayout]);
 
   useEffect(() => {
     const apply = () => {
@@ -573,10 +579,7 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика =====
-     Унифицировано для всех шаблонов:
-     - Графика всегда прижата к низу (с bottomPad); желаемая высота: horiz ~18%H, vert ~12%H (ужимается при нехватке).
-     - Эпитафии размещаем над графикой с отступом (gap), масштабируем, чтобы поместиться между метрикой и графикой. */
+  /* ===== Эпитафия + графика ===== */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
@@ -594,7 +597,7 @@ export default function SketchTemplate({
     // Минимум места для эпитафии — 16px
     const minEpPx = 16;
 
-    // Весь доступный «контент» для эпитафии+графики: от низа метрики до низа изображения
+    // Доступная высота между метрикой и нижней кромкой
     const topAfterMetric = Math.max(metricBottomPx + gap, 0);
     const availableContent = Math.max(0, H - bottomPadPx - topAfterMetric);
 
@@ -733,14 +736,15 @@ export default function SketchTemplate({
 
   /* ===== Съём раскладки для EditorStep (onLayout) ===== */
   const lastLayoutSigRef = useRef<string>("");
+  const onLayoutRafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!onLayout) return;
+    if (!onLayoutRef.current) return;
     const root = containerRef.current;
     if (!root || !H || !W) return;
 
+    // Собираем боксы
     const rootRect = root.getBoundingClientRect();
-
     const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-sketch-el]"));
     const boxes: Record<string, SketchLayoutBox> = {};
     nodes.forEach((node) => {
@@ -775,8 +779,18 @@ export default function SketchTemplate({
 
     if (lastLayoutSigRef.current === sig) return;
     lastLayoutSigRef.current = sig;
-    onLayout(boxes);
-  }, [onLayout, peopleBlocks, crosses, others, epitaphs, H, W, isVertical, tplKey]);
+
+    // rAF, чтобы не вызывать синхронно в фазе эффекта
+    if (onLayoutRafRef.current) cancelAnimationFrame(onLayoutRafRef.current);
+    onLayoutRafRef.current = requestAnimationFrame(() => {
+      onLayoutRef.current?.(boxes);
+    });
+
+    return () => {
+      if (onLayoutRafRef.current) cancelAnimationFrame(onLayoutRafRef.current);
+      onLayoutRafRef.current = null;
+    };
+  }, [peopleBlocks, crosses, others, epitaphs, H, W, isVertical, tplKey]); // onLayout не включаем — используем ref
 
   return (
     <>
