@@ -1,10 +1,10 @@
 // src/screens/SizeStep.tsx
-// Автоориентация (исправлено, чтобы корректно переопределялась при смене резной работы и не было гонок):
-// 1) При КАЖДОЙ смене item.url сбрасываем состояние ориентации и снова пытаемся определить по изображению.
+// Автоориентация (исправлено: переопределяется при каждом выборе другой работы):
+// 1) При КАЖДОЙ смене item (id/url) сбрасываем состояние ориентации и снова пытаемся определить по изображению.
 // 2) Если не удалось (ошибка/таймаут) — берём по выбранным размерам (Ш×В).
 // 3) Сохраняем в драфт только после того, как ориентация реально определена.
 // 4) Если после определения источник = "size", то при изменении размеров ориентир обновляется динамически.
-// 5) Ориентация из драфта используется только как исходное значение до первой загрузки новой картинки.
+// 5) Начальное значение берём из драфта, но оно будет переопределено при загрузке новой картинки.
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import type { CatalogItem } from "../api";
@@ -137,15 +137,14 @@ export default function SizeStep(props: SizeStepProps) {
   });
   const [thickCustom, setThickCustom] = useState<string>(() => (typeof draftTcm === "number" ? String(draftTcm) : "8"));
 
-  // Состояние ориентации (начальное — из драфта, но при смене item.url будет переопределено)
+  // Состояние ориентации: из драфта как старт, далее будет переопределено после загрузки новой картинки
   const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
   const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">("default");
   const [orientationReady, setOrientationReady] = useState<boolean>(false);
 
-  // Рефы для детекта (остановка гонок) и трекинг текущего url
+  // Флаги детекта
   const detectionDoneRef = useRef<boolean>(false);
   const detectingRef = useRef<boolean>(false);
-  const prevItemUrlRef = useRef<string | undefined>(undefined);
 
   const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
     if (sizeMode === "preset") {
@@ -194,24 +193,21 @@ export default function SizeStep(props: SizeStepProps) {
     saveOrderDraft({ size: sizePatch, orientation: currentOrientation });
   }
 
-  // Переопределяем ориентацию КАЖДЫЙ раз при смене резной работы (item.url)
+  // Переопределяем ориентацию КАЖДЫЙ раз при смене резной работы (id/url)
   useEffect(() => {
     const url = item?.url;
+    const id = (item as any)?.id || "";
 
-    // Если URL не менялся — ничего не делаем
-    if (prevItemUrlRef.current === url) return;
-    prevItemUrlRef.current = url;
-
-    // Сброс состояния детекта (важно при смене работы)
+    // Сброс состояния детекта
     detectionDoneRef.current = false;
     detectingRef.current = false;
     setOrientationReady(false);
     setOrientationSource("default");
 
-    // Стартовая оценка по размеру (визуально, до детекта)
+    // Быстрый предварительный ориентир по размерам (визуально до загрузки)
     const [wcm, hcm] = currentWHcm;
     const initialBySize = orientFromSize(wcm, hcm);
-    setOrientation((prev) => prev ?? initialBySize);
+    setOrientation(initialBySize);
 
     let cancelled = false;
     let timer: number | undefined;
@@ -240,7 +236,7 @@ export default function SizeStep(props: SizeStepProps) {
       fallbackToSize();
     }, 1500);
 
-    // Детект по изображению
+    // Детект по изображению — добавляем «бастёр» к URL, чтобы гарантировать срабатывание onload при смене работы
     try {
       const img = new Image();
       img.decoding = "async";
@@ -260,7 +256,9 @@ export default function SizeStep(props: SizeStepProps) {
         if (timer) window.clearTimeout(timer);
         fallbackToSize();
       };
-      img.src = url;
+      const sig = encodeURIComponent(`${id}|${url}`);
+      const bust = url.includes("?") ? `${url}&__o=${sig}` : `${url}?__o=${sig}`;
+      img.src = bust;
     } catch {
       if (!cancelled) {
         if (timer) window.clearTimeout(timer);
@@ -273,13 +271,14 @@ export default function SizeStep(props: SizeStepProps) {
       detectingRef.current = false;
       if (timer) window.clearTimeout(timer);
     };
+    // ВАЖНО: завязываемся на id и url — любое изменение работы перезапускает детект
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.url]); // Завязываемся только на смену картинки
+  }, [item?.id, item?.url]); // при смене выбранной работы переопределяем ориентацию
 
   // Если источник ориентации = "size" — поддерживаем актуальность при изменении размеров
   useEffect(() => {
     if (!detectionDoneRef.current) return; // детект ещё идёт
-    if (orientationSource !== "size") return; // если по картинке — не изменяем от размеров
+    if (orientationSource !== "size") return; // если по картинке — размеры не влияют
     const [wcm, hcm] = currentWHcm;
     const next = orientFromSize(wcm, hcm);
     if (next !== orientation) {
