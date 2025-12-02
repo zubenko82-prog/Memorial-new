@@ -1,10 +1,10 @@
 // src/screens/SizeStep.tsx
-// Автоориентация (исправлено, чтобы определялась с первого раза и без гонок):
-// 1) Пробуем по изображению (naturalWidth/Height) — единожды при смене item.url.
+// Автоориентация (исправлено, чтобы корректно переопределялась при смене резной работы и не было гонок):
+// 1) При КАЖДОЙ смене item.url сбрасываем состояние ориентации и снова пытаемся определить по изображению.
 // 2) Если не удалось (ошибка/таймаут) — берём по выбранным размерам (Ш×В).
 // 3) Сохраняем в драфт только после того, как ориентация реально определена.
 // 4) Если после определения источник = "size", то при изменении размеров ориентир обновляется динамически.
-// 5) Если в драфте уже есть ориентация — НЕ перезапускаем детект (считаем, что она валидна).
+// 5) Ориентация из драфта используется только как исходное значение до первой загрузки новой картинки.
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import type { CatalogItem } from "../api";
@@ -113,7 +113,6 @@ export default function SizeStep(props: SizeStepProps) {
   const draftOrientation = (draft.size?.orientation as Orientation | undefined)
     || (draft.orientation as Orientation | undefined)
     || "vertical";
-  const hadDraftOrientation = Boolean(draft.size?.orientation || (draft as any).orientation);
 
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
@@ -138,13 +137,15 @@ export default function SizeStep(props: SizeStepProps) {
   });
   const [thickCustom, setThickCustom] = useState<string>(() => (typeof draftTcm === "number" ? String(draftTcm) : "8"));
 
+  // Состояние ориентации (начальное — из драфта, но при смене item.url будет переопределено)
   const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
-  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">(hadDraftOrientation ? "default" : "default");
-  const [orientationReady, setOrientationReady] = useState<boolean>(hadDraftOrientation);
+  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">("default");
+  const [orientationReady, setOrientationReady] = useState<boolean>(false);
 
-  // Флаг и рефы для детекта, чтобы остановить гонки
-  const detectionDoneRef = useRef<boolean>(hadDraftOrientation);
+  // Рефы для детекта (остановка гонок) и трекинг текущего url
+  const detectionDoneRef = useRef<boolean>(false);
   const detectingRef = useRef<boolean>(false);
+  const prevItemUrlRef = useRef<string | undefined>(undefined);
 
   const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
     if (sizeMode === "preset") {
@@ -193,27 +194,33 @@ export default function SizeStep(props: SizeStepProps) {
     saveOrderDraft({ size: sizePatch, orientation: currentOrientation });
   }
 
-  // ЕДИНОЖДЫ детектируем по картинке (или fallback по размеру). Не завязываемся на изменение размеров.
+  // Переопределяем ориентацию КАЖДЫЙ раз при смене резной работы (item.url)
   useEffect(() => {
-    // Если в драфте уже есть ориентация — считаем её валидной, не перезапускаем детект.
-    if (hadDraftOrientation) {
-      detectionDoneRef.current = true;
-      setOrientationReady(true);
-      setOrientation(draftOrientation);
-      setOrientationSource("image");
-      return;
-    }
+    const url = item?.url;
+
+    // Если URL не менялся — ничего не делаем
+    if (prevItemUrlRef.current === url) return;
+    prevItemUrlRef.current = url;
+
+    // Сброс состояния детекта (важно при смене работы)
+    detectionDoneRef.current = false;
+    detectingRef.current = false;
+    setOrientationReady(false);
+    setOrientationSource("default");
+
+    // Стартовая оценка по размеру (визуально, до детекта)
+    const [wcm, hcm] = currentWHcm;
+    const initialBySize = orientFromSize(wcm, hcm);
+    setOrientation((prev) => prev ?? initialBySize);
 
     let cancelled = false;
     let timer: number | undefined;
     detectingRef.current = true;
 
-    const url = item?.url;
-
     const fallbackToSize = () => {
       if (cancelled || detectionDoneRef.current) return;
-      const [wcm, hcm] = currentWHcm;
-      const next = orientFromSize(wcm, hcm);
+      const [cw, ch] = currentWHcm;
+      const next = orientFromSize(cw, ch);
       detectionDoneRef.current = true;
       detectingRef.current = false;
       setOrientation(next);
@@ -233,7 +240,7 @@ export default function SizeStep(props: SizeStepProps) {
       fallbackToSize();
     }, 1500);
 
-    // Надёжный детект по изображению
+    // Детект по изображению
     try {
       const img = new Image();
       img.decoding = "async";
@@ -253,7 +260,6 @@ export default function SizeStep(props: SizeStepProps) {
         if (timer) window.clearTimeout(timer);
         fallbackToSize();
       };
-      // старт
       img.src = url;
     } catch {
       if (!cancelled) {
@@ -267,14 +273,13 @@ export default function SizeStep(props: SizeStepProps) {
       detectingRef.current = false;
       if (timer) window.clearTimeout(timer);
     };
-    // ВАЖНО: запускаем детект ТОЛЬКО при смене URL (чтобы избежать гонок с изменениями размеров)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.url]);
+  }, [item?.url]); // Завязываемся только на смену картинки
 
-  // Если детект завершился размером — поддерживаем актуальность ориентации при изменении размеров
+  // Если источник ориентации = "size" — поддерживаем актуальность при изменении размеров
   useEffect(() => {
     if (!detectionDoneRef.current) return; // детект ещё идёт
-    if (orientationSource !== "size") return; // ориентир по картинке — ничего не делаем
+    if (orientationSource !== "size") return; // если по картинке — не изменяем от размеров
     const [wcm, hcm] = currentWHcm;
     const next = orientFromSize(wcm, hcm);
     if (next !== orientation) {
@@ -302,9 +307,10 @@ export default function SizeStep(props: SizeStepProps) {
   const finalThick = thickMode === "preset" ? thickPreset : `${Number(thickCustom)}`;
   const payload: SizeStepResult = { size: finalSize, thickness: finalThick, orientation };
 
-  // Страхующий авто-сейв: выполняем ТОЛЬКО после того, как ориентация действительно определена
+  // Страхующий авто-сейв: когда ориентация определена — фиксируем текущие параметры
   useEffect(() => {
     if (!orientationReady) return;
+
     let widthCm: number | undefined;
     let heightCm: number | undefined;
 
@@ -337,7 +343,7 @@ export default function SizeStep(props: SizeStepProps) {
   }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation, orientationReady]);
 
   const handleContinue = () => {
-    // на случай редкого состояния, если не успели — зафиксируем текущую ориентацию
+    // если по какой-то причине детект ещё не завершён — зафиксируем по размеру
     if (!orientationReady) {
       const [wcm, hcm] = currentWHcm;
       const next = orientFromSize(wcm, hcm);
