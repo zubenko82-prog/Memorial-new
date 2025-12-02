@@ -8,27 +8,33 @@
 //   (по умолчанию ~18% H для горизонтальных, ~12% H для вертикальных). Если места мало — графика ужимается.
 // - В шаблоне с 2 людьми (и горизонтальном, и вертикальном) метрика уменьшена (уменьшен кегль через sizeMult=0.9).
 //
-// Стабильность:
-// - Измерения (metricBottomPx, metricScaleH1) по сигнатурам; setState только при реальном изменении.
-// - Выравнивание — центр, без align из конфигураций.
-// - Графика — в одну строку; ширина каждого элемента рассчитывается так, чтобы вся строка влезала, высота ограничена.
-//
 // Порядок блоков: Метрика → Эпитафия (над графикой) → Графика (прижата к низу).
+//
+// ВАЖНО (для EditorStep):
+// - Возвращаем раскладку через onLayout: проценты 0..100 от области шаблона для каждого элемента.
+//   Идентификаторы стабильные: portrait-<personId>, metric-<personId>, epitaph-<i>, cross-<i>, graphic-<i>.
+// - Одна эпитафия может быть многострочной (whiteSpace: pre-wrap) — это один элемент.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
 type Orientation = "vertical" | "horizontal";
 
+export type SketchLayoutBox = {
+  x: number; y: number; w: number; h: number; // проценты 0..100 относительно области шаблона
+  type: "portrait" | "metric" | "epitaph" | "cross" | "graphic";
+};
+
 export type SketchTemplateProps = {
   item: { url?: string; name?: string } | null;
   peopleBlocks: Array<{ id: string; lines: string[]; photo?: string | null }>;
   crosses?: Array<{ url: string; name?: string }>;
   others?: Array<{ url: string; name?: string }>;
-  epitaphs?: string[];
+  epitaphs?: string[]; // многострочный текст допускается (элемент один)
   carvingOpacity?: number;
   style?: React.CSSProperties;
   orientationOverride?: Orientation;
+  onLayout?: (boxes: Record<string, SketchLayoutBox>) => void; // Callback для EditorStep
 };
 
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
@@ -53,7 +59,7 @@ const CFG = {
   }
 } as const;
 
-// Порог для сравнений, чтобы избежать «дребезга»
+// Пороги для сравнений, чтобы избежать «дребезга»
 const EPS = 0.0005;
 const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
 
@@ -78,13 +84,14 @@ export default function SketchTemplate({
   epitaphs = [],
   carvingOpacity = CFG.general.carvingOpacityDefault,
   style,
-  orientationOverride
+  orientationOverride,
+  onLayout
 }: SketchTemplateProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Измерители (с защитами)
+  // Измерители
   const [metricBottomPx, setMetricBottomPx] = useState(0);
   const metricMeasureSigRef = useRef<string>("");
   const metricRafRef = useRef<number | null>(null);
@@ -140,7 +147,7 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  // Метрика (общая версия + увеличенная/уменьшенная)
+  // Метрика — общие компоненты
   function MetricThreeLines({ lines }: { lines: string[] }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
@@ -206,7 +213,6 @@ export default function SketchTemplate({
 
     return () => {
       if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
-      metricRafRef.current = null;
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
@@ -725,6 +731,53 @@ export default function SketchTemplate({
     );
   };
 
+  /* ===== Съём раскладки для EditorStep (onLayout) ===== */
+  const lastLayoutSigRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!onLayout) return;
+    const root = containerRef.current;
+    if (!root || !H || !W) return;
+
+    const rootRect = root.getBoundingClientRect();
+
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-sketch-el]"));
+    const boxes: Record<string, SketchLayoutBox> = {};
+    nodes.forEach((node) => {
+      const typeAttr = node.getAttribute("data-sketch-el") as SketchLayoutBox["type"] | null;
+      const keyAttr = node.getAttribute("data-sketch-key");
+      if (!typeAttr || keyAttr == null) return;
+
+      const id = `${typeAttr}-${keyAttr}`;
+      const r = node.getBoundingClientRect();
+      const x = ((r.left - rootRect.left) / rootRect.width) * 100;
+      const y = ((r.top - rootRect.top) / rootRect.height) * 100;
+      const w = (r.width / rootRect.width) * 100;
+      const h = (r.height / rootRect.height) * 100;
+
+      boxes[id] = {
+        type: typeAttr,
+        x: clamp(x, 0, 100),
+        y: clamp(y, 0, 100),
+        w: clamp(w, 0, 100),
+        h: clamp(h, 0, 100)
+      };
+    });
+
+    // Сигнатура для отсечения дребезга
+    const sig = Object.keys(boxes)
+      .sort()
+      .map((id) => {
+        const b = boxes[id];
+        return `${id}:${b.type}:${b.x.toFixed(2)}:${b.y.toFixed(2)}:${b.w.toFixed(2)}:${b.h.toFixed(2)}`;
+      })
+      .join("|");
+
+    if (lastLayoutSigRef.current === sig) return;
+    lastLayoutSigRef.current = sig;
+    onLayout(boxes);
+  }, [onLayout, peopleBlocks, crosses, others, epitaphs, H, W, isVertical, tplKey]);
+
   return (
     <>
       {/* Пояснение над эскизом */}
@@ -765,7 +818,7 @@ export default function SketchTemplate({
           src={item?.url || ""}
           alt={item?.name || "Изделие"}
           style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-        draggable={false}
+          draggable={false}
           onLoad={() => requestAnimationFrame(recalc)}
         />
 
