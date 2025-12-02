@@ -1,17 +1,12 @@
 // src/screens/EditorStep.tsx
-// Редактор элементов с надёжной инициализацией, построением эскиза по тем же правилам,
-// что и в SketchTemplate (стабильная сетка), а поверх — редактор (рамки, dnd/resize, мини‑панели).
-//
-// Что сделано:
-// - Портреты строго 3:4, устойчивые колонки/строки при 2+ людях (не «узкие/высокие»).
-// - Эпитафии: один элемент может быть многострочным (whiteSpace: pre-wrap).
-//   Текст автоматически подгоняется по ширине/высоте фрейма (учитываем внутренние отступы) — не вываливается.
-// - Метрика: авто‑подгон по ширине и высоте фрейма (без «ухода» под рамку).
-// - Превью (canvas) использует тот же алгоритм подгона, что и DOM.
-// - Анти‑оверлап фреймов, Alt+клик для выбора нижнего элемента, DnD/resize, автосейв.
+// Редактор поверх того же шаблона, что и на предыдущих шагах (SketchTemplate):
+// - Внизу отрисовываем SketchTemplate (точно как на шагах Engraving/Graphics/Epitaph).
+// - Сверху накладываем слой редактора (рамки, DnD/resize, мини‑панели).
+// - Инициализацию фреймов выполняем по тем же правилам раскладки (макет совпадает со SketchTemplate).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
+import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft } from "../lib/order";
 
 /* ===== UI ===== */
@@ -53,7 +48,7 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты от контентной области
+  x: number; y: number; w: number; h: number; // проценты внутри контентной области (после pad)
   z: number;
   title?: string;
   locked?: boolean;
@@ -61,7 +56,7 @@ type EditorEl = {
   italic?: boolean;    // metric/epitaph
   flipH?: boolean;     // graphic
   bw?: boolean;        // portrait
-  staircase?: boolean; // «Помним, любим, скорбим…» — лесенка
+  staircase?: boolean; // для «Помним, любим, скорбим…»
 };
 
 /* ===== Helpers ===== */
@@ -75,7 +70,7 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const SKETCH_PAD = 8; // синхронизирован со SketchTemplate
+const SKETCH_PAD = 8; // совпадает с SketchTemplate
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -118,13 +113,12 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Вспомогатели подбора шрифта (fit) ===== */
+/* ===== Fit helpers for preview (canvas) ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
   const c = document.createElement("canvas");
-  const ctx = c.getContext("2d");
-  __measureCtx = ctx!;
+  __measureCtx = c.getContext("2d");
   return __measureCtx!;
 }
 function setFontOnCtx(ctx: CanvasRenderingContext2D, italic: boolean, px: number, family: string) {
@@ -135,27 +129,10 @@ function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: bool
   return ctx.measureText(text).width;
 }
 function fitMultilineFontPx({
-  text,
-  boxW,
-  boxH,
-  italic,
-  family,
-  padX = 4,
-  padY = 2,
-  lineHeight = 1.15,
-  minPx = 10,
-  maxPx = 96
+  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
 }: {
-  text: string;
-  boxW: number;
-  boxH: number;
-  italic: boolean;
-  family: string;
-  padX?: number;
-  padY?: number;
-  lineHeight?: number;
-  minPx?: number;
-  maxPx?: number;
+  text: string; boxW: number; boxH: number; italic: boolean; family: string;
+  padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
 }): { fontPx: number; lines: string[] } {
   const ctx = getMeasureCtx();
   const raw = String(text || "");
@@ -163,9 +140,7 @@ function fitMultilineFontPx({
   const count = Math.max(1, lines.length);
   const usableW = Math.max(8, boxW - padX * 2);
   const usableH = Math.max(8, boxH - padY * 2);
-  // ограничитель по высоте
   const fByH = usableH / (count * lineHeight);
-  // ограничитель по ширине
   let fByW = maxPx;
   for (const ln of lines.length ? lines : [" "]) {
     const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
@@ -176,27 +151,10 @@ function fitMultilineFontPx({
   return { fontPx, lines: lines.length ? lines : [""] };
 }
 function fitMetricFontsPx({
-  lines,
-  boxW,
-  boxH,
-  italic,
-  family,
-  padX = 4,
-  padY = 2,
-  lineHeight = 1.12,
-  minPx = 10,
-  weights = [0.36, 0.30, 0.26]
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
 }: {
-  lines: string[];
-  boxW: number;
-  boxH: number;
-  italic: boolean;
-  family: string;
-  padX?: number;
-  padY?: number;
-  lineHeight?: number;
-  minPx?: number;
-  weights?: number[];
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string;
+  padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
 }): number[] {
   const ctx = getMeasureCtx();
   const L = Math.min(3, lines.length);
@@ -217,8 +175,8 @@ function fitMetricFontsPx({
   return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
 }
 
-/* ===== Версионирование раскладки ===== */
-const LAYOUT_VERSION = "2025-01-EditorStep-v15";
+/* ===== Версия раскладки ===== */
+const LAYOUT_VERSION = "2025-01-EditorStep-v16";
 
 /* ===== Сигнатуры контента ===== */
 function peopleSignature(engr: any): string {
@@ -244,8 +202,8 @@ function graphicsSignature(items: any[]): string {
 }
 
 /* =========================================================================================
-   computeSketchLayout — устойчивые шаблоны (как в SketchTemplate): портреты 3:4,
-   устойчивые колонки/строки, эпитафии над графикой.
+   computeSketchLayout — те же правила, что в SketchTemplate (горизонтальные/вертикальные),
+   чтобы фреймы редактора совпадали с шаблоном подложки.
    ========================================================================================= */
 function computeSketchLayout({
   stageW, stageH,
@@ -291,38 +249,13 @@ function computeSketchLayout({
   const bottomPad = Math.max(8, Math.round(0.02 * stageH));
 
   const contentWidth = stageW - SKETCH_PAD * 2;
-  const crossWpx = Math.round(stageW * (orientation === "vertical" ? 0.16 : 0.10));
-  const crossHpx = crossWpx;
-
-  const placeEpitaphsStack = (left: number, top: number, width: number, totalHeight: number) => {
-    const count = Math.max(0, epitaphs.length);
-    const Htot = Math.max(0, Math.floor(totalHeight));
-    if (count === 0 || Htot <= 0) return;
-    const gaps = Math.max(0, count - 1) * gapSmall;
-    const per = Math.max(10, Math.floor((Htot - gaps) / Math.max(1, count)));
-    let y = top;
-    epitaphs.forEach((_, i) => {
-      m.set(`epitaph-${i}`, toBox(left, y, width, per));
-      y += per + gapSmall;
-    });
-  };
-  const placeGraphicsRow = (left: number, top: number, width: number, height: number) => {
-    const count = Math.max(0, graphics.length);
-    const H = Math.max(0, height);
-    if (count === 0 || H <= 0 || width <= 0) return;
-    const totalGaps = Math.max(0, count - 1) * rowGapX;
-    const perW = Math.max(14, Math.floor((width - totalGaps) / count));
-    for (let i = 0; i < count; i++) {
-      const x = left + i * (perW + rowGapX);
-      m.set(`graphic-${i}`, toBox(x, top, perW, H));
-    }
-  };
 
   const desiredGfxH = orientation === "vertical" ? Math.round(0.12 * stageH) : Math.round(0.16 * stageH);
   const minEpTotal = Math.max(22, Math.round(0.06 * stageH));
   const gfxBandLeft = Math.round((stageW - Math.round(contentWidth * 0.92)) / 2);
   const gfxBandWidth = Math.round(contentWidth * 0.92);
 
+  // Горизонтальные
   if (orientation === "horizontal" && tplKey === "one") {
     const pwInit = Math.round(contentWidth * 0.34);
     const maxPortraitH = Math.round(0.30 * stageH);
@@ -346,17 +279,38 @@ function computeSketchLayout({
 
     m.set(`portrait-${people[0]?.id || "p0"}`, toBox(px, py, pw, ph));
     m.set(`metric-${people[0]?.id || "p0"}`, toBox(Math.round((stageW - mw) / 2), py + ph + gapY, mw, mh));
-    placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.86)) / 2), epTop, Math.round(contentWidth * 0.86), epTotal);
-    placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
-    if (crosses[0]) m.set("cross-0", toBox(Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx));
-    if (crosses[1]) m.set("cross-1", toBox(Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx));
+
+    // эпитафии (стек)
+    const epLeft = Math.round((stageW - Math.round(contentWidth * 0.86)) / 2);
+    const epW = Math.round(contentWidth * 0.86);
+    const count = Math.max(0, epitaphs.length);
+    if (count) {
+      const gaps = Math.max(0, count - 1) * gapSmall;
+      const per = Math.max(10, Math.floor((epTotal - gaps) / count));
+      let y = epTop;
+      for (let i = 0; i < count; i++) {
+        m.set(`epitaph-${i}`, toBox(epLeft, y, epW, per));
+        y += per + gapSmall;
+      }
+    }
+
+    // графика
+    const gfxCount = Math.max(0, graphics.length);
+    if (gfxCount > 0 && gfxH > 0) {
+      const totalGaps = Math.max(0, gfxCount - 1) * rowGapX;
+      const perW = Math.max(14, Math.floor((gfxBandWidth - totalGaps) / gfxCount));
+      for (let i = 0; i < gfxCount; i++) {
+        const x = gfxBandLeft + i * (perW + rowGapX);
+        m.set(`graphic-${i}`, toBox(x, gfxTop, perW, gfxH));
+      }
+    }
   } else if (orientation === "horizontal" && tplKey === "two") {
     const gapCols = Math.round(0.010 * stageW);
     const colW = Math.min(320, Math.max(160, Math.floor((contentWidth - gapCols) / 2)));
     const totalW = colW * 2 + gapCols;
     const leftStart = Math.round((stageW - totalW) / 2);
-    const top = Math.round(0.08 * stageH);
-    const maxPortraitH = Math.round(0.34 * stageH);
+    const top = Math.round(0.06 * stageH);
+    const maxPortraitH = Math.round(0.32 * stageH);
 
     people.slice(0, 2).forEach((p, idx) => {
       const colLeft = leftStart + idx * (colW + gapCols);
@@ -382,12 +336,28 @@ function computeSketchLayout({
     const epTop = metricsBottom + gapY;
     const gfxH = Math.max(0, Math.min(desiredGfxH, stageH - bottomPad - (epTop + minEpTotal + gapY)));
     const gfxTop = stageH - bottomPad - gfxH;
-    placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.90)) / 2), epTop, Math.round(contentWidth * 0.90), Math.max(0, gfxTop - gapY - epTop));
-    placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
-    if (crosses.length === 1) m.set("cross-0", toBox(Math.round((stageW - crossWpx) / 2), Math.round(0.06 * stageH), crossWpx, crossHpx));
-    if (crosses.length >= 2) {
-      m.set("cross-0", toBox(Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx));
-      m.set("cross-1", toBox(Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx));
+
+    const epLeft = Math.round((stageW - Math.round(contentWidth * 0.90)) / 2);
+    const epW = Math.round(contentWidth * 0.90);
+    const count = Math.max(0, epitaphs.length);
+    if (count) {
+      const gaps = Math.max(0, count - 1) * gapSmall;
+      const per = Math.max(10, Math.floor((Math.max(0, gfxTop - gapY - epTop) - gaps) / count));
+      let y = epTop;
+      for (let i = 0; i < count; i++) {
+        m.set(`epitaph-${i}`, toBox(epLeft, y, epW, per));
+        y += per + gapSmall;
+      }
+    }
+
+    const gfxCount = Math.max(0, graphics.length);
+    if (gfxCount > 0 && gfxH > 0) {
+      const totalGaps = Math.max(0, gfxCount - 1) * rowGapX;
+      const perW = Math.max(14, Math.floor((gfxBandWidth - totalGaps) / gfxCount));
+      for (let i = 0; i < gfxCount; i++) {
+        const x = gfxBandLeft + i * (perW + rowGapX);
+        m.set(`graphic-${i}`, toBox(x, gfxTop, perW, gfxH));
+      }
     }
   } else if (orientation === "horizontal" && tplKey === "many") {
     const cols = Math.min(4, Math.max(3, people.length));
@@ -395,8 +365,8 @@ function computeSketchLayout({
     const colW = Math.min(260, Math.max(150, Math.floor((contentWidth - (cols - 1) * colGap) / cols)));
     const totalW = colW * cols + (cols - 1) * colGap;
     const leftStart = Math.round((stageW - totalW) / 2);
-    const top = Math.round(0.08 * stageH);
-    const maxPortraitH = Math.round(0.30 * stageH);
+    const top = Math.round(0.06 * stageH);
+    const maxPortraitH = Math.round(0.28 * stageH);
 
     people.forEach((p, i) => {
       const colLeft = leftStart + i * (colW + colGap);
@@ -422,10 +392,29 @@ function computeSketchLayout({
     const epTop = metricsBottom + gapY;
     const gfxH = Math.max(0, Math.min(desiredGfxH, stageH - bottomPad - (epTop + minEpTotal + gapY)));
     const gfxTop = stageH - bottomPad - gfxH;
-    placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.92)) / 2), epTop, Math.round(contentWidth * 0.92), Math.max(0, gfxTop - gapY - epTop));
-    placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
-    if (crosses[0]) m.set("cross-0", toBox(Math.round(0.04 * stageW), Math.round(0.06 * stageH), crossWpx, crossHpx));
-    if (crosses[1]) m.set("cross-1", toBox(Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.06 * stageH), crossWpx, crossHpx));
+
+    const epLeft = Math.round((stageW - Math.round(contentWidth * 0.92)) / 2);
+    const epW = Math.round(contentWidth * 0.92);
+    const count = Math.max(0, epitaphs.length);
+    if (count) {
+      const gaps = Math.max(0, count - 1) * gapSmall;
+      const per = Math.max(10, Math.floor((Math.max(0, gfxTop - gapY - epTop) - gaps) / count));
+      let y = epTop;
+      for (let i = 0; i < count; i++) {
+        m.set(`epitaph-${i}`, toBox(epLeft, y, epW, per));
+        y += per + gapSmall;
+      }
+    }
+
+    const gfxCount = Math.max(0, graphics.length);
+    if (gfxCount > 0 && gfxH > 0) {
+      const totalGaps = Math.max(0, gfxCount - 1) * rowGapX;
+      const perW = Math.max(14, Math.floor((gfxBandWidth - totalGaps) / gfxCount));
+      for (let i = 0; i < gfxCount; i++) {
+        const x = gfxBandLeft + i * (perW + rowGapX);
+        m.set(`graphic-${i}`, toBox(x, gfxTop, perW, gfxH));
+      }
+    }
   } else {
     // Вертикальные
     const topPortrait = Math.round(0.12 * stageH);
@@ -447,12 +436,30 @@ function computeSketchLayout({
 
       m.set(`portrait-${people[0].id}`, toBox(px, topPortrait, pw, ph));
       m.set(`metric-${people[0].id}`, toBox(mx, metricY, mw, mh));
-      placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.86)) / 2), epTop, Math.round(contentWidth * 0.86), Math.max(0, gfxTop - gapY - epTop));
-      placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
-      if (crosses[0]) m.set("cross-0", toBox(Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx));
-      if (crosses[1]) m.set("cross-1", toBox(Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx));
+
+      const epLeft = Math.round((stageW - Math.round(contentWidth * 0.86)) / 2);
+      const epW = Math.round(contentWidth * 0.86);
+      const count = Math.max(0, epitaphs.length);
+      if (count) {
+        const gaps = Math.max(0, count - 1) * gapSmall;
+        const per = Math.max(10, Math.floor((Math.max(0, gfxTop - gapY - epTop) - gaps) / count));
+        let y = epTop;
+        for (let i = 0; i < count; i++) {
+          m.set(`epitaph-${i}`, toBox(epLeft, y, epW, per));
+          y += per + gapSmall;
+        }
+      }
+
+      const gfxCount = Math.max(0, graphics.length);
+      if (gfxCount > 0 && gfxH > 0) {
+        const totalGaps = Math.max(0, gfxCount - 1) * rowGapX;
+        const perW = Math.max(14, Math.floor((gfxBandWidth - totalGaps) / gfxCount));
+        for (let i = 0; i < gfxCount; i++) {
+          const x = gfxBandLeft + i * (perW + rowGapX);
+          m.set(`graphic-${i}`, toBox(x, gfxTop, perW, gfxH));
+        }
+      }
     } else {
-      // 2+ людей: строки
       const rows = tplKey === "two" ? 2 : n;
       const rowGapV = Math.round(0.01 * stageH);
       const gridTop = topPortrait;
@@ -485,14 +492,33 @@ function computeSketchLayout({
       const epTop = Math.round(metricsBottom + gapY);
       const gfxH = Math.max(0, Math.min(desiredGfxH, stageH - bottomPad - (epTop + minEpTotal + gapY)));
       const gfxTop = stageH - bottomPad - gfxH;
-      placeEpitaphsStack(Math.round((stageW - Math.round(contentWidth * 0.92)) / 2), epTop, Math.round(contentWidth * 0.92), Math.max(0, gfxTop - gapY - epTop));
-      placeGraphicsRow(gfxBandLeft, gfxTop, gfxBandWidth, gfxH);
-      if (crosses[0]) m.set("cross-0", toBox(Math.round(0.04 * stageW), Math.round(0.04 * stageH), crossWpx, crossHpx));
-      if (crosses[1]) m.set("cross-1", toBox(Math.round(stageW - 0.04 * stageW - crossWpx), Math.round(0.04 * stageH), crossWpx, crossHpx));
+
+      const epLeft = Math.round((stageW - Math.round(contentWidth * 0.92)) / 2);
+      const epW = Math.round(contentWidth * 0.92);
+      const count = Math.max(0, epitaphs.length);
+      if (count) {
+        const gaps = Math.max(0, count - 1) * gapSmall;
+        const per = Math.max(10, Math.floor((Math.max(0, gfxTop - gapY - epTop) - gaps) / count));
+        let y = epTop;
+        for (let i = 0; i < count; i++) {
+          m.set(`epitaph-${i}`, toBox(epLeft, y, epW, per));
+          y += per + gapSmall;
+        }
+      }
+
+      const gfxCount = Math.max(0, graphics.length);
+      if (gfxCount > 0 && gfxH > 0) {
+        const totalGaps = Math.max(0, gfxCount - 1) * rowGapX;
+        const perW = Math.max(14, Math.floor((gfxBandWidth - totalGaps) / gfxCount));
+        for (let i = 0; i < gfxCount; i++) {
+          const x = gfxBandLeft + i * (perW + rowGapX);
+          m.set(`graphic-${i}`, toBox(x, gfxTop, perW, gfxH));
+        }
+      }
     }
   }
 
-  // Анти‑оверлап фреймов
+  // анти-оверлап фреймов
   const spacingPx = Math.round(0.006 * stageH);
   const priority = (id: string) =>
     id.startsWith("portrait") ? 0 :
@@ -529,15 +555,9 @@ function computeSketchLayout({
       if (!intersects(cur, prev)) continue;
 
       const newY = prev.y + prev.h + spacingPx;
-      if (newY + cur.h <= stageH - spacingPx) {
-        cur.y = newY;
-        continue;
-      }
+      if (newY + cur.h <= stageH - spacingPx) { cur.y = newY; continue; }
       const newX = prev.x + prev.w + spacingPx;
-      if (newX + cur.w <= stageW - spacingPx) {
-        cur.x = newX;
-        continue;
-      }
+      if (newX + cur.w <= stageW - spacingPx) { cur.x = newX; continue; }
       const maxH = Math.max(8, stageH - spacingPx - newY);
       if (maxH < cur.h) {
         cur.y = Math.min(newY, stageH - spacingPx);
@@ -578,18 +598,20 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
 
+  // refs
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
   const wishesTimerRef = useRef<number | null>(null);
 
+  // Соотношение для «рамок» (используем размеры картинки изделия как в SketchTemplate)
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const aspect = useMemo(
     () => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined),
     [imgWH]
   );
 
-  // Защита от «петель»
+  // Сохранение драфта без петель
   const isSavingRef = useRef(false);
   const touchSaving = (ms = 350) => {
     isSavingRef.current = true;
@@ -665,14 +687,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
-  // Эпитафии: одна многострочная = один элемент
+  // Эпитафии: одна многострочная — один элемент
   const epitaphs = useMemo(() => {
-    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) {
-      return (engr.epitaphs as string[]).filter(Boolean);
-    }
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) {
-      return [engr.epitaphText.trim()];
-    }
+    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
+    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
     return [];
   }, [engr]);
 
@@ -749,6 +767,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           return { ...el, ...clampBox(nx, ny, w, h) };
         }
 
+        // resize
         const keepRatio = e.shiftKey;
         let nx = x, ny = y, nw = w, nh = h;
         const startRatio = w / h || 1;
@@ -822,7 +841,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return () => { if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current); };
   }, [wishes]);
 
-  /* ===== Инициализация (складки) ===== */
+  /* ===== Инициализация фреймов по шаблону (как SketchTemplate) ===== */
   const [layoutAppliedHash, setLayoutAppliedHash] = useState<string | null>(
     () => (draft as any)?.editor?.sketchInitHash || null
   );
@@ -845,12 +864,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       graphicsSignature(crosses),
       graphicsSignature(others)
     ].join("::");
-
     if (layoutAppliedHash === contentHash) return;
 
-    const hostRect = host.getBoundingClientRect();
-    const stageW = Math.max(1, Math.floor(hostRect.width - SKETCH_PAD * 2));
-    const stageH = Math.max(1, Math.floor(hostRect.height - SKETCH_PAD * 2));
+    // размеры «контентной области», как в SketchTemplate (wrapper с паддингом)
+    const wrapRect = host.getBoundingClientRect();
+    const stageW = Math.max(1, Math.floor(wrapRect.width - SKETCH_PAD * 2));
+    const stageH = Math.max(1, Math.floor(wrapRect.height - SKETCH_PAD * 2));
     if (stageW < 10 || stageH < 10) return;
 
     const layout = computeSketchLayout({
@@ -869,7 +888,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const used = new Set<string>();
       const next: EditorEl[] = [];
 
-      // Люди
+      // Портреты/метрики
       peopleBlocks.forEach((p, i) => {
         const pid = `portrait-${p.id}`;
         const mid = `metric-${p.id}`;
@@ -896,11 +915,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (!b) return;
         const safe = ensureMin(b, 12, 8);
         const old = prevMap.get(id);
-        next.push(
-          old
-            ? { ...old, ...safe, staircase: old.staircase ?? false }
-            : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: false }
-        );
+        next.push(old ? { ...old, ...safe, staircase: old.staircase ?? false } : { id, type: "epitaph", ...safe, z: 100 + idx, title: id, staircase: false });
         used.add(id);
       });
 
@@ -915,7 +930,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         used.add(id);
       });
 
-      // Графика — внизу
+      // Графика
       others.forEach((_, idx) => {
         const id = `graphic-${idx}`;
         const b = layout.get(id);
@@ -926,7 +941,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         used.add(id);
       });
 
-      // Остальные переносим
+      // прочее переносим
       prev.forEach((el) => { if (!used.has(el.id)) next.push(el); });
 
       return next;
@@ -940,7 +955,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.url, engr, crosses, others, epitaphs, draft?.size?.orientation, imgWH]);
 
-  /* ===== Превью (canvas) ===== */
+  /* ===== Превью (canvas) — рисуем как в EditorStep DOM (тот же fit) ===== */
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
     if (W <= 0 || H <= 0) return null;
     const canvas = document.createElement("canvas");
@@ -974,7 +989,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       ctx.globalAlpha = 1;
     }
 
-    const fontFamily = `"Century Schoolbook","Times New Roman",serif`;
+    const fam = `"Century Schoolbook","Times New Roman",serif`;
     const els = elements.slice().sort((a, b) => a.z - b.z);
 
     for (const el of els) {
@@ -997,8 +1012,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const ww = r.w, hh = Math.round(ww / sr2), xx = r.x, yy = Math.round(r.y + (r.h - hh) / 2);
           ctx.drawImage(im, xx, yy, ww, hh);
         }
-        ctx.restore();
-        ctx.filter = "none";
+        ctx.restore(); ctx.filter = "none";
       } else if (el.type === "graphic") {
         const idx = Number(key);
         const g = Number.isFinite(idx) ? others[idx] : undefined;
@@ -1007,9 +1021,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         if (!im) continue;
         ctx.save();
         if (el.flipH) {
-          ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
-          ctx.scale(-1, 1);
-          ctx.translate(-(r.x + r.w / 2), -(r.y + r.h / 2));
+          ctx.translate(r.x + r.w / 2, r.y + r.h / 2); ctx.scale(-1, 1); ctx.translate(-(r.x + r.w / 2), -(r.y + r.h / 2));
         }
         const sr2 = im.width / im.height, dr2 = r.w / r.h;
         if (sr2 > dr2) {
@@ -1040,24 +1052,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
 
         ctx.save();
-        ctx.fillStyle = "#fff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         const padX = Math.max(4, Math.round(r.w * 0.04));
         const padY = Math.max(2, Math.round(r.h * 0.10));
-        const fam = fontFamily;
         const fitted = fitMetricFontsPx({
           lines: lines.map(tf),
-          boxW: r.w,
-          boxH: r.h,
-          italic: !!el.italic,
-          family: fam,
-          padX,
-          padY,
-          lineHeight: 1.12,
-          minPx: 10
+          boxW: r.w, boxH: r.h,
+          italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10
         });
-
         const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
         let y = r.y + (r.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
         for (let i = 0; i < fitted.length; i++) {
@@ -1072,10 +1074,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const text = el.uppercase ? tRaw.toUpperCase() : tRaw;
 
         ctx.save();
-        ctx.fillStyle = "#fff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        const fam = fontFamily;
+        ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
 
         if (el.staircase && isRememberLoveMourn(text)) {
           const { top, mid, bot } = splitRememberPreserve(text);
@@ -1083,14 +1082,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const padY = Math.max(2, Math.round(r.h * 0.06));
           const all = `${top}\n${mid}\n${bot}`;
           const { fontPx } = fitMultilineFontPx({
-            text: all,
-            boxW: r.w,
-            boxH: r.h,
-            italic: !!el.italic,
-            family: fam,
-            padX,
-            padY,
-            lineHeight: 1.15
+            text: all, boxW: r.w, boxH: r.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.15
           });
           setFontOnCtx(ctx, !!el.italic, fontPx, fam);
           ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(top, r.x + padX, r.y + padY);
@@ -1100,14 +1092,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const padX = Math.max(4, Math.round(r.w * 0.04));
           const padY = Math.max(2, Math.round(r.h * 0.06));
           const { fontPx, lines } = fitMultilineFontPx({
-            text,
-            boxW: r.w,
-            boxH: r.h,
-            italic: !!el.italic,
-            family: fam,
-            padX,
-            padY,
-            lineHeight: 1.15
+            text, boxW: r.w, boxH: r.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.15
           });
           setFontOnCtx(ctx, !!el.italic, fontPx, fam);
           const count = Math.max(1, lines.length);
@@ -1127,8 +1112,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   // Дебаунс-генерация превью
   const prevPreviewInputsRef = useRef<string>("");
   useEffect(() => {
-  if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
-  
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+
     const inputsSig = JSON.stringify({
       item: item?.url || "",
       elements,
@@ -1173,7 +1158,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           }
         } as OrderDraft;
       });
-    }, 260) as unknown as number;
+    }, 280) as unknown as number;
 
     return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
   }, [item?.url, elements, peopleBlocks, crosses, others, epitaphs, aspect, wishes, layoutAppliedHash]);
@@ -1266,138 +1251,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  const ContentOverlay = () => {
-    const { w: cw, h: ch } = (function () {
-      const r = wrapperRef.current?.getBoundingClientRect();
-      if (!r) return { w: 1, h: 1 };
-      return { w: Math.max(1, r.width - SKETCH_PAD * 2), h: Math.max(1, r.height - SKETCH_PAD * 2) };
-    })();
-
-    return (
-      <>
-        {elements
-          .slice()
-          .sort((a, b) => a.z - b.z)
-          .map((el) => {
-            const key = el.id.split("-").slice(1).join("-");
-            let content: React.ReactNode = null;
-
-            if (el.type === "portrait") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const url = p?.photo || "";
-              const filt = el.bw ? "grayscale(100%)" : "none";
-              content = <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block", userSelect: "none", pointerEvents: "none" }} draggable={false} />;
-            } else if (el.type === "metric") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-
-              const boxWpx = (el.w / 100) * cw;
-              const boxHpx = (el.h / 100) * ch;
-              const padX = Math.max(4, Math.round(boxWpx * 0.04));
-              const padY = Math.max(2, Math.round(boxHpx * 0.10));
-              const fam = `"Century Schoolbook","Times New Roman",serif`;
-              const fitted = fitMetricFontsPx({
-                lines: lines.map(tf),
-                boxW: boxWpx,
-                boxH: boxHpx,
-                italic: !!el.italic,
-                family: fam,
-                padX,
-                padY,
-                lineHeight: 1.12,
-                minPx: 10
-              });
-              content = (
-                <div style={{ width: "100%", height: "100%", color: "#fff", display: "grid", placeItems: "center", textAlign: "center", fontFamily: fam, fontStyle: el.italic ? "italic" : "normal", lineHeight: 1.12, textShadow: "0 1px 2px rgba(0,0,0,0.6)", padding: `${padY}px ${padX}px`, boxSizing: "border-box" }}>
-                  <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                    {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
-                    {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
-                    {lines[2] && <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>}
-                  </div>
-                </div>
-              );
-            } else if (el.type === "epitaph") {
-              const idx = Number(key);
-              const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
-              const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
-
-              const boxWpx = (el.w / 100) * cw;
-              const boxHpx = (el.h / 100) * ch;
-              const padX = Math.max(4, Math.round(boxWpx * 0.04));
-              const padY = Math.max(2, Math.round(boxHpx * 0.06));
-              const fam = `"Century Schoolbook","Times New Roman",serif`;
-
-              if (el.staircase && isRememberLoveMourn(txt)) {
-                const { top, mid, bot } = splitRememberPreserve(txt);
-                const { fontPx } = fitMultilineFontPx({
-                  text: `${top}\n${mid}\n${bot}`,
-                  boxW: boxWpx,
-                  boxH: boxHpx,
-                  italic: !!el.italic,
-                  family: fam,
-                  padX,
-                  padY,
-                  lineHeight: 1.15
-                });
-                const f = fontPx;
-                content = (
-                  <div style={{ position: "relative", width: "100%", height: "100%", color: "#fff", fontFamily: fam, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-                    <div style={{ position: "absolute", top: padY / 2, left: padX, fontWeight: 600, fontSize: f, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{top}</div>
-                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontWeight: 600, fontSize: f, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mid}</div>
-                    <div style={{ position: "absolute", right: padX, bottom: padY / 2, fontWeight: 600, fontSize: f, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{bot}</div>
-                  </div>
-                );
-              } else {
-                const { fontPx, lines } = fitMultilineFontPx({
-                  text: txt,
-                  boxW: boxWpx,
-                  boxH: boxHpx,
-                  italic: !!el.italic,
-                  family: fam,
-                  padX,
-                  padY,
-                  lineHeight: 1.15
-                });
-                content = (
-                  <div style={{ width: "100%", height: "100%", color: "#fff", display: "grid", placeItems: "center", textAlign: "center", fontFamily: fam, fontStyle: el.italic ? "italic" : "normal", lineHeight: 1.15, textShadow: "0 1px 2px rgba(0,0,0,0.6)", padding: `${padY}px ${padX}px`, boxSizing: "border-box" }}>
-                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }} title={txt}>
-                      {lines.join("\n")}
-                    </div>
-                  </div>
-                );
-              }
-            } else if (el.type === "cross") {
-              const idx = Number(key);
-              const c = Number.isFinite(idx) ? crosses[idx] : undefined;
-              if (c?.url) content = <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none", pointerEvents: "none", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} />;
-            } else if (el.type === "graphic") {
-              const idx = Number(key);
-              const g = Number.isFinite(idx) ? others[idx] : undefined;
-              if (g?.url) {
-                const tr = el.flipH ? "scaleX(-1)" : "none";
-                content = <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none", pointerEvents: "none", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} />;
-              }
-            }
-
-            return (
-              <div
-                key={`content-${el.id}`}
-                style={{
-                  position: "absolute",
-                  left: `${el.x}%`, top: `${el.y}%`,
-                  width: `${el.w}%`, height: `${el.h}%`,
-                  zIndex: el.z, pointerEvents: "none"
-                }}
-              >
-                {content}
-              </div>
-            );
-          })}
-      </>
-    );
-  };
-
   const MAX_W = 600;
 
   return (
@@ -1416,42 +1269,39 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial - редактор" />
 
-        {/* Подсказка */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
           Разместите элементы условно. Укажите порядок и выравнивание (верх/низ, слева/справа). Финальный вариант сделает специалист исходя из технических требований и согласно этой схеме.
         </section>
 
-        {/* Эскиз */}
+        {/* Эскиз: подложка — Тот Самый SketchTemplate, сверху — фреймы редактора */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={wrapperRef}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerDown={(e) => {
-              if (e.altKey) {
-                const hit = pickElementUnderPointer(e.clientX, e.clientY, null);
-                if (hit) setSelectedId(hit);
-              } else {
-                setSelectedId(null);
-              }
-            }}
             style={{
               position: "relative",
               width: "100%",
               borderRadius: 10,
               overflow: "hidden",
-              userSelect: "none",
-              ...bottomUnderlayGradient(),
-              aspectRatio: aspect,
-              minHeight: aspect ? undefined : 540
+              ...bottomUnderlayGradient()
             }}
           >
-            {/* Фон — фото изделия (полупрозрачное) */}
+            {/* Подложка (как на предыдущих шагах) */}
+            <SketchTemplate
+              item={item}
+              peopleBlocks={peopleBlocks}
+              crosses={crosses as any}
+              others={others as any}
+              epitaphs={epitaphs}
+              carvingOpacity={0.35}
+              // нам важно получить натуральное соотношение, поэтому следим за загрузкой
+              style={{}}
+            />
+
+            {/* На случай получения аспект‑отношения из фонового изображения */}
             <img
               src={item?.url || ""}
-              alt={item?.name || "Изделие"}
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", opacity: 0.35, userSelect: "none", pointerEvents: "none" }}
-              draggable={false}
+              alt=""
+              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
               onLoad={(e) => {
                 const im = e.currentTarget;
                 if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
@@ -1461,13 +1311,28 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               }}
             />
 
-            {/* Контент поверх */}
-            <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
-              <ContentOverlay />
-            </div>
-
-            {/* Рамки + мини‑панели */}
-            <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1000, pointerEvents: "none" }}>
+            {/* Слой фреймов редактора — внутри «контентной области» (с тем же паддингом, что в SketchTemplate) */}
+            <div
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerDown={(e) => {
+                if (e.altKey) {
+                  const hit = pickElementUnderPointer(e.clientX, e.clientY, null);
+                  if (hit) setSelectedId(hit);
+                } else {
+                  setSelectedId(null);
+                }
+              }}
+              style={{
+                position: "absolute",
+                left: SKETCH_PAD,
+                top: SKETCH_PAD,
+                right: SKETCH_PAD,
+                bottom: SKETCH_PAD,
+                zIndex: 1000,
+                pointerEvents: "none"
+              }}
+            >
               {elements
                 .slice()
                 .sort((a, b) => a.z - b.z)
@@ -1495,14 +1360,16 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
                       {selected && !el.locked && (
                         <>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={{ position: "absolute", left: 0, top: 0, ...handleDot(0, 0, "nwse-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={{ position: "absolute", left: "100%", top: 0, ...handleDot("100%", 0, "nesw-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={{ position: "absolute", left: "100%", top: "100%", ...handleDot("100%", "100%", "nwse-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={{ position: "absolute", left: 0, top: "100%", ...handleDot(0, "100%", "nesw-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={{ position: "absolute", left: "50%", top: 0, ...handleDot("50%", 0, "ns-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={{ position: "absolute", left: "100%", top: "50%", ...handleDot("100%", "50%", "ew-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={{ position: "absolute", left: "50%", top: "100%", ...handleDot("50%", "100%", "ns-resize") }} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={{ position: "absolute", left: 0, top: "50%", ...handleDot(0, "50%", "ew-resize") }} />
+                          {/* Углы */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")} />
+                          {/* Стороны */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={handleDot("50%", 0, "ns-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={handleDot("100%", "50%", "ew-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={handleDot("50%", "100%", "ns-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={handleDot(0, "50%", "ew-resize")} />
                         </>
                       )}
                     </div>
