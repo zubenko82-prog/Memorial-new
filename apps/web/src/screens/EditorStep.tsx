@@ -585,12 +585,19 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
+// (Больше НИЧЕГО не делим по строкам — одна многострочная эпитафия = один элемент)
+
   const epitaphs = useMemo(() => {
-    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return engr.epitaphs.filter(Boolean);
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim())
-      return engr.epitaphText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
-    return [];
-  }, [engr]);
+  // Если в драфте уже массив эпитафий — используем как есть
+  if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) {
+    return (engr.epitaphs as string[]).filter(Boolean);
+  }
+  // Если задан одиночный текст эпитафии — НЕ делим по строкам, это одна эпитафия
+  if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) {
+    return [engr.epitaphText.trim()];
+  }
+  return [];
+}, [engr]);
 
   const crosses = useMemo(
     () => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)),
