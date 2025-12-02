@@ -1,39 +1,34 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Что делает:
-// - Портреты 3:4, метрики, эпитафии (могут быть многострочными в рамках одного элемента), графика и кресты.
-// - Эпитафии размещаем строго над графикой (прижатой к низу), масштабируем под доступную высоту.
-// - Для 2 человек метрика немного уменьшена.
-// - Возвращаем раскладку через onLayout (в процентах 0..100), чтобы EditorStep навесил рамки.
+// Что изменено:
+// - Эпитафии «привязаны» к графике: размещаем строго над графикой с отступом (gap). Эпитафия масштабируется,
+//   чтобы уместиться между метрикой и графикой, без выхода за пределы поля.
+// - Графика всегда прижата к низу (у вертикальных и горизонтальных шаблонов), высота — адаптивная
+//   (по умолчанию ~18% H для горизонтальных, ~12% H для вертикальных). Если места мало — графика ужимается.
+// - В шаблоне с 2 людьми (и горизонтальном, и вертикальном) метрика уменьшена (уменьшен кегль через sizeMult=0.9).
 //
-// Исправлено:
-// - Добавлен clamp (раньше падало "clamp is not defined").
-// - onLayout больше не вызывает «Maximum update depth exceeded»:
-//   • Не зависит от изменяющейся каждый рендер ссылки onLayout — используем ref.
-//   • Перед вызовом сравниваем сигнатуру layout; одинаковый layout не отправляем повторно.
-//   • Вызов onLayout обёрнут в requestAnimationFrame.
+// Стабильность:
+// - Измерения (metricBottomPx, metricScaleH1) по сигнатурам; setState только при реальном изменении.
+// - Выравнивание — центр, без align из конфигураций.
+// - Графика — в одну строку; ширина каждого элемента рассчитывается так, чтобы вся строка влезала, высота ограничена.
+//
+// Порядок блоков: Метрика → Эпитафия (над графикой) → Графика (прижата к низу).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
 type Orientation = "vertical" | "horizontal";
 
-export type SketchLayoutBox = {
-  x: number; y: number; w: number; h: number; // проценты 0..100 относительно области шаблона
-  type: "portrait" | "metric" | "epitaph" | "cross" | "graphic";
-};
-
 export type SketchTemplateProps = {
   item: { url?: string; name?: string } | null;
   peopleBlocks: Array<{ id: string; lines: string[]; photo?: string | null }>;
   crosses?: Array<{ url: string; name?: string }>;
   others?: Array<{ url: string; name?: string }>;
-  epitaphs?: string[]; // многострочный текст допускается (элемент один)
+  epitaphs?: string[];
   carvingOpacity?: number;
   style?: React.CSSProperties;
   orientationOverride?: Orientation;
-  onLayout?: (boxes: Record<string, SketchLayoutBox>) => void; // Callback для EditorStep
 };
 
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
@@ -58,10 +53,9 @@ const CFG = {
   }
 } as const;
 
-// Утилиты
+// Порог для сравнений, чтобы избежать «дребезга»
 const EPS = 0.0005;
 const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
@@ -84,14 +78,13 @@ export default function SketchTemplate({
   epitaphs = [],
   carvingOpacity = CFG.general.carvingOpacityDefault,
   style,
-  orientationOverride,
-  onLayout
+  orientationOverride
 }: SketchTemplateProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Измерители
+  // Измерители (с защитами)
   const [metricBottomPx, setMetricBottomPx] = useState(0);
   const metricMeasureSigRef = useRef<string>("");
   const metricRafRef = useRef<number | null>(null);
@@ -104,12 +97,6 @@ export default function SketchTemplate({
   const metricH1SigRef = useRef<string>("");
 
   const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
-
-  // onLayout ref, чтобы не триггерить эффект из-за смены ссылки
-  const onLayoutRef = useRef<typeof onLayout>();
-  useEffect(() => {
-    onLayoutRef.current = onLayout;
-  }, [onLayout]);
 
   useEffect(() => {
     const apply = () => {
@@ -153,7 +140,7 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  // Метрика — общие компоненты
+  // Метрика (общая версия + увеличенная/уменьшенная)
   function MetricThreeLines({ lines }: { lines: string[] }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
@@ -219,6 +206,7 @@ export default function SketchTemplate({
 
     return () => {
       if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
+      metricRafRef.current = null;
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
@@ -579,7 +567,10 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика ===== */
+  /* ===== Эпитафия + графика =====
+     Унифицировано для всех шаблонов:
+     - Графика всегда прижата к низу (с bottomPad); желаемая высота: horiz ~18%H, vert ~12%H (ужимается при нехватке).
+     - Эпитафии размещаем над графикой с отступом (gap), масштабируем, чтобы поместиться между метрикой и графикой. */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
@@ -597,7 +588,7 @@ export default function SketchTemplate({
     // Минимум места для эпитафии — 16px
     const minEpPx = 16;
 
-    // Доступная высота между метрикой и нижней кромкой
+    // Весь доступный «контент» для эпитафии+графики: от низа метрики до низа изображения
     const topAfterMetric = Math.max(metricBottomPx + gap, 0);
     const availableContent = Math.max(0, H - bottomPadPx - topAfterMetric);
 
@@ -734,64 +725,6 @@ export default function SketchTemplate({
     );
   };
 
-  /* ===== Съём раскладки для EditorStep (onLayout) ===== */
-  const lastLayoutSigRef = useRef<string>("");
-  const onLayoutRafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!onLayoutRef.current) return;
-    const root = containerRef.current;
-    if (!root || !H || !W) return;
-
-    // Собираем боксы
-    const rootRect = root.getBoundingClientRect();
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-sketch-el]"));
-    const boxes: Record<string, SketchLayoutBox> = {};
-    nodes.forEach((node) => {
-      const typeAttr = node.getAttribute("data-sketch-el") as SketchLayoutBox["type"] | null;
-      const keyAttr = node.getAttribute("data-sketch-key");
-      if (!typeAttr || keyAttr == null) return;
-
-      const id = `${typeAttr}-${keyAttr}`;
-      const r = node.getBoundingClientRect();
-      const x = ((r.left - rootRect.left) / rootRect.width) * 100;
-      const y = ((r.top - rootRect.top) / rootRect.height) * 100;
-      const w = (r.width / rootRect.width) * 100;
-      const h = (r.height / rootRect.height) * 100;
-
-      boxes[id] = {
-        type: typeAttr,
-        x: clamp(x, 0, 100),
-        y: clamp(y, 0, 100),
-        w: clamp(w, 0, 100),
-        h: clamp(h, 0, 100)
-      };
-    });
-
-    // Сигнатура для отсечения дребезга
-    const sig = Object.keys(boxes)
-      .sort()
-      .map((id) => {
-        const b = boxes[id];
-        return `${id}:${b.type}:${b.x.toFixed(2)}:${b.y.toFixed(2)}:${b.w.toFixed(2)}:${b.h.toFixed(2)}`;
-      })
-      .join("|");
-
-    if (lastLayoutSigRef.current === sig) return;
-    lastLayoutSigRef.current = sig;
-
-    // rAF, чтобы не вызывать синхронно в фазе эффекта
-    if (onLayoutRafRef.current) cancelAnimationFrame(onLayoutRafRef.current);
-    onLayoutRafRef.current = requestAnimationFrame(() => {
-      onLayoutRef.current?.(boxes);
-    });
-
-    return () => {
-      if (onLayoutRafRef.current) cancelAnimationFrame(onLayoutRafRef.current);
-      onLayoutRafRef.current = null;
-    };
-  }, [peopleBlocks, crosses, others, epitaphs, H, W, isVertical, tplKey]); // onLayout не включаем — используем ref
-
   return (
     <>
       {/* Пояснение над эскизом */}
@@ -832,7 +765,7 @@ export default function SketchTemplate({
           src={item?.url || ""}
           alt={item?.name || "Изделие"}
           style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
-          draggable={false}
+        draggable={false}
           onLoad={() => requestAnimationFrame(recalc)}
         />
 
