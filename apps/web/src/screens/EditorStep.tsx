@@ -1125,10 +1125,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
 
   // Дебаунс-генерация превью
-  const prevPreviewInputsRef = useRef<string>("");
-  const previewTimerRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+  // Дебаунс-генерация превью
+const prevPreviewInputsRef = useRef<string>("");
+useEffect(() => {
+  if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+  ...
+
 
     const inputsSig = JSON.stringify({
       item: item?.url || "",
