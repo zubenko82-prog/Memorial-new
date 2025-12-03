@@ -422,7 +422,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
       }}
     >
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        <TopBarWithIntro title="Memorial - усопшие" />
+        <TopBarWithIntro title="Memorial" />
 
         {/* Навигация (пунктирная рамка) */}
         <div

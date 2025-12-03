@@ -10,6 +10,9 @@
 // - Горизонтальный/вертикальный шаблон и метрика — внутри SketchTemplate.
 // - Кресты и прочая графика — передаём в SketchTemplate как оверлеи.
 // - Кнопка «Эскиз» и скролл к категории/подкатегории учитывают высоту навигации и анимации раскрытия.
+//
+// Требование: "Галерея должна быть минимум 2 ряда" — для грид-галерей категорий, подкатегорий и блока выбранных
+// добавлен минимальный вычисляемый minHeight на 2 ряда карточек.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchCatalog } from "../api";
@@ -50,6 +53,18 @@ function bottomUnderlayGradient() {
       "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   } as React.CSSProperties;
 }
+
+// Минимум 2 ряда для галерей: считаем приблизительную высоту карточки (превью + служебная зона)
+// Превью квадрат с min 120px, плюс контролы/отступы ≈ 54px.
+const GALLERY_CELL_MIN = 120;
+const GALLERY_CONTROLS_H = 54;
+const GALLERY_ROW_GAP = 10;
+const galleryMinGridHeightPx = 2 * (GALLERY_CELL_MIN + GALLERY_CONTROLS_H) + GALLERY_ROW_GAP;
+const galleryGrid2RowsStyle: React.CSSProperties = {
+  minHeight: galleryMinGridHeightPx,
+  alignContent: "start" // чтобы грид не растягивался и начинался сверху
+};
+
 function Collapsible({
   open,
   header,
@@ -532,7 +547,7 @@ export default function GraphicsStep(props: any) {
 
   return (
     <div style={{ maxWidth: 600, margin: "0 auto", color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease" }}>
-      <TopBarWithIntro title="Memorial - графика" />
+      <TopBarWithIntro title="Memorial" />
 
       {/* Навигация — стиль EngravingStep */}
       <div
@@ -613,7 +628,14 @@ export default function GraphicsStep(props: any) {
                     >
                       <div style={{ padding: 10, display: "grid", gap: 12 }}>
                         {cat.items.length > 0 && (
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                              gap: 10,
+                              ...galleryGrid2RowsStyle
+                            }}
+                          >
                             {cat.items.map((g: any) => {
                               const qty = countsById[g.id] || 0;
                               return (
@@ -699,7 +721,14 @@ export default function GraphicsStep(props: any) {
                                   }
                                 >
                                   <div style={{ padding: 10 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
+                                    <div
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                                        gap: 10,
+                                        ...galleryGrid2RowsStyle
+                                      }}
+                                    >
                                       {sub.items.map((g: any) => {
                                         const qty = countsById[g.id] || 0;
                                         return (
@@ -773,7 +802,14 @@ export default function GraphicsStep(props: any) {
           const unique = Object.values(firstById);
           if (unique.length === 0) return <div style={{ opacity: 0.8 }}>Не выбрано ни одного элемента</div>;
           return (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                gap: 10,
+                ...galleryGrid2RowsStyle
+              }}
+            >
               {unique.map((g: any) => {
                 const qty = countsById[g.id] || 0;
                 return (
@@ -796,7 +832,7 @@ export default function GraphicsStep(props: any) {
 
       {/* Предпросмотр — общий SketchTemplate с гориз./верт. шаблоном, оверлеями и ЭПИТАФИЯМИ */}
       <section ref={previewSectionRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0", scrollMarginTop: navH + 24 }}>
-          <SketchTemplate
+        <SketchTemplate
           item={item}
           peopleBlocks={peopleBlocks}
           crosses={selectedCrosses}

@@ -814,7 +814,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }}
     >
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        <TopBarWithIntro title="Memorial - редактор" previewUrl={miniPreview} />
+        <TopBarWithIntro title="Memorial" previewUrl={miniPreview} />
 
         {/* Подсказка шага */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>

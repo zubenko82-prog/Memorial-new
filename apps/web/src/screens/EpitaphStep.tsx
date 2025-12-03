@@ -349,7 +349,7 @@ export default function EpitaphStep(props: any) {
       }}
     >
       {/* TopBar — НЕ липкий */}
-      <TopBarWithIntro title="Memorial - эпитафия" />
+      <TopBarWithIntro title="Memorial" />
 
       <div style={{ margin: "0 0 8px 0" }}>
         Сейчас можно выбрать эпитафию. Несколько надписей допустимы, но умеренность поможет сохранить красоту памятника.
