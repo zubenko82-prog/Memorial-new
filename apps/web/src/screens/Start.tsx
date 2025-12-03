@@ -6,7 +6,7 @@
 // (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
 // в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
 //
-// FIX: увеличили высоту всплывающего окна до 96svh, чтобы на телефонах в Telegram влезал «Альтернативный способ связи».
+// FIX: увеличили высоту всплывающего окна до 98svh, чтобы на телефонах в Telegram влезал «Альтернативный способ связи».
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -294,8 +294,8 @@ function PreviewBottomSheet({
           bottom: 0,
           zIndex: 2147483601,
           width: "100%",
-          // Увеличили высоту на мобильных: до 96svh (было 90svh)
-          height: "clamp(560px, 96svh, 1000px)",
+          // Увеличили высоту на мобильных: до 98svh (было 90svh)
+          height: "clamp(560px, 98svh, 1000px)",
           padding: 12,
           paddingBottom: bottomInset,
           borderTopLeftRadius: 12,
