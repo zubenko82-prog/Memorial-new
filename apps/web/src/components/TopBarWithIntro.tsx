@@ -1,10 +1,7 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
-// Правки под мобильные:
-// - Компактный режим (<= 420px): уменьшаем горизонтальные отступы шапки/панели, шрифты и промежутки,
-//   уменьшаем ширину колонки ярлыков (Row), миниатюры и переводим некоторые области в одну колонку.
-// - Минимизируем внешние отступы от краёв экрана на телефоне (маленькие margin-inline).
-// - "(тыл)" в заголовке «Люди на памятнике» показывается только если есть люди на тыльной стороне.
+// Компактный режим (<= 420px): без отступов слева/справа (full-bleed).
+// Дополнительно: уменьшенные отступы/шрифты в компактном режиме, чтобы всё помещалось.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -411,15 +408,16 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     deathDate?: string;
     photoPreview?: string | null;
   }>;
-  const backElements: any[] = (((order as any)?.editorBack?.elements as any[]) || []);
   const backHasPeople = backPersons.length > 0;
 
   return (
     <div
       style={{
         marginBottom: compact ? 8 : 10,
-        // минимальные отступы по краям на мобильном
-        marginInline: compact ? "4px" : "0px"
+        // Компактный режим: без отступов слева/справа (full-bleed)
+        marginInline: compact ? "calc(50% - 50vw)" : "0px",
+        maxWidth: compact ? "100vw" : undefined,
+        overflowX: compact ? "clip" : undefined
       }}
     >
       <style>{`
