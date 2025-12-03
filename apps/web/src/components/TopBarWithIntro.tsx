@@ -1,8 +1,8 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
 // Компактный режим (<= 420px):
-// - Отступы слева, справа и сверху: 2px. Снизу — без изменений (как было).
-// - Сохранены уменьшенные паддинги/шрифты.
+// - Отступы слева, справа и сверху: 2px. Снизу — без изменений.
+// - Кнопку‑индикатор раскрытия (chevron) переносим по центру шапки (визуально, поверх контента).
 // - «Люди» (если есть тыл) и «Эскизы» — всегда 2 столбца.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -435,6 +435,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         title={open ? "Скрыть данные заказа" : "Показать данные заказа"}
         onClick={() => setOpen((v) => !v)}
         style={{
+          position: "relative", // для центрированного chevron в compact
           width: "100%",
           textAlign: "left",
           padding: compact ? "8px 8px" : "12px 14px",
@@ -476,7 +477,37 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           />
         </div>
 
-        {/* Справа — №, имя, телефон + chevron */}
+        {/* Центрированный chevron в компактном режиме (визуальный индикатор, кликаем по всей шапке) */}
+        {compact && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              width: 26,
+              height: 26,
+              borderRadius: 999,
+              display: "grid",
+              placeItems: "center",
+              background: palette(theme).chevronCircleBg,
+              border: palette(theme).chevronCircleBorder,
+              pointerEvents: "none" // кликабельна вся шапка
+            }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width={16}
+              height={16}
+              style={{ display: "block", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 220ms ease" }}
+            >
+              <path d="M6 9l6 6 6-6" fill="none" stroke={palette(theme).chevronStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        )}
+
+        {/* Справа — №, имя, телефон + chevron (chevron скрываем в компактном режиме) */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: compact ? 8 : 10, minWidth: 0 }}>
           <div style={{ display: "grid", gridAutoRows: "min-content", textAlign: "right", lineHeight: 1.15, gap: compact ? 1 : 2, minWidth: 0 }}>
             <div style={{ fontSize: 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
@@ -507,11 +538,25 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               {intro?.customerPhone || "—"}
             </div>
           </div>
-          <div aria-hidden style={{ width: compact ? 22 : 24, height: compact ? 22 : 24, borderRadius: 999, display: "grid", placeItems: "center", background: palette(theme).chevronCircleBg, border: palette(theme).chevronCircleBorder, transition: "background 220ms ease, border-color 220ms ease, transform 220ms ease" }}>
-            <svg viewBox="0 0 24 24" width={compact ? 14 : 16} height={compact ? 14 : 16} style={{ display: "block", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 220ms ease" }}>
-              <path d="M6 9l6 6 6-6" fill="none" stroke={palette(theme).chevronStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </div>
+          {!compact && (
+            <div
+              aria-hidden
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 999,
+                display: "grid",
+                placeItems: "center",
+                background: palette(theme).chevronCircleBg,
+                border: palette(theme).chevronCircleBorder,
+                transition: "background 220ms ease, border-color 220ms ease, transform 220ms ease"
+              }}
+            >
+              <svg viewBox="0 0 24 24" width={16} height={16} style={{ display: "block", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 220ms ease" }}>
+                <path d="M6 9l6 6 6-6" fill="none" stroke={palette(theme).chevronStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+          )}
         </div>
       </button>
 
