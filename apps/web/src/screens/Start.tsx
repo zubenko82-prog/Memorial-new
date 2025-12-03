@@ -333,7 +333,213 @@ function PreviewBottomSheet({
   );
 }
 
-/* ==== Экран Start (каталог) — без изменений ниже ==== */
-export default function Start({ onConfirm }: { onConfirm: (item: CatalogItem, meta?: ConfirmMeta) => void; }) {
-  // ... остальной код компонента Start без изменений ...
+/* ============== Экран Start (каталог) ============== */
+
+export default function Start({
+  onConfirm
+}: {
+  onConfirm: (item: CatalogItem, meta?: ConfirmMeta) => void;
+}) {
+  const [cats, setCats] = useState<CatalogCategory[] | null>(null);
+  const [err, setErr] = useState<string>("");
+  const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
+  const [outro, setOutro] = useState(false);
+
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const [navH, setNavH] = useState<number>(56);
+
+  useEffect(() => {
+    fetchCatalog("carvings")
+      .then((d) => setCats(d.categories))
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  useLayoutEffect(() => {
+    const measure = () => setNavH(navRef.current?.getBoundingClientRect().height ?? 0);
+    measure();
+    window.addEventListener("resize", measure);
+    const ro = new ResizeObserver(measure);
+    if (navRef.current) ro.observe(navRef.current);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro.disconnect();
+    };
+  }, []);
+
+  const makeCatId = (cat: CatalogCategory, idx: number) => {
+    const base = (cat.slug?.trim() || cat.name || `cat-${idx}`).toString();
+    return `${encodeURIComponent(base)}__${idx}`;
+  };
+
+  const scrollToCat = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const y = window.scrollY + rect.top - (navH + 12);
+    window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+  };
+
+  const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
+  function sortedItems(items: CatalogItem[]) {
+    const keyOf = (it: CatalogItem) =>
+      (it as any).order ?? (it as any).index ?? (it as any).idx ?? (it as any).position ?? (it as any).sort;
+    return items.slice().sort((a, b) => {
+      const ka = keyOf(a);
+      const kb = keyOf(b);
+      const na = Number.isFinite(ka) ? Number(ka) : null;
+      const nb = Number.isFinite(kb) ? Number(kb) : null;
+      if (na !== null && nb !== null) return na - nb;
+      const pa = ((a as any).relPath as string) || a.url || a.name || "";
+      const pb = ((b as any).relPath as string) || b.url || b.name || "";
+      const cmp = collator.compare(pa, pb);
+      if (cmp !== 0) return cmp;
+      const na1 = a.name || "";
+      const nb1 = b.name || "";
+      return collator.compare(na1, nb1);
+    });
+  }
+
+  const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
+    saveOrderDraft({ item: { name: it.name, url: it.url, relPath: (it as any).relPath } });
+    setPreviewItem(null);
+    setOutro(true);
+    window.setTimeout(() => onConfirm(it, meta), 220);
+  };
+
+  return (
+    <div
+      style={{
+        color: "#fff",
+        fontFamily:
+          "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
+        padding: 12,
+        opacity: outro ? 0 : 1,
+        transition: "opacity 220ms ease",
+        maxWidth: 600,
+        margin: "0 auto"
+      }}
+    >
+      <TopBarWithIntro title="Memorial" />
+
+      <div style={{ marginBottom: 6, opacity: 0.9 }}>
+        Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
+      </div>
+
+      {/* Липкая панель навигации по категориям */}
+      {cats && cats.length > 0 && (
+        <div
+          ref={navRef}
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 50,
+            paddingTop: "env(safe-area-inset-top)",
+            ...glassPanelStyle(),
+            borderRadius: 0,
+            borderLeft: "none",
+            borderRight: "none",
+            marginBottom: 10
+          }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px", overflow: "hidden" }}>
+            {cats.map((cat, idx) => {
+              const catId = makeCatId(cat, idx);
+              return (
+                <button
+                  key={`nav-${catId}`}
+                  onClick={() => scrollToCat(catId)}
+                  style={{ ...glassButtonStyle("nano"), padding: "4px 8px", fontSize: 12, lineHeight: 1.15 }}
+                  title={`Перейти к: ${cat.name}`}
+                  onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                  onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                  onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+                >
+                  {cat.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {err && <div style={{ color: "salmon" }}>{err}</div>}
+      {!cats && <div>Загрузка...</div>}
+      {cats && cats.length === 0 && <div>Пока пусто. Добавьте папки и изображения в data/catalogs/carvings.</div>}
+
+      <div style={{ display: "grid", gap: 14, scrollBehavior: "smooth" }}>
+        {cats?.map((cat, idx) => {
+          const catId = makeCatId(cat, idx);
+          const items = sortedItems(cat.items);
+          return (
+            <section id={catId} key={`cat-${catId}`} style={{ paddingTop: 2, scrollMarginTop: `${navH + 14}px` }}>
+              <FiligreeSeparator top={2} bottom={6} widthPct={60} />
+              <h3 style={{ margin: "0 0 6px 0" }}>{cat.name}</h3>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                  gap: 10
+                }}
+              >
+                {items.map((it, i) => (
+                  <button
+                    key={it.relPath || `${catId}-${i}`}
+                    onClick={() => setPreviewItem(it)}
+                    title="Открыть предпросмотр"
+                    style={{
+                      ...glassPanelStyle(),
+                      borderRadius: 12,
+                      padding: 6,
+                      cursor: "pointer",
+                      textAlign: "center",
+                      transform: "translateZ(0)"
+                    }}
+                    onPointerEnter={(e) => (e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.35)")}
+                    onPointerLeave={(e) => (e.currentTarget.style.boxShadow = "")}
+                    onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.995)")}
+                    onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                  >
+                    <div
+                      style={{
+                        ...bottomUnderlayGradient(),
+                        borderRadius: 10,
+                        aspectRatio: "1/1",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 6
+                      }}
+                    >
+                      <img
+                        src={it.url}
+                        alt={it.name}
+                        style={{
+                          maxWidth: "100%",
+                          maxHeight: "100%",
+                          width: "auto",
+                          height: "auto",
+                          objectFit: "contain",
+                          display: "block",
+                          borderRadius: 8
+                        }}
+                      />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      {previewItem && (
+        <PreviewBottomSheet
+          item={previewItem}
+          onClose={() => setPreviewItem(null)}
+          onConfirm={(meta) => confirmAndGo(previewItem, meta)}
+        />
+      )}
+    </div>
+  );
 }
