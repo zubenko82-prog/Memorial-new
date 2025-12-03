@@ -1,11 +1,8 @@
 // src/components/TopBarWithIntro.tsx
-// Шапка-кнопка с раскрывающейся панелью заказа (драфт) + мини‑эскизы редактора.
+// Шапка-кнопка с раскрывающейся панелью заказа.
 // Правки:
-// - Показываем мини‑эскизы для редактора (лицевая/тыльная).
-// - При каждом открытии/обновлении сверяем «актуальность» мини‑эскиза: считаем сигнатуру текущего драфта
-//   и сравниваем с сохранённой сигнатурой эскиза. Если отличаются — помечаем «устарел».
-// - Автосохранение текущей сигнатуры в драфт (editor.previewSig / editorBack.previewSig) при изменениях.
-// - "(тыл)" в заголовке «Люди на памятнике» — только если есть люди на тыльной стороне.
+// - "(тыл)" в заголовке «Люди на памятнике» теперь показывается только если есть люди на тыльной стороне (backHasPeople).
+// - Остальной функционал без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -215,75 +212,6 @@ function orientationLabel(o?: "vertical" | "horizontal"): string {
   return o === "horizontal" ? "горизонтальная" : "вертикальная";
 }
 
-/* ===== Хелперы сигнатур эскиза редактора ===== */
-function safeString(v: any) {
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
-}
-function djb2(str: string): string {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    // eslint-disable-next-line no-bitwise
-    hash = ((hash << 5) + hash) + str.charCodeAt(i);
-    // eslint-disable-next-line no-bitwise
-    hash = hash & 0xffffffff;
-  }
-  // to unsigned hex
-  // eslint-disable-next-line no-bitwise
-  return (hash >>> 0).toString(16);
-}
-function makeFrontSignature(order: OrderDraft): string {
-  const itemUrl = order?.item?.url || "";
-  const orient = (order.size?.orientation as any) || (order as any).orientation || "";
-  const persons = Array.isArray(order?.engraving?.persons)
-    ? (order.engraving!.persons as any[]).map((p) => ({
-        id: p.id || "",
-        lastName: p.lastName || "",
-        firstName: p.firstName || "",
-        middleName: p.middleName || "",
-        birthDate: p.birthDate || "",
-        deathDate: p.deathDate || ""
-      }))
-    : [];
-  const graphics = Array.isArray(order?.graphics)
-    ? (order.graphics as any[]).map((g) => ({ id: g.id || "", url: g.url || "", cat: g.catSlug || g.catName || "" }))
-    : [];
-  const epitaphs = Array.isArray(order?.engraving?.epitaphs) && order.engraving!.epitaphs!.length
-    ? order.engraving!.epitaphs
-    : (order?.engraving?.epitaphText ? [order.engraving.epitaphText] : []);
-  const elements = (order as any)?.editor?.elements || [];
-  const wishes = (order as any)?.editor?.wishes || "";
-  const sigObj = { itemUrl, orient, persons, graphics, epitaphs, elements, wishes };
-  return djb2(safeString(sigObj));
-}
-function makeBackSignature(order: OrderDraft): string {
-  const itemUrl = order?.item?.url || "";
-  const orient = (order.size?.orientation as any) || (order as any).orientation || "";
-  const persons = (((order as any)?.editorBack?.people as any[]) || []).map((p) => ({
-    id: p.id || "",
-    lastName: p.lastName || "",
-    firstName: p.firstName || "",
-    middleName: p.middleName || "",
-    birthDate: p.birthDate || "",
-    deathDate: p.deathDate || ""
-  }));
-  const selectedGraphicsIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-  const graphicsMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-  const graphics = selectedGraphicsIds.map((id) => ({
-    id,
-    url: graphicsMeta?.[id]?.url || "",
-    name: graphicsMeta?.[id]?.name || ""
-  }));
-  const epitaphs = (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
-  const elements = (((order as any)?.editorBack?.elements || []) as any[]);
-  const wishes = (((order as any)?.editorBack?.wishes || "") as string);
-  const sigObj = { itemUrl, orient, persons, graphics, epitaphs, elements, wishes };
-  return djb2(safeString(sigObj));
-}
-
 /* ===== Компонент ===== */
 export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
   const [open, setOpen] = useState(false);
@@ -301,18 +229,19 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [contactNotes, setContactNotes] = useState(intro?.customerNotes || "");
   const [sizeNotes, setSizeNotes] = useState(order.size?.notes || "");
 
-  // Эпитафии (лицевая)
+  // Эпитафии общим текстом (лицевая)
   const [epitaphsText, setEpitaphsText] = useState(
     (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) ||
-    order.engraving?.epitaphText || ""
+      order.engraving?.epitaphText ||
+      ""
   );
   const [orderNotes, setOrderNotes] = useState(order.notes || "");
 
-  // Пожелания
+  // Пожелания (лицо/тыл)
   const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
   const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
 
-  // Live‑обновления из драфта
+  // Live-обновления из драфта
   useEffect(() => {
     const onUpd = () => setOrder(loadOrderDraft());
     window.addEventListener("storage", onUpd);
@@ -381,7 +310,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     [order]
   );
 
-  // Мини‑эскизы (hi/mini)
+  // Эскизы (hi/mini)
   const editorMini = order?.editor?.previewUrl as string | undefined;
   const editorBig = order?.editor?.previewHiUrl as string | undefined;
   const backMini = (order as any)?.editorBack?.previewUrl as string | undefined;
@@ -394,39 +323,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
   // orientation для отображения
   const draftOrientation = (order.size?.orientation as "vertical" | "horizontal" | undefined) ?? ((order as any).orientation as "vertical" | "horizontal" | undefined);
-
-  // Сигнатуры и их «актуальность»
-  const frontSigNow = useMemo(() => makeFrontSignature(order), [order]);
-  const backSigNow = useMemo(() => makeBackSignature(order), [order]);
-  const frontSigSaved = (order as any)?.editor?.previewSig as string | undefined;
-  const backSigSaved = (order as any)?.editorBack?.previewSig as string | undefined;
-  const frontUpToDate = !!(editorMini || editorBig) && frontSigSaved && frontSigSaved === frontSigNow;
-  const backUpToDate = !!(backMini || backBig) && backSigSaved && backSigSaved === backSigNow;
-
-  // Автосохранение текущих сигнатур в драфт (чтобы при переходах мы могли быстро сверять)
-  const lastSavedSigRef = useRef<{ f?: string; b?: string }>({});
-  useEffect(() => {
-    const shouldSaveFront = frontSigNow && frontSigNow !== (order as any)?.editor?.previewSig;
-    const shouldSaveBack = backSigNow && backSigNow !== (order as any)?.editorBack?.previewSig;
-    if (!shouldSaveFront && !shouldSaveBack) return;
-
-    const prevF = lastSavedSigRef.current.f;
-    const prevB = lastSavedSigRef.current.b;
-    if (prevF === frontSigNow && prevB === backSigNow) return;
-
-    const cur = loadOrderDraft();
-    const next: any = { ...cur };
-    if (shouldSaveFront) {
-      next.editor = { ...(next.editor || {}), previewSig: frontSigNow };
-      lastSavedSigRef.current.f = frontSigNow;
-    }
-    if (shouldSaveBack) {
-      next.editorBack = { ...(next.editorBack || {}), previewSig: backSigNow };
-      lastSavedSigRef.current.b = backSigNow;
-    }
-    saveOrderDraft(next);
-    setOrder(next);
-  }, [frontSigNow, backSigNow]); // сохраняем при изменении
 
   // Сохранить эскиз (скачивание)
   const downloadDataUrl = (dataUrl: string, filename: string) => {
@@ -487,7 +383,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     );
   };
 
-  // Данные людей
+  // Данные людей (лицо/тыл)
   const frontPersons = ((order.engraving?.persons as any[]) || []).filter(Boolean);
   const backPersons = ((((order as any)?.editorBack?.people as any[]) || []).filter(Boolean)) as Array<{
     id?: string;
@@ -507,13 +403,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       <style>{`
         @keyframes nudge { 0% { transform: translateY(0); } 100% { transform: translateY(3px); } }
         .link-like:hover { text-decoration: underline; }
-        .badge {
-          position: absolute; right: 6px; top: 6px;
-          font-size: 11px; padding: 2px 6px; border-radius: 999px;
-          background: rgba(0,0,0,0.55); color: #fff; border: 1px solid rgba(255,255,255,0.2);
-        }
-        .badge.ok { background: rgba(16,130,63,0.75); }
-        .badge.stale { background: rgba(179,38,30,0.75); }
       `}</style>
 
       {/* Шапка-кнопка */}
@@ -812,14 +701,14 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             )}
           </section>
 
-          {/* Эскизы — две колонки (миникарточки + статус актуальности) */}
+          {/* Эскизы — две колонки (списки сверху, эскиз и пожелания снизу) */}
           <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
             <div style={{ textAlign: "center", textDecoration: "underline", fontWeight: 600, marginBottom: 8, color: palette(theme).text }}>Эскизы</div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "stretch" }}>
               {/* Левая колонка (лицевая) */}
-              <div style={{ display: "grid", gridTemplateRows: "auto auto auto", gap: 10, minHeight: 0 }}>
-                {/* графика/эпитафии списком (сверху) */}
+              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", gap: 10, minHeight: 0 }}>
+                {/* row 1 — списки */}
                 <div style={{ display: "grid", gap: 8 }}>
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Графика (лицевая)</div>
@@ -831,6 +720,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       </div>
                     )}
                   </div>
+
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Эпитафии (лицевая)</div>
                     {frontEpitaphs.length === 0 ? (
@@ -845,32 +735,32 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   </div>
                 </div>
 
-                {/* мини‑эскиз */}
+                {/* row 2 — spacer */}
+                <div style={{ minHeight: 0 }} />
+
+                {/* row 3 — мини-эскиз (снизу) */}
                 <div
                   role="button"
-                  title={(editorBig || editorMini) ? (frontUpToDate ? "Сохранить эскиз (лицевая)" : "Эскиз устарел — обновите на шаге редактирования") : "Нет превью"}
+                  title={(editorBig || editorMini) ? "Сохранить эскиз (лицевая)" : "Нет превью"}
                   onClick={() => (editorBig || editorMini) && askSaveSketch("front")}
                   style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: (frontAR || "1 / 1"), cursor: (editorBig || editorMini) ? "pointer" : "default" }}
                 >
                   {(editorBig || editorMini) ? (
-                    <>
-                      <img
-                        src={editorBig || editorMini}
-                        alt="Эскиз (лицевая)"
-                        style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                        onLoad={(e) => {
-                          const img = e.currentTarget;
-                          if (img.naturalWidth && img.naturalHeight) setFrontWH({ w: img.naturalWidth, h: img.naturalHeight });
-                        }}
-                      />
-                      <div className={`badge ${frontUpToDate ? "ok" : "stale"}`}>{frontUpToDate ? "актуален" : "устарел"}</div>
-                    </>
+                    <img
+                      src={editorBig || editorMini}
+                      alt="Эскиз (лицевая)"
+                      style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        if (img.naturalWidth && img.naturalHeight) setFrontWH({ w: img.naturalWidth, h: img.naturalHeight });
+                      }}
+                    />
                   ) : (
                     <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>
                   )}
                 </div>
 
-                {/* Пожелания (лицевая) */}
+                {/* row 4 — пожелания */}
                 <div>
                   <div style={{ fontWeight: 600, marginBottom: 4, color: palette(theme).text, fontSize: 13 }}>
                     Пожелания по эскизу (лицевая)
@@ -892,8 +782,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               </div>
 
               {/* Правая колонка (тыльная) */}
-              <div style={{ display: "grid", gridTemplateRows: "auto auto auto", gap: 10, minHeight: 0 }}>
-                {/* графика/эпитафии списком */}
+              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", gap: 10, minHeight: 0 }}>
+                {/* row 1 — списки */}
                 <div style={{ display: "grid", gap: 8 }}>
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Графика (тыльная)</div>
@@ -910,6 +800,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       </div>
                     )}
                   </div>
+
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Эпитафии (тыльная)</div>
                     {rearEpitaphs.length === 0 ? (
@@ -924,32 +815,32 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   </div>
                 </div>
 
-                {/* мини‑эскиз */}
+                {/* row 2 — spacer */}
+                <div style={{ minHeight: 0 }} />
+
+                {/* row 3 — мини-эскиз (снизу) */}
                 <div
                   role="button"
-                  title={(backBig || backMini) ? (backUpToDate ? "Сохранить эскиз (тыльная)" : "Эскиз устарел — обновите на шаге редактирования") : "Нет превью"}
+                  title={(backBig || backMini) ? "Сохранить эскиз (тыльная)" : "Нет превью"}
                   onClick={() => (backBig || backMini) && askSaveSketch("back")}
                   style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: (backAR || "1 / 1"), cursor: (backBig || backMini) ? "pointer" : "default" }}
                 >
                   {(backBig || backMini) ? (
-                    <>
-                      <img
-                        src={backBig || backMini}
-                        alt="Эскиз (тыльная)"
-                        style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                        onLoad={(e) => {
-                          const img = e.currentTarget;
-                          if (img.naturalWidth && img.naturalHeight) setBackWH({ w: img.naturalWidth, h: img.naturalHeight });
-                        }}
-                      />
-                      <div className={`badge ${backUpToDate ? "ok" : "stale"}`}>{backUpToDate ? "актуален" : "устарел"}</div>
-                    </>
+                    <img
+                      src={backBig || backMini}
+                      alt="Эскиз (тыльная)"
+                      style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        if (img.naturalWidth && img.naturalHeight) setBackWH({ w: img.naturalWidth, h: img.naturalHeight });
+                      }}
+                    />
                   ) : (
                     <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>
                   )}
                 </div>
 
-                {/* Пожелания (тыльная) */}
+                {/* row 4 — пожелания */}
                 <div>
                   <div style={{ fontWeight: 600, marginBottom: 4, color: palette(theme).text, fontSize: 13 }}>
                     Пожелания по эскизу (тыльная)
