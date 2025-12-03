@@ -3,7 +3,7 @@
 // Как работает:
 // 1) Рендерим SketchTemplate (фон изделия + «невидимый» контент); его подсказку скрываем.
 // 2) Измеряем DOM-элементы SketchTemplate (по data-sketch-el) и строим фреймы 1-в-1.
-//    Для metric/graphic учитываем родитель и субпиксельную поправку по ширине.
+//    Для metric/graphic учитываем родителя и субпиксельную поправку по ширине.
 // 3) Скрываем контент SketchTemplate (оставляем только фон изделия).
 // 4) Сверху рисуем свой управляемый контент (портрет/метрика/эпитафия/графика) строго по фреймам.
 // 5) Ещё слоем выше — фреймы редактора (DnD/resize + мини-панель).
@@ -617,6 +617,20 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       </div>
     );
   };
+
+  // Ручка для resize (исправляет падение: handleDot должен быть объявлен)
+  function handleDot(left: number | string, top: number | string, cursor: string): React.CSSProperties {
+    return {
+      position: "absolute",
+      left, top,
+      width: 10, height: 10,
+      background: "#fff",
+      border: "1px solid #000",
+      borderRadius: 2,
+      transform: "translate(-50%, -50%)",
+      cursor
+    };
+  }
 
   /* ===== Разметка ===== */
   const MAX_W = 600;
