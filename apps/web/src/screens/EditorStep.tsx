@@ -1,10 +1,16 @@
 // src/screens/EditorStep.tsx
-// Редактор поверх SketchTemplate без «миганий» и откатов:
-// - Один снимок раскладки по DOM SketchTemplate при изменении входного контента (item/people/graphics/epitaphs) — только тогда!
-// - После снимка контент SketchTemplate жёстко скрываем (display:none) внутри редактора — виден только фон изделия.
-// - Свой управляемый контент (портрет/метрика/эпитафия/графика/крест) рисуем поверх по фреймам.
-// - Перетаскивание/ресайз не запускает пересъёмку (не откатывает рамки).
-// - Превью (мини/большое) сохраняем в драфт и прокидываем в TopBarWithIntro как миниатюру.
+// Редактор поверх того же шаблона (SketchTemplate):
+// - Один раз (и при изменении контента) снимаем «снимок» раскладки из SketchTemplate (DOM data-sketch-el).
+// - Полностью скрываем контент SketchTemplate (чтобы не «просвечивал» и не мигал), оставляем только фон изделия.
+// - Рисуем свой управляемый контент и фреймы поверх. Движение/ресайз фреймов двигает наш контент.
+// - Сохраняем правки в драфт + генерируем превью и передаём его в TopBarWithIntro.
+//
+// Исправлено:
+// - Метрика измеряется только по своему data-sketch-el (без родителя и без ширинной поправки).
+// - Больше нет «отката к исходному» после перетаскивания: авто‑снятие раскладки не запускается во время редактирования
+//   и вообще только при реальном изменении входного контента (item/people/graphics/epitaphs).
+// - Подложка (контент SketchTemplate) скрыта жёстко через CSS и inline (не просвечивает при DnD).
+// - Сохранение происходит по таймауту и по отпусканию мыши; превью уходит в TopBar (миниатюра).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -82,6 +88,8 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
+const normRemember = (t?: string) =>
+  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
 
 /* ===== Fit helpers ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
@@ -189,7 +197,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (andSetDraft) setDraft(next);
   };
 
-  // Live reload драфта (без пересъёма раскладки)
+  // Live reload драфта (но авто-снятие раскладки не трогаем)
   useEffect(() => {
     const apply = () => setDraft(loadOrderDraft());
     window.addEventListener("focus", apply);
@@ -215,6 +223,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         return { id: p.id || `person-${idx}`, lines, photo };
       });
     }
+    // legacy
     const legacyLines: string[] = [];
     if (engr?.fullName) legacyLines.push(String(engr.fullName));
     const dates: string[] = [];
@@ -241,9 +250,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [graphics]
   );
 
-  /* ===== Сигнатура контента (только для стартового снимка раскладки) ===== */
+  /* ===== Сигнатура контента (для запуска снятия раскладки) ===== */
   const contentSig = useMemo(() => {
-    const ppl = peopleBlocks.map(p => `${p.id}:${p.lines.join("|")}:${p.photo ? "1":"0"}`).join("||");
+    const ppl = peopleBlocks.map(p => ({ id: p.id, lines: p.lines.join("|"), has: !!p.photo })).map(x => `${x.id}:${x.lines}:${x.has?'1':'0'}`).join("||");
     const cr = crosses.map(c => c.url).join("|");
     const ot = others.map(o => o.url).join("|");
     const ep = epitaphs.join("||");
@@ -252,18 +261,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   }, [item?.url, peopleBlocks, crosses, others, epitaphs]);
   const lastAppliedContentSigRef = useRef<string>("");
 
-  // Флаг: скрывать контент SketchTemplate (после снимка) через CSS display:none
-  const [hideSketchContent, setHideSketchContent] = useState<boolean>(false);
+  // Когда юзер редактирует — запрещаем авто‑снятие раскладки
+  const userEditingRef = useRef(false);
 
-  // Единоразовая инъекция CSS: скрывать контент SketchTemplate, когда data-hide-sketch="1"
+  /* ===== Скрытие подсказки/контента SketchTemplate (CSS правилом, чтобы не «откатывалось») ===== */
   const cssOnceRef = useRef(false);
   useEffect(() => {
     if (cssOnceRef.current) return;
     const st = document.createElement("style");
     st.setAttribute("data-editor-shadow-css", "1");
     st.innerHTML = `
-      [data-editor-wrap][data-hide-sketch="1"] [data-sketch-el] { display: none !important; }
-      [data-editor-wrap] [data-sketch-orient] ~ * { pointer-events: none !important; } /* перестраховка */
+      [data-editor-wrap] [data-sketch-el] { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
     `;
     document.head.appendChild(st);
     cssOnceRef.current = true;
@@ -273,12 +281,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  /* ===== Снимок раскладки из SketchTemplate (Только при изменении contentSig) ===== */
-  const makeSnapshotFromTemplate = () => {
+  /* ===== Измерение DOM SketchTemplate -> фреймы (только при изменении контента и если не редактируем) ===== */
+  const measureAndApplyFrames = () => {
     const wrap = editorWrapRef.current;
     const root = templateRootRef.current;
     if (!wrap || !root) return;
-
     const wrapRect = wrap.getBoundingClientRect();
     const contentLeft = wrapRect.left + SKETCH_PAD;
     const contentTop = wrapRect.top + SKETCH_PAD;
@@ -294,8 +301,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const key = (el.getAttribute("data-sketch-key") || "").trim();
       if (!kind) return;
 
-      // graphic — можно мерить по родителю (иногда лейаут шире самого img), остальные — по себе
       let target: HTMLElement = el;
+      // Только graphic может брать родителя (иногда родитель шире)
       if (kind === "graphic") {
         const p = el.parentElement as HTMLElement | null;
         if (p) {
@@ -304,14 +311,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           if (pr.width - er.width > 2) target = p;
         }
       }
-
       const r = target.getBoundingClientRect();
       let xPct = ((r.left - contentLeft) / contentW) * 100;
       let yPct = ((r.top - contentTop) / contentH) * 100;
       let wPct = (r.width / contentW) * 100;
       let hPct = (r.height / contentH) * 100;
-
-      if (kind === "graphic") wPct *= 1.006; // субпиксельная поправка ширины графики
+      if (kind === "graphic") {
+        wPct *= 1.006; // субпиксельная поправка
+      }
 
       xPct = clamp(xPct, 0, 100);
       yPct = clamp(yPct, 0, 100);
@@ -338,31 +345,49 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
     setElements((prev) => {
       const prevMap = new Map(prev.map((p) => [p.id, p]));
+      // Если пользователь уже редактировал (расхождение по координатам с предыдущим), не перетирать!
       const next = entries.map((e) => {
         const old = prevMap.get(e.id);
-        return old
-          ? { ...e, uppercase: old.uppercase, italic: old.italic, flipH: old.flipH, bw: old.bw, staircase: old.staircase }
-          : e;
+        if (!old) return e;
+        // Сохраняем пользовательские флаги
+        return {
+          ...e,
+          uppercase: old.uppercase,
+          italic: old.italic,
+          flipH: old.flipH,
+          bw: old.bw,
+          staircase: old.staircase
+        };
       });
+      // переносим «нестандартные» (если есть)
       prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
       return next;
     });
-
     lastAppliedContentSigRef.current = contentSig;
   };
 
-  // Стартовый/контентный снимок: показать контент SketchTemplate, снять размеры, затем скрыть
   useEffect(() => {
-    // Показать контент SketchTemplate для корректного измерения
-    setHideSketchContent(false);
+    if (userEditingRef.current) return; // не мерить во время редактирования
+    if (lastAppliedContentSigRef.current === contentSig) return;
+    // Снимок раскладки только при реальном изменении входного контента
     requestAnimationFrame(() => {
-      makeSnapshotFromTemplate();
-      // Скрыть контент SketchTemplate полностью (остается только фон)
-      setHideSketchContent(true);
+      measureAndApplyFrames();
+      // и гарантированно скрыть контент подложки
+      const root = templateRootRef.current;
+      if (root) {
+        const hint = root.querySelector('[data-sketch-orient]')?.previousElementSibling as HTMLElement | null;
+        if (hint) hint.style.display = "none";
+        root.querySelectorAll('[data-sketch-el]').forEach((el) => {
+          const n = el as HTMLElement;
+          n.style.visibility = "hidden";
+          n.style.opacity = "0";
+          n.style.pointerEvents = "none";
+        });
+      }
     });
   }, [contentSig]);
 
-  /* ===== DnD/Resize (без пересъёма во время редактирования) ===== */
+  /* ===== DnD/Resize ===== */
   const dragRef = useRef<{
     id: string;
     mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -378,6 +403,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     e.stopPropagation();
     const el = elements.find((x) => x.id === id);
     if (!el || el.locked) return;
+    userEditingRef.current = true;
     setSelectedId(id);
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
     dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, start: { ...el } };
@@ -430,6 +456,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
   const onPointerUp = () => {
     if (dragRef.current) {
+      // Сохранить и сгенерировать превью
       saveEditor((prev) => ({
         ...prev,
         editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
@@ -437,9 +464,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       queuePreviewGeneration();
     }
     dragRef.current = null;
+    userEditingRef.current = false;
   };
 
-  // Автосохранение (подстраховка)
+  // Автосохранение редактора (дополнительно к onPointerUp)
   useEffect(() => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
@@ -447,7 +475,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         ...prev,
         editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
       } as OrderDraft), true);
-    }, 320) as unknown as number;
+    }, 300) as unknown as number;
     return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); };
   }, [elements, wishes]);
 
@@ -626,7 +654,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           wishes
         }
       } as OrderDraft), true);
-    }, 240) as unknown as number;
+    }, 280) as unknown as number;
   };
 
   useEffect(() => {
@@ -826,7 +854,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           <div
             ref={editorWrapRef}
             data-editor-wrap
-            data-hide-sketch={hideSketchContent ? "1" : "0"}
             style={{
               position: "relative",
               width: "100%",
@@ -875,17 +902,21 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onPointerDown={(e) => {
                 // Сброс выбора только при клике по пустому месту контейнера фреймов
                 if (e.target === e.currentTarget) {
-                  const rect = editorWrapRef.current?.getBoundingClientRect();
-                  if (!rect) { setSelectedId(null); return; }
-                  const contentW = rect.width - SKETCH_PAD * 2;
-                  const contentH = rect.height - SKETCH_PAD * 2;
-                  const cx = ((e.clientX - (rect.left + SKETCH_PAD)) / contentW) * 100;
-                  const cy = ((e.clientY - (rect.top + SKETCH_PAD)) / contentH) * 100;
-                  const under = elements
-                    .slice()
-                    .sort((a, b) => b.z - a.z)
-                    .find((el) => cx >= el.x && cx <= el.x + el.w && cy >= el.y && cy <= el.y + el.h);
-                  setSelectedId(under ? under.id : null);
+                  if (e.altKey) {
+                    const rect = editorWrapRef.current?.getBoundingClientRect();
+                    if (!rect) return;
+                    const contentW = rect.width - SKETCH_PAD * 2;
+                    const contentH = rect.height - SKETCH_PAD * 2;
+                    const cx = ((e.clientX - (rect.left + SKETCH_PAD)) / contentW) * 100;
+                    const cy = ((e.clientY - (rect.top + SKETCH_PAD)) / contentH) * 100;
+                    const under = elements
+                      .slice()
+                      .sort((a, b) => b.z - a.z)
+                      .find((el) => cx >= el.x && cx <= el.x + el.w && cy >= el.y && cy <= el.y + el.h);
+                    if (under) setSelectedId(under.id);
+                  } else {
+                    setSelectedId(null);
+                  }
                 }
               }}
               style={{
