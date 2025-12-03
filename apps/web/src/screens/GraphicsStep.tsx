@@ -11,8 +11,8 @@
 // - Кресты и прочая графика — передаём в SketchTemplate как оверлеи.
 // - Кнопка «Эскиз» и скролл к категории/подкатегории учитывают высоту навигации и анимации раскрытия.
 //
-// Требование: "Галерея должна быть минимум 2 ряда" — для грид-галерей категорий, подкатегорий и блока выбранных
-// добавлен минимальный вычисляемый minHeight на 2 ряда карточек.
+// Изменение: галерея сеткой — минимум 2 в ряд (минимум две колонки) даже на узком экране.
+// Реализовано через minmax(clamp(..., (100% - gap)/2, ...), 1fr), чтобы ячейки сжимались до половины ширины контейнера.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchCatalog } from "../api";
@@ -54,16 +54,12 @@ function bottomUnderlayGradient() {
   } as React.CSSProperties;
 }
 
-// Минимум 2 ряда для галерей: считаем приблизительную высоту карточки (превью + служебная зона)
-// Превью квадрат с min 120px, плюс контролы/отступы ≈ 54px.
-const GALLERY_CELL_MIN = 120;
-const GALLERY_CONTROLS_H = 54;
-const GALLERY_ROW_GAP = 10;
-const galleryMinGridHeightPx = 2 * (GALLERY_CELL_MIN + GALLERY_CONTROLS_H) + GALLERY_ROW_GAP;
-const galleryGrid2RowsStyle: React.CSSProperties = {
-  minHeight: galleryMinGridHeightPx,
-  alignContent: "start" // чтобы грид не растягивался и начинался сверху
-};
+// Общая формула колонок: минимум 2 в ряд
+// gap = 10px => на 2 колонки ширина колонки ≈ (100% - 10px) / 2.
+// min 100px, целевая половина контейнера, max 140px (или 120px где нужно).
+const GAP_PX = 10;
+const twoColGrid = (maxPx = 140, minPx = 100) =>
+  `repeat(auto-fill, minmax(clamp(${minPx}px, calc((100% - ${GAP_PX}px)/2), ${maxPx}px), 1fr))`;
 
 function Collapsible({
   open,
@@ -631,9 +627,8 @@ export default function GraphicsStep(props: any) {
                           <div
                             style={{
                               display: "grid",
-                              gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-                              gap: 10,
-                              ...galleryGrid2RowsStyle
+                              gridTemplateColumns: twoColGrid(140, 100),
+                              gap: GAP_PX
                             }}
                           >
                             {cat.items.map((g: any) => {
@@ -724,9 +719,8 @@ export default function GraphicsStep(props: any) {
                                     <div
                                       style={{
                                         display: "grid",
-                                        gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-                                        gap: 10,
-                                        ...galleryGrid2RowsStyle
+                                        gridTemplateColumns: twoColGrid(140, 100),
+                                        gap: GAP_PX
                                       }}
                                     >
                                       {sub.items.map((g: any) => {
@@ -805,9 +799,8 @@ export default function GraphicsStep(props: any) {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-                gap: 10,
-                ...galleryGrid2RowsStyle
+                gridTemplateColumns: twoColGrid(140, 100),
+                gap: GAP_PX
               }}
             >
               {unique.map((g: any) => {

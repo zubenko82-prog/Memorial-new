@@ -15,7 +15,6 @@
 //   Слой зеркалится по горизонтали (в Canvas и в WYSIWYG через CSS).
 // - Пропорции эскиза: используем aspectRatio исходного изделия.
 // - После удаления портрета/метрики рамка редактирования исчезает (не рисуем рамки для «пустых» фото/метрик и сбрасываем выделение).
-// - Галереи (категории/подкатегории/выбранные) — минимум в 2 столбца (адаптивное вычисление количества колонок).
 
 import React, {
   useCallback,
@@ -109,58 +108,6 @@ function iconBtn(): React.CSSProperties {
     alignItems: "center",
     justifyContent: "center"
   };
-}
-
-/* ===== Вспомогательная сетка: минимум 2 столбца, адаптивные колонки ===== */
-function useMeasuredCols(minCard = 120, gap = 10, minCols = 2) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [cols, setCols] = useState<number>(minCols);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const recalc = () => {
-      const w = el.clientWidth || 0;
-      const c = Math.max(minCols, Math.floor((w + gap) / (minCard + gap)));
-      setCols(c);
-    };
-    recalc();
-    const ro = new ResizeObserver(recalc);
-    ro.observe(el);
-    window.addEventListener("resize", recalc);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", recalc);
-    };
-  }, [minCard, gap, minCols]);
-  return { ref, cols };
-}
-
-function MinTwoColsGrid({
-  children,
-  gap = 10,
-  minCard = 120,
-  style
-}: {
-  children: React.ReactNode;
-  gap?: number;
-  minCard?: number;
-  style?: React.CSSProperties;
-}) {
-  const { ref, cols } = useMeasuredCols(minCard, gap, 2);
-  return (
-    <div
-      ref={ref}
-      style={{
-        display: "grid",
-        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-        gap,
-        alignItems: "stretch",
-        ...style
-      }}
-    >
-      {children}
-    </div>
-  );
 }
 
 /* ===== Collapsible ===== */
@@ -702,7 +649,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         console.error(e);
         setGError("Не удалось загрузить каталог графики.");
       } finally {
-        if (alive) setGLoading(false);
+               if (alive) setGLoading(false);
       }
     }
     loadGraphics();
@@ -991,6 +938,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             if (selectedId === el.id) setSelectedId(null);
           }
         } else {
+          // photo/metric не трогаем в этом эффекте
           kept.push(el);
         }
       }
@@ -1060,6 +1008,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       people.forEach((p, i) => {
         const pid = p.id;
         const wantPhotoId = photoId(pid);
+        the: {
+          /* nothing */
+        }
         const wantMetricId = metricId(pid);
         const cnt = people.length;
         const cw = colW(cnt);
@@ -1110,6 +1061,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const found = elements.find((e) => e.id === id);
       if (found?.text) removeEpitaphText(found.text);
     }
+    // photo/metric удаляются только при удалении человека
     saveEditorBack({ elements: elements.filter((el) => el.id !== id) });
   };
 
@@ -1197,12 +1149,132 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       ctx.restore();
     }
 
-    // Рисуем элементы (упрощено для brevity — см. полный код выше)
+    // Рисуем элементы
     const els = elements.slice().sort((a, b) => a.z - b.z);
     for (const el of els) {
       const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
-      // ... (код отрисовки элементов без изменений)
-      // Опущено здесь из-за объёма: используйте ранее представленный блок renderPreview в файле.
+
+      if (el.type === "graphic") {
+        const parsed = parseGraphicId(el.id);
+        if (parsed) {
+          const g = findGraphic(parsed.gid);
+          if (g?.url) {
+            const im = await loadImageSafe(g.preview || g.url);
+            if (im) {
+              const sr = im.width / im.height;
+              const dr = r.w / r.h;
+              let dw = r.w, dh = r.h, dx = r.x, dy = r.y;
+              if (sr > dr) { dh = Math.round(r.w / sr); dy = r.y + Math.round((r.h - dh) / 2); }
+              else { dw = Math.round(r.h * sr); dx = r.x + Math.round((r.w - dw) / 2); }
+              ctx.save();
+              if (el.flipH) {
+                ctx.translate(dx + dw / 2, dy + dh / 2);
+                ctx.scale(-1, 1);
+                ctx.translate(-(dx + dw / 2), -(dy + dh / 2));
+              }
+              ctx.drawImage(im, dx, dy, dw, dh);
+              ctx.restore();
+            }
+          }
+        }
+        continue;
+      }
+
+      if (el.type === "epitaph") {
+        const text = el.text || "";
+        ctx.save();
+        ctx.fillStyle = "#fff";
+        ctx.textBaseline = "alphabetic";
+
+        if (el.staircase && isRememberLoveMourn(text)) {
+          const { top, mid, bot } = splitRememberPreserve(text);
+          const f = fitCanvas.fitStair(top, mid, bot, r.w - 8, r.h - 8, false);
+          ctx.font = `${f}px ${fitCanvas.family}`;
+          ctx.textAlign = "left";   ctx.fillText(top, r.x + 4, r.y + f * 0.95, r.w - 8);
+          ctx.textAlign = "center"; ctx.fillText(mid, r.x + r.w / 2, r.y + r.h / 2 + f * 0.35, r.w - 8);
+          ctx.textAlign = "right";  ctx.fillText(bot, r.x + r.w - 4, r.y + r.h - f * 0.2, r.w - 8);
+        } else {
+          const maxW = r.w - 8, maxH = r.h - 8;
+          const f = fitCanvas.fitBlock(text, maxW, maxH, false);
+          const lines = fitCanvas.wrapLines(text, f, maxW, false);
+          const lh = Math.round(f * fitCanvas.LINE_H);
+          const blockH = lines.length * lh;
+          let y = r.y + Math.max(0, (r.h - blockH) / 2) + f; // базовая линия первой строки
+          ctx.font = `${f}px ${fitCanvas.family}`;
+          ctx.textAlign = "center";
+          for (const line of lines) {
+            ctx.fillText(line, r.x + r.w / 2, y);
+            y += lh;
+          }
+        }
+        ctx.restore();
+        continue;
+      }
+
+      if (el.type === "photo") {
+        const pid = parsePhotoId(el.id) || el.personId;
+        const p = people.find((x) => x.id === pid);
+        const photo = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? null) : null;
+        if (photo) {
+          const im = await loadImageSafe(photo);
+          if (im) {
+            const sr = im.width / im.height;
+            const dr = r.w / r.h;
+            let dw = r.w, dh = r.h, dx = r.x, dy = r.y;
+            if (sr > dr) { dh = Math.round(r.w / sr); dy = r.y + Math.round((r.h - dh) / 2); }
+            else { dw = Math.round(r.h * sr); dx = r.x + Math.round((r.w - dw) / 2); }
+            ctx.save();
+            ctx.drawImage(im, dx, dy, dw, dh);
+            ctx.restore();
+          }
+        }
+        continue;
+      }
+
+      if (el.type === "metric") {
+        const pid = parseMetricId(el.id) || el.personId;
+        const p = people.find((x) => x.id === pid);
+        const l1raw = p ? (p.lastName || "").trim() : "";
+        const l2raw = p ? [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ") : "";
+        const l3 = p ? [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - ") : "";
+        if (!l1raw && !l2raw && !l3) continue;
+
+        const mode = el.caseRest || "lower";
+        const L1 = transformCaseExceptFirstPerWord(l1raw, mode);
+        const L2 = transformCaseExceptFirstPerWord(l2raw, mode);
+
+        const maxW = r.w - 8;
+        const maxH = r.h - 8;
+        const perLineH = Math.max(8, Math.floor(maxH / 3));
+        const f1 = fitCanvas.fitOneLine(L1, maxW, perLineH);
+        const f2 = fitCanvas.fitOneLine(L2, maxW, perLineH);
+        const f3 = fitCanvas.fitOneLine(l3, maxW, perLineH);
+        const f = Math.max(8, Math.min(perLineH, f1, f2, f3));
+
+        ctx.save();
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const cy1 = r.y + (r.h / 6);
+        const cy2 = r.y + (r.h / 2);
+        const cy3 = r.y + (r.h * 5 / 6);
+
+        if (L1) {
+          ctx.font = `bold ${f}px "Times New Roman", ${fitCanvas.family}`;
+          ctx.fillText(L1, r.x + r.w / 2, cy1, maxW);
+        }
+        if (L2) {
+          ctx.font = `bold ${f}px "Times New Roman", ${fitCanvas.family}`;
+          ctx.fillText(L2, r.x + r.w / 2, cy2, maxW);
+        }
+        if (l3) {
+          ctx.font = `${Math.round(f * 0.9)}px "Times New Roman", ${fitCanvas.family}`;
+          ctx.fillText(l3, r.x + r.w / 2, cy3, maxW);
+        }
+        ctx.restore();
+        continue;
+      }
     }
 
     return canvas.toDataURL("image/jpeg", 0.92);
@@ -1393,6 +1465,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
     const isEpitaph = el.type === "epitaph";
+    the: {
+      /* nothing */
+    }
     const isGraphic = el.type === "graphic";
     const isPhoto = el.type === "photo";
     const isMetric = el.type === "metric";
@@ -1446,6 +1521,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {caseMode === "upper" ? "строчные" : "ПРОПИСНЫЕ"}
           </button>
         )}
+        {/* Фото/Метрика не удаляются вручную — управляются списком людей */}
         {!(isPhoto || isMetric) && (
           <button type="button" style={btn} title="Удалить элемент" onClick={() => removeElement(el.id)}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ display: "block" }}>
@@ -1502,13 +1578,112 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return (
       <>
         {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
-          // ... визуализация WYSIWYG без изменений (см. оригинал)
-          // Опущено для краткости
-          return null;
+          if (el.type === "graphic") {
+            const parsed = parseGraphicId(el.id);
+            const gid = parsed?.gid || "";
+            const g = gid ? findGraphic(gid) : undefined;
+            const tr = el.flipH ? "scaleX(-1)" : "none";
+            return (
+              <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, pointerEvents: "none" }}>
+                {g?.url ? (
+                  <img
+                    src={g.preview || g.url}
+                    alt={g.name || "Графика"}
+                    style={{ width: "100%", height: "100%", objectFit: "contain", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))", userSelect: "none", pointerEvents: "none" }}
+                    draggable={false}
+                  />
+                ) : null}
+              </div>
+            );
+          }
+
+          if (el.type === "photo") {
+            const pid = parsePhotoId(el.id) || el.personId;
+            const p = people.find((x) => x.id === pid);
+            const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
+            if (!photoUrl) return null; // нет контента — не рисуем
+            return (
+              <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, pointerEvents: "none" }}>
+                <img src={photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", userSelect: "none", pointerEvents: "none" }} draggable={false} />
+              </div>
+            );
+          }
+
+          if (el.type === "metric") {
+            const pid = parseMetricId(el.id) || el.personId;
+            const p = people.find((x) => x.id === pid);
+            const lastName = p ? (p.lastName || "").trim() : "";
+            const firstPatro = p ? [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ") : "";
+            const dates = p ? [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - ") : "";
+            if (!lastName && !firstPatro && !dates) return null;
+            const mode = el.caseRest || "lower";
+            const L1 = transformCaseExceptFirstPerWord(lastName, mode);
+            const L2 = transformCaseExceptFirstPerWord(firstPatro, mode);
+            const L3 = dates;
+            const f = fitMetricFs3(L1, L2, L3, el.w, el.h);
+            return (
+              <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, color: "#fff", textAlign: "center", pointerEvents: "none", display: "grid", placeItems: "center" }}>
+                <div style={{ width: "100%", padding: "0 4px", fontFamily: `"Century Schoolbook","Times New Roman",serif`, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                  {L1 && <div style={{ fontWeight: 700, fontSize: f, lineHeight: 1.05 }}>{L1}</div>}
+                  {L2 && <div style={{ fontWeight: 700, fontSize: f, lineHeight: 1.05 }}>{L2}</div>}
+                  {L3 && <div style={{ fontSize: Math.round(f * 0.9), lineHeight: 1.05, marginTop: 2 }}>{L3}</div>}
+                </div>
+              </div>
+            );
+          }
+
+          // Эпитафия
+          const text = el.text || "";
+          if (el.staircase && isRememberLoveMourn(text)) {
+            const parts = splitRememberPreserve(text);
+            const f = fitDom(text, el.w, el.h, false, parts);
+            return (
+              <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, color: "#fff", fontFamily: `"Century Schoolbook","Times New Roman",serif`, textShadow: "0 1px 2px rgba(0,0,0,0.6)", pointerEvents: "none" }}>
+                <div style={{ position: "absolute", top: 0, left: 4, fontWeight: 600, fontSize: f }}>{parts.top}</div>
+                <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontWeight: 600, fontSize: f }}>{parts.mid}</div>
+                <div style={{ position: "absolute", right: 4, bottom: 0, fontWeight: 600, fontSize: f }}>{parts.bot}</div>
+              </div>
+            );
+          } else {
+            const maxW = (el.w / 100) * wrapW - 8;
+            const maxH = (el.h / 100) * wrapH - 8;
+            const f = fitCanvas.fitBlock(text, Math.max(0, maxW), Math.max(0, maxH), false);
+            const lines = fitCanvas.wrapLines(text, f, Math.max(0, maxW), false);
+            return (
+              <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+                <div style={{ width: "100%", padding: "0 4px", textAlign: "center", color: "#fff", fontFamily: `"Century Schoolbook","Times New Roman",serif`, textShadow: "0 1px 2px rgba(0,0,0,0.6)", lineHeight: `${fitCanvas.LINE_H}` }}>
+                  {lines.map((ln, i) => (
+                    <div key={i} style={{ fontWeight: 600, fontSize: f }}>{ln}</div>
+                  ))}
+                </div>
+              </div>
+            );
+          }
         })}
       </>
     );
   };
+
+  /* ===== Сбрасываем выделение, если выбран «пустой» фото/метрика ===== */
+  useEffect(() => {
+    if (!selectedId) return;
+    const sel = elements.find((e) => e.id === selectedId);
+    if (!sel) return;
+
+    if (sel.type === "photo") {
+      const pid = parsePhotoId(sel.id) || sel.personId;
+      const p = people.find((x) => x.id === pid);
+      const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
+      if (!photoUrl) setSelectedId(null);
+    } else if (sel.type === "metric") {
+      const pid = parseMetricId(sel.id) || sel.personId;
+      const p = people.find((x) => x.id === pid);
+      const hasL1 = !!p?.lastName?.trim();
+      const hasL2 = !!([p?.firstName, p?.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" "));
+      const hasL3 = !!([p?.birthDate, p?.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - "));
+      if (!hasL1 && !hasL2 && !hasL3) setSelectedId(null);
+    }
+  }, [selectedId, elements, people, transientPhotoUrlById]);
 
   /* ===== Навигация шагов ===== */
   const handleBack = () => { setOutro(true); setTimeout(() => onBack?.(), 320); };
@@ -1670,7 +1845,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                       >
                         <div style={{ padding: 10, display: "grid", gap: 12 }}>
                           {cat.items.length > 0 && (
-                            <MinTwoColsGrid gap={10} minCard={120}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
                               {cat.items.map((g: any) => {
                                 const gid = String(g.id);
                                 const qty = countsById[gid] || 0;
@@ -1692,7 +1867,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                   </div>
                                 );
                               })}
-                            </MinTwoColsGrid>
+                            </div>
                           )}
 
                           {cat.children.length > 0 && cat.children.map((sub: any) => {
@@ -1728,7 +1903,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                   }
                                 >
                                   <div style={{ padding: 10 }}>
-                                    <MinTwoColsGrid gap={10} minCard={120}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
                                       {sub.items.map((g: any) => {
                                         const gid = String(g.id);
                                         const qty = countsById[gid] || 0;
@@ -1750,7 +1925,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                           </div>
                                         );
                                       })}
-                                    </MinTwoColsGrid>
+                                    </div>
                                   </div>
                                 </Collapsible>
                               </section>
@@ -1777,7 +1952,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           const uniqueIds = Array.from(new Set(selGraphicIds));
           if (uniqueIds.length === 0) return <div style={{ opacity: 0.8 }}>Не выбрано ни одного элемента</div>;
           return (
-            <MinTwoColsGrid gap={10} minCard={120}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
               {uniqueIds.map((gid) => {
                 const meta = findGraphic(gid) || rearMeta[gid];
                 const qty = countsById[gid] || 0;
@@ -1794,7 +1969,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                   </div>
                 );
               })}
-            </MinTwoColsGrid>
+            </div>
           );
         })()}
       </section>
@@ -1950,6 +2125,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
                   <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
                     <div style={{ display: "grid", gap: 10 }}>
+                      {/* Все поля — одна колонка по 100% ширины */}
                       <Field label="Фамилия"><input value={p.lastName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, lastName: e.target.value } : x))} style={inputStyle()} placeholder="Иванов" /></Field>
                       <Field label="Имя"><input value={p.firstName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, firstName: e.target.value } : x))} style={inputStyle()} placeholder="Иван" /></Field>
                       <Field label="Отчество"><input value={p.middleName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, middleName: e.target.value } : x))} style={inputStyle()} placeholder="Иванович" /></Field>
@@ -2001,6 +2177,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             minHeight: aspect ? undefined : 540
           }}
         >
+          {/* База — отзеркаленная подложка. */}
           <img
             src={item?.url || ""}
             alt={item?.name || "Изделие"}
@@ -2012,6 +2189,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             }}
             onError={() => { if (!imgWH) setImgWH({ w: 4, h: 3 }); }}
           />
+
+          {/* Слой «резной работы»: вырез по контуру + заливка (#2e2e2e) + зеркалирование через CSS */}
           {carveUrl && (
             <img
               src={carveUrl}
@@ -2020,11 +2199,69 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
               draggable={false}
             />
           )}
+
+          {/* Контент поверх изделия */}
           <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
             <ContentOverlay />
           </div>
+
+          {/* Рамки + мини-кнопки + ручки ресайза */}
           <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1000, pointerEvents: "none" }}>
-            {/* Рамки редактора — без изменений (опущено для краткости) */}
+            {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
+              // Скрыть рамку, если фото/метрика пустые
+              if (el.type === "photo") {
+                const pid = parsePhotoId(el.id) | el.personId || el.personId;
+                const p = people.find((x) => x.id === (parsePhotoId(el.id) || el.personId));
+                const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
+                if (!photoUrl) return null;
+              } else if (el.type === "metric") {
+                const p = people.find((x) => x.id === (parseMetricId(el.id) || el.personId));
+                const hasL1 = !!p?.lastName?.trim();
+                const hasL2 = !!([p?.firstName, p?.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" "));
+                const hasL3 = !!([p?.birthDate, p?.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - "));
+                if (!hasL1 && !hasL2 && !hasL3) return null;
+              }
+
+              const selected = el.id === selectedId;
+              const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
+                position: "absolute", left, top, width: 10, height: 10, background: "#fff", border: "1px solid #000", borderRadius: 2, transform: "translate(-50%, -50%)", cursor
+              });
+              return (
+                <div
+                  key={el.id}
+                  onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")}
+                  style={{
+                    position: "absolute",
+                    left: `${el.x}%`,
+                    top: `${el.y}%`,
+                    width: `${el.w}%`,
+                    height: `${el.h}%`,
+                    border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
+                    borderRadius: 4,
+                    boxShadow: selected ? "0 0 0 1px rgba(138,180,255,0.6)" : "none",
+                    background: "transparent",
+                    pointerEvents: "auto",
+                    cursor: "move",
+                    touchAction: "none"
+                  }}
+                  title={el.id}
+                >
+                  {selected && <MiniToolbar el={el} />}
+                  {selected && (
+                    <>
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={handleDot("50%", 0, "ns-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={handleDot("100%", "50%", "ew-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={handleDot("50%", "100%", "ns-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")} />
+                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={handleDot(0, "50%", "ew-resize")} />
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
