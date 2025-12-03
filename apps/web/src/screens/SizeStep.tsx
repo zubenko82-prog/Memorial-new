@@ -364,13 +364,11 @@ export default function SizeStep(props: SizeStepProps) {
         padding: 16
       }}
     >
-      <TopBarWithIntro title="Memorial стела" />
+      <TopBarWithIntro title="Memorial" />
 
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
       <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
-        Ориентация: <b>{orientation === "horizontal" ? "горизонтальная" : "вертикальная"}</b>{" "}
-        {orientationSource === "image" ? "(по изображению)" : orientationSource === "size" ? "(по размеру)" : "(по умолчанию)"}
-      </div>
+       Выберите размер и толщину памятника.</div>
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
         {/* Размер */}
