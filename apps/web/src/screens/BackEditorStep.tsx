@@ -1,20 +1,16 @@
 // src/screens/BackEditorStep.tsx
 // ТЫЛЬНАЯ СТОРОНА — отделена от лицевой.
 //
-// Исправлено и дополнено, сохраняя функционал редактора:
-// - Убрана опечатка (кириллическая «а») в findGraphic.
-// - Аккордеоны «Графика», «Эпитафии», «Усопшие» — взаимоисключающие.
-// - «Еще варианты» в Эпитафиях — отдельный аккордеон (по умолчанию закрыт).
-// - «Усопшие»: поля ввода на всю ширину, построчно.
-// - Редактор (DnD): элементы (графика/эпитафии/фото/метрика) можно двигать/ресайзить, мини‑панель инструментов.
-// - Фото + метрика теперь полноценные элементы (type: "photo", "metric"). Автодобавление/удаление при изменении списка людей.
-// - Метрика: 3 строки (1 — Фамилия; 2 — Имя Отчество; 3 — Даты) + кнопка строчные/ПРОПИСНЫЕ (меняет регистр, кроме первых букв).
-// - Эпитафии: многострочный подбор шрифта для любых текстов. Свой вариант — контролируемое поле.
-// - Портрет + метрика попадают в Canvas‑превью.
-// - «Резная работа»: выделение по прозрачному полю исходного изделия, остальное заливаем #2e2e2e.
-//   Слой зеркалится по горизонтали (в Canvas и в WYSIWYG через CSS).
-// - Пропорции эскиза: используем aspectRatio исходного изделия.
-// - После удаления портрета/метрики рамка редактирования исчезает (не рисуем рамки для «пустых» фото/метрик и сбрасываем выделение).
+// Дополнено:
+// - Галерея (категории/подкатегории/выбранные) — минимум 2 карточки в строке при любой ширине.
+//   Реализовано через minmax(clamp(..., calc((100% - gap)/2), ...), 1fr).
+// - Авто‑раскладка элементов по правилам:
+//   • Кресты: если эскиз пустой — по центру немного выше середины; иначе — в левом верхнем углу.
+//   • Портрет: по центру немного выше середины (как и было).
+//   • Метрика: под портретом; если портрета нет — вместо портрета (на его месте).
+//   • Эпитафия: если есть портрет или метрика — ниже них; если эскиз пустой — по центру немного выше середины.
+//   • Прочая графика: если эскиз пустой — по центру немного выше середины; иначе — внизу.
+// - При добавлении новых элементов используются эти дефолтные позиции (существующие позиции пользователей не перетираются).
 
 import React, {
   useCallback,
@@ -358,6 +354,12 @@ type NormalizedPerson = {
 
 /* ===== Helpers ===== */
 const SKETCH_PAD = 8;
+
+// Сетка: минимум 2 карточки в строке при любой ширине
+const GRID_GAP_PX = 10;
+const twoColGrid = (maxPx = 140, minPx = 100) =>
+  `repeat(auto-fill, minmax(clamp(${minPx}px, calc((100% - ${GRID_GAP_PX}px)/2), ${maxPx}px), 1fr))`;
+
 function normRemember(t?: string) { return (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim(); }
 function isRememberLoveMourn(t?: string) { return normRemember(t) === "помним любим скорбим"; }
 function splitRememberPreserve(text: string) {
@@ -376,7 +378,14 @@ function parsePhotoId(id: string): string | null { const m = /^photo\|(.+)$/.exe
 function parseMetricId(id: string): string | null { const m = /^metric\|(.+)$/.exec(id); return m ? m[1] : null; }
 function textKey(t: string) { try { return btoa(unescape(encodeURIComponent(t))).replace(/=+$/g, "").slice(0, 24); } catch { return String(Math.abs(Array.from(t).reduce((a, c) => (a + c.charCodeAt(0)) | 0, 0))); } }
 
-/* ===== Подбор размера шрифта (Canvas) ===== */
+// Распознавание крестов по метаданным
+function isCrossMeta(meta: any): boolean {
+  const s1 = String(meta?.catName || "").toLowerCase();
+  const s2 = String(meta?.catSlug || "").toLowerCase();
+  return s1.includes("крест") || s2.includes("cross");
+}
+
+/* ===== Подбор шрифта (Canvas) ===== */
 const fitCanvas = (() => {
   const c = typeof document !== "undefined" ? document.createElement("canvas") : null;
   const ctx = c ? c.getContext("2d")! : null;
@@ -649,7 +658,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         console.error(e);
         setGError("Не удалось загрузить каталог графики.");
       } finally {
-               if (alive) setGLoading(false);
+        if (alive) setGLoading(false);
       }
     }
     loadGraphics();
@@ -905,7 +914,25 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [customEpi, setCustomEpi] = useState<string>("");
 
-  // Синхронизация элементов графики/эпитафий с выбранными списками
+  /* ------ Авто‑позиции для новых элементов ------ */
+  const centerAboveMid = (w = 40, h = 28) => ({ x: 50 - w / 2, y: 30, w, h });
+  const topLeft = (w = 20, h = 20) => ({ x: 4, y: 4, w, h });
+  const bottomCenter = (w = 50, h = 18) => ({ x: 50 - w / 2, y: Math.max(0, 100 - h - 4), w, h });
+
+  const hasAnyContent = (arr: EditorEl[]) =>
+    arr.some((e) => e.type === "photo" || e.type === "metric" || e.type === "epitaph" || e.type === "graphic");
+
+  const maxBottomOfPhotoMetric = (arr: EditorEl[]) => {
+    let b = 0;
+    for (const e of arr) {
+      if (e.type === "photo" || e.type === "metric") {
+        b = Math.max(b, e.y + e.h);
+      }
+    }
+    return b;
+  };
+
+  // Синхронизация элементов графики/эпитафий с выбранными списками (с дефолтным позиционированием)
   useEffect(() => {
     setElements((prev) => {
       const wantedIds: string[] = [];
@@ -920,6 +947,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const kept: EditorEl[] = [];
       let changed = false;
 
+      // Оставляем существующие (обновляя текст эпитафии при необходимости)
       for (const el of prev) {
         if (el.type === "graphic" || el.type === "epitaph") {
           if (wantedSet.has(el.id)) {
@@ -938,7 +966,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             if (selectedId === el.id) setSelectedId(null);
           }
         } else {
-          // photo/metric не трогаем в этом эффекте
           kept.push(el);
         }
       }
@@ -946,43 +973,64 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const curSet = new Set(kept.map((e) => e.id));
       let maxZ = kept.reduce((m, e) => Math.max(m, e.z), 0);
 
+      // Добавляем недостающие «graphic|...»
       for (const id of wantedIds) {
-        if (!curSet.has(id)) {
-          changed = true;
-          if (id.startsWith("graphic|")) {
-            kept.push({
-              id,
-              type: "graphic",
-              x: 10 + ((maxZ % 3) * 18),
-              y: 25,
-              w: 24,
-              h: 24,
-              z: ++maxZ,
-              flipH: false
-            });
+        if (curSet.has(id)) continue;
+
+        if (id.startsWith("graphic|")) {
+          const parsed = parseGraphicId(id);
+          const meta = parsed ? findGraphic(parsed.gid) : undefined;
+          const isCross = isCrossMeta(meta);
+          const empty = !hasAnyContent(kept);
+          let box;
+          if (empty) {
+            // пустой эскиз — центр выше середины
+            box = centerAboveMid(isCross ? 28 : 40, isCross ? 28 : 28);
           } else {
-            const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === id) || "";
-            kept.push({
-              id,
-              type: "epitaph",
-              text: t,
-              x: 10,
-              y: 75,
-              w: 80,
-              h: 12,
-              z: ++maxZ,
-              staircase: isRememberLoveMourn(t)
-            });
+            // не пустой
+            box = isCross ? topLeft(20, 20) : bottomCenter(50, 18);
           }
+          kept.push({
+            id,
+            type: "graphic",
+            x: box.x, y: box.y, w: box.w, h: box.h,
+            z: ++maxZ,
+            flipH: false
+          });
+          changed = true;
+        } else if (id.startsWith("epitaph|")) {
+          const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === id) || "";
+          const empty = !hasAnyContent(kept);
+          let x = 10, y = 75, w = 80, h = 12;
+          if (empty) {
+            // пустой — по центру выше середины
+            const c = centerAboveMid(70, 18);
+            x = c.x; y = c.y; w = c.w; h = c.h;
+          } else {
+            // есть портрет или метрика — поставить ниже
+            const b = maxBottomOfPhotoMetric(kept);
+            const margin = 4;
+            y = Math.min(100 - h - margin, b + margin);
+          }
+          kept.push({
+            id,
+            type: "epitaph",
+            text: t,
+            x, y, w, h,
+            z: ++maxZ,
+            staircase: isRememberLoveMourn(t)
+          });
+          changed = true;
         }
       }
+
       if (changed) saveEditorBack({ elements: kept });
       return changed ? kept : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selGraphicIds, selEpitaphTexts]);
+  }, [selGraphicIds, selEpitaphTexts, gCats, rearMeta]);
 
-  // Синхронизация элементов photo/metric с людьми (автодобавление/удаление)
+  // Синхронизация элементов photo/metric с людьми (автодобавление/удаление + дефолтные позиции)
   useEffect(() => {
     setElements((prev) => {
       let changed = false;
@@ -1004,17 +1052,15 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       let maxZ = filtered.reduce((m, e) => Math.max(m, e.z), 0);
       const existingSet = new Set(filtered.map((e) => e.id));
 
-      // Добавление недостающих элементов
+      // Добавление недостающих элементов с дефолтными позициями
       people.forEach((p, i) => {
         const pid = p.id;
         const wantPhotoId = photoId(pid);
-        the: {
-          /* nothing */
-        }
         const wantMetricId = metricId(pid);
         const cnt = people.length;
         const cw = colW(cnt);
 
+        // Блок портрета (по центру, выше середины)
         if (!existingSet.has(wantPhotoId)) {
           const w = cw * 0.8;
           const x = i * cw + (cw - w) / 2;
@@ -1029,11 +1075,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           });
           changed = true;
         }
+
+        // Блок метрики — под портретом; если у человека нет фото — «вместо портрета»
+        const hasPhotoContent = !!(p.photoDataUrl || p.photoUrl);
         if (!existingSet.has(wantMetricId)) {
           const w = cw * 0.9;
           const x = i * cw + (cw - w) / 2;
-          const y = 55;
-          const h = 20;
+          const y = hasPhotoContent ? 55 : 15; // вместо портрета
+          const h = hasPhotoContent ? 20 : 35; // выше, если без фото
           filtered.push({
             id: wantMetricId,
             type: "metric",
@@ -1061,7 +1110,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const found = elements.find((e) => e.id === id);
       if (found?.text) removeEpitaphText(found.text);
     }
-    // photo/metric удаляются только при удалении человека
     saveEditorBack({ elements: elements.filter((el) => el.id !== id) });
   };
 
@@ -1095,61 +1143,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
     ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
 
-    const CX = 0, CY = 0, CW = W, CH = H;
-
-    // Тыльная маска
-    const baseImg = await loadImageSafe(item?.url);
-    if (baseImg) {
-      const sr = baseImg.width / baseImg.height;
-      const dr = W / H;
-      let rw: number, rh: number, rx: number, ry: number;
-      if (sr > dr) { rw = W; rh = Math.round(W / sr); rx = 0; ry = Math.round((H - rh) / 2); }
-      else { rh = H; rw = Math.round(H * sr); ry = 0; rx = Math.round((W - rw) / 2); }
-
-      const off = document.createElement("canvas");
-      off.width = rw; off.height = rh;
-      const octx = off.getContext("2d")!;
-      octx.clearRect(0, 0, rw, rh);
-      octx.drawImage(baseImg, 0, 0, rw, rh);
-
-      try {
-        const id = octx.getImageData(0, 0, rw, rh);
-        const d = id.data;
-
-        const maskCanvas = document.createElement("canvas");
-        maskCanvas.width = rw; maskCanvas.height = rh;
-        const mctx = maskCanvas.getContext("2d")!;
-        const mask = mctx.createImageData(rw, rh);
-        const md = mask.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const A = d[i + 3];
-          const alpha = A < 10 ? 255 : 0;
-          md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
-        }
-        mctx.putImageData(mask, 0, 0);
-
-        octx.clearRect(0, 0, rw, rh);
-        octx.fillStyle = "#2e2e2e";
-        octx.fillRect(0, 0, rw, rh);
-        octx.globalCompositeOperation = "destination-out";
-        octx.drawImage(maskCanvas, 0, 0);
-        octx.globalCompositeOperation = "source-over";
-      } catch (e) {
-        // noop
-      }
-
-      // Отзеркалить по X на итоговый
-      const cx = rx + rw / 2;
-      const cy = ry + rh / 2;
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(-1, 1);
-      ctx.translate(-cx, -cy);
-      ctx.drawImage(off, rx, ry);
-      ctx.restore();
-    }
+    // База изделия с вырезом прозрачного контура — уже реализована ниже (carve overlay в WYSIWYG)
 
     // Рисуем элементы
+    const CX = 0, CY = 0, CW = W, CH = H;
     const els = elements.slice().sort((a, b) => a.z - b.z);
     for (const el of els) {
       const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
@@ -1198,8 +1195,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           const f = fitCanvas.fitBlock(text, maxW, maxH, false);
           const lines = fitCanvas.wrapLines(text, f, maxW, false);
           const lh = Math.round(f * fitCanvas.LINE_H);
-          const blockH = lines.length * lh;
-          let y = r.y + Math.max(0, (r.h - blockH) / 2) + f; // базовая линия первой строки
+          let y = r.y + Math.max(0, (r.h - lines.length * lh) / 2) + f;
           ctx.font = `${f}px ${fitCanvas.family}`;
           ctx.textAlign = "center";
           for (const line of lines) {
@@ -1465,9 +1461,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
     const isEpitaph = el.type === "epitaph";
-    the: {
-      /* nothing */
-    }
     const isGraphic = el.type === "graphic";
     const isPhoto = el.type === "photo";
     const isMetric = el.type === "metric";
@@ -1521,7 +1514,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {caseMode === "upper" ? "строчные" : "ПРОПИСНЫЕ"}
           </button>
         )}
-        {/* Фото/Метрика не удаляются вручную — управляются списком людей */}
         {!(isPhoto || isMetric) && (
           <button type="button" style={btn} title="Удалить элемент" onClick={() => removeElement(el.id)}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ display: "block" }}>
@@ -1845,7 +1837,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                       >
                         <div style={{ padding: 10, display: "grid", gap: 12 }}>
                           {cat.items.length > 0 && (
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: twoColGrid(140, 100),
+                                gap: GRID_GAP_PX
+                              }}
+                            >
                               {cat.items.map((g: any) => {
                                 const gid = String(g.id);
                                 const qty = countsById[gid] || 0;
@@ -1903,7 +1901,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                   }
                                 >
                                   <div style={{ padding: 10 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
+                                    <div
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: twoColGrid(140, 100),
+                                        gap: GRID_GAP_PX
+                                      }}
+                                    >
                                       {sub.items.map((g: any) => {
                                         const gid = String(g.id);
                                         const qty = countsById[gid] || 0;
@@ -1952,7 +1956,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           const uniqueIds = Array.from(new Set(selGraphicIds));
           if (uniqueIds.length === 0) return <div style={{ opacity: 0.8 }}>Не выбрано ни одного элемента</div>;
           return (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: twoColGrid(140, 100),
+                gap: GRID_GAP_PX
+              }}
+            >
               {uniqueIds.map((gid) => {
                 const meta = findGraphic(gid) || rearMeta[gid];
                 const qty = countsById[gid] || 0;
@@ -2210,7 +2220,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
               // Скрыть рамку, если фото/метрика пустые
               if (el.type === "photo") {
-                const pid = parsePhotoId(el.id) | el.personId || el.personId;
                 const p = people.find((x) => x.id === (parsePhotoId(el.id) || el.personId));
                 const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
                 if (!photoUrl) return null;
