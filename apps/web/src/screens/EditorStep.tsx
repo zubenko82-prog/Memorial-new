@@ -1,14 +1,18 @@
 // src/screens/EditorStep.tsx
 // Редактор поверх такого же шаблона, как на предыдущих шагах (SketchTemplate).
-// Как работает:
-// 1) Рендерим SketchTemplate (фон изделия + «невидимый» контент); его подсказку скрываем.
+// Последовательность:
+// 1) Рендерим SketchTemplate (фон изделия + «невидимый» контент). Его подсказку скрываем.
 // 2) Измеряем DOM-элементы SketchTemplate (по data-sketch-el) и строим фреймы 1-в-1.
-//    Для metric/graphic учитываем родителя и субпиксельную поправку по ширине.
+//    Для graphic учитываем родитель и субпиксельную поправку по ширине. Для metric НЕ берём родителя (исправляет «уехала вверх и стала больше»).
 // 3) Скрываем контент SketchTemplate (оставляем только фон изделия).
 // 4) Сверху рисуем свой управляемый контент (портрет/метрика/эпитафия/графика) строго по фреймам.
 // 5) Ещё слоем выше — фреймы редактора (DnD/resize + мини-панель).
+// 6) Генерируем превью (мини и большое) и сохраняем в драфт, передаём в TopBarWithIntro (миниатюра в топбаре).
 //
-// На этом шаге показываем только нашу подсказку, подсказку из SketchTemplate скрываем.
+// Исправлено:
+// - Метрика: больше не «уезжает вверх» и не «раздувается» — измеряем по data-sketch-el="metric", без родителей и без ширинной поправки.
+// - «Проявлялся» шаблон при перетаскивании — контент подложки принудительно скрываем (opacity:0 + visibility:hidden + pointer-events:none).
+// - Сохранение: форсируем автосохранение при отпускании (onPointerUp) + генерируем превью и прокидываем в TopBarWithIntro.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -85,28 +89,6 @@ const clampBox = (x: number, y: number, w: number, h: number) => ({
 });
 const snap = (v: number, step = 1) => Math.round(v / step) * step;
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
-
-const normRemember = (t?: string) =>
-  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
-const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
-function splitRememberPreserve(text: string) {
-  const t = (text || "").trim();
-  const parts: string[] = [];
-  let buf = "";
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    buf += ch;
-    if (ch === ",") {
-      parts.push(buf.trim());
-      buf = "";
-    }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  const top = parts[0] || "Помним,";
-  const mid = parts[1] || "любим,";
-  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим...").trim();
-  return { top, mid, bot };
-}
 
 /* ===== Fit helpers (для текста) ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
@@ -194,6 +176,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   const saveTimerRef = useRef<number | null>(null);
   const wishesTimerRef = useRef<number | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
 
   // Для aspectRatio контейнера
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -202,7 +185,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   // Сохранение без петель
   const isSavingRef = useRef(false);
   const touchSaving = (ms = 350) => { isSavingRef.current = true; window.setTimeout(() => (isSavingRef.current = false), ms); };
-  const saveEditor = (updater: (prev: OrderDraft) => OrderDraft) => {
+  const saveEditor = (updater: (prev: OrderDraft) => OrderDraft, andSetDraft = false) => {
     const prev = loadOrderDraft();
     const next = updater(prev);
     const prevJson = JSON.stringify(prev.editor || {});
@@ -210,6 +193,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (prevJson === nextJson) return;
     touchSaving();
     saveOrderDraft(next);
+    if (andSetDraft) setDraft(next);
   };
 
   // Live reload драфта
@@ -276,7 +260,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       if (hint) hint.style.display = "none";
     }
     const nodes = root.querySelectorAll('[data-sketch-el]');
-    nodes.forEach((el) => ((el as HTMLElement).style.visibility = "hidden"));
+    nodes.forEach((el) => {
+      const n = el as HTMLElement;
+      n.style.visibility = "hidden";
+      n.style.opacity = "0";
+      n.style.pointerEvents = "none";
+    });
   };
 
   useEffect(() => {
@@ -311,9 +300,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const key = (el.getAttribute("data-sketch-key") || "").trim();
       if (!kind) return;
 
-      // Для metric/graphic берём более широкий контейнер (родителя), если он реально шире
+      // graphic: берём родителя если он заметно шире (для точного попадания по ширине)
+      // metric: ИСПОЛЬЗУЕМ ТОЛЬКО САМ ЭЛЕМЕНТ (иначе метрика «раздувается» и уезжает)
       let target: HTMLElement = el;
-      if (kind === "metric" || kind === "graphic") {
+      if (kind === "graphic") {
         const p = el.parentElement as HTMLElement | null;
         if (p) {
           const pr = p.getBoundingClientRect();
@@ -328,8 +318,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       let wPct = (r.width / contentW) * 100;
       let hPct = (r.height / contentH) * 100;
 
-      // Субпиксельная компенсация для width (metric/graphic)
-      if (kind === "metric" || kind === "graphic") {
+      // Субпиксельная компенсация — только для graphic
+      if (kind === "graphic") {
         wPct *= 1.006;
       }
 
@@ -463,17 +453,27 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       })
     );
   };
-  const onPointerUp = () => { dragRef.current = null; };
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      // Сохраним после перетаскивания/ресайза + обновим превью, чтобы изменения не терялись при переходе
+      saveEditor((prev) => ({
+        ...prev,
+        editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+      } as OrderDraft), true);
+      queuePreviewGeneration(); // сгенерируем превью для топбара
+    }
+    dragRef.current = null;
+  };
 
-  // Автосохранение редактора
+  // Автосохранение редактора (дополнительно к onPointerUp)
   useEffect(() => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveEditor((prev) => ({
         ...prev,
         editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
-      } as OrderDraft));
-    }, 240) as unknown as number;
+      } as OrderDraft), true);
+    }, 300) as unknown as number;
     return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); };
   }, [elements, wishes]);
 
@@ -483,10 +483,211 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       saveEditor((prev) => {
         if (prev.editor?.wishes === wishes) return prev;
         return { ...prev, editor: { ...(prev.editor || {}), wishes, updatedAt: Date.now() } } as OrderDraft;
-      });
+      }, true);
     }, 320) as unknown as number;
     return () => { if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current); };
   }, [wishes]);
+
+  /* ===== Превью для TopBar (мини и большое) ===== */
+  const queuePreviewGeneration = () => {
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = window.setTimeout(async () => {
+      const wrap = editorWrapRef.current;
+      if (!wrap) return;
+
+      // Рисуем превью по текущим elements (наш контент), т.к. контент подложки скрыт
+      const r = wrap.getBoundingClientRect();
+      const pad = SKETCH_PAD;
+      const CW = Math.max(1, r.width - pad * 2);
+      const CH = Math.max(1, r.height - pad * 2);
+
+      async function drawPreview(W: number, H: number): Promise<string | null> {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.floor(W));
+        canvas.height = Math.max(1, Math.floor(H));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+
+        // фон (градиент + фото изделия)
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#6e6e6e");
+        grad.addColorStop(0.2, "#464545");
+        grad.addColorStop(0.4, "#424242");
+        grad.addColorStop(0.7, "#888888");
+        grad.addColorStop(1.0, "#ffffff");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        // фото
+        const base = await new Promise<HTMLImageElement | null>((resolve) => {
+          const url = item?.url || "";
+          if (!url) return resolve(null);
+          const im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = () => resolve(im);
+          im.onerror = () => resolve(null);
+          im.src = url;
+        });
+        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
+
+        if (base) {
+          const sr = base.width / base.height, dr = PW / PH;
+          ctx.globalAlpha = 0.35;
+          if (sr > dr) {
+            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          } else {
+            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          }
+          ctx.globalAlpha = 1;
+        }
+
+        const fam = FONT_CENTURY;
+
+        // контент
+        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
+          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
+          const key = el.id.split("-").slice(1).join("-");
+
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || "";
+            if (!url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image();
+              i.crossOrigin = "anonymous";
+              i.onload = () => resolve(i);
+              i.onerror = () => resolve(null);
+              i.src = url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            ctx.save();
+            ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
+            if (el.bw) ctx.filter = "grayscale(100%)";
+            if (sr2 > dr2) {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore();
+            ctx.filter = "none";
+          } else if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            ctx.save();
+            ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX = Math.max(4, Math.round(rbox.w * 0.04));
+            const padY = Math.max(2, Math.round(rbox.h * 0.10));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
+            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
+            let y = rbox.y + (rbox.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
+            for (let i = 0; i < fitted.length; i++) {
+              setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
+              ctx.fillText(tf(lines[i]), rbox.x + rbox.w / 2, y);
+              y += fitted[i] * 1.12;
+            }
+            ctx.restore();
+          } else if (el.type === "epitaph") {
+            const idx = Number(key);
+            const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+            const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+            ctx.save();
+            ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX = Math.max(4, Math.round(rbox.w * 0.04));
+            const padY = Math.max(2, Math.round(rbox.h * 0.06));
+            const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.15 });
+            setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+            const count = Math.max(1, lines.length);
+            const lineH = (rbox.h - padY * 2) / count;
+            for (let i = 0; i < count; i++) {
+              const yy = rbox.y + padY + lineH * (i + 0.5);
+              ctx.fillText(lines[i], rbox.x + rbox.w / 2, yy);
+            }
+            ctx.restore();
+          } else if (el.type === "graphic") {
+            const idx = Number(key);
+            const g = Number.isFinite(idx) ? others[idx] : undefined;
+            if (!g?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image();
+              i.crossOrigin = "anonymous";
+              i.onload = () => resolve(i);
+              i.onerror = () => resolve(null);
+              i.src = g.url;
+            });
+            if (!im) continue;
+            ctx.save();
+            if (el.flipH) {
+              ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
+              ctx.scale(-1, 1);
+              ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2));
+            }
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore();
+          } else if (el.type === "cross") {
+            const idx = Number(key);
+            const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+            if (!c?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image();
+              i.crossOrigin = "anonymous";
+              i.onload = () => resolve(i);
+              i.onerror = () => resolve(null);
+              i.src = c.url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+          }
+        }
+
+        return canvas.toDataURL("image/jpeg", 0.9);
+      }
+
+      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
+      const maxSide = 1600;
+      const ratio = r.width / (r.height || 1);
+      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+      const big = await drawPreview(bigW, bigH);
+
+      saveEditor((prev) => ({
+        ...prev,
+        editor: {
+          ...(prev.editor || {}),
+          previewUrl: mini || (prev.editor as any)?.previewUrl || null,
+          previewHiUrl: big || (prev.editor as any)?.previewHiUrl || null,
+          previewUpdatedAt: Date.now(),
+          elements,
+          wishes
+        }
+      } as OrderDraft), true);
+    }, 280) as unknown as number;
+  };
+
+  // Генерим превью при изменениях
+  useEffect(() => {
+    queuePreviewGeneration();
+    return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
+  }, [elements, peopleBlocks, crosses, others, epitaphs, aspect, wishes, item?.url]);
 
   /* ===== Контент поверх (им управляют фреймы) ===== */
   const ContentOverlay = () => {
@@ -575,7 +776,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Мини‑панель на фреймах ===== */
+  /* ===== Мини‑панель и ручки resize ===== */
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
     const isMetric = el.type === "metric";
@@ -618,22 +819,43 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  // Ручка для resize (исправляет падение: handleDot должен быть объявлен)
   function handleDot(left: number | string, top: number | string, cursor: string): React.CSSProperties {
     return {
       position: "absolute",
       left, top,
       width: 10, height: 10,
-      background: "#fff",
-      border: "1px solid #000",
-      borderRadius: 2,
-      transform: "translate(-50%, -50%)",
+      background: "#fff", border: "1px solid #000",
+      borderRadius: 2, transform: "translate(-50%, -50%)",
       cursor
     };
   }
 
+  /* ===== Навигация ===== */
+  const handleBack = () => {
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft), true);
+    queuePreviewGeneration();
+    setOutro(true);
+    setTimeout(() => onBack?.(), 150);
+  };
+  const handleContinue = () => {
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft), true);
+    queuePreviewGeneration();
+    const go = onRearSide || onSendOrder || onContinue;
+    if (!go) return;
+    setOutro(true);
+    setTimeout(() => go({ elements, wishes }), 150);
+  };
+
   /* ===== Разметка ===== */
   const MAX_W = 600;
+  const miniPreview = (draft as any)?.editor?.previewUrl || null;
+
   return (
     <div
       style={{
@@ -648,7 +870,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }}
     >
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        <TopBarWithIntro title="Memorial - редактор" />
+        <TopBarWithIntro title="Memorial - редактор" previewUrl={miniPreview} />
 
         {/* Подсказка шага (только эта) */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
@@ -792,24 +1014,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         </section>
 
         <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
-          <button type="button" onClick={() => {
-            saveEditor((prev) => ({
-              ...prev,
-              editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
-            } as OrderDraft));
-            setOutro(true);
-            setTimeout(() => onBack?.(), 150);
-          }} style={glassButtonStyle("sm")}>Назад</button>
-          <button type="button" onClick={() => {
-            saveEditor((prev) => ({
-              ...prev,
-              editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
-            } as OrderDraft));
-            const go = onRearSide || onSendOrder || onContinue;
-            if (!go) return;
-            setOutro(true);
-            setTimeout(() => go({ elements, wishes }), 150);
-          }} style={glassButtonStyle("sm")}>Продолжить</button>
+          <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
+          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
         </div>
       </div>
     </div>
