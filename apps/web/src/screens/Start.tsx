@@ -1,724 +1,965 @@
-// src/screens/Start.tsx
-// Стартовый экран каталога «Резьба».
-// «Знакомство» (контактные данные) показывается ТОЛЬКО после клика «Подтвердить».
-// Если валидные контакты уже сохранены — «знакомство» не спрашиваем, а при подтверждении фиксируем (lock=true) и назначаем номер заказа.
-// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остается видимой
-// (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
-// в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
+// src/screens/EditorStep.tsx
+// Редактор поверх SketchTemplate без «миганий» и откатов:
+// - Один снимок раскладки по DOM SketchTemplate при изменении входного контента (item/people/graphics/epitaphs) — только тогда!
+// - После снимка контент SketchTemplate жёстко скрываем (display:none) внутри редактора — виден только фон изделия.
+// - Свой управляемый контент (портрет/метрика/эпитафия/графика/крест) рисуем поверх по фреймам.
+// - Перетаскивание/ресайз не запускает пересъёмку (не откатывает рамки).
+// - Превью (мини/большое) сохраняем в драфт и прокидываем в TopBarWithIntro как миниатюру.
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { fetchCatalog, type CatalogCategory, type CatalogItem } from "../api";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
-import {
-  loadIntroState,
-  isIntroValid,
-  isPhoneValid,
-  saveIntro,
-  type Intro
-} from "../lib/intro";
-import { saveOrderDraft } from "../lib/order";
+import SketchTemplate from "../components/SketchTemplate";
+import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
-/* ============== Стили и утилиты ============== */
-
-type BtnSize = "nano" | "sm" | "md";
-function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProperties {
-  const pad: Record<BtnSize, string> = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" };
+/* ===== UI ===== */
+function glassPanelStyle() {
+  return {
+    background: "rgba(20,20,24,0.55)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: 12,
+    color: "#fff",
+    boxSizing: "border-box"
+  } as React.CSSProperties;
+}
+function glassButtonStyle(size: "nano" | "sm" | "md" = "sm") {
+  const pad = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
     padding: pad[size],
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
     background:
-      "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.1)",
     color: "#fff",
-    cursor: disabled ? "not-allowed" : "pointer",
+    cursor: "pointer",
     whiteSpace: "nowrap",
     boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
-    backdropFilter: "blur(14px) saturate(140%)",
-    WebkitBackdropFilter: "blur(14px) saturate(140%)",
-    opacity: disabled ? 0.6 : 1,
-    transition: "transform 280ms ease, opacity 280ms ease",
-    willChange: "transform",
-    fontFamily:
-      "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)"
-  };
-}
-function glassPanelStyle(): React.CSSProperties {
-  return {
-    background: "rgba(20,20,24,0.55)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    backdropFilter: "blur(12px) saturate(140%)",
-    WebkitBackdropFilter: "blur(12px) saturate(140%)",
-    borderRadius: 12,
-    transition: "background 280ms ease, box-shadow 280ms ease",
-    boxSizing: "border-box",
-    color: "#fff"
-  };
+      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)"
+  } as React.CSSProperties;
 }
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
-    backgroundColor: "#000000",
+    backgroundColor: "#000",
     backgroundImage:
       "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   };
 }
-function inputStyle(): React.CSSProperties {
-  return {
-    width: "100%",
-    maxWidth: "100%",
-    minWidth: 0,
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#fff",
-    outline: "none",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25)",
-    boxSizing: "border-box"
-  };
+
+/* ===== Types ===== */
+type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
+type EditorEl = {
+  id: string;
+  type: ElType;
+  x: number; y: number; w: number; h: number; // проценты внутрь контентной области
+  z: number;
+  title?: string;
+  locked?: boolean;
+  uppercase?: boolean; // metric/epitaph
+  italic?: boolean;    // metric/epitaph
+  flipH?: boolean;     // graphic
+  bw?: boolean;        // portrait
+  staircase?: boolean; // «Помним, любим, скорбим…»
+};
+
+/* ===== Helpers ===== */
+const SKETCH_PAD = 8;
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+const clampBox = (x: number, y: number, w: number, h: number) => ({
+  x: clamp(x, 0, 100 - w),
+  y: clamp(y, 0, 100 - h),
+  w: clamp(w, 2, 100),
+  h: clamp(h, 2, 100)
+});
+const snap = (v: number, step = 1) => Math.round(v / step) * step;
+const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
+
+function isCrossCategoryName(s?: string) {
+  const v = (s || "").toLowerCase();
+  return v.includes("крест") || v.includes("cross") || v.includes("crosses");
 }
-function errorTextStyle(): React.CSSProperties {
-  return { color: "#ffb4b4", fontSize: 12 };
+function linesFromPerson(p: any) {
+  const l1 = (p?.lastName || "").trim();
+  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
+  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
+  return [l1, l2, l3].filter(Boolean);
 }
 
-// Вензель‑разделитель (локально)
-function FiligreeSeparator({
-  top = 10,
-  bottom = 10,
-  widthPct = 60
+/* ===== Fit helpers ===== */
+let __measureCtx: CanvasRenderingContext2D | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (__measureCtx) return __measureCtx;
+  const c = document.createElement("canvas");
+  __measureCtx = c.getContext("2d");
+  return __measureCtx!;
+}
+function setFontOnCtx(ctx: CanvasRenderingContext2D, italic: boolean, px: number, family: string) {
+  ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.round(px))}px ${family}`;
+}
+function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: boolean, family: string, sizePx: number): number {
+  setFontOnCtx(ctx, italic, sizePx, family);
+  return ctx.measureText(text).width;
+}
+function fitMultilineFontPx({
+  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
 }: {
-  top?: number;
-  bottom?: number;
-  widthPct?: number;
-}) {
-  return (
-    <div style={{ margin: `${top}px 0 ${bottom}px` }}>
-      <svg
-        viewBox="0 0 600 80"
-        preserveAspectRatio="xMidYMid meet"
-        style={{ display: "block", margin: "0 auto", width: `${widthPct}%`, opacity: 0.55 }}
-      >
-        <path d="M10,40 C60,5 120,5 160,40 C200,75 260,75 300,40 C340,5 400,5 440,40 C480,75 540,75 590,40" fill="none" stroke="white" strokeWidth="1" strokeOpacity="0.7" />
-        <path d="M20,42 C70,10 130,10 170,42 C210,74 270,74 310,42 C350,10 410,10 450,42 C490,74 550,74 580,42" fill="none" stroke="white" strokeWidth="0.8" strokeOpacity="0.6" />
-        <path d="M30,38 C80,15 140,15 180,38 C220,61 280,61 320,38 C360,15 420,15 460,38 C500,61 560,61 570,38" fill="none" stroke="white" strokeWidth="0.6" strokeOpacity="0.5" />
-      </svg>
-    </div>
-  );
-}
-
-function getDecodedFileName(item: CatalogItem): string {
-  const src = (item as any).relPath || item.url || item.name || "";
-  const noQuery = String(src).split(/[?#]/)[0];
-  const last = (noQuery.split("/").pop() || noQuery).split("\\").pop() || noQuery;
-  let decodedName;
-  try {
-    decodedName = decodeURIComponent(last.replace(/\+/g, " "));
-  } catch {
-    decodedName = last;
+  text: string; boxW: number; boxH: number; italic: boolean; family: string;
+  padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
+}): { fontPx: number; lines: string[] } {
+  const ctx = getMeasureCtx();
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const count = Math.max(1, lines.length);
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const fByH = usableH / (count * lineHeight);
+  let fByW = maxPx;
+  for (const ln of lines.length ? lines : [" "]) {
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const fLine = (usableW * 100) / w100;
+    fByW = Math.min(fByW, fLine);
   }
-  // Удаляем расширение файла, если оно есть
-  const dotIndex = decodedName.lastIndexOf(".");
-  if (dotIndex !== -1) {
-    return decodedName.substring(0, dotIndex);
+  const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
+  return { fontPx, lines: lines.length ? lines : [""] };
+}
+function fitMetricFontsPx({
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
+}: {
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string;
+  padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
+}): number[] {
+  const ctx = getMeasureCtx();
+  const L = Math.min(3, lines.length);
+  if (L === 0) return [];
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const wSum = weights.slice(0, L).reduce((a, b) => a + b, 0);
+  const baseByH = usableH / (lineHeight * wSum);
+  const initial = Array.from({ length: L }, (_, i) => baseByH * weights[i]);
+  let sW = 1;
+  for (let i = 0; i < L; i++) {
+    const ln = lines[i] || "";
+    if (!ln) continue;
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const maxFi = (usableW * 100) / w100;
+    sW = Math.min(sW, maxFi / initial[i]);
   }
-  return decodedName;
+  return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
 }
 
-/* Плавное раскрытие/сворачивание секции */
-function useCollapse(open: boolean, duration = 260) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [style, setStyle] = useState<React.CSSProperties>({
-    overflow: "hidden",
-    maxHeight: 0,
-    opacity: 0,
-    transform: "translateY(-6px)"
-  });
+/* ===== Компонент редактора ===== */
+type Props = {
+  onBack?: () => void;
+  onContinue?: (payload?: any) => void;
+  onRearSide?: (payload?: any) => void;
+  onSendOrder?: (payload?: any) => void;
+};
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const h = el.scrollHeight;
-    if (open) {
-      setStyle({
-        overflow: "hidden",
-        maxHeight: h,
-        opacity: 1,
-        transform: "translateY(0)",
-        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
-      });
-      const t = setTimeout(() => {
-        if (ref.current) {
-          setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
-        }
-      }, duration + 20);
-      return () => clearTimeout(t);
-    } else {
-      setStyle({
-        overflow: "hidden",
-        maxHeight: 0,
-        opacity: 0,
-        transform: "translateY(-6px)",
-        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
-      });
-    }
-  }, [open, duration]);
-
-  return { ref, style };
-}
-
-/* ============== Типы мета-данных ============== */
-type ConfirmMeta = { intro: Intro; orderNumber: string };
-
-/* ============== Нижний лист — предпросмотр + «знакомство» ============== */
-
-function PreviewBottomSheet({
-  item,
-  onClose,
-  onConfirm
-}: {
-  item: CatalogItem;
-  onClose: () => void;
-  onConfirm: (meta: ConfirmMeta) => void;
-}) {
-  const [visible, setVisible] = useState(false);
-
-  // «Знакомство» показываем только после клика «Подтвердить»
-  const initialIntroState = loadIntroState();
-  const [showIntro, setShowIntro] = useState<boolean>(false);
-
-  // Поля «знакомства»
-  const [customerName, setCustomerName] = useState(initialIntroState.intro?.customerName || "");
-  const [customerPhone, setCustomerPhone] = useState(initialIntroState.intro?.customerPhone || "");
-  const [customerNotes, setCustomerNotes] = useState(initialIntroState.intro?.customerNotes || "");
-  const [orderNumber, setOrderNumber] = useState<string | null>(initialIntroState.orderNumber);
-
-  const [touched, setTouched] = useState<{ name?: boolean; phone?: boolean }>({});
-
-  // Плавное раскрытие секции «знакомства»
-  const introColl = useCollapse(showIntro, 260);
-
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), 10);
-    return () => clearTimeout(t);
-  }, []);
-
-  // Автосохранение промежуточных значений (без фиксации)
-  useEffect(() => {
-    saveIntro(
-      {
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerNotes: customerNotes.trim() || undefined
-      },
-      { lock: false }
-    );
-  }, [customerName, customerPhone, customerNotes]);
-
-  const isNameValid = customerName.trim().length > 1;
-  const isPhoneOk = isPhoneValid(customerPhone);
-  const formValid = isNameValid && isPhoneOk;
-
-  const closeWithFade = (cb: () => void) => {
-    setVisible(false);
-    setTimeout(cb, 220);
-  };
-
-  // Подтверждение:
-  const handleConfirm = () => {
-    const st = loadIntroState();
-    if (isIntroValid(st.intro)) {
-      const lockedState = st.locked && st.orderNumber ? st : saveIntro(st.intro!, { lock: true });
-      return closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
-    }
-    setShowIntro(true);
-  };
-
-  // Сабмит «знакомства»: фиксируем один раз (назначаем номер) и продолжаем
-  const submitIntro = (e: React.FormEvent) => {
-    e.preventDefault();
-    setTouched({ name: true, phone: true });
-    if (!formValid) return;
-
-    const lockedState = saveIntro(
-      {
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerNotes: customerNotes.trim() || undefined
-      },
-      { lock: true }
-    );
-    setOrderNumber(lockedState.orderNumber || null);
-
-    if (lockedState.intro && lockedState.orderNumber) {
-      return closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
-    }
-  };
-
-  // Общая «вставка» для нижнего отступа с учётом Telegram WebApp и Safe Area
-  const bottomInset = "calc(14px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
-
-  return createPortal(
-    <>
-      {/* Подложка */}
-      <div
-        aria-hidden
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 2147483600,
-          background: "rgba(12, 8, 8, 0.45)",
-          opacity: visible ? 1 : 0,
-          transition: "opacity 220ms ease",
-          pointerEvents: "none"
-        }}
-      />
-      {/* Фиксированный нижний лист */}
-      <div
-        role="dialog"
-        aria-modal="false"
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 2147483601,
-          width: "100%",
-          // Используем svh для стабильной высоты в мобильных браузерах
-          height: "clamp(540px, 90svh, 860px)",
-          padding: 12,
-          paddingBottom: bottomInset,
-          borderTopLeftRadius: 12,
-          borderTopRightRadius: 12,
-          ...glassPanelStyle(),
-          boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
-          display: "grid",
-          gridTemplateRows: "auto 1fr auto",
-          gap: 10,
-          opacity: visible ? 1 : 0,
-          transition: "opacity 220ms ease",
-          boxSizing: "border-box",
-          overflow: "hidden"
-        }}
-      >
-        {/* Заголовок (имя файла) */}
-        <div
-          style={{
-            textAlign: "center",
-            fontSize: 16,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis"
-          }}
-          title={getDecodedFileName(item)}
-        >
-          {getDecodedFileName(item)}
-        </div>
-
-        {/* Прокручиваемая середина: картинка + (опционально) «знакомство» */}
-        <div
-          style={{
-            minHeight: 0,
-            overflowY: "auto",
-            display: "grid",
-            gap: 10,
-            paddingBottom: 8
-          }}
-        >
-          {/* Картинка — всегда видима; по центру; уменьшаем высоту при открытом «знакомстве» */}
-          <div
-            style={{
-              ...bottomUnderlayGradient(),
-              borderRadius: 12,
-              padding: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-              maxHeight: showIntro ? "18vh" : "48vh", // уменьшили верхний блок, чтобы кнопки точно помещались
-              transition: "max-height 260ms ease, padding 260ms ease"
-            }}
-          >
-            <img
-              src={item.url}
-              alt={item.name}
-              style={{
-                maxWidth: "100%",
-                maxHeight: "100%",
-                width: "auto",
-                height: "auto",
-                objectFit: "contain",
-                borderRadius: 8,
-                display: "block",
-                margin: 0,
-                userSelect: "none",
-                pointerEvents: "none"
-              }}
-              draggable={false}
-            />
-          </div>
-
-          {/* «Знакомство» — плавное раскрытие: высота + fade + лёгкий slide */}
-          <div ref={introColl.ref} style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}>
-            {showIntro && (
-              <section
-                style={{
-                  ...glassPanelStyle(),
-                  padding: 12,
-                  transform: "translateY(0)",
-                  transition: "transform 260ms ease",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-                  border: "1px solid rgba(255,255,255,0.08)"
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                  <h3 style={{ margin: 0, fontWeight: 500 }}>Давайте познакомимся</h3>
-                  {orderNumber && <div style={{ opacity: 0.9, fontSize: 14 }}>№ {orderNumber}</div>}
-                </div>
-                <p style={{ margin: "6px 0 10px 0", opacity: 0.9 }}>
-                  Укажите ваши контакты — мы свяжемся для уточнения деталей заказа.
-                </p>
-
-                <form onSubmit={submitIntro} style={{ display: "grid", gap: 10 }}>
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span>Представьтесь, пожалуйста</span>
-                    <input
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      onBlur={() => setTouched((t) => ({ ...t, name: true }))}
-                      placeholder="Иванов Иван Иванович"
-                      style={inputStyle()}
-                    />
-                    {touched.name && customerName.trim().length <= 1 && (
-                      <div style={errorTextStyle()}>Пожалуйста, укажите имя и фамилию.</div>
-                    )}
-                  </label>
-
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span>Контактный телефон</span>
-                    <input
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
-                      placeholder="+7 (___) ___-__-__"
-                      style={inputStyle()}
-                      inputMode="tel"
-                    />
-                    {touched.phone && !isPhoneOk && (
-                      <div style={errorTextStyle()}>
-                        Введите корректный телефон: 10 цифр или 11 цифр, начинающийся с 7 или 8.
-                      </div>
-                    )}
-                  </label>
-
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span>Альтернативный способ связи (необязательно)</span>
-                    <textarea
-                      value={customerNotes}
-                      onChange={(e) => setCustomerNotes(e.target.value)}
-                      placeholder="Доп. телефон, email или мессенджер"
-                      rows={3}
-                      style={{ ...inputStyle(), resize: "vertical" }}
-                    />
-                  </label>
-
-                  {/* Кнопки формы */}
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "center",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      marginTop: 6,
-                      // резерв под нижние панели приложения
-                      paddingBottom: bottomInset
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setShowIntro(false)}
-                      style={glassButtonStyle("nano")}
-                      onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                      onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                      onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-                    >
-                      Назад
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!formValid}
-                      style={glassButtonStyle("nano", !formValid)}
-                      onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                      onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                      onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-                    >
-                      Продолжить
-                    </button>
-                  </div>
-                </form>
-              </section>
-            )}
-          </div>
-        </div>
-
-        {/* Нижние кнопки — всегда видимы; учтён нижний inset для Telegram/Safe Area */}
-        {!showIntro && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              gap: 8,
-              flexWrap: "wrap",
-              paddingBottom: bottomInset // гарантированно над системными панелями
-            }}
-          >
-            <button
-              onClick={() => closeWithFade(onClose)}
-              style={glassButtonStyle("nano")}
-              onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-              onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-              onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-            >
-              Выбрать другую
-            </button>
-            <button
-              onClick={handleConfirm}
-              style={glassButtonStyle("nano")}
-              title="Подтвердить"
-              onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-              onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-              onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-            >
-              Подтвердить
-            </button>
-          </div>
-        )}
-      </div>
-    </>,
-    document.body
-  );
-}
-
-/* ============== Экран Start (каталог) ============== */
-
-export default function Start({
-  onConfirm
-}: {
-  onConfirm: (item: CatalogItem, meta?: ConfirmMeta) => void;
-}) {
-  const [cats, setCats] = useState<CatalogCategory[] | null>(null);
-  const [err, setErr] = useState<string>("");
-  const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
+export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
+  const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
   const [outro, setOutro] = useState(false);
 
-  // Липкая навигация — только навигация прилипает (TopBar не липкий)
-  const navRef = useRef<HTMLDivElement | null>(null);
-  const [navH, setNavH] = useState<number>(56);
+  const [elements, setElements] = useState<EditorEl[]>(
+    () => (draft as any)?.editor?.elements || []
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
 
+  const editorWrapRef = useRef<HTMLDivElement | null>(null);
+  const templateRootRef = useRef<HTMLDivElement | null>(null);
+  const overlayFramesRef = useRef<HTMLDivElement | null>(null);
+
+  const saveTimerRef = useRef<number | null>(null);
+  const wishesTimerRef = useRef<number | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+
+  // Для aspectRatio контейнера
+  const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
+
+  // Сохранение без петель
+  const isSavingRef = useRef(false);
+  const touchSaving = (ms = 350) => { isSavingRef.current = true; window.setTimeout(() => (isSavingRef.current = false), ms); };
+  const saveEditor = (updater: (prev: OrderDraft) => OrderDraft, andSetDraft = false) => {
+    const prev = loadOrderDraft();
+    const next = updater(prev);
+    const prevJson = JSON.stringify(prev.editor || {});
+    const nextJson = JSON.stringify(next.editor || {});
+    if (prevJson === nextJson) return;
+    touchSaving();
+    saveOrderDraft(next);
+    if (andSetDraft) setDraft(next);
+  };
+
+  // Live reload драфта (без пересъёма раскладки)
   useEffect(() => {
-    fetchCatalog("carvings")
-      .then((d) => setCats(d.categories))
-      .catch((e) => setErr(String(e)));
-  }, []);
-
-  useLayoutEffect(() => {
-    const measure = () => setNavH(navRef.current?.getBoundingClientRect().height ?? 0);
-    measure();
-    window.addEventListener("resize", measure);
-    const ro = new ResizeObserver(measure);
-    if (navRef.current) ro.observe(navRef.current);
+    const apply = () => setDraft(loadOrderDraft());
+    window.addEventListener("focus", apply);
+    window.addEventListener("storage", apply);
+    window.addEventListener(DRAFT_UPDATED_EVENT, apply as any);
     return () => {
-      window.removeEventListener("resize", measure);
-      ro.disconnect();
+      window.removeEventListener("focus", apply);
+      window.removeEventListener("storage", apply);
+      window.removeEventListener(DRAFT_UPDATED_EVENT, apply as any);
     };
   }, []);
 
-  const makeCatId = (cat: CatalogCategory, idx: number) => {
-    const base = (cat.slug?.trim() || cat.name || `cat-${idx}`).toString();
-    return `${encodeURIComponent(base)}__${idx}`;
-  };
+  // Источники
+  const item = draft?.item || null;
+  const engr: any = draft?.engraving || {};
+  const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
 
-  const scrollToCat = (id: string) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const y = window.scrollY + rect.top - (navH + 12);
-    window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
-  };
+  const peopleBlocks = useMemo(() => {
+    if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
+      return engr.persons.map((p: any, idx: number) => {
+        const lines = linesFromPerson(p);
+        const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null;
+        return { id: p.id || `person-${idx}`, lines, photo };
+      });
+    }
+    const legacyLines: string[] = [];
+    if (engr?.fullName) legacyLines.push(String(engr.fullName));
+    const dates: string[] = [];
+    if (engr?.birthDate) dates.push(String(engr.birthDate));
+    if (engr?.deathDate) dates.push(String(engr.deathDate));
+    if (dates.length) legacyLines.push(dates.join(" — "));
+    if (Array.isArray(engr?.lines)) legacyLines.push(...(engr.lines as string[]).filter(Boolean));
+    const photo = engr?.photoPreview || engr?.photoDataUrl || engr?.photoUrl || engr?.photo || null;
+    return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
+  }, [engr]);
 
-  // Сортировка как в каталоге
-  const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
-  function sortedItems(items: CatalogItem[]) {
-    const keyOf = (it: CatalogItem) =>
-      (it as any).order ?? (it as any).index ?? (it as any).idx ?? (it as any).position ?? (it as any).sort;
-    return items.slice().sort((a, b) => {
-      const ka = keyOf(a);
-      const kb = keyOf(b);
-      const na = Number.isFinite(ka) ? Number(ka) : null;
-      const nb = Number.isFinite(kb) ? Number(kb) : null;
-      if (na !== null && nb !== null) return na - nb;
-      const pa = ((a as any).relPath as string) || a.url || a.name || "";
-      const pb = ((b as any).relPath as string) || b.url || b.name || "";
-      const cmp = collator.compare(pa, pb);
-      if (cmp !== 0) return cmp;
-      const na1 = a.name || "";
-      const nb1 = b.name || "";
-      return collator.compare(na1, nb1);
+  const epitaphs = useMemo(() => {
+    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
+    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
+    return [];
+  }, [engr]);
+
+  const crosses = useMemo(
+    () => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)),
+    [graphics]
+  );
+  const others = useMemo(
+    () => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)),
+    [graphics]
+  );
+
+  /* ===== Сигнатура контента (только для стартового снимка раскладки) ===== */
+  const contentSig = useMemo(() => {
+    const ppl = peopleBlocks.map(p => `${p.id}:${p.lines.join("|")}:${p.photo ? "1":"0"}`).join("||");
+    const cr = crosses.map(c => c.url).join("|");
+    const ot = others.map(o => o.url).join("|");
+    const ep = epitaphs.join("||");
+    const itemUrl = item?.url || "";
+    return [itemUrl, ppl, cr, ot, ep].join("::");
+  }, [item?.url, peopleBlocks, crosses, others, epitaphs]);
+  const lastAppliedContentSigRef = useRef<string>("");
+
+  // Флаг: скрывать контент SketchTemplate (после снимка) через CSS display:none
+  const [hideSketchContent, setHideSketchContent] = useState<boolean>(false);
+
+  // Единоразовая инъекция CSS: скрывать контент SketchTemplate, когда data-hide-sketch="1"
+  const cssOnceRef = useRef(false);
+  useEffect(() => {
+    if (cssOnceRef.current) return;
+    const st = document.createElement("style");
+    st.setAttribute("data-editor-shadow-css", "1");
+    st.innerHTML = `
+      [data-editor-wrap][data-hide-sketch="1"] [data-sketch-el] { display: none !important; }
+      [data-editor-wrap] [data-sketch-orient] ~ * { pointer-events: none !important; } /* перестраховка */
+    `;
+    document.head.appendChild(st);
+    cssOnceRef.current = true;
+    return () => {
+      document.head.removeChild(st);
+      cssOnceRef.current = false;
+    };
+  }, []);
+
+  /* ===== Снимок раскладки из SketchTemplate (Только при изменении contentSig) ===== */
+  const makeSnapshotFromTemplate = () => {
+    const wrap = editorWrapRef.current;
+    const root = templateRootRef.current;
+    if (!wrap || !root) return;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const contentLeft = wrapRect.left + SKETCH_PAD;
+    const contentTop = wrapRect.top + SKETCH_PAD;
+    const contentW = Math.max(1, wrapRect.width - SKETCH_PAD * 2);
+    const contentH = Math.max(1, wrapRect.height - SKETCH_PAD * 2);
+
+    const nodes = root.querySelectorAll('[data-sketch-el]');
+    const entries: EditorEl[] = [];
+
+    nodes.forEach((node) => {
+      const el = node as HTMLElement;
+      const kind = (el.getAttribute("data-sketch-el") || "").trim();
+      const key = (el.getAttribute("data-sketch-key") || "").trim();
+      if (!kind) return;
+
+      // graphic — можно мерить по родителю (иногда лейаут шире самого img), остальные — по себе
+      let target: HTMLElement = el;
+      if (kind === "graphic") {
+        const p = el.parentElement as HTMLElement | null;
+        if (p) {
+          const pr = p.getBoundingClientRect();
+          const er = el.getBoundingClientRect();
+          if (pr.width - er.width > 2) target = p;
+        }
+      }
+
+      const r = target.getBoundingClientRect();
+      let xPct = ((r.left - contentLeft) / contentW) * 100;
+      let yPct = ((r.top - contentTop) / contentH) * 100;
+      let wPct = (r.width / contentW) * 100;
+      let hPct = (r.height / contentH) * 100;
+
+      if (kind === "graphic") wPct *= 1.006; // субпиксельная поправка ширины графики
+
+      xPct = clamp(xPct, 0, 100);
+      yPct = clamp(yPct, 0, 100);
+      wPct = clamp(wPct, 0, 100);
+      hPct = clamp(hPct, 0, 100);
+
+      let id = "", type: ElType | null = null;
+      if (kind === "portrait") { id = `portrait-${key}`; type = "portrait"; }
+      else if (kind === "metric") { id = `metric-${key}`; type = "metric"; }
+      else if (kind === "epitaph") { id = `epitaph-${key}`; type = "epitaph"; }
+      else if (kind === "graphic") { id = `graphic-${key}`; type = "graphic"; }
+      else if (kind === "cross") { id = `cross-${key}`; type = "cross"; }
+      if (!id || !type) return;
+
+      let z = 0;
+      if (type === "portrait") z = 10;
+      else if (type === "metric") z = 20;
+      else if (type === "epitaph") z = 30 + Number(key);
+      else if (type === "cross") z = 40 + Number(key);
+      else if (type === "graphic") z = 50 + Number(key);
+
+      entries.push({ id, type, x: xPct, y: yPct, w: Math.max(2, wPct), h: Math.max(2, hPct), z, title: id });
     });
+
+    setElements((prev) => {
+      const prevMap = new Map(prev.map((p) => [p.id, p]));
+      const next = entries.map((e) => {
+        const old = prevMap.get(e.id);
+        return old
+          ? { ...e, uppercase: old.uppercase, italic: old.italic, flipH: old.flipH, bw: old.bw, staircase: old.staircase }
+          : e;
+      });
+      prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
+      return next;
+    });
+
+    lastAppliedContentSigRef.current = contentSig;
+  };
+
+  // Стартовый/контентный снимок: показать контент SketchTemplate, снять размеры, затем скрыть
+  useEffect(() => {
+    // Показать контент SketchTemplate для корректного измерения
+    setHideSketchContent(false);
+    requestAnimationFrame(() => {
+      makeSnapshotFromTemplate();
+      // Скрыть контент SketchTemplate полностью (остается только фон)
+      setHideSketchContent(true);
+    });
+  }, [contentSig]);
+
+  /* ===== DnD/Resize (без пересъёма во время редактирования) ===== */
+  const dragRef = useRef<{
+    id: string;
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+    startX: number; startY: number;
+    start: EditorEl;
+  } | null>(null);
+
+  const onPointerDownBox = (
+    e: React.PointerEvent,
+    id: string,
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
+  ) => {
+    e.stopPropagation();
+    const el = elements.find((x) => x.id === id);
+    if (!el || el.locked) return;
+    setSelectedId(id);
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+    dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, start: { ...el } };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current; if (!d) return;
+    e.preventDefault();
+    const wrap = editorWrapRef.current; if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const contentW = rect.width - SKETCH_PAD * 2;
+    const contentH = rect.height - SKETCH_PAD * 2;
+    if (contentW <= 0 || contentH <= 0) return;
+
+    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
+    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
+    const withSnap = !e.altKey;
+    const snapStep = e.shiftKey ? 1.5 : 1;
+
+    setElements((prev) =>
+      prev.map((el) => {
+        if (el.id !== d.id) return el;
+        let { x, y, w, h } = d.start;
+
+        if (d.mode === "move") {
+          let nx = x + dxPct, ny = y + dyPct;
+          if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); }
+          return { ...el, ...clampBox(nx, ny, w, h) };
+        }
+
+        const keepRatio = e.shiftKey;
+        let nx = x, ny = y, nw = w, nh = h;
+        const ratio = w / h || 1;
+
+        if (d.mode.includes("e")) nw = w + dxPct;
+        if (d.mode.includes("s")) nh = h + dyPct;
+        if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
+        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dyPct; }
+
+        if (keepRatio) {
+          if (["e","w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
+          if (["n","s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
+        }
+
+        if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); nw = snap(nw, snapStep); nh = snap(nh, snapStep); }
+
+        return { ...el, ...clampBox(nx, ny, nw, nh) };
+      })
+    );
+  };
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      saveEditor((prev) => ({
+        ...prev,
+        editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+      } as OrderDraft), true);
+      queuePreviewGeneration();
+    }
+    dragRef.current = null;
+  };
+
+  // Автосохранение (подстраховка)
+  useEffect(() => {
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveEditor((prev) => ({
+        ...prev,
+        editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+      } as OrderDraft), true);
+    }, 320) as unknown as number;
+    return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); };
+  }, [elements, wishes]);
+
+  useEffect(() => {
+    if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
+    wishesTimerRef.current = window.setTimeout(() => {
+      saveEditor((prev) => {
+        if (prev.editor?.wishes === wishes) return prev;
+        return { ...prev, editor: { ...(prev.editor || {}), wishes, updatedAt: Date.now() } } as OrderDraft;
+      }, true);
+    }, 320) as unknown as number;
+    return () => { if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current); };
+  }, [wishes]);
+
+  /* ===== Превью (мини/большое) для TopBar и драфта ===== */
+  const queuePreviewGeneration = () => {
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = window.setTimeout(async () => {
+      const wrap = editorWrapRef.current; if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const pad = SKETCH_PAD;
+
+      async function drawPreview(W: number, H: number): Promise<string | null> {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.floor(W));
+        canvas.height = Math.max(1, Math.floor(H));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+
+        // фон (градиент + фото изделия)
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#6e6e6e");
+        grad.addColorStop(0.2, "#464545");
+        grad.addColorStop(0.4, "#424242");
+        grad.addColorStop(0.7, "#888888");
+        grad.addColorStop(1.0, "#ffffff");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        // фото
+        const base = await new Promise<HTMLImageElement | null>((resolve) => {
+          const url = item?.url || "";
+          if (!url) return resolve(null);
+          const im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = () => resolve(im);
+          im.onerror = () => resolve(null);
+          im.src = url;
+        });
+
+        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
+        if (base) {
+          const sr = base.width / base.height, dr = PW / PH;
+          ctx.globalAlpha = 0.35;
+          if (sr > dr) {
+            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          } else {
+            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          }
+          ctx.globalAlpha = 1;
+        }
+
+        const fam = FONT_CENTURY;
+
+        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
+          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
+          const key = el.id.split("-").slice(1).join("-");
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || ""; if (!url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            ctx.save(); ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
+            if (el.bw) ctx.filter = "grayscale(100%)";
+            if (sr2 > dr2) {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore(); ctx.filter = "none";
+          } else if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            ctx.save();
+            ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04));
+            const padY2 = Math.max(2, Math.round(rbox.h * 0.10));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
+            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
+            let y = rbox.y + (rbox.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
+            for (let i = 0; i < fitted.length; i++) {
+              setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
+              ctx.fillText(tf(lines[i]), rbox.x + rbox.w / 2, y);
+              y += fitted[i] * 1.12;
+            }
+            ctx.restore();
+          } else if (el.type === "epitaph") {
+            const idx = Number(key);
+            const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+            const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+            ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04));
+            const padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
+            setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+            const count = Math.max(1, lines.length);
+            const lineH = (rbox.h - padY2 * 2) / count;
+            for (let i = 0; i < count; i++) {
+              const yy = rbox.y + padY2 + lineH * (i + 0.5);
+              ctx.fillText(lines[i], rbox.x + rbox.w / 2, yy);
+            }
+            ctx.restore();
+          } else if (el.type === "graphic") {
+            const idx = Number(key);
+            const g = Number.isFinite(idx) ? others[idx] : undefined;
+            if (!g?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = g.url;
+            });
+            if (!im) continue;
+            ctx.save();
+            if (el.flipH) { ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2); ctx.scale(-1, 1); ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2)); }
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore();
+          } else if (el.type === "cross") {
+            const idx = Number(key);
+            const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+            if (!c?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = c.url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+          }
+        }
+        return canvas.toDataURL("image/jpeg", 0.9);
+      }
+
+      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
+      const maxSide = 1600;
+      const ratio = r.width / (r.height || 1);
+      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+      const big = await drawPreview(bigW, bigH);
+
+      saveEditor((prev) => ({
+        ...prev,
+        editor: {
+          ...(prev.editor || {}),
+          previewUrl: mini || (prev.editor as any)?.previewUrl || null,
+          previewHiUrl: big || (prev.editor as any)?.previewHiUrl || null,
+          previewUpdatedAt: Date.now(),
+          elements,
+          wishes
+        }
+      } as OrderDraft), true);
+    }, 240) as unknown as number;
+  };
+
+  useEffect(() => {
+    queuePreviewGeneration();
+    return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
+  }, [elements, peopleBlocks, crosses, others, epitaphs, aspect, wishes, item?.url]);
+
+  /* ===== Контент поверх (им управляют фреймы) ===== */
+  const ContentOverlay = () => {
+    const fam = FONT_CENTURY;
+    const wrap = editorWrapRef.current?.getBoundingClientRect();
+    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
+    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
+
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD,
+          pointerEvents: "none", zIndex: 1000
+        }}
+      >
+        {elements
+          .slice()
+          .sort((a, b) => a.z - b.z)
+          .map((el) => {
+            const key = el.id.split("-").slice(1).join("-");
+            const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
+
+            if (el.type === "portrait") {
+              const p = peopleBlocks.find((pp) => pp.id === key);
+              const url = p?.photo || "";
+              const filt = el.bw ? "grayscale(100%)" : "none";
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
+                  {url ? <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.6 }}>(нет фото)</div>}
+                </div>
+              );
+            } else if (el.type === "metric") {
+              const p = peopleBlocks.find((pp) => pp.id === key);
+              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+              const padY = Math.max(2, Math.round(boxPx.h * 0.10));
+              const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.12, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ display: "grid", gap: 2, width: "100%" }}>
+                      {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
+                      {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
+                      {lines[2] && <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            } else if (el.type === "epitaph") {
+              const idx = Number(key);
+              const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+              const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+              const padY = Math.max(2, Math.round(boxPx.h * 0.06));
+              const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.15 });
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
+                  </div>
+                </div>
+              );
+            } else if (el.type === "cross") {
+              const idx = Number(key);
+              const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
+                  {c?.url ? <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+                </div>
+              );
+            } else if (el.type === "graphic") {
+              const idx = Number(key);
+              const g = Number.isFinite(idx) ? others[idx] : undefined;
+              const tr = el.flipH ? "scaleX(-1)" : "none";
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
+                  {g?.url ? <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+                </div>
+              );
+            }
+            return null;
+          })}
+      </div>
+    );
+  };
+
+  /* ===== Мини‑панель и ручки resize ===== */
+  const MiniToolbar = ({ el }: { el: EditorEl }) => {
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
+    const isMetric = el.type === "metric";
+    const isEpitaph = el.type === "epitaph";
+    const isGraphic = el.type === "graphic";
+    const isPortrait = el.type === "portrait";
+    return (
+      <div
+        onPointerDown={(ev) => ev.stopPropagation()}
+        style={{
+          position: "absolute", left: 0, top: -30,
+          display: "flex", gap: 6,
+          background: "rgba(0,0,0,0.6)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6, padding: "2px 6px",
+          alignItems: "center", pointerEvents: "auto", zIndex: 3000
+        }}
+      >
+        {isMetric && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))}>
+            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+          </button>
+        )}
+        {isEpitaph && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, italic: !e.italic } : e)))}>
+            {el.italic ? "Обычный" : "Курсив"}
+          </button>
+        )}
+        {isGraphic && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))}>
+            Отразить ⇄
+          </button>
+        )}
+        {isPortrait && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, bw: !e.bw } : e)))}>
+            {el.bw ? "Цвет" : "Ч/Б"}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  function handleDot(left: number | string, top: number | string, cursor: string): React.CSSProperties {
+    return {
+      position: "absolute",
+      left, top,
+      width: 10, height: 10,
+      background: "#fff", border: "1px solid #000",
+      borderRadius: 2, transform: "translate(-50%, -50%)",
+      cursor
+    };
   }
 
-  const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
-    // Сохраняем выбранный элемент в драфт заказа (для TopBar и следующих шагов)
-    saveOrderDraft({
-      item: { name: it.name, url: it.url, relPath: (it as any).relPath }
-    });
-
-    setPreviewItem(null);
+  /* ===== Навигация + превью в топбар ===== */
+  const handleBack = () => {
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft), true);
+    queuePreviewGeneration();
     setOutro(true);
-    window.setTimeout(() => onConfirm(it, meta), 220);
+    setTimeout(() => onBack?.(), 150);
   };
+  const handleContinue = () => {
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft), true);
+    queuePreviewGeneration();
+    const go = onRearSide || onSendOrder || onContinue;
+    if (!go) return;
+    setOutro(true);
+    setTimeout(() => go({ elements, wishes }), 150);
+  };
+
+  const MAX_W = 600;
+  const miniPreview = (draft as any)?.editor?.previewUrl || null;
 
   return (
     <div
       style={{
         color: "#fff",
-        fontFamily:
-          "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
         padding: 12,
         opacity: outro ? 0 : 1,
-        transition: "opacity 220ms ease",
-        maxWidth: 600,
-        margin: "0 auto"
+        transition: "opacity 240ms ease",
+        backgroundImage: `url(/data/bg.svg)`,
+        backgroundSize: "cover",
+        backgroundPosition: "center center",
+        backgroundAttachment: "fixed"
       }}
     >
-      {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
-      <TopBarWithIntro title="Memorial" />
+      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
+        <TopBarWithIntro title="Memorial - редактор" previewUrl={miniPreview} />
 
-      <div style={{ marginBottom: 6, opacity: 0.9 }}>
-        Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
-      </div>
+        {/* Подсказка шага */}
+        <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
+          Разместите элементы условно. Укажите порядок и выравнивание (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ). Финальный вариант сделает специалист исходя из технических требований и согласно этой схеме.
+        </section>
 
-      {/* Липкая панель навигации по категориям */}
-      {cats && cats.length > 0 && (
-        <div
-          ref={navRef}
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 50,
-            paddingTop: "env(safe-area-inset-top)",
-            ...glassPanelStyle(),
-            borderRadius: 0,
-            borderLeft: "none",
-            borderRight: "none",
-            marginBottom: 10
-          }}
-        >
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px", overflow: "hidden" }}>
-            {cats.map((cat, idx) => {
-              const catId = makeCatId(cat, idx);
-              return (
-                <button
-                  key={`nav-${catId}`}
-                  onClick={() => scrollToCat(catId)}
-                  style={{
-                    ...glassButtonStyle("nano"),
-                    padding: "4px 8px",
-                    fontSize: 12,
-                    lineHeight: 1.15
-                  }}
-                  title={`Перейти к: ${cat.name}`}
-                  onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                  onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                  onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-                >
-                  {cat.name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+        {/* Эскиз: подложка (SketchTemplate) + наш контент + фреймы */}
+        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+          <div
+            ref={editorWrapRef}
+            data-editor-wrap
+            data-hide-sketch={hideSketchContent ? "1" : "0"}
+            style={{
+              position: "relative",
+              width: "100%",
+              borderRadius: 10,
+              overflow: "hidden",
+              userSelect: "none",
+              ...bottomUnderlayGradient(),
+              aspectRatio: aspect,
+              minHeight: aspect ? undefined : 540
+            }}
+          >
+            {/* Подложка (как на предыдущих шагах) */}
+            <div ref={templateRootRef}>
+              <SketchTemplate
+                item={item}
+                peopleBlocks={peopleBlocks}
+                crosses={crosses as any}
+                others={others as any}
+                epitaphs={epitaphs}
+                carvingOpacity={0.35}
+              />
+            </div>
 
-      {err && <div style={{ color: "salmon" }}>{err}</div>}
-      {!cats && <div>Загрузка...</div>}
-      {cats && cats.length === 0 && <div>Пока пусто. Добавьте папки и изображения в data/catalogs/carvings.</div>}
+            {/* Технический img, чтобы узнать естественное соотношение */}
+            <img
+              src={item?.url || ""}
+              alt=""
+              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+              onLoad={(e) => {
+                const im = e.currentTarget;
+                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
+              }}
+              onError={() => {
+                if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
+              }}
+            />
 
-      <div style={{ display: "grid", gap: 14, scrollBehavior: "smooth" }}>
-        {cats?.map((cat, idx) => {
-          const catId = makeCatId(cat, idx);
-          const items = sortedItems(cat.items);
-          return (
-            <section id={catId} key={`cat-${catId}`} style={{ paddingTop: 2, scrollMarginTop: `${navH + 14}px` }}>
-              <FiligreeSeparator top={2} bottom={6} widthPct={60} />
-              <h3 style={{ margin: "0 0 6px 0" }}>{cat.name}</h3>
+            {/* Наш управляемый контент */}
+            <ContentOverlay />
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                  gap: 10
-                }}
-              >
-                {items.map((it, i) => (
-                  <button
-                    key={it.relPath || `${catId}-${i}`}
-                    onClick={() => setPreviewItem(it)}
-                    title="Открыть предпросмотр"
-                    style={{
-                      ...glassPanelStyle(),
-                      borderRadius: 12,
-                      padding: 6,
-                      cursor: "pointer",
-                      textAlign: "center",
-                      transform: "translateZ(0)"
-                    }}
-                    onPointerEnter={(e) => (e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.35)")}
-                    onPointerLeave={(e) => (e.currentTarget.style.boxShadow = "")}
-                    onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.995)")}
-                    onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                  >
+            {/* Слой фреймов */}
+            <div
+              ref={overlayFramesRef}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerDown={(e) => {
+                // Сброс выбора только при клике по пустому месту контейнера фреймов
+                if (e.target === e.currentTarget) {
+                  const rect = editorWrapRef.current?.getBoundingClientRect();
+                  if (!rect) { setSelectedId(null); return; }
+                  const contentW = rect.width - SKETCH_PAD * 2;
+                  const contentH = rect.height - SKETCH_PAD * 2;
+                  const cx = ((e.clientX - (rect.left + SKETCH_PAD)) / contentW) * 100;
+                  const cy = ((e.clientY - (rect.top + SKETCH_PAD)) / contentH) * 100;
+                  const under = elements
+                    .slice()
+                    .sort((a, b) => b.z - a.z)
+                    .find((el) => cx >= el.x && cx <= el.x + el.w && cy >= el.y && cy <= el.y + el.h);
+                  setSelectedId(under ? under.id : null);
+                }
+              }}
+              style={{
+                position: "absolute",
+                left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD,
+                zIndex: 1001,
+                pointerEvents: "none"
+              }}
+            >
+              {elements
+                .slice()
+                .sort((a, b) => a.z - b.z)
+                .map((el) => {
+                  const selected = el.id === selectedId;
+                  return (
                     <div
+                      key={el.id}
+                      onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")}
                       style={{
-                        ...bottomUnderlayGradient(),
-                        borderRadius: 10,
-                        aspectRatio: "1/1",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 6
+                        position: "absolute",
+                        left: `${el.x}%`, top: `${el.y}%`,
+                        width: `${el.w}%`, height: `${el.h}%`,
+                        border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
+                        borderRadius: 4,
+                        boxShadow: selected ? "0 0 0 1px rgba(138,180,255,0.6)" : "none",
+                        background: "transparent",
+                        pointerEvents: "auto",
+                        cursor: el.locked ? "not-allowed" : "move",
+                        touchAction: "none"
                       }}
+                      title={el.title || el.id}
                     >
-                      <img
-                        src={it.url}
-                        alt={it.name}
-                        style={{
-                          maxWidth: "100%",
-                          maxHeight: "100%",
-                          width: "auto",
-                          height: "auto",
-                          objectFit: "contain",
-                          display: "block",
-                          borderRadius: 8
-                        }}
-                      />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+                      {selected && <MiniToolbar el={el} />}
 
-      {/* Предпросмотр. «Знакомство» откроется ТОЛЬКО после клика «Подтвердить» */}
-      {previewItem && (
-        <PreviewBottomSheet
-          item={previewItem}
-          onClose={() => setPreviewItem(null)}
-          onConfirm={(meta) => confirmAndGo(previewItem, meta)}
-        />
-      )}
+                      {selected && !el.locked && (
+                        <>
+                          {/* Углы */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")} />
+                          {/* Стороны */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={handleDot("50%", 0, "ns-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={handleDot("100%", "50%", "ew-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={handleDot("50%", "100%", "ns-resize")} />
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={handleDot(0, "50%", "ew-resize")} />
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </section>
+
+        {/* Пожелания */}
+        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+          <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>Пожелания по эскизу</label>
+          <textarea
+            id="wishes"
+            value={wishes}
+            onChange={(e) => setWishes(e.target.value)}
+            rows={4}
+            placeholder="Например: ещё уменьшить портрет, метрику сузить, эпитафию сделать лесенкой…"
+            style={{ width: "100%", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(0,0,0,0.35)", color: "#fff", padding: 10, resize: "vertical", outline: "none", boxSizing: "border-box" }}
+          />
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>Пожелания будут учтены при подготовке финального макета.</div>
+        </section>
+
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
+          <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
+          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
+        </div>
+      </div>
     </div>
   );
 }
