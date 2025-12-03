@@ -1,10 +1,10 @@
 // src/screens/Start.tsx
 // Стартовый экран каталога «Резьба».
-// «Знакомство» (контактные данные) показывается ТОЛЬКО после клика «Подтвердить».
-// Если валидные контакты уже сохранены — «знакомство» не спрашиваем, а при подтверждении фиксируем (lock=true) и назначаем номер заказа.
-// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остается видимой
-// (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
-// в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
+// FIX (Telegram mobile):
+// - Кнопки «Назад/Продолжить» для «знакомства» вынесены в нижнюю фиксированную панель листа (третья строка грида).
+//   Они всегда видимы, не попадают под экран/системные панели и клавиатуру (учитываем env(safe-area-inset-bottom) и var(--tg-viewport-inset-bottom)).
+// - Внутренние кнопки у формы убраны (чтобы не было дубля и «сползания»).
+// - Высота листа — через svh (стабильно в мобильных).
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -117,11 +117,8 @@ function getDecodedFileName(item: CatalogItem): string {
   } catch {
     decodedName = last;
   }
-  // Удаляем расширение файла, если оно есть
   const dotIndex = decodedName.lastIndexOf(".");
-  if (dotIndex !== -1) {
-    return decodedName.substring(0, dotIndex);
-  }
+  if (dotIndex !== -1) return decodedName.substring(0, dotIndex);
   return decodedName;
 }
 
@@ -148,9 +145,7 @@ function useCollapse(open: boolean, duration = 260) {
         transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
       });
       const t = setTimeout(() => {
-        if (ref.current) {
-          setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
-        }
+        if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
       }, duration + 20);
       return () => clearTimeout(t);
     } else {
@@ -197,6 +192,7 @@ function PreviewBottomSheet({
 
   // Плавное раскрытие секции «знакомства»
   const introColl = useCollapse(showIntro, 260);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setVisible(true), 10);
@@ -255,8 +251,16 @@ function PreviewBottomSheet({
     }
   };
 
-  // Общая «вставка» для нижнего отступа с учётом Telegram WebApp и Safe Area
-  const bottomInset = "calc(14px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
+  // Общая вставка под нижние панели (Telegram/Safe Area)
+  const bottomInset = "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
+
+  // Обработчики для нижней панели при открытом «знакомстве»
+  const handleIntroBack = () => setShowIntro(false);
+  const handleIntroSubmit = () => {
+    if (!formValid) return;
+    // Нативный submit формы (с валидацией)
+    formRef.current?.requestSubmit();
+  };
 
   return createPortal(
     <>
@@ -284,8 +288,7 @@ function PreviewBottomSheet({
           bottom: 0,
           zIndex: 2147483601,
           width: "100%",
-          // Используем svh для стабильной высоты в мобильных браузерах
-          height: "clamp(540px, 90svh, 860px)",
+          height: "clamp(520px, 90svh, 860px)", // svh — стабильно на мобильных
           padding: 12,
           paddingBottom: bottomInset,
           borderTopLeftRadius: 12,
@@ -293,7 +296,7 @@ function PreviewBottomSheet({
           ...glassPanelStyle(),
           boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
           display: "grid",
-          gridTemplateRows: "auto 1fr auto",
+          gridTemplateRows: "auto 1fr auto", // верх — заголовок, середина — скролл, низ — кнопки
           gap: 10,
           opacity: visible ? 1 : 0,
           transition: "opacity 220ms ease",
@@ -335,7 +338,7 @@ function PreviewBottomSheet({
               alignItems: "center",
               justifyContent: "center",
               overflow: "hidden",
-              maxHeight: showIntro ? "18vh" : "48vh", // уменьшили верхний блок, чтобы кнопки точно помещались
+              maxHeight: showIntro ? "18vh" : "48vh",
               transition: "max-height 260ms ease, padding 260ms ease"
             }}
           >
@@ -379,7 +382,7 @@ function PreviewBottomSheet({
                   Укажите ваши контакты — мы свяжемся для уточнения деталей заказа.
                 </p>
 
-                <form onSubmit={submitIntro} style={{ display: "grid", gap: 10 }}>
+                <form ref={formRef} onSubmit={submitIntro} style={{ display: "grid", gap: 10 }}>
                   <label style={{ display: "grid", gap: 6 }}>
                     <span>Представьтесь, пожалуйста</span>
                     <input
@@ -422,77 +425,72 @@ function PreviewBottomSheet({
                     />
                   </label>
 
-                  {/* Кнопки формы */}
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "center",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      marginTop: 6,
-                      // резерв под нижние панели приложения
-                      paddingBottom: bottomInset
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setShowIntro(false)}
-                      style={glassButtonStyle("nano")}
-                      onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                      onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                      onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-                    >
-                      Назад
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!formValid}
-                      style={glassButtonStyle("nano", !formValid)}
-                      onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                      onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                      onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-                    >
-                      Продолжить
-                    </button>
-                  </div>
+                  {/* ВНИМАНИЕ: внутренних кнопок здесь больше нет.
+                     Кнопки «Назад/Продолжить» вынесены в нижнюю фиксированную панель (см. ниже). */}
                 </form>
               </section>
             )}
           </div>
         </div>
 
-        {/* Нижние кнопки — всегда видимы; учтён нижний inset для Telegram/Safe Area */}
-        {!showIntro && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              gap: 8,
-              flexWrap: "wrap",
-              paddingBottom: bottomInset // гарантированно над системными панелями
-            }}
-          >
-            <button
-              onClick={() => closeWithFade(onClose)}
-              style={glassButtonStyle("nano")}
-              onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-              onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-              onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-            >
-              Выбрать другую
-            </button>
-            <button
-              onClick={handleConfirm}
-              style={glassButtonStyle("nano")}
-              title="Подтвердить"
-              onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-              onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-              onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-            >
-              Подтвердить
-            </button>
-          </div>
-        )}
+        {/* Нижняя фиксированная панель — ВСЕГДА видима. */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            paddingBottom: bottomInset // гарантированно над панелями Telegram/Safe Area
+          }}
+        >
+          {!showIntro ? (
+            <>
+              <button
+                onClick={() => closeWithFade(onClose)}
+                style={glassButtonStyle("nano")}
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Выбрать другую
+              </button>
+              <button
+                onClick={handleConfirm}
+                style={glassButtonStyle("nano")}
+                title="Подтвердить"
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Подтвердить
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleIntroBack}
+                style={glassButtonStyle("nano")}
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Назад
+              </button>
+              <button
+                type="button"
+                onClick={handleIntroSubmit}
+                disabled={!formValid}
+                style={glassButtonStyle("nano", !formValid)}
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Продолжить
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </>,
     document.body
@@ -511,7 +509,6 @@ export default function Start({
   const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
   const [outro, setOutro] = useState(false);
 
-  // Липкая навигация — только навигация прилипает (TopBar не липкий)
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState<number>(56);
 
@@ -546,7 +543,6 @@ export default function Start({
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   };
 
-  // Сортировка как в каталоге
   const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
   function sortedItems(items: CatalogItem[]) {
     const keyOf = (it: CatalogItem) =>
@@ -568,11 +564,7 @@ export default function Start({
   }
 
   const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
-    // Сохраняем выбранный элемент в драфт заказа (для TopBar и следующих шагов)
-    saveOrderDraft({
-      item: { name: it.name, url: it.url, relPath: (it as any).relPath }
-    });
-
+    saveOrderDraft({ item: { name: it.name, url: it.url, relPath: (it as any).relPath } });
     setPreviewItem(null);
     setOutro(true);
     window.setTimeout(() => onConfirm(it, meta), 220);
@@ -591,7 +583,6 @@ export default function Start({
         margin: "0 auto"
       }}
     >
-      {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
       <TopBarWithIntro title="Memorial" />
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
@@ -621,12 +612,7 @@ export default function Start({
                 <button
                   key={`nav-${catId}`}
                   onClick={() => scrollToCat(catId)}
-                  style={{
-                    ...glassButtonStyle("nano"),
-                    padding: "4px 8px",
-                    fontSize: 12,
-                    lineHeight: 1.15
-                  }}
+                  style={{ ...glassButtonStyle("nano"), padding: "4px 8px", fontSize: 12, lineHeight: 1.15 }}
                   title={`Перейти к: ${cat.name}`}
                   onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
                   onPointerUp={(e) => (e.currentTarget.style.transform = "")}
@@ -711,7 +697,6 @@ export default function Start({
         })}
       </div>
 
-      {/* Предпросмотр. «Знакомство» откроется ТОЛЬКО после клика «Подтвердить» */}
       {previewItem && (
         <PreviewBottomSheet
           item={previewItem}
