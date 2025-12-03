@@ -364,7 +364,7 @@ export default function SizeStep(props: SizeStepProps) {
         padding: 16
       }}
     >
-      <TopBarWithIntro title="Memorial" />
+      <h3><TopBarWithIntro title="Memorial - стела" /></h3>
 
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
       <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
