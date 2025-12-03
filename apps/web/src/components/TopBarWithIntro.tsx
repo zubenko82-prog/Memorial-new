@@ -1,8 +1,10 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
-// Правки:
-// - "(тыл)" в заголовке «Люди на памятнике» теперь показывается только если есть люди на тыльной стороне (backHasPeople).
-// - Остальной функционал без изменений.
+// Правки под мобильные:
+// - Компактный режим (<= 420px): уменьшаем горизонтальные отступы шапки/панели, шрифты и промежутки,
+//   уменьшаем ширину колонки ярлыков (Row), миниатюры и переводим некоторые области в одну колонку.
+// - Минимизируем внешние отступы от краёв экрана на телефоне (маленькие margin-inline).
+// - "(тыл)" в заголовке «Люди на памятнике» показывается только если есть люди на тыльной стороне.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -82,6 +84,20 @@ function paperShadow(t: ThemeMode): React.CSSProperties {
     : { boxShadow: "0 8px 24px rgba(0,0,0,0.45)" };
 }
 
+/* ===== Адаптивность ===== */
+function useCompact(breakpoint = 420): boolean {
+  const [compact, setCompact] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= breakpoint;
+  });
+  useEffect(() => {
+    const onResize = () => setCompact(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return compact;
+}
+
 /* ===== UI-хелперы и локальные стили ===== */
 function inputStyle(theme: ThemeMode): React.CSSProperties {
   const p = palette(theme);
@@ -134,9 +150,9 @@ function linkButtonStyle(theme: ThemeMode, kind: "default" | "danger" = "default
     lineHeight: 1.2
   };
 }
-function Row({ label, theme, children }: { label: string; theme: ThemeMode; children: React.ReactNode }) {
+function Row({ label, theme, children, compact = false }: { label: string; theme: ThemeMode; children: React.ReactNode; compact?: boolean }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10, alignItems: "center" }}>
+    <div style={{ display: "grid", gridTemplateColumns: `${compact ? 120 : 160}px 1fr`, gap: compact ? 8 : 10, alignItems: "center" }}>
       <div style={{ color: palette(theme).text }}>{label}</div>
       <div>{children}</div>
     </div>
@@ -217,6 +233,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
+  const compact = useCompact(420); // compact-режим для телефонов
 
   const introState = loadIntroState();
   const intro = introState.intro;
@@ -396,10 +413,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   }>;
   const backElements: any[] = (((order as any)?.editorBack?.elements as any[]) || []);
   const backHasPeople = backPersons.length > 0;
-  const backHasMetric = backElements.some((el) => el?.type === "metric");
 
   return (
-    <div style={{ marginBottom: 10 }}>
+    <div
+      style={{
+        marginBottom: compact ? 8 : 10,
+        // минимальные отступы по краям на мобильном
+        marginInline: compact ? "4px" : "0px"
+      }}
+    >
       <style>{`
         @keyframes nudge { 0% { transform: translateY(0); } 100% { transform: translateY(3px); } }
         .link-like:hover { text-decoration: underline; }
@@ -415,15 +437,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         style={{
           width: "100%",
           textAlign: "left",
-          padding: "12px 14px",
-          borderRadius: 12,
+          padding: compact ? "8px 8px" : "12px 14px",
+          borderRadius: compact ? 10 : 12,
           border: palette(theme).headerBorder,
           background: palette(theme).headerBg,
           color: palette(theme).headerText,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: 12,
+          gap: compact ? 8 : 12,
           cursor: "pointer",
           ...paperShadow(theme),
           transition: "box-shadow 220ms ease, background 220ms ease, transform 120ms ease"
@@ -438,8 +460,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         onMouseLeave={(e) => (e.currentTarget.style.boxShadow = paperShadow(theme).boxShadow as string)}
       >
         {/* Слева — название */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, position: "relative" }}>
-          <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 10, minWidth: 0, position: "relative" }}>
+          <span style={{ fontSize: compact ? 19 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
           <div
             aria-hidden
             style={{
@@ -455,18 +477,38 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         </div>
 
         {/* Справа — №, имя, телефон + chevron */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <div style={{ display: "grid", gridAutoRows: "min-content", textAlign: "right", lineHeight: 1.15, gap: 2, minWidth: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: compact ? 8 : 10, minWidth: 0 }}>
+          <div style={{ display: "grid", gridAutoRows: "min-content", textAlign: "right", lineHeight: 1.15, gap: compact ? 1 : 2, minWidth: 0 }}>
             <div style={{ fontSize: 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
-            <div style={{ fontSize: 13, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "60vw" }} title={intro?.customerName || ""}>
+            <div
+              style={{
+                fontSize: compact ? 12 : 13,
+                opacity: 0.92,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: compact ? "52vw" : "60vw"
+              }}
+              title={intro?.customerName || ""}
+            >
               {intro?.customerName || "—"}
             </div>
-            <div style={{ fontSize: 13, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "60vw" }} title={intro?.customerPhone || ""}>
+            <div
+              style={{
+                fontSize: compact ? 12 : 13,
+                opacity: 0.92,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: compact ? "52vw" : "60vw"
+              }}
+              title={intro?.customerPhone || ""}
+            >
               {intro?.customerPhone || "—"}
             </div>
           </div>
-          <div aria-hidden style={{ width: 24, height: 24, borderRadius: 999, display: "grid", placeItems: "center", background: palette(theme).chevronCircleBg, border: palette(theme).chevronCircleBorder, transition: "background 220ms ease, border-color 220ms ease, transform 220ms ease" }}>
-            <svg viewBox="0 0 24 24" width="16" height="16" style={{ display: "block", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 220ms ease" }}>
+          <div aria-hidden style={{ width: compact ? 22 : 24, height: compact ? 22 : 24, borderRadius: 999, display: "grid", placeItems: "center", background: palette(theme).chevronCircleBg, border: palette(theme).chevronCircleBorder, transition: "background 220ms ease, border-color 220ms ease, transform 220ms ease" }}>
+            <svg viewBox="0 0 24 24" width={compact ? 14 : 16} height={compact ? 14 : 16} style={{ display: "block", transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 220ms ease" }}>
               <path d="M6 9l6 6 6-6" fill="none" stroke={palette(theme).chevronStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
@@ -474,10 +516,21 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       </button>
 
       {/* Панель с коллапсом */}
-      <div id={panelId} ref={coll.ref} style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? 8 : 0 }}>
-        <section style={{ background: palette(theme).panelBg, border: palette(theme).panelBorder, borderRadius: 12, color: palette(theme).text, ...paperShadow(theme), padding: 12, display: "grid", gap: 10 }}>
+      <div id={panelId} ref={coll.ref} style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}>
+        <section
+          style={{
+            background: palette(theme).panelBg,
+            border: palette(theme).panelBorder,
+            borderRadius: compact ? 10 : 12,
+            color: palette(theme).text,
+            ...paperShadow(theme),
+            padding: compact ? 8 : 12,
+            display: "grid",
+            gap: compact ? 8 : 10
+          }}
+        >
           {/* Верхняя полоса действий */}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 14 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14 }}>
             <button type="button" onClick={(e) => { e.stopPropagation(); const next: ThemeMode = theme === "dark" ? "light" : "dark"; setTheme(next); saveTheme(next); }} style={linkButtonStyle(theme)} className="link-like">
               {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
             </button>
@@ -541,41 +594,41 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           </div>
 
           {/* Контакты */}
-          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
+          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: compact ? 8 : 10 }}>
             <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Контакты</div>
             {!editing ? (
               <div style={{ display: "grid", gap: 6 }}>
-                <div style={{ padding: "8px 0", borderBottom: palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}><div style={{ color: palette(theme).text }}>{intro?.customerName || "—"}</div></div>
-                <div style={{ padding: "8px 0", borderBottom: palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}><div style={{ color: palette(theme).text }}>{intro?.customerPhone || "—"}</div></div>
-                <div style={{ padding: "8px 0", display: "flex", alignItems: "center", gap: 10 }}><div style={{ color: palette(theme).text }}>{intro?.customerNotes || "—"}</div></div>
+                <div style={{ padding: compact ? "6px 0" : "8px 0", borderBottom: palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}><div style={{ color: palette(theme).text }}>{intro?.customerName || "—"}</div></div>
+                <div style={{ padding: compact ? "6px 0" : "8px 0", borderBottom: palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}><div style={{ color: palette(theme).text }}>{intro?.customerPhone || "—"}</div></div>
+                <div style={{ padding: compact ? "6px 0" : "8px 0", display: "flex", alignItems: "center", gap: 10 }}><div style={{ color: palette(theme).text }}>{intro?.customerNotes || "—"}</div></div>
               </div>
             ) : (
-              <div style={{ display: "grid", gap: 8 }}>
-                <Row label="Имя" theme={theme}><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" /></Row>
-                <Row label="Телефон" theme={theme}><input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" /></Row>
-                <Row label="Примечание" theme={theme}><input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" /></Row>
+              <div style={{ display: "grid", gap: compact ? 6 : 8 }}>
+                <Row label="Имя" theme={theme} compact={compact}><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" /></Row>
+                <Row label="Телефон" theme={theme} compact={compact}><input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" /></Row>
+                <Row label="Примечание" theme={theme} compact={compact}><input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" /></Row>
                 {!isPhoneValid(phone) && (<div style={{ color: theme === "light" ? "#b91c1c" : "#ffb4b4", fontSize: 12 }}>Неверный телефон. Введите 10–11 цифр.</div>)}
               </div>
             )}
           </section>
 
           {/* Резная работа */}
-          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
+          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: compact ? 8 : 10 }}>
             <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Резная работа</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ ...galleryThumbBoxStyle(), width: 100, height: 100 }}>
+              <div style={{ ...galleryThumbBoxStyle(), width: compact ? 84 : 100, height: compact ? 84 : 100 }}>
                 {order.item?.url ? (
                   <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
                 ) : <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>}
               </div>
-              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: palette(theme).text, maxWidth: "60vw" }}>
+              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: palette(theme).text, maxWidth: compact ? "58vw" : "60vw" }}>
                 {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
               </div>
             </div>
           </section>
 
           {/* Размеры/характеристики */}
-          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
+          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: compact ? 8 : 10 }}>
             <div style={{ fontWeight: 600, marginBottom: 6, color: palette(theme).text }}>Размеры/характеристики</div>
             {!editing ? (
               <div style={{ display: "grid", gap: 4, color: palette(theme).text }}>
@@ -588,24 +641,22 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 {sizeNotes ? <div style={{ padding: "8px 0" }}>{sizeNotes}</div> : null}
               </div>
             ) : (
-              <div style={{ display: "grid", gap: 8 }}>
-                <Row label="Примечание" theme={theme}><input value={sizeNotes} onChange={(e) => setSizeNotes(e.target.value)} style={inputStyle(theme)} placeholder="Например: уточнить толщину по наличию…" /></Row>
+              <div style={{ display: "grid", gap: compact ? 6 : 8 }}>
+                <Row label="Примечание" theme={theme} compact={compact}><input value={sizeNotes} onChange={(e) => setSizeNotes(e.target.value)} style={inputStyle(theme)} placeholder="Например: уточнить толщину по наличию…" /></Row>
               </div>
             )}
           </section>
 
           {/* Люди */}
-          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
+          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: compact ? 8 : 10 }}>
             <div style={{ textAlign: "center", textDecoration: "underline", fontWeight: 600, marginBottom: 8, color: palette(theme).text }}>
               Люди на памятнике
-              {backHasPeople && (
-                <span style={{ marginLeft: 6, opacity: 0.7 }}> (тыл)</span>
-              )}
+              {backHasPeople && <span style={{ marginLeft: 6, opacity: 0.7 }}> (тыл)</span>}
             </div>
 
             {backHasPeople ? (
-              // Две колонки: левая — лицевая, правая — тыльная
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              // Две колонки (на мобильном — одна)
+              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 16 }}>
                 {/* Левая колонка — лицевая */}
                 <div>
                   <span style={{ marginLeft: 6, opacity: 0.7 }}>лицевая сторона</span>
@@ -617,8 +668,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                         const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
                         const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
                         return (
-                          <div key={p.id || `person-front-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ ...galleryThumbBoxStyle(), width: 64, height: 64 }}>
+                          <div key={p.id || `person-front-${idx}`} style={{ padding: compact ? "6px 0" : "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ ...galleryThumbBoxStyle(), width: compact ? 56 : 64, height: compact ? 56 : 64 }}>
                               {p.photoPreview ? (
                                 <img src={p.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                               ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
@@ -648,8 +699,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                         const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
                         const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
                         return (
-                          <div  key={p.id || `person-back-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ ...galleryThumbBoxStyle(), width: 64, height: 64 }}>
+                          <div  key={p.id || `person-back-${idx}`} style={{ padding: compact ? "6px 0" : "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ ...galleryThumbBoxStyle(), width: compact ? 56 : 64, height: compact ? 56 : 64 }}>
                               {p.photoPreview ? (
                                 <img src={p.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                               ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
@@ -679,8 +730,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
                       const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
                       return (
-                        <div key={p.id || `person-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ ...galleryThumbBoxStyle(), width: 64, height: 64 }}>
+                        <div key={p.id || `person-${idx}`} style={{ padding: compact ? "6px 0" : "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ ...galleryThumbBoxStyle(), width: compact ? 56 : 64, height: compact ? 56 : 64 }}>
                             {p.photoPreview ? (
                               <img src={p.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                             ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
@@ -701,13 +752,13 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             )}
           </section>
 
-          {/* Эскизы — две колонки (списки сверху, эскиз и пожелания снизу) */}
-          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: 10 }}>
+          {/* Эскизы — две колонки (на мобильном одна) */}
+          <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: compact ? 8 : 10 }}>
             <div style={{ textAlign: "center", textDecoration: "underline", fontWeight: 600, marginBottom: 8, color: palette(theme).text }}>Эскизы</div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "stretch" }}>
+            <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 16, alignItems: "stretch" }}>
               {/* Левая колонка (лицевая) */}
-              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", gap: 10, minHeight: 0 }}>
+              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", gap: compact ? 8 : 10, minHeight: 0 }}>
                 {/* row 1 — списки */}
                 <div style={{ display: "grid", gap: 8 }}>
                   <div>
@@ -715,7 +766,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                     {frontUnique.length === 0 ? (
                       <div style={{ color: palette(theme).subText }}>Нет выбранных элементов</div>
                     ) : (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8 }}>
+                      <div style={{ ...glassPanelStyle(theme), padding: compact ? 6 : 8 }}>
                         {frontUnique.map((g: any) => renderGraphicRow(g, frontCountsById[g.id] || 0, theme))}
                       </div>
                     )}
@@ -726,7 +777,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                     {frontEpitaphs.length === 0 ? (
                       <div style={{ color: palette(theme).subText }}>—</div>
                     ) : (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8, display: "grid", gap: 6 }}>
+                      <div style={{ ...glassPanelStyle(theme), padding: compact ? 6 : 8, display: "grid", gap: 6 }}>
                         {frontEpitaphs.map((t, i) => (
                           <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
                         ))}
@@ -782,7 +833,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               </div>
 
               {/* Правая колонка (тыльная) */}
-              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", gap: 10, minHeight: 0 }}>
+              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto auto", gap: compact ? 8 : 10, minHeight: 0 }}>
                 {/* row 1 — списки */}
                 <div style={{ display: "grid", gap: 8 }}>
                   <div>
@@ -790,7 +841,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                     {rearUnique.length === 0 ? (
                       <div style={{ color: palette(theme).subText }}>Нет выбранных элементов</div>
                     ) : (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8 }}>
+                      <div style={{ ...glassPanelStyle(theme), padding: compact ? 6 : 8 }}>
                         {rearUnique.map((g: any) => {
                           const gid = g?.id || g?.relPath || g?.url || g?.name;
                           const qty = rearCountsById[gid] || 0;
@@ -806,7 +857,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                     {rearEpitaphs.length === 0 ? (
                       <div style={{ color: palette(theme).subText }}>—</div>
                     ) : (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8, display: "grid", gap: 6 }}>
+                      <div style={{ ...glassPanelStyle(theme), padding: compact ? 6 : 8, display: "grid", gap: 6 }}>
                         {rearEpitaphs.map((t, i) => (
                           <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
                         ))}
