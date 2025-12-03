@@ -1,6 +1,12 @@
 // src/screens/Start.tsx
-// Изменение: увеличили высоту всплывающего окна (bottom sheet) — теперь оно занимает до 96svh.
-// Это даёт больше места для «Альтернативного способа связи» на телефонах/в Telegram.
+// Стартовый экран каталога «Резьба».
+// «Знакомство» (контактные данные) показывается ТОЛЬКО после клика «Подтвердить».
+// Если валидные контакты уже сохранены — «знакомство» не спрашиваем, а при подтверждении фиксируем (lock=true) и назначаем номер заказа.
+// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остается видимой
+// (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
+// в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
+//
+// FIX: увеличили высоту всплывающего окна до 96svh, чтобы на телефонах в Telegram влезал «Альтернативный способ связи».
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -15,10 +21,158 @@ import {
 } from "../lib/intro";
 import { saveOrderDraft } from "../lib/order";
 
-/* ... остальные помощники/стили и компонент FiligreeSeparator, getDecodedFileName, useCollapse без изменений ... */
+/* ============== Стили и утилиты ============== */
 
-// Типы
+type BtnSize = "nano" | "sm" | "md";
+function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProperties {
+  const pad: Record<BtnSize, string> = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" };
+  return {
+    padding: pad[size],
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.28)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    color: "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap",
+    boxShadow:
+      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
+    backdropFilter: "blur(14px) saturate(140%)",
+    WebkitBackdropFilter: "blur(14px) saturate(140%)",
+    opacity: disabled ? 0.6 : 1,
+    transition: "transform 280ms ease, opacity 280ms ease",
+    willChange: "transform",
+    fontFamily:
+      "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)"
+  };
+}
+function glassPanelStyle(): React.CSSProperties {
+  return {
+    background: "rgba(20,20,24,0.55)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    backdropFilter: "blur(12px) saturate(140%)",
+    WebkitBackdropFilter: "blur(12px) saturate(140%)",
+    borderRadius: 12,
+    transition: "background 280ms ease, box-shadow 280ms ease",
+    boxSizing: "border-box",
+    color: "#fff"
+  };
+}
+function bottomUnderlayGradient(): React.CSSProperties {
+  return {
+    backgroundColor: "#000000",
+    backgroundImage:
+      "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+  };
+}
+function inputStyle(): React.CSSProperties {
+  return {
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.18)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    outline: "none",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25)",
+    boxSizing: "border-box"
+  };
+}
+function errorTextStyle(): React.CSSProperties {
+  return { color: "#ffb4b4", fontSize: 12 };
+}
+
+// Вензель‑разделитель (локально)
+function FiligreeSeparator({
+  top = 10,
+  bottom = 10,
+  widthPct = 60
+}: {
+  top?: number;
+  bottom?: number;
+  widthPct?: number;
+}) {
+  return (
+    <div style={{ margin: `${top}px 0 ${bottom}px` }}>
+      <svg
+        viewBox="0 0 600 80"
+        preserveAspectRatio="xMidYMid meet"
+        style={{ display: "block", margin: "0 auto", width: `${widthPct}%`, opacity: 0.55 }}
+      >
+        <path d="M10,40 C60,5 120,5 160,40 C200,75 260,75 300,40 C340,5 400,5 440,40 C480,75 540,75 590,40" fill="none" stroke="white" strokeWidth="1" strokeOpacity="0.7" />
+        <path d="M20,42 C70,10 130,10 170,42 C210,74 270,74 310,42 C350,10 410,10 450,42 C490,74 550,74 580,42" fill="none" stroke="white" strokeWidth="0.8" strokeOpacity="0.6" />
+        <path d="M30,38 C80,15 140,15 180,38 C220,61 280,61 320,38 C360,15 420,15 460,38 C500,61 560,61 570,38" fill="none" stroke="white" strokeWidth="0.6" strokeOpacity="0.5" />
+      </svg>
+    </div>
+  );
+}
+
+function getDecodedFileName(item: CatalogItem): string {
+  const src = (item as any).relPath || item.url || item.name || "";
+  const noQuery = String(src).split(/[?#]/)[0];
+  const last = (noQuery.split("/").pop() || noQuery).split("\\").pop() || noQuery;
+  let decodedName;
+  try {
+    decodedName = decodeURIComponent(last.replace(/\+/g, " "));
+  } catch {
+    decodedName = last;
+  }
+  // Удаляем расширение файла, если оно есть
+  const dotIndex = decodedName.lastIndexOf(".");
+  if (dotIndex !== -1) {
+    return decodedName.substring(0, dotIndex);
+  }
+  return decodedName;
+}
+
+/* Плавное раскрытие/сворачивание секции */
+function useCollapse(open: boolean, duration = 260) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({
+    overflow: "hidden",
+    maxHeight: 0,
+    opacity: 0,
+    transform: "translateY(-6px)"
+  });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const h = el.scrollHeight;
+    if (open) {
+      setStyle({
+        overflow: "hidden",
+        maxHeight: h,
+        opacity: 1,
+        transform: "translateY(0)",
+        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
+      });
+      const t = setTimeout(() => {
+        if (ref.current) {
+          setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
+        }
+      }, duration + 20);
+      return () => clearTimeout(t);
+    } else {
+      setStyle({
+        overflow: "hidden",
+        maxHeight: 0,
+        opacity: 0,
+        transform: "translateY(-6px)",
+        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
+      });
+    }
+  }, [open, duration]);
+
+  return { ref, style };
+}
+
+/* ============== Типы мета-данных ============== */
 type ConfirmMeta = { intro: Intro; orderNumber: string };
+
+/* ============== Нижний лист — предпросмотр + «знакомство» ============== */
 
 function PreviewBottomSheet({
   item,
@@ -30,15 +184,20 @@ function PreviewBottomSheet({
   onConfirm: (meta: ConfirmMeta) => void;
 }) {
   const [visible, setVisible] = useState(false);
+
+  // «Знакомство» показываем только после клика «Подтвердить»
   const initialIntroState = loadIntroState();
   const [showIntro, setShowIntro] = useState<boolean>(false);
 
+  // Поля «знакомства»
   const [customerName, setCustomerName] = useState(initialIntroState.intro?.customerName || "");
   const [customerPhone, setCustomerPhone] = useState(initialIntroState.intro?.customerPhone || "");
   const [customerNotes, setCustomerNotes] = useState(initialIntroState.intro?.customerNotes || "");
   const [orderNumber, setOrderNumber] = useState<string | null>(initialIntroState.orderNumber);
 
   const [touched, setTouched] = useState<{ name?: boolean; phone?: boolean }>({});
+
+  // Плавное раскрытие секции «знакомства»
   const introColl = useCollapse(showIntro, 260);
   const formRef = useRef<HTMLFormElement | null>(null);
 
@@ -47,6 +206,7 @@ function PreviewBottomSheet({
     return () => clearTimeout(t);
   }, []);
 
+  // Автосохранение промежуточных значений (без фиксации)
   useEffect(() => {
     saveIntro(
       {
@@ -67,6 +227,7 @@ function PreviewBottomSheet({
     setTimeout(cb, 220);
   };
 
+  // Подтверждение:
   const handleConfirm = () => {
     const st = loadIntroState();
     if (isIntroValid(st.intro)) {
@@ -76,6 +237,7 @@ function PreviewBottomSheet({
     setShowIntro(true);
   };
 
+  // Сабмит «знакомства»: фиксируем один раз (назначаем номер) и продолжаем
   const submitIntro = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched({ name: true, phone: true });
@@ -96,8 +258,10 @@ function PreviewBottomSheet({
     }
   };
 
+  // Общая вставка под нижние панели (Telegram/Safe Area)
   const bottomInset = "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
 
+  // Обработчики для нижней панели при открытом «знакомстве»
   const handleIntroBack = () => setShowIntro(false);
   const handleIntroSubmit = () => {
     if (!formValid) return;
@@ -106,6 +270,7 @@ function PreviewBottomSheet({
 
   return createPortal(
     <>
+      {/* Подложка */}
       <div
         aria-hidden
         style={{
@@ -118,6 +283,7 @@ function PreviewBottomSheet({
           pointerEvents: "none"
         }}
       />
+      {/* Фиксированный нижний лист */}
       <div
         role="dialog"
         aria-modal="false"
@@ -128,8 +294,7 @@ function PreviewBottomSheet({
           bottom: 0,
           zIndex: 2147483601,
           width: "100%",
-          // БЫЛО: clamp(520px, 90svh, 860px)
-          // СТАЛО: чуть выше на мобильных, почти на весь экран — влезает «альтернативный способ связи».
+          // Увеличили высоту на мобильных: до 96svh (было 90svh)
           height: "clamp(560px, 96svh, 1000px)",
           padding: 12,
           paddingBottom: bottomInset,
@@ -146,6 +311,7 @@ function PreviewBottomSheet({
           overflow: "hidden"
         }}
       >
+        {/* Заголовок (имя файла) */}
         <div
           style={{
             textAlign: "center",
@@ -159,6 +325,7 @@ function PreviewBottomSheet({
           {getDecodedFileName(item)}
         </div>
 
+        {/* Прокручиваемая середина: картинка + (опционально) «знакомство» */}
         <div
           style={{
             minHeight: 0,
@@ -168,6 +335,7 @@ function PreviewBottomSheet({
             paddingBottom: 8
           }}
         >
+          {/* Картинка — всегда видима; по центру; уменьшаем высоту при открытом «знакомстве» */}
           <div
             style={{
               ...bottomUnderlayGradient(),
@@ -177,7 +345,7 @@ function PreviewBottomSheet({
               alignItems: "center",
               justifyContent: "center",
               overflow: "hidden",
-              maxHeight: showIntro ? "18vh" : "48vh",
+              maxHeight: showIntro ? "18vh" : "48vh", // уменьшили верхний блок, чтобы кнопки точно помещались
               transition: "max-height 260ms ease, padding 260ms ease"
             }}
           >
@@ -200,6 +368,7 @@ function PreviewBottomSheet({
             />
           </div>
 
+          {/* «Знакомство» — плавное раскрытие: высота + fade + лёгкий slide */}
           <div ref={introColl.ref} style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}>
             {showIntro && (
               <section
@@ -262,21 +431,23 @@ function PreviewBottomSheet({
                       style={{ ...inputStyle(), resize: "vertical" }}
                     />
                   </label>
-                  {/* Кнопки формы вынесены вниз (фиксированная панель) */}
+
+                  {/* ВНИМАНИЕ: внутренних кнопок здесь нет.
+                      Кнопки «Назад/Продолжить» вынесены в нижнюю фиксированную панель (см. ниже). */}
                 </form>
               </section>
             )}
           </div>
         </div>
 
-        {/* Нижняя фиксированная панель */}
+        {/* Нижние кнопки — всегда видимы; учтён нижний inset для Telegram/Safe Area */}
         <div
           style={{
             display: "flex",
             justifyContent: "center",
             gap: 8,
             flexWrap: "wrap",
-            paddingBottom: bottomInset
+            paddingBottom: bottomInset // гарантированно над системными панелями
           }}
         >
           {!showIntro ? (
@@ -305,7 +476,7 @@ function PreviewBottomSheet({
             <>
               <button
                 type="button"
-                onClick={() => setShowIntro(false)}
+                onClick={handleIntroBack}
                 style={glassButtonStyle("nano")}
                 onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
                 onPointerUp={(e) => (e.currentTarget.style.transform = "")}
@@ -315,7 +486,7 @@ function PreviewBottomSheet({
               </button>
               <button
                 type="button"
-                onClick={() => formRef.current?.requestSubmit()}
+                onClick={handleIntroSubmit}
                 disabled={!formValid}
                 style={glassButtonStyle("nano", !formValid)}
                 onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
@@ -345,6 +516,7 @@ export default function Start({
   const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
   const [outro, setOutro] = useState(false);
 
+  // Липкая навигация — только навигация прилипает (TopBar не липкий)
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState<number>(56);
 
@@ -379,6 +551,7 @@ export default function Start({
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   };
 
+  // Сортировка как в каталоге
   const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
   function sortedItems(items: CatalogItem[]) {
     const keyOf = (it: CatalogItem) =>
@@ -400,7 +573,11 @@ export default function Start({
   }
 
   const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
-    saveOrderDraft({ item: { name: it.name, url: it.url, relPath: (it as any).relPath } });
+    // Сохраняем выбранный элемент в драфт заказа (для TopBar и следующих шагов)
+    saveOrderDraft({
+      item: { name: it.name, url: it.url, relPath: (it as any).relPath }
+    });
+
     setPreviewItem(null);
     setOutro(true);
     window.setTimeout(() => onConfirm(it, meta), 220);
@@ -419,6 +596,7 @@ export default function Start({
         margin: "0 auto"
       }}
     >
+      {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
       <TopBarWithIntro title="Memorial" />
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
@@ -448,7 +626,12 @@ export default function Start({
                 <button
                   key={`nav-${catId}`}
                   onClick={() => scrollToCat(catId)}
-                  style={{ ...glassButtonStyle("nano"), padding: "4px 8px", fontSize: 12, lineHeight: 1.15 }}
+                  style={{
+                    ...glassButtonStyle("nano"),
+                    padding: "4px 8px",
+                    fontSize: 12,
+                    lineHeight: 1.15
+                  }}
                   title={`Перейти к: ${cat.name}`}
                   onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
                   onPointerUp={(e) => (e.currentTarget.style.transform = "")}
@@ -533,6 +716,7 @@ export default function Start({
         })}
       </div>
 
+      {/* Предпросмотр. «Знакомство» откроется ТОЛЬКО после клика «Подтвердить» */}
       {previewItem && (
         <PreviewBottomSheet
           item={previewItem}
