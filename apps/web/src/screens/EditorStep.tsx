@@ -1,12 +1,10 @@
 // src/screens/EditorStep.tsx
 // Редактор поверх того же шаблона (SketchTemplate):
-// - Снимаем «снимок» раскладки из SketchTemplate (по data-sketch-el), скрываем контент шаблона.
-// - Рисуем свой управляемый контент и фреймы поверх. Сохраняем правки в драфт + генерируем превью.
-//
-// Что исправлено:
-// - Увеличены узлы (ручки) редактирования и зона их «попадания» (удобнее на телефоне).
-// - Эпитафия и графика не отображались — теперь ключ безопасно парсится (если не число, берём 0) и контент выводится.
-// - Не передаём превью эскиза в TopBar (там они больше не показываются).
+// - Снимаем «снимок» раскладки из SketchTemplate (по data-sketch-el) при изменении входного контента.
+// - Контент шаблона скрываем (виден только фон), рисуем свой управляемый слой с элементами.
+// - Увеличены ручки (узлы) ресайза и их «hit area» — удобнее на телефоне.
+// - Исправлено отображение эпитафий и графики (безопасный парс ключа).
+// - Превью эскиза сохраняем в драфт, но НЕ передаём в TopBar (там больше не показываем миниатюры).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -276,7 +274,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  /* ===== Снятие раскладки из SketchTemplate (по изменению контента) ===== */
+  /* ===== Снятие раскладки из SketchTemplate ===== */
   const measureAndApplyFrames = () => {
     const wrap = editorWrapRef.current;
     const root = templateRootRef.current;
@@ -486,7 +484,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const ctx = canvas.getContext("2d");
         if (!ctx) return null;
 
-        // фон (градиент + фото изделия)
         const grad = ctx.createLinearGradient(0, 0, 0, H);
         grad.addColorStop(0, "#6e6e6e");
         grad.addColorStop(0.2, "#464545");
@@ -522,25 +519,25 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
         const fam = FONT_CENTURY;
 
+        const safeIndex = (raw: string, max: number) => {
+          const n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 0) return 0;
+          return Math.min(n, Math.max(0, max - 1));
+        };
+
         for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
           const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
           const key = el.id.split("-").slice(1).join("-");
 
           if (el.type === "portrait") {
             const p = peopleBlocks.find((pp) => pp.id === key);
-            const url = p?.photo || "";
-            if (!url) continue;
+            const url = p?.photo || ""; if (!url) continue;
             const im = await new Promise<HTMLImageElement | null>((resolve) => {
-              const i = new Image();
-              i.crossOrigin = "anonymous";
-              i.onload = () => resolve(i);
-              i.onerror = () => resolve(null);
-              i.src = url;
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url;
             });
             if (!im) continue;
             const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
-            ctx.save();
-            ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
+            ctx.save(); ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
             if (el.bw) ctx.filter = "grayscale(100%)";
             if (sr2 > dr2) {
               const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
@@ -549,8 +546,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
               ctx.drawImage(im, xx, yy, ww, hh);
             }
-            ctx.restore();
-            ctx.filter = "none";
+            ctx.restore(); ctx.filter = "none";
           } else if (el.type === "metric") {
             const p = peopleBlocks.find((pp) => pp.id === key);
             const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
@@ -569,12 +565,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             }
             ctx.restore();
           } else if (el.type === "epitaph") {
-            // Безопасно парсим ключ: если не число — 0
-            const idx = Number.isFinite(parseInt(key, 10)) ? Math.max(0, parseInt(key, 10)) : 0;
+            const idx = safeIndex(key, epitaphs.length);
             const tRaw = epitaphs[idx] || "";
             const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
-            ctx.save();
-            ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
             const padX2 = Math.max(4, Math.round(rbox.w * 0.04));
             const padY2 = Math.max(2, Math.round(rbox.h * 0.06));
             const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
@@ -587,7 +581,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             }
             ctx.restore();
           } else if (el.type === "graphic") {
-            const idx = Number.isFinite(parseInt(key, 10)) ? Math.max(0, parseInt(key, 10)) : 0;
+            const idx = safeIndex(key, others.length);
             const g = others[idx];
             if (!g?.url) continue;
             const im = await new Promise<HTMLImageElement | null>((resolve) => {
@@ -595,11 +589,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             });
             if (!im) continue;
             ctx.save();
-            if (el.flipH) {
-              ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
-              ctx.scale(-1, 1);
-              ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2));
-            }
+            if (el.flipH) { ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2); ctx.scale(-1, 1); ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2)); }
             const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             if (sr2 > dr2) {
               const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
@@ -610,7 +600,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             }
             ctx.restore();
           } else if (el.type === "cross") {
-            const idx = Number.isFinite(parseInt(key, 10)) ? Math.max(0, parseInt(key, 10)) : 0;
+            const idx = safeIndex(key, crosses.length);
             const c = crosses[idx];
             if (!c?.url) continue;
             const im = await new Promise<HTMLImageElement | null>((resolve) => {
@@ -656,12 +646,54 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
   }, [elements, peopleBlocks, crosses, others, epitaphs, aspect, wishes, item?.url]);
 
+  /* ===== Мини‑панель инструментов (ДОЛЖНА БЫТЬ ОБЪЯВЛЕНА ДО ИСПОЛЬЗОВАНИЯ) ===== */
+  const MiniToolbar = ({ el }: { el: EditorEl }) => {
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
+    const isMetric = el.type === "metric";
+    const isEpitaph = el.type === "epitaph";
+    const isGraphic = el.type === "graphic";
+    const isPortrait = el.type === "portrait";
+    return (
+      <div
+        onPointerDown={(ev) => ev.stopPropagation()}
+        style={{
+          position: "absolute", left: 0, top: -30,
+          display: "flex", gap: 6,
+          background: "rgba(0,0,0,0.6)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6, padding: "2px 6px",
+          alignItems: "center", pointerEvents: "auto", zIndex: 3000
+        }}
+      >
+        {isMetric && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, uppercase: !e.uppercase } : e)))}>
+            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+          </button>
+        )}
+        {isEpitaph && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, italic: !e.italic } : e)))}>
+            {el.italic ? "Обычный" : "Курсив"}
+          </button>
+        )}
+        {isGraphic && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))}>
+            Отразить ⇄
+          </button>
+        )}
+        {isPortrait && (
+          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, bw: !e.bw } : e)))}>
+            {el.bw ? "Цвет" : "Ч/Б"}
+          </button>
+        )}
+      </div>
+    );
+  };
+
   /* ===== Контент поверх (им управляют фреймы) ===== */
   const ContentOverlay = () => {
     const fam = FONT_CENTURY;
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
-    the: { /* eslint fix */ }
     const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
 
     const safeIndex = (raw: string, max: number) => {
@@ -752,7 +784,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   /* ===== Узлы/ручки: увеличенный размер и зона попадания ===== */
   const KNOB_HIT = 28;   // зона попадания (px)
-  const KNOB_VIS = 14;   // видимый «квадратик» (px)
+  const KNOB_VIS = 14;   // видимый квадратик (px)
   const knobWrapStyle = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
     position: "absolute",
     left, top,
@@ -760,7 +792,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     height: KNOB_HIT,
     transform: "translate(-50%, -50%)",
     cursor,
-    // прозрачный фон, но событие клика ловится над всей зоной
     background: "rgba(255,255,255,0.001)",
     pointerEvents: "auto",
     display: "grid",
@@ -814,13 +845,15 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }}
     >
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        {/* В TopBar не передаём превью эскиза */}
+        {/* В TopBar не передаём previewUrl */}
         <TopBarWithIntro title="Memorial" />
 
+        {/* Подсказка шага */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
           Разместите элементы условно. Укажите порядок и выравнивание (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ). Финальный вариант сделает специалист исходя из технических требований и согласно этой схеме.
         </section>
 
+        {/* Эскиз */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={editorWrapRef}
@@ -836,7 +869,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               minHeight: aspect ? undefined : 540
             }}
           >
-            {/* Подложка */}
+            {/* Подложка (как на предыдущих шагах) */}
             <div ref={templateRootRef}>
               <SketchTemplate
                 item={item}
@@ -857,9 +890,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 const im = e.currentTarget;
                 if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
               }}
-              onError={() => {
-                if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
-              }}
+              onError={() => { if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 }); }}
             />
 
             {/* Наш управляемый контент */}
