@@ -722,8 +722,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
           {/* Эскизы — компакт: один столбик, на широких — два. Без мини-превью. */}
           <section style={{ background: palette(theme).neutralBg, border: palette(theme).neutralBorder, borderRadius: 10, padding: compact ? 8 : 10 }}>
-            <div style={{ textAlign: "center", textDecoration: "underline", fontWeight: 600, marginBottom: 8, color: palette(theme).text }}>Эскизы</div>
-
+            
             <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 16, alignItems: "stretch" }}>
               {/* Левая колонка (лицевая) */}
               <div style={{ display: "grid", gridTemplateRows: "auto auto auto", gap: compact ? 8 : 10, minHeight: 0 }}>

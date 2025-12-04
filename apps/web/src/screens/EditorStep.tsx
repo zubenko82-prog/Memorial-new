@@ -1,16 +1,14 @@
 // src/screens/EditorStep.tsx
 // Редактор поверх того же шаблона (SketchTemplate):
 // - Один раз (и при изменении контента) снимаем «снимок» раскладки из SketchTemplate (DOM data-sketch-el).
-// - Полностью скрываем контент SketchTemplate (чтобы не «просвечивал» и не мигал), оставляем только фон изделия.
-// - Рисуем свой управляемый контент и фреймы поверх. Движение/ресайз фреймов двигает наш контент.
+// - После снятия раскладки скрываем контент SketchTemplate (оставляем фон изделия), рисуем свой управляемый контент и фреймы поверх.
 // - Сохраняем правки в драфт + генерируем превью и передаём его в TopBarWithIntro.
 //
 // Исправлено:
-// - Метрика измеряется только по своему data-sketch-el (без родителя и без ширинной поправки).
-// - Больше нет «отката к исходному» после перетаскивания: авто‑снятие раскладки не запускается во время редактирования
-//   и вообще только при реальном изменении входного контента (item/people/graphics/epitaphs).
-// - Подложка (контент SketchTemplate) скрыта жёстко через CSS и inline (не просвечивает при DnD).
-// - Сохранение происходит по таймауту и по отпусканию мыши; превью уходит в TopBar (миниатюра).
+// - Отображались только кресты: больше НЕ скрываем контент SketchTemplate жёстко сразу (CSS в <head> теперь только отключает события).
+//   Сначала снимаем раскладку, затем скрываем контент inline — портреты/метрика/эпитафии/графика корректно попадают в фреймы.
+// - Увеличены зоны ресайз‑узлов (hit‑areas) — на телефоне по ним проще попадать. Видимый узел прежний, вокруг него большая невидимая зона.
+// - Без изменения логики DnD/сохранения/превью.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -91,7 +89,7 @@ function linesFromPerson(p: any) {
 const normRemember = (t?: string) =>
   (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
 
-/* ===== Fit helpers ===== */
+/* ===== Fit helpers (canvas) ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -264,14 +262,15 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   // Когда юзер редактирует — запрещаем авто‑снятие раскладки
   const userEditingRef = useRef(false);
 
-  /* ===== Скрытие подсказки/контента SketchTemplate (CSS правилом, чтобы не «откатывалось») ===== */
+  /* ===== CSS подложки: НЕ скрываем контент жёстко (только отключаем события) ===== */
   const cssOnceRef = useRef(false);
   useEffect(() => {
     if (cssOnceRef.current) return;
     const st = document.createElement("style");
     st.setAttribute("data-editor-shadow-css", "1");
+    // Только отключаем события — размеры DOM сохраняются для корректного измерения
     st.innerHTML = `
-      [data-editor-wrap] [data-sketch-el] { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
+      [data-editor-wrap] [data-sketch-el] { pointer-events: none !important; }
     `;
     document.head.appendChild(st);
     cssOnceRef.current = true;
@@ -343,13 +342,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       entries.push({ id, type, x: xPct, y: yPct, w: Math.max(2, wPct), h: Math.max(2, hPct), z, title: id });
     });
 
+    // Применяем измеренное
     setElements((prev) => {
       const prevMap = new Map(prev.map((p) => [p.id, p]));
-      // Если пользователь уже редактировал (расхождение по координатам с предыдущим), не перетирать!
       const next = entries.map((e) => {
         const old = prevMap.get(e.id);
         if (!old) return e;
-        // Сохраняем пользовательские флаги
         return {
           ...e,
           uppercase: old.uppercase,
@@ -359,32 +357,25 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           staircase: old.staircase
         };
       });
-      // переносим «нестандартные» (если есть)
       prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
       return next;
     });
+
+    // Теперь — скрываем подложку inline (контент SketchTemplate)
+    root.querySelectorAll('[data-sketch-el]').forEach((el) => {
+      const n = el as HTMLElement;
+      n.style.opacity = "0";
+      n.style.visibility = "hidden";
+      n.style.pointerEvents = "none";
+    });
+
     lastAppliedContentSigRef.current = contentSig;
   };
 
   useEffect(() => {
     if (userEditingRef.current) return; // не мерить во время редактирования
     if (lastAppliedContentSigRef.current === contentSig) return;
-    // Снимок раскладки только при реальном изменении входного контента
-    requestAnimationFrame(() => {
-      measureAndApplyFrames();
-      // и гарантированно скрыть контент подложки
-      const root = templateRootRef.current;
-      if (root) {
-        const hint = root.querySelector('[data-sketch-orient]')?.previousElementSibling as HTMLElement | null;
-        if (hint) hint.style.display = "none";
-        root.querySelectorAll('[data-sketch-el]').forEach((el) => {
-          const n = el as HTMLElement;
-          n.style.visibility = "hidden";
-          n.style.opacity = "0";
-          n.style.pointerEvents = "none";
-        });
-      }
-    });
+    requestAnimationFrame(measureAndApplyFrames);
   }, [contentSig]);
 
   /* ===== DnD/Resize ===== */
@@ -456,7 +447,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
   const onPointerUp = () => {
     if (dragRef.current) {
-      // Сохранить и сгенерировать превью
       saveEditor((prev) => ({
         ...prev,
         editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
@@ -515,7 +505,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, W, H);
 
-        // фото
         const base = await new Promise<HTMLImageElement | null>((resolve) => {
           const url = item?.url || "";
           if (!url) return resolve(null);
@@ -717,9 +706,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
               const padX = Math.max(4, Math.round(boxPx.w * 0.04));
               const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-              const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.15 });
+              const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
               return (
-                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
                   <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
                     <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
                   </div>
@@ -749,7 +738,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Мини‑панель и ручки resize ===== */
+  /* ===== Мини‑панель и ручки resize (увеличенные hit‑areas) ===== */
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
     const isMetric = el.type === "metric";
@@ -792,14 +781,27 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  function handleDot(left: number | string, top: number | string, cursor: string): React.CSSProperties {
+  // Стилевые хелперы для узлов и их больших «невидимых» hit‑зон
+  function dotStyle(left: number | string, top: number | string, cursor: string): React.CSSProperties {
     return {
       position: "absolute",
       left, top,
-      width: 10, height: 10,
+      width: 12, height: 12,
       background: "#fff", border: "1px solid #000",
-      borderRadius: 2, transform: "translate(-50%, -50%)",
-      cursor
+      borderRadius: 3, transform: "translate(-50%, -50%)",
+      pointerEvents: "none", // события ловит hit‑area
+      boxShadow: "0 0 0 1px rgba(0,0,0,0.3)"
+    };
+  }
+  function hitStyle(left: number | string, top: number | string, cursor: string, w = 32, h = 32): React.CSSProperties {
+    return {
+      position: "absolute",
+      left, top, width: w, height: h,
+      transform: "translate(-50%, -50%)",
+      cursor,
+      background: "transparent",
+      // немного расширяем область, но не перекрываем видимые элементы
+      zIndex: 5
     };
   }
 
@@ -900,7 +902,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerDown={(e) => {
-                // Сброс выбора только при клике по пустому месту контейнера фреймов
                 if (e.target === e.currentTarget) {
                   if (e.altKey) {
                     const rect = editorWrapRef.current?.getBoundingClientRect();
@@ -931,6 +932,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 .sort((a, b) => a.z - b.z)
                 .map((el) => {
                   const selected = el.id === selectedId;
+                  const isPhone = typeof window !== "undefined" ? window.innerWidth <= 480 : false;
+                  const hitBox = isPhone ? 40 : 32; // крупнее на телефоне
+                  const sideHitW = isPhone ? 44 : 36;
+                  const sideHitH = isPhone ? 20 : 16;
                   return (
                     <div
                       key={el.id}
@@ -953,16 +958,31 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
                       {selected && !el.locked && (
                         <>
-                          {/* Углы */}
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")} />
-                          {/* Стороны */}
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={handleDot("50%", 0, "ns-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={handleDot("100%", "50%", "ew-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={handleDot("50%", "100%", "ns-resize")} />
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={handleDot(0, "50%", "ew-resize")} />
+                          {/* Углы — большая невидимая зона + видимая точка */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={hitStyle(0, 0, "nwse-resize", hitBox, hitBox)} />
+                          <div style={dotStyle(0, 0, "nwse-resize")} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={hitStyle("100%", 0, "nesw-resize", hitBox, hitBox)} />
+                          <div style={dotStyle("100%", 0, "nesw-resize")} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={hitStyle("100%", "100%", "nwse-resize", hitBox, hitBox)} />
+                          <div style={dotStyle("100%", "100%", "nwse-resize")} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={hitStyle(0, "100%", "nesw-resize", hitBox, hitBox)} />
+                          <div style={dotStyle(0, "100%", "nesw-resize")} />
+
+                          {/* Стороны — широкие невидимые полосы + небольшая видимая точка */}
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={hitStyle("50%", 0, "ns-resize", sideHitW, sideHitH)} />
+                          <div style={dotStyle("50%", 0, "ns-resize")} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={hitStyle("100%", "50%", "ew-resize", sideHitH, sideHitW)} />
+                          <div style={dotStyle("100%", "50%", "ew-resize")} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={hitStyle("50%", "100%", "ns-resize", sideHitW, sideHitH)} />
+                          <div style={dotStyle("50%", "100%", "ns-resize")} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={hitStyle(0, "50%", "ew-resize", sideHitH, sideHitW)} />
+                          <div style={dotStyle(0, "50%", "ew-resize")} />
                         </>
                       )}
                     </div>
