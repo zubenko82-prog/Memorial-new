@@ -1,6 +1,10 @@
 // src/screens/EngravingStep.tsx
 // Шаг «Информация об усопших» (без редактора).
 //
+// Обновление:
+// - Эскиз скрыт. На его месте — поле ввода «Комментарий или пожелания».
+// - Пожелание сохраняется в draft.editor.wishes по кнопкам «Назад»/«Продолжить» (он же виден в TopBar).
+//
 // Фото/драфт:
 // - Драфт НЕ сохраняем «на лету». saveOrderDraft вызывается только по «Назад»/«Продолжить».
 // - Транзиентный blob:ObjectURL для превью (ревок при замене/очистке/анмаунте).
@@ -8,12 +12,6 @@
 //
 // Навигация:
 // - Кнопка «Список» (или ☰ при дефиците места) — сворачивает все аккордеоны.
-//
-// Исправлено/упрощено:
-// - validateDates/parseFlexibleDate на месте.
-// - Подключён общий SketchTemplate (общий предпросмотр с гориз./верт. шаблонами) из ../components/SketchTemplate.
-// - Прозрачность резной работы настраивается через carvingOpacity (передаётся в SketchTemplate).
-// - ДОБАВЛЕНО: передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
 
 import React, {
   useCallback,
@@ -25,7 +23,6 @@ import React, {
 } from "react";
 import PhotoField, { PhotoValue } from "../components/PhotoField";
 import TopBarWithIntro from "../components/TopBarWithIntro";
-import SketchTemplate from "../components/SketchTemplate";
 import {
   loadOrderDraft,
   saveOrderDraft,
@@ -159,7 +156,7 @@ function validateDates(birth?: string, death?: string): string | null {
 type Props = {
   item: any;
   sizeResult?: any;
-  initial?: { persons?: Person[]; epitaphs?: string[]; epitaphText?: string; [k: string]: any } | null;
+  initial?: { persons?: Person[]; epitaphs?: string[]; epitaphText?: string; wishes?: string; [k: string]: any } | null;
   onBack?: () => void;
   onSaveDraft?: (data: any) => void;
   onDone?: (data: any) => void;
@@ -181,6 +178,9 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
       : [makeBlankPerson("p-0")]
   );
 
+  // Пожелания/комментарии (сохраняем в draft.editor.wishes)
+  const [wishes, setWishes] = useState<string>(() => (draftSnapRef.current as any)?.editor?.wishes || initial?.wishes || "");
+
   // Транзиентные превью с ревоком
   const [transientPhotoUrlById, setTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const setTransientFor = useCallback((id: string, url: string | null) => {
@@ -200,7 +200,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     };
   }, [transientPhotoUrlById]);
 
-  // Блоки для эскиза (люди)
+  // Блоки для эскиза (люди) — сохраняем для совместимости, но эскиз скрыт
   const peopleBlocks = useMemo(
     () =>
       persons.map((p) => {
@@ -356,13 +356,14 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
   const flushSaveNow = useCallback(() => {
     const prev = loadOrderDraft();
     const norm = normalizePersonsForSave(persons);
-    saveOrderDraft({
+    const next = saveOrderDraft({
       ...prev,
       item: prev?.item ?? (item ?? null),
-      engraving: { ...(prev?.engraving || {}), persons: norm, updatedAt: Date.now() }
+      engraving: { ...(prev?.engraving || {}), persons: norm, updatedAt: Date.now() },
+      editor: { ...(prev as any)?.editor, wishes: (wishes || "").trim() || undefined }
     });
-    onSaveDraft?.({ persons: norm });
-  }, [persons, item, onSaveDraft]);
+    onSaveDraft?.({ persons: norm, wishes: next?.editor?.wishes });
+  }, [persons, item, onSaveDraft, wishes]);
 
   const handleBack = useCallback(() => {
     flushSaveNow();
@@ -377,33 +378,8 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     setIsRendering(true);
     setIsRendering(false);
     setOutro(true);
-    setTimeout(() => onDone?.({ persons, sketchDataUrl: null }), 200);
-  }, [canContinue, flushSaveNow, onDone, persons]);
-
-  /* ===== Оверлеи из снапшота драфта (на входе) ===== */
-  const selectedGraphics = useMemo(() => (draftSnapRef.current?.graphics || []) as any[], []);
-  const selectedCrosses = useMemo(
-    () => selectedGraphics.filter((g) => (g.catName || "").toLowerCase().includes("крест") || (g.catSlug || "").toLowerCase().includes("cross")),
-    [selectedGraphics]
-  );
-  const selectedOtherGraphics = useMemo(
-    () => selectedGraphics.filter((g) => !((g.catName || "").toLowerCase().includes("крест") || (g.catSlug || "").toLowerCase().includes("cross"))),
-    [selectedGraphics]
-  );
-
-  // Эпитафии — берём из драфта (snapshot), иначе из initial
-  const epitaphsForPreview = useMemo(() => {
-    const engr: any = draftSnapRef.current?.engraving || {};
-    if (Array.isArray(engr.epitaphs) && engr.epitaphs.length) return engr.epitaphs.filter(Boolean);
-    if (typeof engr.epitaphText === "string" && engr.epitaphText.trim()) {
-      return engr.epitaphText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
-    }
-    if (Array.isArray(initial?.epitaphs)) return (initial!.epitaphs as string[]).filter(Boolean);
-    if (typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()) {
-      return initial!.epitaphText!.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
-    }
-    return [];
-  }, [initial]);
+    setTimeout(() => onDone?.({ persons, wishes: (wishes || "").trim() || undefined }), 200);
+  }, [canContinue, flushSaveNow, onDone, persons, wishes]);
 
   /* ===== MAX WIDTH LIMIT ===== */
   const MAX_W = 600;
@@ -462,7 +438,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
             })}
 
             <div style={{ flex: 1 }} />
-            <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>Эскиз</button>
+            <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>Комментарий</button>
           </div>
         </div>
 
@@ -534,16 +510,34 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
           </div>
         </section>
 
-        {/* Эскиз — общий шаблон SketchTemplate (ДОБАВЛЕНЫ ЭПИТАФИИ) */}
+        {/* Вместо эскиза — поле комментария/пожелания */}
         <section ref={previewRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-            <SketchTemplate
-            item={item}
-            peopleBlocks={peopleBlocks}
-            crosses={selectedCrosses}
-            others={selectedOtherGraphics}
-            epitaphs={epitaphsForPreview}
-            carvingOpacity={0.4}
+          <label htmlFor="engraving-wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>
+            Комментарий или пожелания (лицевая сторона)
+          </label>
+          <textarea
+            id="engraving-wishes"
+            value={wishes}
+            onChange={(e) => setWishes(e.target.value)}
+            rows={6}
+            placeholder="Например: портрет по центру, эпитафию ниже метрики, шрифт — прописной…"
+            style={{
+              width: "100%",
+              minHeight: 120,
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.25)",
+              background: "rgba(0,0,0,0.35)",
+              color: "#fff",
+              padding: 10,
+              resize: "vertical",
+              outline: "none",
+              boxSizing: "border-box",
+              fontFamily: FONT_CENTURY
+            }}
           />
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+            Поясните любые важные моменты — размещение, шрифты, пожелания по ретуши и т.д.
+          </div>
         </section>
 
         {/* Кнопки */}
@@ -554,9 +548,9 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
             disabled={!canContinue || isRendering}
             onClick={handleContinue}
             style={{ ...glassButtonStyle("sm"), opacity: canContinue && !isRendering ? 1 : 0.6 }}
-            title={isRendering ? "Подождите, формируем изображение…" : undefined}
+            title={isRendering ? "Подождите..." : undefined}
           >
-            {isRendering ? "Формирование…" : "Продолжить"}
+            {isRendering ? "Сохранение…" : "Продолжить"}
           </button>
         </div>
       </div>
