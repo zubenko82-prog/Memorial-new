@@ -1,14 +1,9 @@
 // src/screens/EditorStep.tsx
 // Редактор поверх того же шаблона (SketchTemplate):
-// - Один раз (и при изменении контента) снимаем «снимок» раскладки из SketchTemplate (DOM data-sketch-el).
-// - После снятия раскладки скрываем контент SketchTemplate (оставляем фон изделия), рисуем свой управляемый контент и фреймы поверх.
-// - Сохраняем правки в драфт + генерируем превью и передаём его в TopBarWithIntro.
-//
-// Исправлено:
-// - Отображались только кресты: больше НЕ скрываем контент SketchTemplate жёстко сразу (CSS в <head> теперь только отключает события).
-//   Сначала снимаем раскладку, затем скрываем контент inline — портреты/метрика/эпитафии/графика корректно попадают в фреймы.
-// - Увеличены зоны ресайз‑узлов (hit‑areas) — на телефоне по ним проще попадать. Видимый узел прежний, вокруг него большая невидимая зона.
-// - Без изменения логики DnD/сохранения/превью.
+// - Снимаем «снимок» раскладки из SketchTemplate (DOM data-sketch-el) и строим управляемые фреймы.
+// - Скрываем только контент SketchTemplate ПОСЛЕ измерений (фон изделия остаётся), чтобы фреймы не «теряли» размеры.
+// - Увеличены зоны хвата (hit-areas) у узлов ресайза — на телефоне по ним проще попадать.
+// - Исправлено: больше не «исчезают» портрет/метрика/эпитафия/графика — всё корректно строится, редактируются все элементы, не только крест.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -86,8 +81,6 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const normRemember = (t?: string) =>
-  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
 
 /* ===== Fit helpers (canvas) ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
@@ -195,7 +188,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (andSetDraft) setDraft(next);
   };
 
-  // Live reload драфта (но авто-снятие раскладки не трогаем)
+  // Live reload драфта
   useEffect(() => {
     const apply = () => setDraft(loadOrderDraft());
     window.addEventListener("focus", apply);
@@ -221,7 +214,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         return { id: p.id || `person-${idx}`, lines, photo };
       });
     }
-    // legacy
     const legacyLines: string[] = [];
     if (engr?.fullName) legacyLines.push(String(engr.fullName));
     const dates: string[] = [];
@@ -262,13 +254,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   // Когда юзер редактирует — запрещаем авто‑снятие раскладки
   const userEditingRef = useRef(false);
 
-  /* ===== CSS подложки: НЕ скрываем контент жёстко (только отключаем события) ===== */
+  /* ===== CSS подложки: не скрываем содержимое заранее (только отключаем события) ===== */
   const cssOnceRef = useRef(false);
   useEffect(() => {
     if (cssOnceRef.current) return;
     const st = document.createElement("style");
     st.setAttribute("data-editor-shadow-css", "1");
-    // Только отключаем события — размеры DOM сохраняются для корректного измерения
     st.innerHTML = `
       [data-editor-wrap] [data-sketch-el] { pointer-events: none !important; }
     `;
@@ -280,102 +271,106 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  /* ===== Измерение DOM SketchTemplate -> фреймы (только при изменении контента и если не редактируем) ===== */
+  /* ===== Измерение DOM SketchTemplate -> фреймы ===== */
   const measureAndApplyFrames = () => {
     const wrap = editorWrapRef.current;
     const root = templateRootRef.current;
     if (!wrap || !root) return;
-    const wrapRect = wrap.getBoundingClientRect();
-    const contentLeft = wrapRect.left + SKETCH_PAD;
-    const contentTop = wrapRect.top + SKETCH_PAD;
-    const contentW = Math.max(1, wrapRect.width - SKETCH_PAD * 2);
-    const contentH = Math.max(1, wrapRect.height - SKETCH_PAD * 2);
 
-    const nodes = root.querySelectorAll('[data-sketch-el]');
-    const entries: EditorEl[] = [];
+    // Двойной rAF — ждём layout, затем мерим
+    requestAnimationFrame(() => {
+      const wrapRect = wrap.getBoundingClientRect();
+      const contentLeft = wrapRect.left + SKETCH_PAD;
+      const contentTop = wrapRect.top + SKETCH_PAD;
+      const contentW = Math.max(1, wrapRect.width - SKETCH_PAD * 2);
+      const contentH = Math.max(1, wrapRect.height - SKETCH_PAD * 2);
 
-    nodes.forEach((node) => {
-      const el = node as HTMLElement;
-      const kind = (el.getAttribute("data-sketch-el") || "").trim();
-      const key = (el.getAttribute("data-sketch-key") || "").trim();
-      if (!kind) return;
+      const nodes = root.querySelectorAll("[data-sketch-el]");
+      if (nodes.length === 0) return; // ничего мерить — выходим (не будем скрывать подложку)
 
-      let target: HTMLElement = el;
-      // Только graphic может брать родителя (иногда родитель шире)
-      if (kind === "graphic") {
-        const p = el.parentElement as HTMLElement | null;
-        if (p) {
-          const pr = p.getBoundingClientRect();
-          const er = el.getBoundingClientRect();
-          if (pr.width - er.width > 2) target = p;
+      const entries: EditorEl[] = [];
+      nodes.forEach((node) => {
+        const el = node as HTMLElement;
+        const kind = (el.getAttribute("data-sketch-el") || "").trim();
+        const key = (el.getAttribute("data-sketch-key") || "").trim();
+        if (!kind) return;
+
+        let target: HTMLElement = el;
+        if (kind === "graphic") {
+          const p = el.parentElement as HTMLElement | null;
+          if (p) {
+            const pr = p.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            if (pr.width - er.width > 2) target = p;
+          }
         }
-      }
-      const r = target.getBoundingClientRect();
-      let xPct = ((r.left - contentLeft) / contentW) * 100;
-      let yPct = ((r.top - contentTop) / contentH) * 100;
-      let wPct = (r.width / contentW) * 100;
-      let hPct = (r.height / contentH) * 100;
-      if (kind === "graphic") {
-        wPct *= 1.006; // субпиксельная поправка
-      }
+        const r = target.getBoundingClientRect();
+        let xPct = ((r.left - contentLeft) / contentW) * 100;
+        let yPct = ((r.top - contentTop) / contentH) * 100;
+        let wPct = (r.width / contentW) * 100;
+        let hPct = (r.height / contentH) * 100;
+        if (kind === "graphic") {
+          wPct *= 1.006;
+        }
 
-      xPct = clamp(xPct, 0, 100);
-      yPct = clamp(yPct, 0, 100);
-      wPct = clamp(wPct, 0, 100);
-      hPct = clamp(hPct, 0, 100);
+        xPct = clamp(xPct, 0, 100);
+        yPct = clamp(yPct, 0, 100);
+        wPct = clamp(wPct, 0, 100);
+        hPct = clamp(hPct, 0, 100);
 
-      let id = "", type: ElType | null = null;
-      if (kind === "portrait") { id = `portrait-${key}`; type = "portrait"; }
-      else if (kind === "metric") { id = `metric-${key}`; type = "metric"; }
-      else if (kind === "epitaph") { id = `epitaph-${key}`; type = "epitaph"; }
-      else if (kind === "graphic") { id = `graphic-${key}`; type = "graphic"; }
-      else if (kind === "cross") { id = `cross-${key}`; type = "cross"; }
-      if (!id || !type) return;
+        let id = "", type: ElType | null = null;
+        if (kind === "portrait") { id = `portrait-${key}`; type = "portrait"; }
+        else if (kind === "metric") { id = `metric-${key}`; type = "metric"; }
+        else if (kind === "epitaph") { id = `epitaph-${key}`; type = "epitaph"; }
+        else if (kind === "graphic") { id = `graphic-${key}`; type = "graphic"; }
+        else if (kind === "cross") { id = `cross-${key}`; type = "cross"; }
+        if (!id || !type) return;
 
-      let z = 0;
-      if (type === "portrait") z = 10;
-      else if (type === "metric") z = 20;
-      else if (type === "epitaph") z = 30 + Number(key);
-      else if (type === "cross") z = 40 + Number(key);
-      else if (type === "graphic") z = 50 + Number(key);
+        let z = 0;
+        if (type === "portrait") z = 10;
+        else if (type === "metric") z = 20;
+        else if (type === "epitaph") z = 30 + Number(key);
+        else if (type === "cross") z = 40 + Number(key);
+        else if (type === "graphic") z = 50 + Number(key);
 
-      entries.push({ id, type, x: xPct, y: yPct, w: Math.max(2, wPct), h: Math.max(2, hPct), z, title: id });
-    });
-
-    // Применяем измеренное
-    setElements((prev) => {
-      const prevMap = new Map(prev.map((p) => [p.id, p]));
-      const next = entries.map((e) => {
-        const old = prevMap.get(e.id);
-        if (!old) return e;
-        return {
-          ...e,
-          uppercase: old.uppercase,
-          italic: old.italic,
-          flipH: old.flipH,
-          bw: old.bw,
-          staircase: old.staircase
-        };
+        entries.push({ id, type, x: xPct, y: yPct, w: Math.max(2, wPct), h: Math.max(2, hPct), z, title: id });
       });
-      prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
-      return next;
-    });
 
-    // Теперь — скрываем подложку inline (контент SketchTemplate)
-    root.querySelectorAll('[data-sketch-el]').forEach((el) => {
-      const n = el as HTMLElement;
-      n.style.opacity = "0";
-      n.style.visibility = "hidden";
-      n.style.pointerEvents = "none";
-    });
+      // Применяем измеренное
+      setElements((prev) => {
+        const prevMap = new Map(prev.map((p) => [p.id, p]));
+        const next = entries.map((e) => {
+          const old = prevMap.get(e.id);
+          if (!old) return e;
+          return {
+            ...e,
+            uppercase: old.uppercase,
+            italic: old.italic,
+            flipH: old.flipH,
+            bw: old.bw,
+            staircase: old.staircase
+          };
+        });
+        prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
+        return next;
+      });
 
-    lastAppliedContentSigRef.current = contentSig;
+      // Теперь — скрываем подложку inline (контент SketchTemplate), чтобы фреймы были видимы сверху
+      root.querySelectorAll("[data-sketch-el]").forEach((el) => {
+        const n = el as HTMLElement;
+        n.style.opacity = "0";
+        n.style.visibility = "hidden";
+        n.style.pointerEvents = "none";
+      });
+
+      lastAppliedContentSigRef.current = contentSig;
+    });
   };
 
   useEffect(() => {
-    if (userEditingRef.current) return; // не мерить во время редактирования
+    if (userEditingRef.current) return;
     if (lastAppliedContentSigRef.current === contentSig) return;
-    requestAnimationFrame(measureAndApplyFrames);
+    measureAndApplyFrames();
   }, [contentSig]);
 
   /* ===== DnD/Resize ===== */
@@ -781,26 +776,24 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  // Стилевые хелперы для узлов и их больших «невидимых» hit‑зон
-  function dotStyle(left: number | string, top: number | string, cursor: string): React.CSSProperties {
+  function dotStyle(left: number | string, top: number | string): React.CSSProperties {
     return {
       position: "absolute",
       left, top,
       width: 12, height: 12,
       background: "#fff", border: "1px solid #000",
       borderRadius: 3, transform: "translate(-50%, -50%)",
-      pointerEvents: "none", // события ловит hit‑area
+      pointerEvents: "none",
       boxShadow: "0 0 0 1px rgba(0,0,0,0.3)"
     };
   }
-  function hitStyle(left: number | string, top: number | string, cursor: string, w = 32, h = 32): React.CSSProperties {
+  function hitStyle(left: number | string, top: number | string, cursor: string, w = 40, h = 40): React.CSSProperties {
     return {
       position: "absolute",
       left, top, width: w, height: h,
       transform: "translate(-50%, -50%)",
       cursor,
       background: "transparent",
-      // немного расширяем область, но не перекрываем видимые элементы
       zIndex: 5
     };
   }
@@ -846,9 +839,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" previewUrl={miniPreview} />
 
-        {/* Подсказка шага */}
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
-          Разместите элементы условно. Укажите порядок и выравнивание (крест слева/справа, направление бутонов, строчные/ПРОПИСНЫЕ). Финальный вариант сделает специалист исходя из технических требований и согласно этой схеме.
+          Разместите элементы условно. Укажите порядок и выравнивание. Финальный вариант сделает специалист. В этом режиме вы можете двигать и менять размер всех элементов (портрет, метрика, эпитафия, графика, крест).
         </section>
 
         {/* Эскиз: подложка (SketchTemplate) + наш контент + фреймы */}
@@ -867,7 +859,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               minHeight: aspect ? undefined : 540
             }}
           >
-            {/* Подложка (как на предыдущих шагах) */}
+            {/* Подложка (SketchTemplate) */}
             <div ref={templateRootRef}>
               <SketchTemplate
                 item={item}
@@ -893,38 +885,25 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               }}
             />
 
-            {/* Наш управляемый контент */}
+            {/* Наш управляемый контент (рисуем под фреймами, без событий) */}
             <ContentOverlay />
 
-            {/* Слой фреймов */}
+            {/* Слой фреймов — pointerEvents: auto, чтобы взаимодействовать со всеми элементами */}
             <div
               ref={overlayFramesRef}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerDown={(e) => {
+                // Сброс выбора при тапе по пустому месту
                 if (e.target === e.currentTarget) {
-                  if (e.altKey) {
-                    const rect = editorWrapRef.current?.getBoundingClientRect();
-                    if (!rect) return;
-                    const contentW = rect.width - SKETCH_PAD * 2;
-                    const contentH = rect.height - SKETCH_PAD * 2;
-                    const cx = ((e.clientX - (rect.left + SKETCH_PAD)) / contentW) * 100;
-                    const cy = ((e.clientY - (rect.top + SKETCH_PAD)) / contentH) * 100;
-                    const under = elements
-                      .slice()
-                      .sort((a, b) => b.z - a.z)
-                      .find((el) => cx >= el.x && cx <= el.x + el.w && cy >= el.y && cy <= el.y + el.h);
-                    if (under) setSelectedId(under.id);
-                  } else {
-                    setSelectedId(null);
-                  }
+                  setSelectedId(null);
                 }
               }}
               style={{
                 position: "absolute",
                 left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD,
                 zIndex: 1001,
-                pointerEvents: "none"
+                pointerEvents: "auto" // ВАЖНО: разрешаем события внутри слоя фреймов
               }}
             >
               {elements
@@ -933,9 +912,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 .map((el) => {
                   const selected = el.id === selectedId;
                   const isPhone = typeof window !== "undefined" ? window.innerWidth <= 480 : false;
-                  const hitBox = isPhone ? 40 : 32; // крупнее на телефоне
-                  const sideHitW = isPhone ? 44 : 36;
-                  const sideHitH = isPhone ? 20 : 16;
+                  const hitBox = isPhone ? 44 : 36;
+                  const sideHitW = isPhone ? 48 : 40;
+                  const sideHitH = isPhone ? 24 : 18;
                   return (
                     <div
                       key={el.id}
@@ -958,31 +937,31 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
                       {selected && !el.locked && (
                         <>
-                          {/* Углы — большая невидимая зона + видимая точка */}
+                          {/* Углы — увеличенные hit areas + видимые точки */}
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={hitStyle(0, 0, "nwse-resize", hitBox, hitBox)} />
-                          <div style={dotStyle(0, 0, "nwse-resize")} />
+                          <div style={dotStyle(0, 0)} />
 
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={hitStyle("100%", 0, "nesw-resize", hitBox, hitBox)} />
-                          <div style={dotStyle("100%", 0, "nesw-resize")} />
+                          <div style={dotStyle("100%", 0)} />
 
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={hitStyle("100%", "100%", "nwse-resize", hitBox, hitBox)} />
-                          <div style={dotStyle("100%", "100%", "nwse-resize")} />
+                          <div style={dotStyle("100%", "100%")} />
 
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={hitStyle(0, "100%", "nesw-resize", hitBox, hitBox)} />
-                          <div style={dotStyle(0, "100%", "nesw-resize")} />
+                          <div style={dotStyle(0, "100%")} />
 
-                          {/* Стороны — широкие невидимые полосы + небольшая видимая точка */}
+                          {/* Стороны — широкие полосы + маленькие точки */}
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={hitStyle("50%", 0, "ns-resize", sideHitW, sideHitH)} />
-                          <div style={dotStyle("50%", 0, "ns-resize")} />
+                          <div style={dotStyle("50%", 0)} />
 
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={hitStyle("100%", "50%", "ew-resize", sideHitH, sideHitW)} />
-                          <div style={dotStyle("100%", "50%", "ew-resize")} />
+                          <div style={dotStyle("100%", "50%")} />
 
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={hitStyle("50%", "100%", "ns-resize", sideHitW, sideHitH)} />
-                          <div style={dotStyle("50%", "100%", "ns-resize")} />
+                          <div style={dotStyle("50%", "100%")} />
 
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={hitStyle(0, "50%", "ew-resize", sideHitH, sideHitW)} />
-                          <div style={dotStyle(0, "50%", "ew-resize")} />
+                          <div style={dotStyle(0, "50%")} />
                         </>
                       )}
                     </div>
