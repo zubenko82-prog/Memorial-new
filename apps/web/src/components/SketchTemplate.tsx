@@ -1,15 +1,13 @@
 // src/components/SketchTemplate.tsx
 // Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Обновлено (горизонтальные шаблоны для 2+ людей):
-// - Портрет и метрика по высоте вместе занимают ≈90% высоты эскиза (H).
-// - Метрика уменьшена и по ширине немного больше портрета (≈ +8%, с ограничением по ширине колонки).
-// - Для 2 людей распределение по высоте: портрет ~55% C, метрика ~35% C (C = 90% H); для 3+ — портрет ~50% C, метрика ~40% C.
-// - Ширина портрета сохраняет соотношение 3:4 (pw = ph*0.75); метрика шире портрета, но не шире колонки.
+// Правки по горизонтальному эскизу для двоих:
+// - Портрет 65% высоты H, метрика 25% высоты H (между ними небольшой зазор ~1% H).
+// - Метрика по ширине немного больше портрета (~+8%, но не шире колонки).
+// - Размер шрифта метрики уменьшен; разрешён перенос по строкам (Фамилия → Имя Отчество → Даты).
+// - Эпитафия и графика не «вылетают» за нижнее поле: верх метрики теперь ниже (оставляем запас).
 //
-// Также сохранено:
-// - Эпитафии располагаются над графикой, графика — у низа.
-// - Анти-дребезг измерений: state меняется только при реальном изменении.
+// Остальное поведение без изменений.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -79,14 +77,12 @@ export default function SketchTemplate({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Измерители (с защитами)
   const [metricBottomPx, setMetricBottomPx] = useState(0);
   const metricMeasureSigRef = useRef<string>("");
   const metricRafRef = useRef<number | null>(null);
 
   const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
 
-  // Масштаб метрики (только горизонтальный шаблон на одного)
   const metricMeasureRef = useRef<HTMLDivElement | null>(null);
   const [metricScaleH1, setMetricScaleH1] = useState(1);
   const metricH1SigRef = useRef<string>("");
@@ -135,24 +131,64 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  // Метрика (общая версия + увеличенная/уменьшенная)
-  function MetricThreeLines({ lines }: { lines: string[] }) {
+  /* ===== Текст метрики (универсальный) — с переносами, уменьшенный ===== */
+  function PersonMetricText({
+    lines,
+    sizeMult = 1
+  }: {
+    lines: string[];
+    sizeMult?: number;
+  }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
+    const S = (minPx: number, vw: number, maxPx: number) =>
+      `clamp(${Math.round(minPx * sizeMult)}px, ${vw * sizeMult}vw, ${Math.round(maxPx * sizeMult)}px)`;
+    const lineBase: React.CSSProperties = {
+      wordBreak: "break-word",
+      whiteSpace: "normal"
+    };
     return (
-      <div style={{ width: "100%", display: "grid", gap: 6, textAlign: "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-        {!!L[0] && <div style={{ font: `700 clamp(18px, 3.4vw, 32px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" }}>{toUp(L[0])}</div>}
-        {!!L[1] && <div style={{ font: `600 clamp(16px, 3vw, 26px) ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" }}>{toUp(L[1])}</div>}
+      <div
+        style={{
+          width: "100%",
+          display: "grid",
+          gap: 4,
+          textAlign: "center",
+          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
+        }}
+      >
+        {!!L[0] && (
+          <div
+            style={{
+              ...lineBase,
+              font: `700 ${S(14, 2.6, 24)} ${FONT_CENTURY}`,
+              lineHeight: 1.15,
+              letterSpacing: "0.3px"
+            }}
+          >
+            {toUp(L[0])}
+          </div>
+        )}
+        {!!L[1] && (
+          <div
+            style={{
+              ...lineBase,
+              font: `600 ${S(13, 2.3, 22)} ${FONT_CENTURY}`,
+              lineHeight: 1.15,
+              letterSpacing: "0.25px"
+            }}
+          >
+            {toUp(L[1])}
+          </div>
+        )}
         {!!L[2] && (
           <div
             style={{
-              font: `400 clamp(14px, 2.6vw, 22px) ${FONT_CENTURY}`,
-              lineHeight: 1.15,
+              ...lineBase,
+              font: `400 ${S(12, 2.0, 20)} ${FONT_CENTURY}`,
+              lineHeight: 1.12,
               letterSpacing: "0.2px",
-              opacity: 0.95,
-              whiteSpace: "nowrap",
-              wordBreak: "keep-all",
-              overflow: "hidden"
+              opacity: 0.95
             }}
           >
             {toUp(L[2])}
@@ -162,26 +198,15 @@ export default function SketchTemplate({
     );
   }
 
-  function PersonMetricText({ lines, sizeMult = 1 }: { lines: string[]; sizeMult?: number }) {
-    const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
-    const toUp = (s: string) => s.toUpperCase();
-    const S = (minPx: number, vw: number, maxPx: number) => `clamp(${Math.round(minPx * sizeMult)}px, ${vw * sizeMult}vw, ${Math.round(maxPx * sizeMult)}px)`;
-    return (
-      <div style={{ width: "100%", display: "grid", gap: 6, textAlign: "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-        {!!L[0] && <div style={{ font: `700 ${S(18, 3.4, 32)} ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.4px" }}>{toUp(L[0])}</div>}
-        {!!L[1] && <div style={{ font: `600 ${S(16, 3.0, 26)} ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.3px" }}>{toUp(L[1])}</div>}
-        {!!L[2] && <div style={{ font: `400 ${S(14, 2.6, 22)} ${FONT_CENTURY}`, lineHeight: 1.15, letterSpacing: "0.2px", opacity: 0.95 }}>{toUp(L[2])}</div>}
-      </div>
-    );
-  }
-
-  /* ===== Измерение нижней границы метрики (без циклов) ===== */
+  /* ===== Измерение нижней границы метрики ===== */
   useEffect(() => {
     if (!H || !W) return;
     const root = containerRef.current;
     if (!root) return;
 
-    const sig = [H, W, isVertical ? "v" : "h", tplKey, peopleBlocks.map((p) => p.lines.join("|")).join("||")].join("::");
+    const sig = [H, W, isVertical ? "v" : "h", tplKey, peopleBlocks.map((p) => p.lines.join("|")).join("||")].join(
+      "::"
+    );
     if (metricMeasureSigRef.current === sig) return;
     metricMeasureSigRef.current = sig;
 
@@ -205,7 +230,7 @@ export default function SketchTemplate({
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
-  /* ===== Горизонтальный 1 ===== */
+  /* ===== Горизонтальный 1 (без изменений) ===== */
   const h1 = useMemo(() => {
     if (isVertical || tplKey !== "one") return null;
     const gap = Math.round(0.015 * H);
@@ -240,14 +265,13 @@ export default function SketchTemplate({
     return () => cancelAnimationFrame(t);
   }, [h1, peopleBlocks]);
 
-  /* ===== Кресты ===== */
+  /* ===== Кресты (без изменений) ===== */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
     const isHorizontalTwo = !isVertical && tplKey === "two";
     const baseSize = (isVertical
       ? (tplKey === "one" ? CFG.vertical.one.blocks.cross.size : tplKey === "two" ? CFG.vertical.two.blocks.cross.size : CFG.vertical.many.blocks.cross.size)
-      : (tplKey === "one" ? CFG.horizontal.one.blocks.cross.size : tplKey === "two" ? CFG.horizontal.two.blocks.cross.size : CFG.horizontal.many.blocks.cross.size)
-    ) as any;
+      : (tplKey === "one" ? CFG.horizontal.one.blocks.cross.size : tplKey === "two" ? CFG.horizontal.two.blocks.cross.size : CFG.horizontal.many.blocks.cross.size)) as any;
 
     const baseFilter: React.CSSProperties = {
       objectFit: "contain",
@@ -263,7 +287,9 @@ export default function SketchTemplate({
     if (isHorizontalTwo) {
       if (crosses.length === 1) {
         const c = crosses[0];
-        return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topCenterPos }} draggable={false} />;
+        return (
+          <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topCenterPos }} draggable={false} />
+        );
       }
       if (crosses.length >= 2) {
         const [cL, cR] = [crosses[0], crosses[1]];
@@ -352,36 +378,38 @@ export default function SketchTemplate({
           }}
         >
           <div style={{ transform: `scale(${metricScaleH1})`, transformOrigin: "top center", width: "100%" }}>
-            <MetricThreeLines lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]} />
+            <PersonMetricText lines={p.lines} />
           </div>
         </div>
 
         {/* Offscreen измеритель метрики */}
         <div style={{ position: "absolute", left: -99999, top: -99999, width: s.metricW }}>
           <div ref={metricMeasureRef} style={{ width: s.metricW }}>
-            <MetricThreeLines lines={[p.lines?.[0] ?? "", p.lines?.[1] ?? "", p.lines?.[2] ?? ""]} />
+            <PersonMetricText lines={p.lines} />
           </div>
         </div>
       </>
     );
   };
 
-  // Горизонтальный: ДВОЕ — суммарно портрет+метрика ≈ 90% H; метрика чуть шире портрета
+  // Горизонтальный: ДВОЕ — Портрет 65% H, Метрика 25% H. Метрика чуть шире портрета. Шрифт меньше.
   const HorizontalTwo = () => {
     if (!H || !W) return null;
-    const topOffset = Math.round(0.06 * H);
-    const C = Math.round(0.90 * H); // целевая высота под портрет+метрику
+    const topOffset = Math.round(0.02 * H); // небольшой отступ сверху
     const gapSide = 16;
     const colGap = CFG.horizontal.layout.gap;
     const availableW = Math.max(0, W - gapSide * 2 - colGap);
     const colW = Math.min(320, Math.max(CFG.horizontal.layout.columnMinW, Math.floor(availableW / 2)));
 
-    const interGap = Math.max(6, Math.round(0.02 * H));
-    // портрет: ~55% C, метрика: остальное
-    const ph = Math.min(Math.round(C * 0.55), Math.round(colW / 0.75)); // ограничение по ширине колонки (3:4)
+    const interGap = Math.max(4, Math.round(0.01 * H)); // между портретом и метрикой
+
+    // Портрет 65% H (не шире колонки по 3:4)
+    const ph = Math.min(Math.round(0.65 * H), Math.round(colW / 0.75));
     const pw = Math.round(ph * 0.75);
-    const mh = Math.max(24, C - ph - interGap);
-    const metricWpx = Math.min(colW, Math.round(pw * 1.08)); // на ~8% шире портрета
+
+    // Метрика 25% H
+    const mh = Math.max(24, Math.round(0.25 * H));
+    const metricWpx = Math.min(colW, Math.round(pw * 1.08)); // чуть шире портрета
 
     return (
       <div
@@ -399,8 +427,8 @@ export default function SketchTemplate({
         }}
       >
         {peopleBlocks.slice(0, 2).map((p) => (
-          <div key={p.id} style={{ width: colW, height: C, display: "flex", flexDirection: "column", alignItems: "center" }}>
-            {/* Портрет (≈55% C) */}
+          <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            {/* Портрет (65% H) */}
             <div style={{ width: pw, height: ph }}>
               <div
                 data-sketch-el="portrait"
@@ -425,9 +453,19 @@ export default function SketchTemplate({
             {/* Зазор */}
             <div style={{ height: interGap, width: 1 }} />
 
-            {/* Метрика (оставшаяся часть до 90% C), ширина чуть больше портрета */}
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: mh, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <PersonMetricText lines={p.lines} sizeMult={0.88} />
+            {/* Метрика (25% H), ширина чуть больше портрета; уменьшенный шрифт и переносы */}
+            <div
+              data-sketch-el="metric"
+              data-sketch-key={p.id}
+              style={{
+                width: metricWpx,
+                height: mh,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+              }}
+            >
+              <PersonMetricText lines={p.lines} sizeMult={0.75} />
             </div>
           </div>
         ))}
@@ -435,11 +473,10 @@ export default function SketchTemplate({
     );
   };
 
-  // Горизонтальный: 3+ — суммарно портрет+метрика ≈ 90% H; метрика чуть шире портрета
+  // Горизонтальный: 3+ — как было (с уменьшенной метрикой)
   const HorizontalMany = () => {
     if (!H || !W) return null;
     const topOffset = Math.round(0.06 * H);
-    const C = Math.round(0.90 * H); // целевая высота под портрет+метрику
     const gapSide = 16;
     const colGap = CFG.horizontal.layout.gap;
     const cols = Math.min(4, Math.max(3, peopleBlocks.length));
@@ -463,13 +500,12 @@ export default function SketchTemplate({
         }}
       >
         {peopleBlocks.map((p) => {
-          // портрет ~50% C, метрика — остальное
-          const ph = Math.min(Math.round(C * 0.50), Math.round(perCol / 0.75));
+          const ph = Math.min(Math.round(0.50 * H), Math.round(perCol / 0.75));
           const pw = Math.round(ph * 0.75);
-          const mh = Math.max(24, C - ph - interGap);
+          const mh = Math.max(24, Math.round(0.40 * H));
           const metricWpx = Math.min(perCol, Math.round(pw * 1.08));
           return (
-            <div key={p.id} style={{ width: perCol, height: C, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div key={p.id} style={{ width: perCol, display: "flex", flexDirection: "column", alignItems: "center" }}>
               <div style={{ width: pw, height: ph }}>
                 <div
                   data-sketch-el="portrait"
@@ -494,7 +530,7 @@ export default function SketchTemplate({
               <div style={{ height: interGap, width: 1 }} />
 
               <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: mh, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <PersonMetricText lines={p.lines} sizeMult={0.85} />
+                <PersonMetricText lines={p.lines} sizeMult={0.82} />
               </div>
             </div>
           );
@@ -617,7 +653,7 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика ===== */
+  /* ===== Эпитафия + графика (подгоняем под оставшееся место) ===== */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
@@ -679,7 +715,7 @@ export default function SketchTemplate({
                 fontFamily: FONT_CENTURY,
                 lineHeight: 1.2,
                 letterSpacing: "0.3px",
-                fontSize: "clamp(10px, 3.0vw, 22px)",
+                fontSize: "clamp(10px, 2.6vw, 20px)", // чуточку меньше
                 display: "grid",
                 gap: 8
               }}
@@ -743,7 +779,7 @@ export default function SketchTemplate({
                 fontFamily: FONT_CENTURY,
                 lineHeight: 1.2,
                 letterSpacing: "0.3px",
-                fontSize: "clamp(10px, 3.0vw, 22px)",
+                fontSize: "clamp(10px, 2.6vw, 20px)",
                 display: "grid",
                 gap: 8
               }}
@@ -762,7 +798,6 @@ export default function SketchTemplate({
 
   return (
     <>
-      {/* Пояснение над эскизом */}
       <div
         style={{
           color: "#fff",
@@ -794,7 +829,6 @@ export default function SketchTemplate({
         data-sketch-orient={isVertical ? "vertical" : "horizontal"}
         data-sketch-orient-source={orientation ? "draft" : "image"}
       >
-        {/* Фоновое изображение изделия */}
         <img
           ref={imgRef}
           src={item?.url || ""}
@@ -804,7 +838,6 @@ export default function SketchTemplate({
           onLoad={() => requestAnimationFrame(recalc)}
         />
 
-        {/* Контент */}
         {renderPeople()}
         <CrossOverlay />
         <EpitaphAndGraphics />
