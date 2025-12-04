@@ -1,13 +1,11 @@
 // src/screens/EditorStep.tsx
-// Редактор поверх шаблона SketchTemplate.
-// Исправления по жалобам:
-// - Дубли («статичная копия» под фреймами): теперь всегда скрываем исходный контент SketchTemplate (data-sketch-el)
-//   ТОЛЬКО ПОСЛЕ измерений и повторно при любых изменениях/перерисовках (MutationObserver + ResizeObserver).
-// - «Редактируется только крест»: исправлено — снимаем раскладку ПОСЛЕ того, как контент действительно отрисовался
-//   (двойной rAF + наблюдатели). Строим фреймы для портрета, метрики, эпитафии, графики и креста.
-// - «Метрика и эпитафия только статичные и не на своём месте»: измерения повторяются до появления этих узлов;
-//   фреймы строятся корректно, статичный слой скрывается.
-// - Ручки ресайза: увеличены чувствительные области (hit-areas) — попадать с телефона стало проще.
+// Редактор поверх того же шаблона (SketchTemplate):
+// FIX:
+// - Убираем «двойники»: после первого снимка раскладки полностью скрываем ВСЕ узлы SketchTemplate с data-sketch-el (display:none).
+//   Фон изделия оставляем видимым (он без data-sketch-el).
+// - Делаем снимок раскладки гарантированно: на монтировании, при загрузке картинки изделия, при изменении контента и при ресайзе.
+// - Эпитафия/метрика попадают в фреймы и оказываются на своих местах (снимок идёт по их реальным DOM‑размерам).
+// - Все редактируемые элементы (портрет/метрика/эпитафия/графика/крест) рисуются нашим слоем, статичная копия скрыта.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -52,15 +50,15 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты внутрь контентной области
+  x: number; y: number; w: number; h: number;
   z: number;
   title?: string;
   locked?: boolean;
-  uppercase?: boolean; // metric/epitaph
-  italic?: boolean;    // metric/epitaph
-  flipH?: boolean;     // graphic
-  bw?: boolean;        // portrait
-  staircase?: boolean; // «Помним, любим, скорбим…»
+  uppercase?: boolean;
+  italic?: boolean;
+  flipH?: boolean;
+  bw?: boolean;
+  staircase?: boolean;
 };
 
 /* ===== Helpers ===== */
@@ -174,11 +172,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const wishesTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
-  // Для aspectRatio контейнера
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
 
-  // Сохранение без петель
   const isSavingRef = useRef(false);
   const touchSaving = (ms = 350) => { isSavingRef.current = true; window.setTimeout(() => (isSavingRef.current = false), ms); };
   const saveEditor = (updater: (prev: OrderDraft) => OrderDraft, andSetDraft = false) => {
@@ -192,7 +188,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (andSetDraft) setDraft(next);
   };
 
-  // Live reload драфта
   useEffect(() => {
     const apply = () => setDraft(loadOrderDraft());
     window.addEventListener("focus", apply);
@@ -205,7 +200,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  // Источники
   const item = draft?.item || null;
   const engr: any = draft?.engraving || {};
   const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
@@ -218,7 +212,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         return { id: p.id || `person-${idx}`, lines, photo };
       });
     }
-    // legacy
     const legacyLines: string[] = [];
     if (engr?.fullName) legacyLines.push(String(engr.fullName));
     const dates: string[] = [];
@@ -245,9 +238,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [graphics]
   );
 
-  /* ===== Сигнатура контента (для запуска снятия раскладки) ===== */
+  /* ===== Сигнатура контента (для старта снимка) ===== */
   const contentSig = useMemo(() => {
-    const ppl = peopleBlocks.map(p => ({ id: p.id, lines: p.lines.join("|"), has: !!p.photo })).map(x => `${x.id}:${x.lines}:${x.has?'1':'0'}`).join("||");
+    const ppl = peopleBlocks.map(p => `${p.id}:${p.lines.join("|")}:${p.photo ? "1":"0"}`).join("||");
     const cr = crosses.map(c => c.url).join("|");
     const ot = others.map(o => o.url).join("|");
     const ep = epitaphs.join("||");
@@ -256,161 +249,145 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   }, [item?.url, peopleBlocks, crosses, others, epitaphs]);
   const lastAppliedContentSigRef = useRef<string>("");
 
-  // Когда юзер редактирует — запрещаем авто‑снятие раскладки
-  const userEditingRef = useRef(false);
+  // Флаг: скрывать статичный контент SketchTemplate (после снимка)
+  const hiddenSketchRef = useRef(false);
 
-  /* ===== CSS подложки: НЕ скрываем сразу — только отключаем события ===== */
-  const cssOnceRef = useRef(false);
+  /* ===== CSS: запрещаем события статичному контенту ===== */
   useEffect(() => {
-    if (cssOnceRef.current) return;
     const st = document.createElement("style");
-    st.setAttribute("data-editor-shadow-css", "1");
-    st.innerHTML = `
-      [data-editor-wrap] [data-sketch-el] { pointer-events: none !important; }
-    `;
+    st.innerHTML = `[data-editor-wrap] [data-sketch-el]{pointer-events:none!important;}`;
     document.head.appendChild(st);
-    cssOnceRef.current = true;
-    return () => {
-      document.head.removeChild(st);
-      cssOnceRef.current = false;
-    };
+    return () => { document.head.removeChild(st); };
   }, []);
 
-  /* ===== Наблюдатели: следим за DOM/размером подложки, чтобы вовремя снять раскладку и скрыть её ===== */
-  const moRef = useRef<MutationObserver | null>(null);
-  const roRef = useRef<ResizeObserver | null>(null);
-  const measureRafRef = useRef<number | null>(null);
-  const scheduleMeasure = (delayRaf = true) => {
-    if (measureRafRef.current) cancelAnimationFrame(measureRafRef.current);
-    measureRafRef.current = requestAnimationFrame(() => {
-      if (delayRaf) {
-        requestAnimationFrame(measureAndApplyFrames); // двойной rAF чтобы точно дождаться layout/painт
-      } else {
-        measureAndApplyFrames();
-      }
-    });
-  };
-
-  useEffect(() => {
+  // Показ/скрытие статичного контента
+  const setSketchContentVisible = (visible: boolean) => {
     const root = templateRootRef.current;
     if (!root) return;
-    // MutationObserver — появление/перемещение узлов data-sketch-el
-    moRef.current = new MutationObserver(() => scheduleMeasure(true));
-    moRef.current.observe(root, { subtree: true, childList: true, attributes: true });
-    // ResizeObserver — изменения размеров
-    roRef.current = new ResizeObserver(() => scheduleMeasure(false));
-    roRef.current.observe(root);
-    // Первая попытка снятия
-    scheduleMeasure(true);
+    const nodes = root.querySelectorAll<HTMLElement>("[data-sketch-el]");
+    nodes.forEach((n) => {
+      if (visible) {
+        n.style.display = "";
+        n.style.opacity = "";
+        n.style.visibility = "";
+      } else {
+        n.style.display = "none";
+      }
+    });
+    hiddenSketchRef.current = !visible;
+  };
 
-    return () => {
-      moRef.current?.disconnect();
-      roRef.current?.disconnect();
-      if (measureRafRef.current) cancelAnimationFrame(measureRafRef.current);
-    };
-  }, []);
-
-  /* ===== Измерение DOM SketchTemplate -> фреймы ===== */
+  /* ===== Снимок DOM SketchTemplate -> фреймы ===== */
   const measureAndApplyFrames = () => {
     const wrap = editorWrapRef.current;
     const root = templateRootRef.current;
     if (!wrap || !root) return;
 
-    const wrapRect = wrap.getBoundingClientRect();
-    const contentLeft = wrapRect.left + SKETCH_PAD;
-    const contentTop = wrapRect.top + SKETCH_PAD;
-    const contentW = Math.max(1, wrapRect.width - SKETCH_PAD * 2);
-    const contentH = Math.max(1, wrapRect.height - SKETCH_PAD * 2);
+    // Показать контент (если ранее скрывали), чтобы корректно измерить
+    if (hiddenSketchRef.current) setSketchContentVisible(true);
 
-    const nodes = root.querySelectorAll("[data-sketch-el]");
-    if (nodes.length === 0) return;
+    requestAnimationFrame(() => {
+      const wrapRect = wrap.getBoundingClientRect();
+      const contentLeft = wrapRect.left + SKETCH_PAD;
+      const contentTop = wrapRect.top + SKETCH_PAD;
+      const contentW = Math.max(1, wrapRect.width - SKETCH_PAD * 2);
+      const contentH = Math.max(1, wrapRect.height - SKETCH_PAD * 2);
 
-    const entries: EditorEl[] = [];
+      const nodes = root.querySelectorAll("[data-sketch-el]");
+      if (nodes.length === 0) return;
 
-    nodes.forEach((node) => {
-      const el = node as HTMLElement;
-      const kind = (el.getAttribute("data-sketch-el") || "").trim();
-      const key = (el.getAttribute("data-sketch-key") || "").trim();
-      if (!kind) return;
+      const entries: EditorEl[] = [];
+      nodes.forEach((node) => {
+        const el = node as HTMLElement;
+        const kind = (el.getAttribute("data-sketch-el") || "").trim();
+        const key = (el.getAttribute("data-sketch-key") || "").trim();
+        if (!kind) return;
 
-      let target: HTMLElement = el;
-      if (kind === "graphic") {
-        const p = el.parentElement as HTMLElement | null;
-        if (p) {
-          const pr = p.getBoundingClientRect();
-          const er = el.getBoundingClientRect();
-          if (pr.width - er.width > 2) target = p;
+        let target: HTMLElement = el;
+        if (kind === "graphic") {
+          const p = el.parentElement as HTMLElement | null;
+          if (p) {
+            const pr = p.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            if (pr.width - er.width > 2) target = p;
+          }
         }
-      }
-      const r = target.getBoundingClientRect();
-      let xPct = ((r.left - contentLeft) / contentW) * 100;
-      let yPct = ((r.top - contentTop) / contentH) * 100;
-      let wPct = (r.width / contentW) * 100;
-      let hPct = (r.height / contentH) * 100;
-      if (kind === "graphic") {
-        wPct *= 1.006;
-      }
 
-      xPct = clamp(xPct, 0, 100);
-      yPct = clamp(yPct, 0, 100);
-      wPct = clamp(wPct, 0, 100);
-      hPct = clamp(hPct, 0, 100);
+        const r = target.getBoundingClientRect();
+        let xPct = ((r.left - contentLeft) / contentW) * 100;
+        let yPct = ((r.top - contentTop) / contentH) * 100;
+        let wPct = (r.width / contentW) * 100;
+        let hPct = (r.height / contentH) * 100;
+        if (kind === "graphic") wPct *= 1.006;
 
-      let id = "", type: ElType | null = null;
-      if (kind === "portrait") { id = `portrait-${key}`; type = "portrait"; }
-      else if (kind === "metric") { id = `metric-${key}`; type = "metric"; }
-      else if (kind === "epitaph") { id = `epitaph-${key}`; type = "epitaph"; }
-      else if (kind === "graphic") { id = `graphic-${key}`; type = "graphic"; }
-      else if (kind === "cross") { id = `cross-${key}`; type = "cross"; }
-      if (!id || !type) return;
+        xPct = clamp(xPct, 0, 100);
+        yPct = clamp(yPct, 0, 100);
+        wPct = clamp(wPct, 0, 100);
+        hPct = clamp(hPct, 0, 100);
 
-      let z = 0;
-      if (type === "portrait") z = 10;
-      else if (type === "metric") z = 20;
-      else if (type === "epitaph") z = 30 + Number(key);
-      else if (type === "cross") z = 40 + Number(key);
-      else if (type === "graphic") z = 50 + Number(key);
+        let id = "", type: ElType | null = null;
+        if (kind === "portrait") { id = `portrait-${key}`; type = "portrait"; }
+        else if (kind === "metric") { id = `metric-${key}`; type = "metric"; }
+        else if (kind === "epitaph") { id = `epitaph-${key}`; type = "epitaph"; }
+        else if (kind === "graphic") { id = `graphic-${key}`; type = "graphic"; }
+        else if (kind === "cross") { id = `cross-${key}`; type = "cross"; }
+        if (!id || !type) return;
 
-      entries.push({ id, type, x: xPct, y: yPct, w: Math.max(2, wPct), h: Math.max(2, hPct), z, title: id });
-    });
+        let z = 0;
+        if (type === "portrait") z = 10;
+        else if (type === "metric") z = 20;
+        else if (type === "epitaph") z = 30 + Number(key);
+        else if (type === "cross") z = 40 + Number(key);
+        else if (type === "graphic") z = 50 + Number(key);
 
-    // Применяем измеренное
-    setElements((prev) => {
-      const prevMap = new Map(prev.map((p) => [p.id, p]));
-      const next = entries.map((e) => {
-        const old = prevMap.get(e.id);
-        if (!old) return e;
-        return {
-          ...e,
-          uppercase: old.uppercase,
-          italic: old.italic,
-          flipH: old.flipH,
-          bw: old.bw,
-          staircase: old.staircase
-        };
+        entries.push({ id, type, x: xPct, y: yPct, w: Math.max(2, wPct), h: Math.max(2, hPct), z, title: id });
       });
-      prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
-      return next;
-    });
 
-    // ВАЖНО: скрыть исходный контент подложки (только после измерений)
-    root.querySelectorAll("[data-sketch-el]").forEach((el) => {
-      const n = el as HTMLElement;
-      n.style.opacity = "0";
-      n.style.visibility = "hidden";
-      n.style.pointerEvents = "none";
-    });
+      setElements((prev) => {
+        const prevMap = new Map(prev.map((p) => [p.id, p]));
+        const next = entries.map((e) => {
+          const old = prevMap.get(e.id);
+          return old
+            ? { ...e, uppercase: old.uppercase, italic: old.italic, flipH: old.flipH, bw: old.bw, staircase: old.staircase }
+            : e;
+        });
+        // Сохраняем пользовательские фреймы, которых нет в текущем шаблоне
+        prev.forEach((p) => { if (!next.find((n) => n.id === p.id)) next.push(p); });
+        return next;
+      });
 
-    lastAppliedContentSigRef.current = contentSig;
+      // Скрыть все узлы SketchTemplate (устранить статичные копии)
+      setSketchContentVisible(false);
+
+      lastAppliedContentSigRef.current = contentSig;
+    });
   };
 
+  // 1) Снимок при монтировании (на всякий случай — сразу)
   useEffect(() => {
-    if (userEditingRef.current) return;
-    // При смене контента переснимаем раскладку
-    if (lastAppliedContentSigRef.current !== contentSig) {
-      scheduleMeasure(true);
-    }
+    measureAndApplyFrames();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 2) Снимок при изменении контента
+  useEffect(() => {
+    if (lastAppliedContentSigRef.current === contentSig) return;
+    measureAndApplyFrames();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentSig]);
+
+  // 3) Снимок при загрузке картинки изделия (когда известны реальные размеры)
+  const onBaseImgLoad = () => {
+    measureAndApplyFrames();
+  };
+
+  // 4) Снимок при ресайзе окна (меняются размеры контейнера)
+  useEffect(() => {
+    const onResize = () => measureAndApplyFrames();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ===== DnD/Resize ===== */
   const dragRef = useRef<{
@@ -428,7 +405,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     e.stopPropagation();
     const el = elements.find((x) => x.id === id);
     if (!el || el.locked) return;
-    userEditingRef.current = true;
     setSelectedId(id);
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
     dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, start: { ...el } };
@@ -451,16 +427,492 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     setElements((prev) =>
       prev.map((el) => {
         if (el.id !== d.id) return el;
-        let { xdiv style={dotStyle("50%", 0)} />
+        let { x, y, w, h } = d.start;
 
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={hitStyle("100%", "50%", "ew-resize", sideH, sideW)} />
-                          <div style={dotStyle("100%", "50%")} />
+        if (d.mode === "move") {
+          let nx = x + dxPct, ny = y + dyPct;
+          if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); }
+          return { ...el, ...clampBox(nx, ny, w, h) };
+        }
 
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={hitStyle("50%", "100%", "ns-resize", sideW, sideH)} />
-                          <div style={dotStyle("50%", "100%")} />
+        const keepRatio = e.shiftKey;
+        let nx = x, ny = y, nw = w, nh = h;
+        const ratio = w / h || 1;
 
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={hitStyle(0, "50%", "ew-resize", sideH, sideW)} />
-                          <div style={dotStyle(0, "50%")} />
+        if (d.mode.includes("e")) nw = w + dxPct;
+        if (d.mode.includes("s")) nh = h + dyPct;
+        if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
+        if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dyPct; }
+
+        if (keepRatio) {
+          if (["e","w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
+          if (["n","s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
+        }
+
+        if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); nw = snap(nw, snapStep); nh = snap(nh, snapStep); }
+
+        return { ...el, ...clampBox(nx, ny, nw, nh) };
+      })
+    );
+  };
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      saveEditor((prev) => ({
+        ...prev,
+        editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+      } as OrderDraft), true);
+      queuePreviewGeneration();
+    }
+    dragRef.current = null;
+  };
+
+  // Автосохранение редактора
+  useEffect(() => {
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveEditor((prev) => ({
+        ...prev,
+        editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+      } as OrderDraft), true);
+    }, 300) as unknown as number;
+    return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); };
+  }, [elements, wishes]);
+
+  useEffect(() => {
+    if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current);
+    wishesTimerRef.current = window.setTimeout(() => {
+      saveEditor((prev) => {
+        if (prev.editor?.wishes === wishes) return prev;
+        return { ...prev, editor: { ...(prev.editor || {}), wishes, updatedAt: Date.now() } } as OrderDraft;
+      }, true);
+    }, 320) as unknown as number;
+    return () => { if (wishesTimerRef.current) window.clearTimeout(wishesTimerRef.current); };
+  }, [wishes]);
+
+  /* ===== Превью (мини/большое) для драфта ===== */
+  const queuePreviewGeneration = () => {
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = window.setTimeout(async () => {
+      const wrap = editorWrapRef.current; if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const pad = SKETCH_PAD;
+
+      async function drawPreview(W: number, H: number): Promise<string | null> {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.floor(W));
+        canvas.height = Math.max(1, Math.floor(H));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#6e6e6e");
+        grad.addColorStop(0.2, "#464545");
+        grad.addColorStop(0.4, "#424242");
+        grad.addColorStop(0.7, "#888888");
+        grad.addColorStop(1.0, "#ffffff");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        const base = await new Promise<HTMLImageElement | null>((resolve) => {
+          const url = item?.url || "";
+          if (!url) return resolve(null);
+          const im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = () => resolve(im);
+          im.onerror = () => resolve(null);
+          im.src = url;
+        });
+
+        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
+        if (base) {
+          const sr = base.width / base.height, dr = PW / PH;
+          ctx.globalAlpha = 0.35;
+          if (sr > dr) {
+            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          } else {
+            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          }
+          ctx.globalAlpha = 1;
+        }
+
+        const fam = FONT_CENTURY;
+
+        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
+          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
+          const key = el.id.split("-").slice(1).join("-");
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || ""; if (!url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            ctx.save(); ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
+            if (el.bw) ctx.filter = "grayscale(100%)";
+            if (sr2 > dr2) {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore(); ctx.filter = "none";
+          } else if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            ctx.save();
+            ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04));
+            const padY2 = Math.max(2, Math.round(rbox.h * 0.10));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
+            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
+            let y = rbox.y + (rbox.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
+            for (let i = 0; i < fitted.length; i++) {
+              setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
+              ctx.fillText(tf(lines[i]), rbox.x + rbox.w / 2, y);
+              y += fitted[i] * 1.12;
+            }
+            ctx.restore();
+          } else if (el.type === "epitaph") {
+            const idx = Number(key);
+            const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+            const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+            ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04));
+            const padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
+            setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+            const count = Math.max(1, lines.length);
+            const lineH = (rbox.h - padY2 * 2) / count;
+            for (let i = 0; i < count; i++) {
+              const yy = rbox.y + padY2 + lineH * (i + 0.5);
+              ctx.fillText(lines[i], rbox.x + rbox.w / 2, yy);
+            }
+            ctx.restore();
+          } else if (el.type === "graphic") {
+            const idx = Number(key);
+            const g = Number.isFinite(idx) ? others[idx] : undefined;
+            if (!g?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = g.url;
+            });
+            if (!im) continue;
+            ctx.save();
+            if (el.flipH) { ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2); ctx.scale(-1, 1); ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2)); }
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore();
+          } else if (el.type === "cross") {
+            const idx = Number(key);
+            const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+            if (!c?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = c.url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+          }
+        }
+        return canvas.toDataURL("image/jpeg", 0.9);
+      }
+
+      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
+      const maxSide = 1600;
+      const ratio = r.width / (r.height || 1);
+      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+      const big = await drawPreview(bigW, bigH);
+
+      saveEditor((prev) => ({
+        ...prev,
+        editor: {
+          ...(prev.editor || {}),
+          previewUrl: mini || (prev.editor as any)?.previewUrl || null,
+          previewHiUrl: big || (prev.editor as any)?.previewHiUrl || null,
+          previewUpdatedAt: Date.now(),
+          elements,
+          wishes
+        }
+      } as OrderDraft), true);
+    }, 280) as unknown as number;
+  };
+
+  useEffect(() => {
+    queuePreviewGeneration();
+    return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
+  }, [elements, peopleBlocks, crosses, others, epitaphs, aspect, wishes, item?.url]);
+
+  /* ===== Контент поверх ===== */
+  const ContentOverlay = () => {
+    const fam = FONT_CENTURY;
+    const wrap = editorWrapRef.current?.getBoundingClientRect();
+    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
+    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
+
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD,
+          pointerEvents: "none", zIndex: 1000
+        }}
+      >
+        {elements
+          .slice()
+          .sort((a, b) => a.z - b.z)
+          .map((el) => {
+            const key = el.id.split("-").slice(1).join("-");
+            const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
+
+            if (el.type === "portrait") {
+              const p = peopleBlocks.find((pp) => pp.id === key);
+              const url = p?.photo || "";
+              const filt = el.bw ? "grayscale(100%)" : "none";
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
+                  {url ? <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.6 }}>(нет фото)</div>}
+                </div>
+              );
+            } else if (el.type === "metric") {
+              const p = peopleBlocks.find((pp) => pp.id === key);
+              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+              const padY = Math.max(2, Math.round(boxPx.h * 0.10));
+              const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.12, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ display: "grid", gap: 2, width: "100%" }}>
+                      {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
+                      {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
+                      {lines[2] && <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            } else if (el.type === "epitaph") {
+              const idx = Number(key);
+              const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+              const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+              const padY = Math.max(2, Math.round(boxPx.h * 0.06));
+              const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
+                  </div>
+                </div>
+              );
+            } else if (el.type === "cross") {
+              const idx = Number(key);
+              const c = Number.isFinite(idx) ? crosses[idx] : undefined;
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
+                  {c?.url ? <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+                </div>
+              );
+            } else if (el.type === "graphic") {
+              const idx = Number(key);
+              const g = Number.isFinite(idx) ? others[idx] : undefined;
+              const tr = el.flipH ? "scaleX(-1)" : "none";
+              return (
+                <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
+                  {g?.url ? <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+                </div>
+              );
+            }
+            return null;
+          })}
+      </div>
+    );
+  };
+
+  const handleBack = () => {
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft), true);
+    queuePreviewGeneration();
+    setOutro(true);
+    setTimeout(() => onBack?.(), 150);
+  };
+  const handleContinue = () => {
+    saveEditor((prev) => ({
+      ...prev,
+      editor: { ...(prev.editor || {}), elements, wishes, updatedAt: Date.now() }
+    } as OrderDraft), true);
+    queuePreviewGeneration();
+    const go = onRearSide || onSendOrder || onContinue;
+    if (!go) return;
+    setOutro(true);
+    setTimeout(() => go({ elements, wishes }), 150);
+  };
+
+  const MAX_W = 600;
+  const miniPreview = (draft as any)?.editor?.previewUrl || null;
+
+  return (
+    <div
+      style={{
+        color: "#fff",
+        padding: 12,
+        opacity: outro ? 0 : 1,
+        transition: "opacity 240ms ease",
+        backgroundImage: `url(/data/bg.svg)`,
+        backgroundSize: "cover",
+        backgroundPosition: "center center",
+        backgroundAttachment: "fixed"
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
+        <TopBarWithIntro title="Memorial" previewUrl={miniPreview} />
+
+        <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
+          Разместите элементы условно. Укажите порядок и выравнивание. Финальный вариант сделает специалист. В этом режиме вы можете двигать и менять размер всех элементов (портрет, метрика, эпитафия, графика, крест).
+        </section>
+
+        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+          <div
+            ref={editorWrapRef}
+            data-editor-wrap
+            style={{
+              position: "relative",
+              width: "100%",
+              borderRadius: 10,
+              overflow: "hidden",
+              userSelect: "none",
+              ...bottomUnderlayGradient(),
+              aspectRatio: aspect,
+              minHeight: aspect ? undefined : 540
+            }}
+          >
+            {/* Подложка (SketchTemplate) */}
+            <div ref={templateRootRef}>
+              <SketchTemplate
+                item={item}
+                peopleBlocks={peopleBlocks}
+                crosses={crosses as any}
+                others={others as any}
+                epitaphs={epitaphs}
+                carvingOpacity={0.35}
+              />
+            </div>
+
+            {/* Технический img: из него берём соотношение и триггерим повторное измерение */}
+            <img
+              src={item?.url || ""}
+              alt=""
+              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+              onLoad={() => {
+                const im = (event?.target as HTMLImageElement) || null;
+                if (im && im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
+                onBaseImgLoad();
+              }}
+              onError={() => {
+                if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
+                onBaseImgLoad();
+              }}
+            />
+
+            {/* Наш управляемый контент */}
+            <ContentOverlay />
+
+            {/* Слой фреймов (редактируемые рамки) */}
+            <div
+              ref={overlayFramesRef}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget) {
+                  setSelectedId(null);
+                }
+              }}
+              style={{
+                position: "absolute",
+                left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD,
+                zIndex: 1001,
+                pointerEvents: "auto"
+              }}
+            >
+              {elements
+                .slice()
+                .sort((a, b) => a.z - b.z)
+                .map((el) => {
+                  const selected = el.id === selectedId;
+                  const isPhone = typeof window !== "undefined" ? window.innerWidth <= 480 : false;
+                  const hitBox = isPhone ? 44 : 36;
+                  const sideHitW = isPhone ? 48 : 40;
+                  const sideHitH = isPhone ? 24 : 18;
+
+                  const dotStyle: React.CSSProperties = {
+                    width: 12, height: 12, background: "#fff", border: "1px solid #000", borderRadius: 3, transform: "translate(-50%, -50%)", pointerEvents: "none", boxShadow: "0 0 0 1px rgba(0,0,0,0.3)", position: "absolute"
+                  };
+                  const hitStyle = (left: number | string, top: number | string, cursor: string, w = 40, h = 40): React.CSSProperties => ({
+                    position: "absolute", left, top, width: w, height: h, transform: "translate(-50%, -50%)", cursor, background: "transparent", zIndex: 5
+                  });
+
+                  return (
+                    <div
+                      key={el.id}
+                      onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")}
+                      style={{
+                        position: "absolute",
+                        left: `${el.x}%`, top: `${el.y}%`,
+                        width: `${el.w}%`, height: `${el.h}%`,
+                        border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
+                        borderRadius: 4,
+                        boxShadow: selected ? "0 0 0 1px rgba(138,180,255,0.6)" : "none",
+                        background: "transparent",
+                        pointerEvents: "auto",
+                        cursor: el.locked ? "not-allowed" : "move",
+                        touchAction: "none"
+                      }}
+                      title={el.title || el.id}
+                    >
+                      {selected && (
+                        <>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={hitStyle(0, 0, "nwse-resize", hitBox, hitBox)} />
+                          <div style={{ ...dotStyle, left: 0, top: 0 }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={hitStyle("100%", 0, "nesw-resize", hitBox, hitBox)} />
+                          <div style={{ ...dotStyle, left: "100%", top: 0 }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={hitStyle("100%", "100%", "nwse-resize", hitBox, hitBox)} />
+                          <div style={{ ...dotStyle, left: "100%", top: "100%" }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={hitStyle(0, "100%", "nesw-resize", hitBox, hitBox)} />
+                          <div style={{ ...dotStyle, left: 0, top: "100%" }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={hitStyle("50%", 0, "ns-resize", sideHitW, sideHitH)} />
+                          <div style={{ ...dotStyle, left: "50%", top: 0 }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={hitStyle("100%", "50%", "ew-resize", sideHitH, sideHitW)} />
+                          <div style={{ ...dotStyle, left: "100%", top: "50%" }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={hitStyle("50%", "100%", "ns-resize", sideHitW, sideHitH)} />
+                          <div style={{ ...dotStyle, left: "50%", top: "100%" }} />
+
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={hitStyle(0, "50%", "ew-resize", sideHitH, sideHitW)} />
+                          <div style={{ ...dotStyle, left: 0, top: "50%" }} />
                         </>
                       )}
                     </div>
