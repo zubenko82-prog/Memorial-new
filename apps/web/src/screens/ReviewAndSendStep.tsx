@@ -1,18 +1,21 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
-// Требования:
-// - Подсказка перенесена наверх (точный текст из ТЗ).
-// - Липкая навигация по шагам (Выбор, Эскиз лицевая, Эскиз тыльная, Обзор).
-// - Отображаем (и даём редактировать) контакты и «Резная работа» (как раньше).
-// - Кроме них показываем остальные элементы заказа: Люди, Элементы эскиза (Графика/Эпитафии/Пожелания) отдельно для лицевой/тыльной.
-// - Эскизы (превью) оставляем в 2 столбца (как раньше).
-// - Фон тыльной стороны исправлен: под превью тыла подложка с тем же фоном и зеркалённым изделием.
-// - Слово «эскиз» нигде не показываем.
+// В этом варианте:
+// - Навигация: берём готовую src/components/StepNav.tsx и показываем её «липко» сверху.
+// - Подсказка перенесена вверх (точный текст из ТЗ).
+// - Редактируемые: Контакты и «Резная работа/размеры».
+// - Остальные элементы отсортированы по сторонам:
+//   Лицевая: Люди → Графика → Эпитафии → Пожелания.
+//   Тыльная: Люди → Графика → Эпитафии → Пожелания.
+//   Пустые секции не показываем (например, если нет «Люди (тыльная)», блока не будет).
+// - Миниатюры «вписывают изображение» (object-fit: contain).
+// - Превью сторон оставляем как раньше — в 2 столбца. Для тыльной стороны подложка зеркалится.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
+import StepNav from "../components/StepNav";
 
 /* ===== UI ===== */
 function glassPanelStyle() {
@@ -55,6 +58,38 @@ function inputStyle(): React.CSSProperties {
 }
 function smallText(): React.CSSProperties {
   return { opacity: 0.85, fontSize: 12 };
+}
+
+function chip(txt: string) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "2px 8px",
+        borderRadius: 999,
+        fontSize: 12,
+        background: "rgba(138,180,255,0.18)",
+        color: "#dbe7ff",
+        whiteSpace: "nowrap"
+      }}
+    >
+      {txt}
+    </span>
+  );
+}
+function AccentBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        background: "rgba(255,242,201,0.15)",
+        border: "1px solid rgba(255,242,201,0.35)",
+        borderRadius: 10,
+        padding: 8
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 /* ===== Подложка под превью (градиент + изделие) ===== */
@@ -245,39 +280,6 @@ function EditableOrderSummary() {
   );
 }
 
-/* ===== Вспом. рендеры элементов заказа (кроме контактов и резной) ===== */
-function SectionChip({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 999,
-        fontSize: 12,
-        background: "rgba(138,180,255,0.18)",
-        color: "#dbe7ff",
-        whiteSpace: "nowrap"
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-function AccentBox({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        background: "rgba(255,242,201,0.15)",
-        border: "1px solid rgba(255,242,201,0.35)",
-        borderRadius: 10,
-        padding: 8
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 /* ===== Компонент шага ===== */
 type Props = {
   onBack?: () => void;
@@ -297,7 +299,7 @@ export default function ReviewAndSendStep({
   const draft = useMemo(() => loadOrderDraft(), []);
   const itemUrl = (draft as any)?.item?.url as string | undefined;
 
-  // Для подложки — соотношение сторон изделия
+  // Соотношение сторон подложки
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
@@ -310,11 +312,11 @@ export default function ReviewAndSendStep({
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Превью (мини)
+  // Превью
   const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
   const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
 
-  // Элементы заказа (кроме контактов/резной)
+  // Данные по сторонам
   const frontPersons: any[] = (draft.engraving?.persons as any[])?.filter(Boolean) || [];
   const rearPeople: any[] = ((draft as any)?.editorBack?.people as any[])?.filter(Boolean) || [];
 
@@ -327,7 +329,8 @@ export default function ReviewAndSendStep({
   const frontUnique: any[] = useMemo(() => {
     const first: Record<string, any> = {};
     frontGraphics.forEach((g) => {
-      if (g?.id && !first[g.id]) first[g.id] = g;
+      const id = g?.id || g?.url || g?.name;
+      if (id && !first[id]) first[id] = g;
     });
     return Object.values(first);
   }, [frontGraphics]);
@@ -399,323 +402,209 @@ export default function ReviewAndSendStep({
     }
   };
 
-  // Липкая навигация по шагам
-  const safeTop = "calc(env(safe-area-inset-top, 0px))";
-  const StepButton = ({
-    label,
-    onClick,
-    active
-  }: {
-    label: string;
-    onClick: () => void;
-    active?: boolean;
-  }) => (
-    <button
-      type="button"
-      onClick={onClick}
+  // Липкая навигация: берём готовую StepNav
+  const StepNavAny = StepNav as any;
+
+  // Хелп для миниатюр (вписываем изображение)
+  const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?: number }) => (
+    <div
       style={{
-        padding: "6px 10px",
-        borderRadius: 999,
-        border: active ? "1px solid rgba(255,255,255,0.9)" : "1px solid rgba(255,255,255,0.28)",
-        background: active ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
-        color: "#fff",
-        cursor: "pointer",
-        whiteSpace: "nowrap"
+        borderRadius: 8,
+        border: "1px solid rgba(255,255,255,0.14)",
+        overflow: "hidden",
+        background: "rgba(255,255,255,0.04)",
+        width: size,
+        height: size,
+        display: "grid",
+        placeItems: "center"
       }}
     >
-      {label}
-    </button>
+      {url ? (
+        <img src={url} alt={alt} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+      ) : (
+        <div style={{ ...smallText() }}>—</div>
+      )}
+    </div>
   );
+
+  const hasFront =
+    frontPersons.length > 0 || frontUnique.length > 0 || frontEpitaphs.length > 0 || !!frontWishes.trim();
+  const hasBack =
+    rearPeople.length > 0 || rearUnique.length > 0 || rearEpitaphs.length > 0 || !!backWishes.trim();
 
   return (
     <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
-      {/* Липкая навигация по шагам */}
+      {/* Липкая навигация по шагам (готовая компонентa) */}
       <div
         style={{
           position: "sticky",
-          top: safeTop,
-          zIndex: 50,
-          padding: 8,
-          borderRadius: 12,
-          border: "1px solid rgba(255,255,255,0.14)",
-          background: "rgba(20,20,24,0.75)",
-          backdropFilter: "blur(8px)",
-          display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          alignItems: "center"
+          top: "calc(env(safe-area-inset-top, 0px))",
+          zIndex: 50
         }}
       >
-        <StepButton
-          label="Выбор резьбы"
-          onClick={() => (onGoCatalog ? onGoCatalog() : window.dispatchEvent(new CustomEvent("memorial:navigate", { detail: { step: "catalog" } })))}
-        />
-        <StepButton
-          label="Эскиз (лицевая)"
-          onClick={() => (onGoEditorFront ? onGoEditorFront() : window.dispatchEvent(new CustomEvent("memorial:navigate", { detail: { step: "editorFront" } })))}
-        />
-        <StepButton
-          label="Эскиз (тыльная)"
-          onClick={() => (onGoEditorBack ? onGoEditorBack() : window.dispatchEvent(new CustomEvent("memorial:navigate", { detail: { step: "editorBack" } })))}
-        />
-        <StepButton label="Обзор" onClick={() => {}} active />
+        <StepNavAny active="review" />
       </div>
 
-      {/* Подсказка (вверху, как по ТЗ) */}
+      {/* Подсказка — сверху */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
         гравировки перейдите на соответствующий шаг. Когда всё верно — нажмите «Отправить заказ».
       </section>
 
-      {/* Редактируемые данные заказа (контакты + резная работа/размеры) */}
+      {/* Редактируемые данные заказа */}
       <EditableOrderSummary />
 
-      {/* Остальные элементы заказа */}
-      <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
-        <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
-          <SectionChip>Элементы заказа</SectionChip>
-        </div>
-
-        {/* Люди */}
-        {(frontPersons.length > 0 || rearPeople.length > 0) && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-            {/* Лицевая */}
-            <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: 8 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Люди (лицевая)</div>
-              {frontPersons.length ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {frontPersons.map((p: any, i: number) => {
-                    const fio1 = (p.lastName || "").trim();
-                    const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-                    const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
-                    return (
-                      <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
-                        <div
-                          style={{
-                            borderRadius: 8,
-                            border: "1px solid rgba(255,255,255,0.14)",
-                            overflow: "hidden",
-                            background: "rgba(255,255,255,0.04)",
-                            width: 56,
-                            height: 56,
-                            display: "grid",
-                            placeItems: "center"
-                          }}
-                        >
-                          {p.photoPreview ? (
-                            <img src={p.photoPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          ) : (
-                            <div style={{ ...smallText() }}>нет</div>
-                          )}
-                        </div>
-                        <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                          {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                          {fio2 && <div>{fio2}</div>}
-                          <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ ...smallText() }}>—</div>
-              )}
-            </div>
-
-            {/* Тыльная */}
-            <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: 8 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Люди (тыльная)</div>
-              {rearPeople.length ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {rearPeople.map((p: any, i: number) => {
-                    const fio1 = (p.lastName || "").trim();
-                    const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-                    const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
-                    return (
-                      <div key={p.id || `rp-${i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
-                        <div
-                          style={{
-                            borderRadius: 8,
-                            border: "1px solid rgba(255,255,255,0.14)",
-                            overflow: "hidden",
-                            background: "rgba(255,255,255,0.04)",
-                            width: 56,
-                            height: 56,
-                            display: "grid",
-                            placeItems: "center"
-                          }}
-                        >
-                          {p.photoPreview ? (
-                            <img src={p.photoPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          ) : (
-                            <div style={{ ...smallText() }}>нет</div>
-                          )}
-                        </div>
-                        <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                          {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                          {fio2 && <div>{fio2}</div>}
-                          <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ ...smallText() }}>—</div>
-              )}
-            </div>
+      {/* Лицевая сторона: Люди → Графика → Эпитафии → Пожелания (показываем только то, что есть) */}
+      {hasFront && (
+        <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+            {chip("Лицевая")}
           </div>
-        )}
 
-        {/* Элементы эскиза: графика/эпитафии/пожелания (лицевая/тыльная) */}
-        {(frontUnique.length > 0 || frontEpitaphs.length > 0 || frontWishes.trim() || rearUnique.length > 0 || rearEpitaphs.length > 0 || backWishes.trim()) && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
-            {/* Лицевая */}
-            {(frontUnique.length > 0 || frontEpitaphs.length > 0 || frontWishes.trim()) && (
-              <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: 8 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
-
-                {/* Графика */}
-                {frontUnique.length > 0 && (
-                  <div style={{ ...glassPanelStyle(), padding: 8, marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {frontUnique.map((g: any) => {
-                        const qty = frontCountsById[g.id] || 0;
-                        const name = g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id);
-                        return (
-                          <div key={`fg-${g.id || name}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <div
-                              style={{
-                                borderRadius: 6,
-                                border: "1px solid rgba(255,255,255,0.18)",
-                                overflow: "hidden",
-                                background: "rgba(255,255,255,0.04)",
-                                width: 55,
-                                height: 55,
-                                display: "grid",
-                                placeItems: "center"
-                              }}
-                            >
-                              {g.url ? <img src={g.url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <div style={{ ...smallText() }}>—</div>}
-                            </div>
-                            <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
-                              {qty > 1 && <div style={{ ...smallText() }}>×{qty}</div>}
-                            </div>
-                          </div>
-                        );
-                      })}
+          {/* Люди (лицевая) */}
+          {frontPersons.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Люди</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {frontPersons.map((p: any, i: number) => {
+                  const fio1 = (p.lastName || "").trim();
+                  const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+                  const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
+                  return (
+                    <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                      <Thumb url={p.photoPreview || ""} />
+                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                        {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                        {fio2 && <div>{fio2}</div>}
+                        <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                      </div>
                     </div>
-                  </div>
-                )}
-
-                {/* Эпитафии */}
-                {frontEpitaphs.length > 0 && (
-                  <AccentBox>
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {frontEpitaphs.map((t, i) => (
-                        <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                      ))}
-                    </div>
-                  </AccentBox>
-                )}
-
-                {/* Пожелания (редактируемые) */}
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
-                  <textarea
-                    value={frontWishes}
-                    onChange={(e) => setFrontWishes(e.target.value)}
-                    rows={3}
-                    placeholder="Пожелания по лицевой…"
-                    style={{ ...inputStyle(), resize: "vertical" }}
-                  />
-                </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Тыльная */}
-            {(rearUnique.length > 0 || rearEpitaphs.length > 0 || backWishes.trim()) && (
-              <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: 8 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
-
-                {/* Графика */}
-                {rearUnique.length > 0 && (
-                  <div style={{ ...glassPanelStyle(), padding: 8, marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {rearUnique.map((g: any, i: number) => {
-                        const gid = g?.id || g?.relPath || g?.url || g?.name || `rear-${i}`;
-                        const qty = rearCountsById[gid] || 0;
-                        const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : gid);
-                        return (
-                          <div key={`rg-${gid}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <div
-                              style={{
-                                borderRadius: 6,
-                                border: "1px solid rgba(255,255,255,0.18)",
-                                overflow: "hidden",
-                                background: "rgba(255,255,255,0.04)",
-                                width: 55,
-                                height: 55,
-                                display: "grid",
-                                placeItems: "center"
-                              }}
-                            >
-                              {g.url ? <img src={g.url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <div style={{ ...smallText() }}>—</div>}
-                            </div>
-                            <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
-                              {qty > 1 && <div style={{ ...smallText() }}>×{qty}</div>}
-                            </div>
-                          </div>
-                        );
-                      })}
+          {/* Графика (лицевая) */}
+          {frontUnique.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {frontUnique.map((g: any) => {
+                  const id = g?.id || g?.url || g?.name;
+                  const qty = id ? (frontCountsById[id] || 0) : 0;
+                  const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : id);
+                  return (
+                    <div key={`fg-${id}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr auto", gap: 8, alignItems: "center" }}>
+                      <Thumb url={g?.url} />
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                      {qty > 1 && <div style={{ ...smallText() }}>×{qty}</div>}
                     </div>
-                  </div>
-                )}
-
-                {/* Эпитафии */}
-                {rearEpitaphs.length > 0 && (
-                  <AccentBox>
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {rearEpitaphs.map((t, i) => (
-                        <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                      ))}
-                    </div>
-                  </AccentBox>
-                )}
-
-                {/* Пожелания (редактируемые) */}
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
-                  <textarea
-                    value={backWishes}
-                    onChange={(e) => setBackWishes(e.target.value)}
-                    rows={3}
-                    placeholder="Пожелания по тыльной…"
-                    style={{ ...inputStyle(), resize: "vertical" }}
-                  />
-                </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
+          )}
+
+          {/* Эпитафии (лицевая) */}
+          {frontEpitaphs.length > 0 && (
+            <AccentBox>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {frontEpitaphs.map((t, i) => (
+                  <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                ))}
+              </div>
+            </AccentBox>
+          )}
+
+          {/* Пожелания (лицевая) */}
+          {!!frontWishes.trim() && (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes.trim()}</div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Тыльная сторона: Люди → Графика → Эпитафии → Пожелания */}
+      {hasBack && (
+        <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+            {chip("Тыльная")}
           </div>
-        )}
-      </section>
 
-      {/* Превью сторон — 2 столбца (как раньше), с подложкой; слово «эскиз» не используем */}
+          {/* Люди (тыльная) */}
+          {rearPeople.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Люди</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {rearPeople.map((p: any, i: number) => {
+                  const fio1 = (p.lastName || "").trim();
+                  const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+                  const metric = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
+                  return (
+                    <div key={p.id || `rp-${i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                      <Thumb url={p.photoPreview || ""} />
+                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                        {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                        {fio2 && <div>{fio2}</div>}
+                        <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Графика (тыльная) */}
+          {rearUnique.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {rearUnique.map((g: any, i: number) => {
+                  const id = g?.id || g?.relPath || g?.url || g?.name || `rear-${i}`;
+                  const qty = rearCountsById[id] || 0;
+                  const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : id);
+                  return (
+                    <div key={`rg-${id}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr auto", gap: 8, alignItems: "center" }}>
+                      <Thumb url={g?.url} />
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                      {qty > 1 && <div style={{ ...smallText() }}>×{qty}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Эпитафии (тыльная) */}
+          {rearEpitaphs.length > 0 && (
+            <AccentBox>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {rearEpitaphs.map((t, i) => (
+                  <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                ))}
+              </div>
+            </AccentBox>
+          )}
+
+          {/* Пожелания (тыльная) */}
+          {!!backWishes.trim() && (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{backWishes.trim()}</div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Превью сторон — 2 столбца, с подложкой; слово «эскиз» не используем */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 12,
-            alignItems: "stretch"
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} />
           <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} />
         </div>
@@ -777,7 +666,19 @@ export default function ReviewAndSendStep({
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>
           Назад
         </button>
-        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>
+        <button type="button" onClick={async () => {
+          setBusy(true);
+          setErr("");
+          try {
+            const extras: Extras = { base: extraBase, headstonePlate: extraPlate, flowerbed: extraFlowerbed };
+            await sendOrderEmailAndNotifyTg(extras);
+            onSend?.({ extras });
+          } catch (e: any) {
+            setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
+          } finally {
+            setBusy(false);
+          }
+        }} style={glassButtonStyle("sm", busy)} disabled={busy}>
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
