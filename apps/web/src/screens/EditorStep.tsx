@@ -1,773 +1,940 @@
-// src/components/TopBarWithIntro.tsx
-// Шапка-кнопка с раскрывающейся панелью заказа.
+// src/screens/EditorStep.tsx
+// Лёгкий редактор БЕЗ SketchTemplate и БЕЗ измерения DOM:
 //
-// По требованиям:
-// - «Ориентация» — не показываем (строку полностью убрали).
-// - Компактный режим (<= 420px): один столбец везде, внешние отступы сверху/слева/справа — 1px (снизу без изменений),
-//   всё вмещается по ширине (включая поля ввода).
-// - В компактном режиме при РЕДАКТИРОВАНИИ поля контактов и примечание — с НОВОЙ строки, на всю ширину
-//   (никаких инлайновых инпутов в шапке — чтобы не «накладывалось» на Memorial).
-// - Разделы «Элементы эскиза» и «Люди»: визуальная отделённость сторон; не показываем пустые блоки.
-// - Эпитафии выделены акцентной плашкой.
-// - Контакты: имя и телефон одной строкой (если помещаются) в шапке; «примечание к контактам» показывается только если есть.
+// Исправления:
+// - Кнопки в мини‑панели элементов (ПРОПИСНЫЕ/Курсив/Лесенка/Ч-Б/Отразить) теперь работают:
+//   • слой рамок принимает события (pointerEvents: "auto"),
+//   • все кнопки стопорят всплытие (stopPropagation),
+//   • убран «бесконечный» цикл сохранений (сейв/прослушка/пересборка): сохраняем и строим превью
+//     только при изменениях элементов/пожеланий; добавлена защита от повторного сейва без изменений.
+// - Ручки ресайза выровнены по рамке (не смещаются).
+// - Портрет по умолчанию Ч/Б.
+// - «Помним, любим, скорбим…»:
+//   • В строку — три слова в одну строку без переносов (whiteSpace: "nowrap").
+//   • Лесенкой — 3 строки: «Помним,» слева, «любим,» по центру, «скорбим,» справа (и в Canvas‑превью тоже).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  loadIntroState,
-  saveIntro,
-  isPhoneValid,
-  type Intro,
-  clearIntroAll
-} from "../lib/intro";
-import {
-  loadOrderDraft,
-  saveOrderDraft,
-  clearOrderDraft,
-  type OrderDraft,
-  DRAFT_UPDATED_EVENT
-} from "../lib/order";
+import TopBarWithIntro from "../components/TopBarWithIntro";
+import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
-/* ===== Темизация ===== */
-type ThemeMode = "dark" | "light";
-const LS_THEME_KEY = "memorial.ui.theme.v1";
-function loadTheme(): ThemeMode {
-  const v = (typeof localStorage !== "undefined" ? localStorage.getItem(LS_THEME_KEY) : null) || "light";
-  return v?.toLowerCase() === "dark" ? "dark" : "light";
-}
-function saveTheme(t: ThemeMode) {
-  if (typeof localStorage !== "undefined") localStorage.setItem(LS_THEME_KEY, t);
-}
-function palette(t: ThemeMode) {
-  if (t === "light") {
-    return {
-      text: "#222",
-      subText: "rgba(0,0,0,0.65)",
-      panelBg: "#fff",
-      panelBorder: "1px solid #e6e2da",
-      inputBg: "#ffffff",
-      inputBorder: "1px solid #d7d3c7",
-      link: "#1d4ed8",
-      linkHover: "#0b3ab8",
-      danger: "#b91c1c",
-      dangerHover: "#991b1b",
-      headerBg: "#ffffff",
-      headerText: "#111",
-      headerBorder: "1px solid #e6e2da",
-      chevronCircleBg: "rgba(0,0,0,0.06)",
-      chevronCircleBorder: "1px solid rgba(0,0,0,0.16)",
-      chevronStroke: "#111",
-      neutralBg: "#faf9f7",
-      neutralBorder: "1px solid #ece8de",
-      divider: "1px solid #ece8de",
-      accentBg: "#fff8e6",
-      accentBorder: "1px solid #f0d9a7",
-      chipBg: "#eef2ff",
-      chipText: "#1d4ed8"
-    };
-  }
+/* ===== UI ===== */
+function glassPanelStyle() {
   return {
-    text: "#fff",
-    subText: "rgba(255,255,255,0.85)",
-    panelBg: "rgba(20,20,24,0.55)",
-    panelBorder: "1px solid rgba(255,255,255,0.14)",
-    inputBg: "rgba(255,255,255,0.06)",
-    inputBorder: "1px solid rgba(255,255,255,0.18)",
-    link: "#8ab4ff",
-    linkHover: "#a5c5ff",
-    danger: "#ff7b7b",
-    dangerHover: "#ff9c9c",
-    headerBg: "#000000",
-    headerText: "#ffffff",
-    headerBorder: "1px solid rgba(255,255,255,0.22)",
-    chevronCircleBg: "rgba(255,255,255,0.06)",
-    chevronCircleBorder: "1px solid rgba(255,255,255,0.16)",
-    chevronStroke: "#ffffff",
-    neutralBg: "rgba(255,255,255,0.04)",
-    neutralBorder: "1px solid rgba(255,255,255,0.10)",
-    divider: "1px solid rgba(255,255,255,0.12)",
-    accentBg: "rgba(255,242,201,0.15)",
-    accentBorder: "1px solid rgba(255,242,201,0.35)",
-    chipBg: "rgba(138,180,255,0.18)",
-    chipText: "#dbe7ff"
-  };
-}
-function paperShadow(t: ThemeMode): React.CSSProperties {
-  return t === "light"
-    ? { boxShadow: "0 10px 24px rgba(0,0,0,0.08), 0 1px 0 rgba(0,0,0,0.06)" }
-    : { boxShadow: "0 8px 24px rgba(0,0,0,0.45)" };
-}
-
-/* ===== Адаптивность ===== */
-function useCompact(breakpoint = 420): boolean {
-  const [compact, setCompact] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.innerWidth <= breakpoint;
-  });
-  useEffect(() => {
-    const onResize = () => setCompact(window.innerWidth <= breakpoint);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [breakpoint]);
-  return compact;
-}
-
-/* ===== UI-хелперы и стили ===== */
-function inputStyle(theme: ThemeMode): React.CSSProperties {
-  const p = palette(theme);
-  return {
-    width: "100%",
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: p.inputBorder,
-    background: p.inputBg,
-    color: p.text,
-    outline: "none",
+    background: "rgba(20,20,24,0.55)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: 12,
+    color: "#fff",
     boxSizing: "border-box"
-  };
+  } as React.CSSProperties;
 }
-function smallText(theme: ThemeMode): React.CSSProperties {
-  return { opacity: theme === "light" ? 0.8 : 0.9, fontSize: 12, color: palette(theme).subText };
+function glassButtonStyle(size: "nano" | "sm" | "md" = "sm") {
+  const pad = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
+  return {
+    padding: pad[size],
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.28)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.1)",
+    color: "#fff",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    boxShadow:
+      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)"
+  } as React.CSSProperties;
 }
-function galleryThumbBoxStyle(): React.CSSProperties {
-  const grad: React.CSSProperties = {
-    backgroundColor: "#000000",
+function bottomUnderlayGradient(): React.CSSProperties {
+  return {
+    backgroundColor: "#000",
     backgroundImage:
       "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   };
-  return {
-    ...grad,
-    overflow: "hidden",
-    borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.14)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flex: "0 0 auto",
-    position: "relative"
-  };
 }
-function linkButtonStyle(theme: ThemeMode, kind: "default" | "danger" = "default", disabled = false): React.CSSProperties {
-  const p = palette(theme);
-  const color = kind === "danger" ? p.danger : p.link;
-  return {
-    background: "transparent",
-    border: "none",
-    padding: 0,
-    margin: 0,
-    color: disabled ? (p.subText) : color,
-    cursor: disabled ? "not-allowed" : "pointer",
-    textDecoration: "none",
-    font: "inherit",
-    lineHeight: 1.2
-  };
+
+/* ===== Types ===== */
+type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
+type EditorEl = {
+  id: string;
+  type: ElType;
+  x: number; y: number; w: number; h: number; // проценты
+  z: number;
+  title?: string;
+  locked?: boolean;
+  uppercase?: boolean; // metric/epitaph
+  italic?: boolean;    // metric/epitaph
+  flipH?: boolean;     // graphic
+  bw?: boolean;        // portrait
+  staircase?: boolean; // «Помним, любим, скорбим…»
+};
+
+/* ===== Helpers ===== */
+const SKETCH_PAD = 8;
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+const clampBox = (x: number, y: number, w: number, h: number) => ({
+  x: clamp(x, 0, 100 - w),
+  y: clamp(y, 0, 100 - h),
+  w: clamp(w, 2, 100),
+  h: clamp(h, 2, 100)
+});
+const snap = (v: number, step = 1) => Math.round(v / step) * step;
+const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
+const isCrossCategoryName = (s?: string) => (s || "").toLowerCase().includes("крест") || (s || "").toLowerCase().includes("cross");
+
+function linesFromPerson(p: any) {
+  const l1 = (p?.lastName || "").trim();
+  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
+  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
+  return [l1, l2, l3].filter(Boolean);
 }
-function Row({ label, theme, children, compact = false }: { label: string; theme: ThemeMode; children: React.ReactNode; compact?: boolean }) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: `${compact ? 120 : 160}px 1fr`, gap: compact ? 8 : 10, alignItems: "center" }}>
-      <div style={{ color: palette(theme).text }}>{label}</div>
-      <div>{children}</div>
-    </div>
-  );
-}
-function fileNameFromUrl(url?: string): string {
-  if (!url) return "";
-  try {
-    const noQuery = String(url).split(/[?#]/)[0];
-    const last = (noQuery.split("/").pop() || noQuery).split("\\").pop() || noQuery;
-    return decodeURIComponent(last.replace(/\+/g, " "));
-  } catch {
-    return url;
+const normRemember = (t?: string) =>
+  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
+const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
+function splitRememberPreserve(text: string) {
+  const t = (text || "").trim();
+  const parts: string[] = [];
+  let buf = "";
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    buf += ch;
+    if (ch === ",") { parts.push(buf.trim()); buf = ""; }
   }
-}
-function glassPanelStyle(themeParam?: ThemeMode): React.CSSProperties {
-  const t = themeParam ?? loadTheme();
-  const p = palette(t);
-  return { background: p.neutralBg, border: p.neutralBorder, borderRadius: 10, color: p.text };
-}
-function accentPanelStyle(theme: ThemeMode): React.CSSProperties {
-  const p = palette(theme);
-  return {
-    background: p.accentBg,
-    border: p.accentBorder,
-    borderRadius: 10,
-    padding: 8
-  };
-}
-function chip(theme: ThemeMode): React.CSSProperties {
-  const p = palette(theme);
-  return {
-    display: "inline-block",
-    padding: "2px 8px",
-    borderRadius: 999,
-    fontSize: 12,
-    background: p.chipBg,
-    color: p.chipText,
-    whiteSpace: "nowrap"
-  };
+  if (buf.trim()) parts.push(buf.trim());
+  const top = parts[0] || "Помним,";
+  const mid = parts[1] || "любим,";
+  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим…").trim();
+  return { top, mid, bot };
 }
 
-/* ===== Коллапс ===== */
-function useCollapse(open: boolean, duration = 280) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [style, setStyle] = useState<React.CSSProperties>({
-    overflow: "hidden",
-    maxHeight: 0,
-    opacity: 0,
-    transform: "translateY(-6px)"
-  });
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const h = el.scrollHeight;
-    if (open) {
-      setStyle({
-        overflow: "hidden",
-        maxHeight: h,
-        opacity: 1,
-        transform: "translateY(0)",
-        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
-      });
-      const t = setTimeout(() => {
-        if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
-      }, duration + 20);
-      return () => clearTimeout(t);
-    } else {
-      setStyle({
-        overflow: "hidden",
-        maxHeight: 0,
-        opacity: 0,
-        transform: "translateY(-6px)",
-        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
-      });
-    }
-  }, [open, duration]);
-
-  return { ref, style };
+/* ===== Fit helpers ===== */
+let __measureCtx: CanvasRenderingContext2D | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (__measureCtx) return __measureCtx;
+  const c = document.createElement("canvas");
+  __measureCtx = c.getContext("2d");
+  return __measureCtx!;
+}
+function setFontOnCtx(ctx: CanvasRenderingContext2D, italic: boolean, px: number, family: string) {
+  ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.round(px))}px ${family}`;
+}
+function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: boolean, family: string, sizePx: number) {
+  setFontOnCtx(ctx, italic, sizePx, family);
+  return ctx.measureText(text).width;
 }
 
-/* ===== Форматтеры ===== */
-function mmToCm(mm?: number): number | undefined {
-  if (typeof mm !== "number" || !isFinite(mm)) return undefined;
-  return mm / 10;
+// Фит «лесенки» (3 строки) с одним размером шрифта
+function fitStairRLMFontPx({
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
+}: {
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string;
+  padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
+}): number {
+  const ctx = getMeasureCtx();
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const perLineH = usableH / Math.max(1, lines.length) / lineHeight;
+  let fW = maxPx;
+  for (const ln of lines.length ? lines : [" "]) {
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    fW = Math.min(fW, (usableW * 100) / w100);
+  }
+  return clamp(Math.floor(Math.min(perLineH, fW, maxPx)), minPx, maxPx);
 }
-function cmValue(n?: number): string {
-  if (typeof n !== "number" || !isFinite(n)) return "—";
-  return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
+function fitMultilineFontPxGeneric({
+  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
+}: {
+  text: string; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
+}) {
+  const ctx = getMeasureCtx();
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const count = Math.max(1, lines.length);
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const fByH = usableH / (count * lineHeight);
+  let fByW = maxPx;
+  for (const ln of lines.length ? lines : [" "]) {
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const fLine = (usableW * 100) / w100;
+    fByW = Math.min(fByW, fLine);
+  }
+  const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
+  return { fontPx, lines: lines.length ? lines : [""] };
+}
+function fitMetricFontsPx({
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
+}: {
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
+}) {
+  const ctx = getMeasureCtx();
+  const L = Math.min(3, lines.length);
+  if (L === 0) return [];
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const wSum = weights.slice(0, L).reduce((a, b) => a + b, 0);
+  const baseByH = usableH / (lineHeight * wSum);
+  const initial = Array.from({ length: L }, (_, i) => baseByH * weights[i]);
+  let sW = 1;
+  for (let i = 0; i < L; i++) {
+    const ln = lines[i] || "";
+    if (!ln) continue;
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const maxFi = (usableW * 100) / w100;
+    sW = Math.min(sW, maxFi / initial[i]);
+  }
+  return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
 }
 
 /* ===== Компонент ===== */
-export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
-  const compact = useCompact(420);
+type Props = { onBack?: () => void; onContinue?: (payload?: any) => void; onRearSide?: (payload?: any) => void; onSendOrder?: (payload?: any) => void; };
 
-  const introState = loadIntroState();
-  const intro = introState.intro;
-  const orderNumber = introState.orderNumber || "—";
-  const [order, setOrder] = useState<OrderDraft>(() => loadOrderDraft());
+export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
+  const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
+  const [outro, setOutro] = useState(false);
 
-  // Поля редактирования (редактируем «на месте»)
-  const [name, setName] = useState(intro?.customerName || "");
-  const [phone, setPhone] = useState(intro?.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState(intro?.customerNotes || "");
-  const [sizeNotes, setSizeNotes] = useState(order.size?.notes || "");
-  const [epitaphsText, setEpitaphsText] = useState(
-    (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) ||
-      order.engraving?.epitaphText ||
-      ""
-  );
-  const [orderNotes, setOrderNotes] = useState(order.notes || "");
-  const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
-  const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
+  const [elements, setElements] = useState<EditorEl[]>(() => (draft as any)?.editor?.elements || []);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
 
-  // Live-обновления из драфта
+  const editorWrapRef = useRef<HTMLDivElement | null>(null);
+
+  const saveTimerRef = useRef<number | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+
+  // aspectRatio
+  const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
+
+  // Источники
+  const item = draft?.item || null;
+  const engr: any = draft?.engraving || {};
+  const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
+
+  // Блоки людей
+  const peopleBlocks = useMemo(() => {
+    if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
+      return engr.persons.map((p: any, idx: number) => {
+        const lines = linesFromPerson(p);
+        const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null;
+        return { id: p.id || `person-${idx}`, lines, photo };
+      });
+    }
+    const legacyLines: string[] = [];
+    if (engr?.fullName) legacyLines.push(String(engr.fullName));
+    const dates: string[] = [];
+    if (engr?.birthDate) dates.push(String(engr.birthDate));
+    if (engr?.deathDate) dates.push(String(engr.deathDate));
+    if (dates.length) legacyLines.push(dates.join(" — "));
+    if (Array.isArray(engr?.lines)) legacyLines.push(...(engr.lines as string[]).filter(Boolean));
+    const photo = engr?.photoPreview || engr?.photoDataUrl || engr?.photoUrl || engr?.photo || null;
+    return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
+  }, [engr]);
+
+  // Эпитафии
+  const epitaphs = useMemo(() => {
+    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
+    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
+    return [];
+  }, [engr]);
+
+  // Графика
+  const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
+  const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
+
+  /* ===== Построение элементов (простые «правила») ===== */
+  const buildOrMergeElements = React.useCallback(() => {
+    setElements((prev) => {
+      const existById = new Map(prev.map((e) => [e.id, e]));
+      const next: EditorEl[] = [];
+
+      const cnt = peopleBlocks.length || 0;
+      const cw = cnt > 0 ? 100 / cnt : 100;
+      let z = 10;
+
+      peopleBlocks.forEach((pb, i) => {
+        const pid = pb.id;
+        const pidPortrait = `portrait-${pid}`;
+        if (existById.has(pidPortrait)) next.push(existById.get(pidPortrait)!);
+        else {
+          // Портрет по умолчанию — ч/б
+          const w = cw * 0.8, h = 35, x = i * cw + (cw - w) / 2, y = 10;
+          next.push({ id: pidPortrait, type: "portrait", x, y, w, h, z: z++, bw: true, title: "Портрет" });
+        }
+        const pidMetric = `metric-${pid}`;
+        if (existById.has(pidMetric)) next.push(existById.get(pidMetric)!);
+        else {
+          const w = cw * 0.9, h = 20, x = i * cw + (cw - w) / 2, y = 10 + 35 + 4;
+          next.push({ id: pidMetric, type: "metric", x, y, w, h, z: z++, uppercase: false, italic: false, title: "Метрика" });
+        }
+      });
+
+      const topContentBottom = next
+        .filter((e) => e.type === "portrait" || e.type === "metric")
+        .reduce((m, e) => Math.max(m, e.y + e.h), 0);
+
+      epitaphs.forEach((_, i) => {
+        const id = `epitaph-${i}`;
+        if (existById.has(id)) next.push(existById.get(id)!);
+        else {
+          const w = 80, h = 16, x = 10, y = Math.min(95, (topContentBottom || 28) + 6) + i * (16 + 4);
+          next.push({ id, type: "epitaph", x, y, w, h, z: 100 + i, uppercase: false, italic: false, staircase: false, title: "Эпитафия" });
+        }
+      });
+
+      const anyCore = next.length > 0;
+      crosses.forEach((_, i) => {
+        const id = `cross-${i}`;
+        if (existById.has(id)) next.push(existById.get(id)!);
+        else {
+          const w = anyCore ? 18 : 28, h = anyCore ? 18 : 28;
+          const x = 4, y = 4;
+          next.push({ id, type: "cross", x, y, w, h, z: 200 + i, title: "Крест" });
+        }
+      });
+
+      others.forEach((_, i) => {
+        const id = `graphic-${i}`;
+        if (existById.has(id)) next.push(existById.get(id)!);
+        else {
+          const w = 40, h = 18, x = 50 - w / 2, y = Math.max(0, 100 - h - 4);
+          next.push({ id, type: "graphic", x, y, w, h, z: 300 + i, flipH: false, title: "Графика" });
+        }
+      });
+
+      // Сохраняем пользовательские флаги
+      const kept = next.map((e) => {
+        const old = existById.get(e.id);
+        return old ? { ...e, uppercase: old.uppercase ?? e.uppercase, italic: old.italic ?? e.italic, flipH: old.flipH ?? e.flipH, bw: old.bw ?? e.bw, staircase: old.staircase ?? e.staircase } : e;
+      });
+
+      // Защита от «бесконечного» сейва (сравнение по id/полям)
+      const norm = (arr: EditorEl[]) =>
+        arr
+          .map(({ id, type, x, y, w, h, z, uppercase, italic, flipH, bw, staircase }) => ({
+            id, type, x, y, w, h, z, uppercase: !!uppercase, italic: !!italic, flipH: !!flipH, bw: !!bw, staircase: !!staircase
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id));
+      const same =
+        JSON.stringify(norm(kept)) === JSON.stringify(norm(prev));
+
+      if (!same) {
+        const cur = loadOrderDraft();
+        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: kept, wishes, updatedAt: Date.now() } });
+      }
+
+      return kept;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peopleBlocks, epitaphs, crosses, others, wishes]);
+
+  useEffect(() => { buildOrMergeElements(); }, [buildOrMergeElements]);
+
+  /* ===== DnD / Resize ===== */
+  const dragRef = useRef<{
+    id: string; mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+    startX: number; startY: number; start: EditorEl;
+  } | null>(null);
+
+  const onPointerDownBox = (e: React.PointerEvent, id: string, mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move") => {
+    e.stopPropagation();
+    const el = elements.find((x) => x.id === id);
+    if (!el || el.locked) return;
+    setSelectedId(id);
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+    dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, start: { ...el } };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current; if (!d) return;
+    e.preventDefault();
+    const rect = editorWrapRef.current?.getBoundingClientRect(); if (!rect) return;
+    const contentW = rect.width - SKETCH_PAD * 2;
+    const contentH = rect.height - SKETCH_PAD * 2;
+    if (contentW <= 0 || contentH <= 0) return;
+
+    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
+    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
+
+    const withSnap = !e.altKey;
+    const snapStep = e.shiftKey ? 1.5 : 1;
+
+    setElements((prev) => prev.map((el) => {
+      if (el.id !== d.id) return el;
+      let { x, y, w, h } = d.start;
+      if (d.mode === "move") {
+        let nx = x + dxPct, ny = y + dyPct;
+        if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); }
+        return { ...el, ...clampBox(nx, ny, w, h) };
+      }
+      const keepRatio = e.shiftKey;
+      let nx = x, ny = y, nw = w, nh = h;
+      const ratio = (w || 1) / (h || 1);
+      if (d.mode.includes("e")) nw = w + dxPct;
+      if (d.mode.includes("s")) nh = h + dyPct;
+      if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
+      if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dyPct; }
+      if (keepRatio) {
+        if (["e","w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
+        if (["n","s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
+      }
+      if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); nw = snap(nw, snapStep); nh = snap(nh, snapStep); }
+      return { ...el, ...clampBox(nx, ny, nw, nh) };
+    }));
+  };
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      const cur = loadOrderDraft();
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+      queuePreviewGeneration();
+    }
+    dragRef.current = null;
+  };
+
+  /* ===== Превью в драфт ===== */
+  const queuePreviewGeneration = () => {
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = window.setTimeout(async () => {
+      const wrap = editorWrapRef.current; if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const pad = SKETCH_PAD;
+
+      async function drawPreview(W: number, H: number): Promise<string | null> {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.floor(W));
+        canvas.height = Math.max(1, Math.floor(H));
+        const ctx = canvas.getContext("2d"); if (!ctx) return null;
+
+        // фон
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#6e6e6e"); grad.addColorStop(0.2, "#464545");
+        grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+
+        // изделие
+        const base = await new Promise<HTMLImageElement | null>((resolve) => {
+          const url = item?.url || ""; if (!url) return resolve(null);
+          const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url;
+        });
+        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
+        if (base) {
+          const sr = base.width / base.height, dr = PW / PH;
+          ctx.globalAlpha = 0.35;
+          if (sr > dr) {
+            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          } else {
+            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          }
+          ctx.globalAlpha = 1;
+        }
+
+        const fam = FONT_CENTURY;
+        const safeIndex = (raw: string, max: number) => {
+          const n = parseInt(raw, 10); if (!Number.isFinite(n) || n < 0) return 0;
+          return Math.min(n, Math.max(0, max - 1));
+        };
+
+        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
+          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
+          const key = el.id.split("-").slice(1).join("-");
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || ""; if (!url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url; });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            ctx.save(); ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
+            if (el.bw) ctx.filter = "grayscale(100%)";
+            if (sr2 > dr2) { const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
+            else { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
+            ctx.restore(); ctx.filter = "none";
+          } else if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.10));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
+            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
+            let y = rbox.y + (rbox.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
+            for (let i = 0; i < fitted.length; i++) { setFontOnCtx(ctx, !!el.italic, fitted[i], fam); ctx.fillText(tf(lines[i]), rbox.x + rbox.w / 2, y); y += fitted[i] * 1.12; }
+            ctx.restore();
+          } else if (el.type === "epitaph") {
+            const idx = safeIndex(key, epitaphs.length);
+            const tRaw = epitaphs[idx] || "";
+            const isRLM = isRememberLoveMourn(tRaw);
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            ctx.save(); ctx.fillStyle = "#fff"; ctx.textBaseline = "middle";
+            if (isRLM && el.staircase) {
+              const r = splitRememberPreserve(tRaw);
+              const parts = [r.top, r.mid, r.bot];
+              const fontPx = fitStairRLMFontPx({ lines: parts, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15, minPx: 10, maxPx: 96 });
+              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              const slotH = (rbox.h - padY2 * 2) / 3;
+              ctx.textAlign = "left";
+              ctx.fillText(parts[0], rbox.x + padX2, rbox.y + padY2 + slotH * 0.5);
+              ctx.textAlign = "center";
+              ctx.fillText(parts[1], rbox.x + rbox.w / 2, rbox.y + padY2 + slotH * 1.5);
+              ctx.textAlign = "right";
+              ctx.fillText(parts[2], rbox.x + rbox.w - padX2, rbox.y + padY2 + slotH * 2.5);
+            } else {
+              // В одну строку без переносов
+              const oneLine = isRLM
+                ? `${splitRememberPreserve(tRaw).top} ${splitRememberPreserve(tRaw).mid} ${splitRememberPreserve(tRaw).bot}`.replace(/\s+/g, " ")
+                : tRaw;
+              const { fontPx } = fitMultilineFontPxGeneric({ text: oneLine, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
+              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              ctx.textAlign = "center";
+              ctx.fillText(el.uppercase ? oneLine.toUpperCase() : oneLine, rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
+            }
+            ctx.restore();
+          } else if (el.type === "graphic") {
+            const idx = Number(key); const g = Number.isFinite(idx) ? others[idx] : null; if (!g?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = g.url; });
+            if (!im) continue;
+            ctx.save();
+            if (el.flipH) { ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2); ctx.scale(-1, 1); ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2)); }
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
+            else { const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
+            ctx.restore();
+          } else if (el.type === "cross") {
+            const idx = Number(key); const c = Number.isFinite(idx) ? crosses[idx] : null; if (!c?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = c.url; });
+            if (!im) continue;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
+            else { const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
+          }
+        }
+        return canvas.toDataURL("image/jpeg", 0.9);
+      }
+
+      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
+      const maxSide = 1600, ratio = r.width / Math.max(1, r.height);
+      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+      const big = await drawPreview(bigW, bigH);
+
+      const cur = loadOrderDraft();
+      saveOrderDraft({
+        ...cur,
+        editor: {
+          ...(cur as any).editor,
+          previewUrl: mini || (cur as any).editor?.previewUrl || null,
+          previewHiUrl: big || (cur as any).editor?.previewHiUrl || null,
+          previewUpdatedAt: Date.now(),
+          elements,
+          wishes
+        }
+      });
+    }, 300) as unknown as number;
+  };
+
+  // Автосохранение и превью — только при изменении элементов/пожеланий (чтобы не ловить циклы)
   useEffect(() => {
-    const onUpd = () => setOrder(loadOrderDraft());
-    window.addEventListener("storage", onUpd);
-    window.addEventListener("memorial:orderDraftUpdated", onUpd as any);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      const cur = loadOrderDraft();
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    }, 250) as unknown as number;
+    queuePreviewGeneration();
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [elements, wishes]);
+
+  // aspectRatio для изделия
+  useEffect(() => {
+    if (!item?.url) return;
+    const im = new Image();
+    im.onload = () => setImgWH({ w: im.naturalWidth || 4, h: im.naturalHeight || 3 });
+    im.onerror = () => setImgWH({ w: 4, h: 3 });
+    im.src = item.url;
+  }, [item?.url]);
+
+  // Внешние обновления драфта
+  useEffect(() => {
+    const onUpd = () => setDraft(loadOrderDraft());
     window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
+    window.addEventListener("storage", onUpd);
     return () => {
-      window.removeEventListener("storage", onUpd);
-      window.removeEventListener("memorial:orderDraftUpdated", onUpd as any);
       window.removeEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
+      window.removeEventListener("storage", onUpd);
     };
   }, []);
 
-  // Подтянуть стор при раскрытии
-  useEffect(() => {
-    if (open) {
-      const cur = loadOrderDraft();
-      setOrder(cur);
-      setSizeNotes(cur.size?.notes || "");
-      setEpitaphsText(cur.engraving?.epitaphs?.join("\n") || cur.engraving?.epitaphText || "");
-      setOrderNotes(cur.notes || "");
-      setFrontWishes((cur as any)?.editor?.wishes || "");
-      setBackWishes((cur as any)?.editorBack?.wishes || "");
+  /* ===== Мини‑панель инструментов (кнопки с stopPropagation) ===== */
+  const MiniToolbar = ({ el }: { el: EditorEl }) => {
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
+    const stop = (e: React.PointerEvent | React.MouseEvent) => { e.stopPropagation(); };
+
+    const isMetric = el.type === "metric";
+    const isEpitaph = el.type === "epitaph";
+    const isGraphic = el.type === "graphic";
+    const isPortrait = el.type === "portrait";
+
+    let canStair = false;
+    if (isEpitaph) {
+      const idx = Number(el.id.split("-")[1]);
+      const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+      canStair = isRememberLoveMourn(tRaw);
     }
-  }, [open]);
 
-  // Контакты в одну строку (отображение)
-  const contactLine = useMemo(() => {
-    const a = (editing ? name : intro?.customerName) || "";
-    const b = (editing ? phone : intro?.customerPhone) || "";
-    if (!a && !b) return "";
-    if (!a) return b;
-    if (!b) return a;
-    return `${a} • ${b}`;
-  }, [editing, name, phone, intro?.customerName, intro?.customerPhone]);
-
-  // Графика (лицевая)
-  const frontGraphics = (order.graphics || []) as any[];
-  const frontCountsById = useMemo(() => {
-    const m: Record<string, number> = {};
-    frontGraphics.forEach((g: any) => { m[g.id] = (m[g.id] || 0) + 1; });
-    return m;
-  }, [frontGraphics]);
-  const frontUnique = useMemo(() => {
-    const first: Record<string, any> = {};
-    frontGraphics.forEach((g: any) => { if (!first[g.id]) first[g.id] = g; });
-    return Object.values(first);
-  }, [frontGraphics]);
-
-  // Графика (тыльная)
-  const rearSelectedIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-  const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-  const rearCountsById = useMemo(() => {
-    const m: Record<string, number> = {};
-    (rearSelectedIds || []).forEach((id) => { m[id] = (m[id] || 0) + 1; });
-    return m;
-  }, [rearSelectedIds]);
-  const rearUnique = useMemo(() => {
-    const ids = Array.from(new Set(rearSelectedIds || []));
-    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
-  }, [rearSelectedIds, rearMeta]);
-
-  // Эпитафии (по сторонам)
-  const frontEpitaphs: string[] = useMemo(() => {
-    const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
-    if (arr.length) return arr;
-    if (order.engraving?.epitaphText?.trim()) return [order.engraving!.epitaphText!.trim()];
-    return [];
-  }, [order.engraving]);
-  const rearEpitaphs: string[] = useMemo(
-    () => (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean),
-    [order]
-  );
-
-  // Есть ли элементы по сторонам
-  const frontHasSketch =
-    (frontUnique && frontUnique.length > 0) ||
-    (frontEpitaphs && frontEpitaphs.length > 0) ||
-    (frontWishes && frontWishes.trim().length > 0);
-  const rearHasSketch =
-    (rearUnique && rearUnique.length > 0) ||
-    (rearEpitaphs && rearEpitaphs.length > 0) ||
-    (backWishes && backWishes.trim().length > 0);
-
-  const saveAll = () => {
-    const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
-    const introNext: Intro = {
-      customerName: (name || "").trim(),
-      customerPhone: (phone || "").trim(),
-      customerNotes: (contactNotes || "").trim() || undefined
-    };
-    saveIntro(introNext, { lock: false });
-
-    const cur = loadOrderDraft();
-    const sizePatch = { ...(cur.size || {}), notes: sizeNotes?.trim() || undefined };
-    const next = saveOrderDraft({
-      size: sizePatch as any,
-      engraving: {
-        ...(cur.engraving || {}),
-        epitaphs: epLines.length ? epLines : undefined,
-        epitaphText: epLines.length === 1 ? epLines[0] : undefined
-      },
-      editor: { ...(cur as any).editor, wishes: (frontWishes || "").trim() || undefined },
-      editorBack: { ...(cur as any).editorBack, wishes: (backWishes || "").trim() || undefined },
-      notes: orderNotes?.trim() || undefined
-    });
-    setOrder(next);
-  };
-
-  const coll = useCollapse(open, 280);
-  const panelId = "order-panel";
-  const p = palette(theme);
-
-  return (
-    <div
-      style={{
-        marginTop: compact ? 1 : 10,
-        marginLeft: compact ? 1 : 0,
-        marginRight: compact ? 1 : 0,
-        marginBottom: compact ? 8 : 10
-      }}
-    >
-      {/* Шапка-кнопка */}
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        title={open ? "Скрыть данные заказа" : "Показать данные заказа"}
-        onClick={() => setOpen((v) => !v)}
+    return (
+      <div
+        onPointerDown={stop}
+        onMouseDown={stop}
         style={{
-          width: "100%",
-          textAlign: "left",
-          padding: compact ? "8px 8px" : "12px 14px",
-          borderRadius: compact ? 10 : 12,
-          border: p.headerBorder,
-          background: p.headerBg,
-          color: p.headerText,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: compact ? 8 : 12,
-          cursor: "pointer",
-          ...paperShadow(theme)
+          position: "absolute", left: 0, top: -30,
+          display: "flex", gap: 6,
+          background: "rgba(0,0,0,0.6)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6, padding: "2px 6px",
+          alignItems: "center", pointerEvents: "auto", zIndex: 3000
         }}
       >
-        {/* Слева — заголовок */}
-        <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 10, minWidth: 0 }}>
-          <span style={{ fontSize: compact ? 19 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
-        </div>
-
-        {/* Справа — № + строка контактов (в компактном режиме при редактировании строку не показываем во избежание наложений) */}
-        <div style={{ display: "grid", gap: 4, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
-          <div style={{ fontSize: 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
-          {!compact && contactLine && !editing && (
-            <div style={{ fontSize: 13, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "60vw" }} title={contactLine}>
-              {contactLine}
-            </div>
-          )}
-          {compact && contactLine && !editing && (
-            <div style={{ fontSize: 12, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "62vw" }} title={contactLine}>
-              {contactLine}
-            </div>
-          )}
-        </div>
-      </button>
-
-      {/* Панель с коллапсом */}
-      <div id={panelId} ref={coll.ref} style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}>
-        <section
-          style={{
-            background: p.panelBg,
-            border: p.panelBorder,
-            borderRadius: compact ? 10 : 12,
-            color: p.text,
-            ...paperShadow(theme),
-            padding: compact ? 8 : 12,
-            display: "grid",
-            gap: compact ? 8 : 10
-          }}
-        >
-          {/* Действия */}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
-            <button type="button" onClick={(e) => { e.stopPropagation(); const next: ThemeMode = theme === "dark" ? "light" : "dark"; setTheme(next); saveTheme(next); }} style={linkButtonStyle(theme)} className="link-like">
-              {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
-            </button>
-            <button type="button" onClick={(e) => { e.stopPropagation(); setEditing((v) => !v); if (!editing) return; saveAll(); }} style={linkButtonStyle(theme)} className="link-like">
-              {editing ? "Сохранить" : "Редактировать"}
-            </button>
-          </div>
-
-          {/* Контакты — в компактном РЕДАКТИРОВАНИИ: с новой строки, ширина 100% */}
-          {(editing || contactNotes.trim() || compact) && (
-            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Контакты</div>
-
-              {editing ? (
-                compact ? (
-                  <div style={{ display: "grid", gap: 6 }}>
-                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Имя" style={{ ...inputStyle(theme) }} />
-                    <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7..." inputMode="tel" style={{ ...inputStyle(theme) }} />
-                    <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} placeholder="Примечание (мессенджер, время...)" style={{ ...inputStyle(theme) }} />
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <Row label="Имя" theme={theme} compact={compact}>
-                      <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" />
-                    </Row>
-                    <Row label="Телефон" theme={theme} compact={compact}>
-                      <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" />
-                    </Row>
-                    <Row label="Примечание" theme={theme} compact={compact}>
-                      <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" />
-                    </Row>
-                  </div>
-                )
-              ) : (
-                contactNotes.trim() && <div>{contactNotes.trim()}</div>
-              )}
-            </section>
-          )}
-
-          {/* Резная работа: компакт — один столбец */}
-          <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Резная работа</div>
-            <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 10, alignItems: "stretch" }}>
-              {/* Левая — превью и имя */}
-              <div style={{ display: "grid", gap: 8 }}>
-                <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
-                  {order.item?.url ? (
-                    <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
-                  ) : (
-                    <div style={{ color: p.subText, fontSize: 12 }}>нет</div>
-                  )}
-                </div>
-                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
-                </div>
-              </div>
-
-              {/* Правая — характеристики (без «Ориентация») */}
-              <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
-                <div style={{ fontWeight: 600 }}>Характеристики</div>
-                <div style={{ opacity: 0.95 }}>
-                  {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
-                </div>
-                {(editing || sizeNotes.trim()) && (
-                  <div>
-                    {editing ? (
-                      <textarea
-                        value={sizeNotes}
-                        onChange={(e) => setSizeNotes(e.target.value)}
-                        rows={compact ? 2 : 3}
-                        placeholder="Примечание по размерам…"
-                        style={{ ...inputStyle(theme), resize: "vertical" }}
-                      />
-                    ) : (
-                      sizeNotes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{sizeNotes.trim()}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* Люди — показываем если есть на хотя бы одной стороне; компакт — один столбец */}
-          {(order.engraving?.persons?.length || 0) > 0 && (
-            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
-                <span style={chip(theme)}>Люди на памятнике</span>
-                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона есть</span>}
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"), gap: 16 }}>
-                {/* Лицевая */}
-                <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
-                  {order.engraving?.persons?.length ? (
-                    <div style={{ display: "grid", gap: 0 }}>
-                      {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
-                        const last = idx === (order.engraving?.persons?.length || 0) - 1;
-                        const fio1 = (ppl.lastName || "").trim();
-                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
-                        return (
-                          <div key={ppl.id || `person-front-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : p.divider, display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                              {ppl.photoPreview ? (
-                                <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                              ) : <div style={{ color: p.subText, fontSize: 11 }}>нет</div>}
-                            </div>
-                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
-                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div style={{ color: p.subText }}>—</div>
-                  )}
-                </div>
-
-                {/* Тыльная */}
-                {(order as any)?.editorBack?.people?.length > 0 && (
-                  <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
-                    <div style={{ display: "grid", gap: 0 }}>
-                      {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
-                        const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
-                        const fio1 = (ppl.lastName || "").trim();
-                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
-                        return (
-                          <div key={ppl.id || `person-back-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : p.divider, display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                              {ppl.photoPreview ? (
-                                <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                              ) : <div style={{ color: p.subText, fontSize: 11 }}>нет</div>}
-                            </div>
-                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
-                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* Элементы эскиза — показываем только если есть на хотя бы одной стороне; компакт — один столбец */}
-          {(frontHasSketch || rearHasSketch) && (
-            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
-                <span style={chip(theme)}>Элементы эскиза</span>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"), gap: 16 }}>
-                {/* Лицевая */}
-                {frontHasSketch && (
-                  <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
-
-                    {frontGraphics.length > 0 && (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
-                        {frontUnique.map((g: any) => {
-                          const qty = frontCountsById[g.id] || 0;
-                          return (
-                            <div key={`fg-${g.id}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
-                              <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
-                                {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                                <div style={{ color: p.text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
-                                  {g.name || fileNameFromUrl(g.url) || g.id || "—"}
-                                </div>
-                                {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: p.subText }}>×{qty}</div>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {frontEpitaphs.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          {frontEpitaphs.map((t, i) => (
-                            <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {(editing || frontWishes.trim()) && (
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
-                        {editing ? (
-                          <textarea
-                            value={frontWishes}
-                            onChange={(e) => setFrontWishes(e.target.value)}
-                            rows={compact ? 2 : 3}
-                            placeholder="Пожелания по лицевой…"
-                            style={{ ...inputStyle(theme), resize: "vertical" }}
-                          />
-                        ) : (
-                          frontWishes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes.trim()}</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Тыльная */}
-                {rearHasSketch && (
-                  <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
-
-                    {rearUnique.length > 0 && (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
-                        {rearUnique.map((g: any, i: number) => {
-                          const gid = g?.id || g?.relPath || g?.url || g?.name || `rear-${i}`;
-                          const qty = rearCountsById[gid] || 0;
-                          return (
-                            <div key={`rg-${gid}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
-                              <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
-                                {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                                <div style={{ color: p.text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
-                                  {g.name || fileNameFromUrl(g.url) || gid}
-                                </div>
-                                {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: p.subText }}>×{qty}</div>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {rearEpitaphs.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          {rearEpitaphs.map((t, i) => (
-                            <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {(editing || backWishes.trim()) && (
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
-                        {editing ? (
-                          <textarea
-                            value={backWishes}
-                            onChange={(e) => setBackWishes(e.target.value)}
-                            rows={compact ? 2 : 3}
-                            placeholder="Пожелания по тыльной…"
-                            style={{ ...inputStyle(theme), resize: "vertical" }}
-                          />
-                        ) : (
-                          backWishes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{backWishes.trim()}</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* Низ панели: действие «Очистить всё» */}
-          <div style={{ marginTop: 2, paddingTop: 10, borderTop: p.divider, display: "flex", justifyContent: "center" }}>
+        {isMetric && (
+          <button
+            type="button"
+            style={btn}
+            onPointerDown={stop} onMouseDown={stop}
+            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x))); }}
+          >
+            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+          </button>
+        )}
+        {isEpitaph && (
+          <>
             <button
               type="button"
-              onClick={async (e) => {
-                e.stopPropagation();
-                const ok = window.confirm("Очистить ВСЕ данные заказа, включая номер заявки? Действие необратимо.");
-                if (!ok) return;
-                await clearOrderDraft();
-                clearIntroAll();
-                setEditing(false);
-                setOpen(false);
-                setOrder({ graphics: [], updatedAt: Date.now() });
-                setName(""); setPhone(""); setContactNotes(""); setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
-                setFrontWishes(""); setBackWishes("");
-              }}
-              style={linkButtonStyle(theme, "danger")}
-              className="link-like"
-              title="Очистить все данные (с подтверждением)"
+              style={btn}
+              onPointerDown={stop} onMouseDown={stop}
+              onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x))); }}
             >
-              Очистить всё
+              {el.italic ? "Обычный" : "Курсив"}
             </button>
+            {canStair && (
+              <button
+                type="button"
+                style={btn}
+                onPointerDown={stop} onMouseDown={stop}
+                onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x))); }}
+              >
+                {el.staircase ? "В строку" : "Лесенкой"}
+              </button>
+            )}
+          </>
+        )}
+        {isGraphic && (
+          <button
+            type="button"
+            style={btn}
+            onPointerDown={stop} onMouseDown={stop}
+            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x))); }}
+          >
+            Отразить ⇄
+          </button>
+        )}
+        {isPortrait && (
+          <button
+            type="button"
+            style={btn}
+            onPointerDown={stop} onMouseDown={stop}
+            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x))); }}
+          >
+            {el.bw ? "Цвет" : "Ч/Б"}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  /* ===== Контент поверх ===== */
+  const ContentOverlay = () => {
+    const fam = FONT_CENTURY;
+    const wrap = editorWrapRef.current?.getBoundingClientRect();
+    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
+    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
+
+    return (
+      <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, pointerEvents: "none", zIndex: 1000 }}>
+        {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
+          const key = el.id.split("-").slice(1).join("-");
+          const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
+          const wrapperStyle: React.CSSProperties = {
+            position: "absolute",
+            left: boxPx.x,
+            top: boxPx.y,
+            width: boxPx.w,
+            height: boxPx.h,
+            zIndex: el.z,
+            pointerEvents: "none",
+            contain: "layout paint style",
+            backfaceVisibility: "hidden",
+            boxSizing: "border-box"
+          };
+
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || "";
+            const filt = el.bw ? "grayscale(100%)" : "none";
+            return (
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {url ? <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block" }} draggable={false} /> : null}
+              </div>
+            );
+          }
+
+          if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+            const padY = Math.max(2, Math.round(boxPx.h * 0.10));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
+            return (
+              <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.12, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                  <div style={{ display: "grid", gap: 2, width: "100%" }}>
+                    {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
+                    {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
+                    {lines[2] && <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          if (el.type === "epitaph") {
+            const idx = Number(key);
+            const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+            const isRLM = isRememberLoveMourn(tRaw);
+
+            const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+            const padY = Math.max(2, Math.round(boxPx.h * 0.06));
+
+            if (isRLM) {
+              const r = splitRememberPreserve(tRaw);
+              const parts = [r.top, r.mid, r.bot];
+
+              if (el.staircase) {
+                const fontPx = fitStairRLMFontPx({ lines: parts, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15, minPx: 10, maxPx: 96 });
+                return (
+                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
+                    <div style={{ position: "absolute", left: padX, top: padY, right: padX, bottom: padY, display: "grid", gridTemplateRows: "1fr 1fr 1fr" }}>
+                      <div style={{ alignSelf: "center", justifySelf: "start", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[0]}</div>
+                      <div style={{ alignSelf: "center", justifySelf: "center", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[1]}</div>
+                      <div style={{ alignSelf: "center", justifySelf: "end", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[2]}</div>
+                    </div>
+                  </div>
+                );
+              } else {
+                const oneLine = `${parts[0]} ${parts[1]} ${parts[2]}`.replace(/\s+/g, " ");
+                const { fontPx } = fitMultilineFontPxGeneric({ text: oneLine, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
+                return (
+                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
+                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "nowrap" }}>{el.uppercase ? oneLine.toUpperCase() : oneLine}</div>
+                    </div>
+                  </div>
+                );
+              }
+            } else {
+              const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const { fontPx, lines } = fitMultilineFontPxGeneric({ text: textDisplay, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
+              return (
+                <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
+                  </div>
+                </div>
+              );
+            }
+          }
+
+          if (el.type === "cross") {
+            const idx = Number(key);
+            const c = Number.isFinite(idx) ? crosses[idx] : null;
+            return (
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {c?.url ? <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+              </div>
+            );
+          }
+
+          if (el.type === "graphic") {
+            const idx = Number(key);
+            const g = Number.isFinite(idx) ? others[idx] : null;
+            const tr = el.flipH ? "scaleX(-1)" : "none";
+            return (
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {g?.url ? <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+              </div>
+            );
+          }
+
+          return null;
+        })}
+      </div>
+    );
+  };
+
+  /* ===== Навигация ===== */
+  const handleBack = () => {
+    const cur = loadOrderDraft();
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    setOutro(true);
+    setTimeout(() => onBack?.(), 150);
+  };
+  const handleContinue = () => {
+    const cur = loadOrderDraft();
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    const go = onRearSide || onSendOrder || onContinue; if (!go) return;
+    setOutro(true);
+    setTimeout(() => go({ elements, wishes }), 150);
+  };
+
+  const MAX_W = 600;
+
+  // Ручки ресайза: выравнивание по рамке
+  const KNOB_HIT = 28;
+  const KNOB_VIS = 14;
+  const knob = (left: string, top: string, cursor: string) => ({
+    position: "absolute",
+    left,
+    top,
+    width: KNOB_HIT,
+    height: KNOB_HIT,
+    cursor,
+    pointerEvents: "auto",
+    display: "grid",
+    placeItems: "center"
+  } as React.CSSProperties);
+  const knobDot: React.CSSProperties = {
+    width: KNOB_VIS,
+    height: KNOB_VIS,
+    background: "#fff",
+    border: "1px solid #000",
+    borderRadius: 3,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
+  };
+
+  return (
+    <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 240ms ease", backgroundImage: `url(/data/bg.svg)`, backgroundSize: "cover", backgroundPosition: "center center", backgroundAttachment: "fixed" }}>
+      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
+        <TopBarWithIntro title="Memorial" />
+
+        <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
+          Разместите элементы условно. Укажите порядок и выравнивание. Финальный вариант сделает специалист согласно этой схеме.
+        </section>
+
+        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+          <div
+            ref={editorWrapRef}
+            style={{
+              position: "relative",
+              width: "100%",
+              borderRadius: 10,
+              overflow: "hidden",
+              userSelect: "none",
+              ...bottomUnderlayGradient(),
+              aspectRatio: aspect,
+              minHeight: aspect ? undefined : 540
+            }}
+          >
+            {/* Фон-изделие */}
+            {item?.url && (
+              <img
+                src={item.url}
+                alt=""
+                style={{
+                  position: "absolute",
+                  left: SKETCH_PAD,
+                  top: SKETCH_PAD,
+                  width: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                  height: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                  objectFit: "contain",
+                  opacity: 0.35,
+                  pointerEvents: "none"
+                }}
+                draggable={false}
+              />
+            )}
+            {/* Тех. img для aspectRatio */}
+            <img
+              src={item?.url || ""}
+              alt=""
+              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+              onLoad={(e) => {
+                const im = e.currentTarget;
+                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
+              }}
+              onError={() => { if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 }); }}
+            />
+
+            {/* Контент */}
+            <ContentOverlay />
+
+            {/* Рамки + ручки — слой интерактивный (pointerEvents: "auto") */}
+            <div
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerDown={(e) => { if (e.target === e.currentTarget) setSelectedId(null); }}
+              style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1001, pointerEvents: "auto" }}
+            >
+              {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
+                const selected = el.id === selectedId;
+                const frameStyle: React.CSSProperties = {
+                  position: "absolute",
+                  left: `${el.x}%`, top: `${el.y}%`,
+                  width: `${el.w}%`, height: `${el.h}%`,
+                  border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
+                  borderRadius: 4,
+                  boxSizing: "border-box",
+                  background: "transparent",
+                  pointerEvents: "auto",
+                  cursor: el.locked ? "not-allowed" : "move",
+                  touchAction: "none"
+                };
+                return (
+                  <div key={el.id} onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")} style={frameStyle} title={el.title || el.id}>
+                    {selected && <MiniToolbar el={el} />}
+                    {selected && !el.locked && (
+                      <>
+                        {/* Углы */}
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT/2}px`, `-${KNOB_HIT/2}px`, "nwse-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "nesw-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "nwse-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT/2}px`, `calc(100% - ${KNOB_HIT/2}px)`, "nesw-resize")}><div style={knobDot} /></div>
+                        {/* Стороны */}
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "ns-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT/2}px`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </section>
+
+        {/* Пожелания */}
+        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+          <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>Пожелания по эскизу</label>
+          <textarea
+            id="wishes"
+            value={wishes}
+            onChange={(e) => setWishes(e.target.value)}
+            rows={4}
+            placeholder="Например: ещё уменьшить портрет, метрику сузить, эпитафию сделать лесенкой…"
+            style={{ width: "100%", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(0,0,0,0.35)", color: "#fff", padding: 10, resize: "vertical", outline: "none", boxSizing: "border-box" }}
+          />
+        </section>
+
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
+          <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
+          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
+        </div>
       </div>
     </div>
   );
