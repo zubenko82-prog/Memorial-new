@@ -1,11 +1,19 @@
 // src/screens/ReviewAndSendStep.tsx
-// Шаг «Обзор и подтверждение» с отправкой на email + Telegram-уведомлением через /api/send-order-email
+// Обзор и подтверждение (без TopBar заголовка, редактирование — прямо над эскизами).
+// Изменения:
+// - Слово «эскиз» убрано (и из заголовков, и из alt).
+// - Топбар не показываем; вместо этого отображаем его содержимое всегда раскрытым над эскизами
+//   (хак: программно раскрываем TopBarWithIntro и скрываем его «шапку»-кнопку).
+// - Фон тыльной стороны исправлен: под мини‑превью рисуем такой же подложенный фон (градиент + изделие),
+//   при этом изделие для тыльной стороны зеркалится по X, как в редакторе.
+// - Сохранили возможность редактировать (через раскрытую панель TopBarWithIntro).
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
-import { loadOrderDraft } from "../lib/order";
+import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
 
+/* ===== UI ===== */
 function glassPanelStyle() {
   return {
     background: "rgba(20,20,24,0.95)",
@@ -33,13 +41,140 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false) {
   } as React.CSSProperties;
 }
 
+/* ===== Подложка под превью (градиент + изделие) ===== */
+function Underlay({
+  itemUrl,
+  mirror = false
+}: {
+  itemUrl?: string;
+  mirror?: boolean;
+}) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        inset: 0,
+        borderRadius: 8,
+        overflow: "hidden",
+        background:
+          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+      }}
+    >
+      {!!itemUrl && (
+        <img
+          src={itemUrl}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 8,
+            width: "calc(100% - 16px)",
+            height: "calc(100% - 16px)",
+            objectFit: "contain",
+            opacity: 0.35,
+            transform: mirror ? "scaleX(-1)" : "none",
+            filter: "saturate(100%)"
+          }}
+          draggable={false}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ===== Карточка превью стороны ===== */
+function SidePreview({
+  title,
+  miniUrl,
+  itemUrl,
+  mirror = false
+}: {
+  title: string;
+  miniUrl?: string;
+  itemUrl?: string;
+  mirror?: boolean;
+}) {
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 8 }}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>{title}</div>
+      <div style={{ position: "relative", borderRadius: 8, overflow: "hidden" }}>
+        {/* Подложка с фоном/изделием (для тыльной — зеркалим) */}
+        <Underlay itemUrl={itemUrl} mirror={mirror} />
+        {miniUrl ? (
+          <img
+            src={miniUrl}
+            alt=""
+            style={{
+              position: "relative",
+              width: "100%",
+              height: "auto",
+              display: "block",
+              borderRadius: 8
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              position: "relative",
+              minHeight: 200,
+              display: "grid",
+              placeItems: "center",
+              opacity: 0.8
+            }}
+          >
+            Превью отсутствует
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ===== Инлайновое отображение TopBarWithIntro (содержимое, без «шапки») ===== */
+/* Хак: рендерим TopBarWithIntro, программно раскрываем и скрываем его заголовок-кнопку. */
+function InlineOrderPanel() {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+
+    // Найти кнопку‑шапку и кликнуть один раз, чтобы раскрыть панель
+    const headerBtn = root.querySelector("button[aria-controls]") as HTMLButtonElement | null;
+    if (headerBtn && headerBtn.getAttribute("aria-expanded") !== "true") {
+      headerBtn.click();
+    }
+
+    // Скрыть шапку визуально (оставить только содержимое)
+    if (headerBtn) {
+      (headerBtn as HTMLElement).style.display = "none";
+    }
+
+    // Чуть сжать внешние отступы панели
+    const panel = root.querySelector("[id]") as HTMLElement | null;
+    if (panel) {
+      panel.style.marginTop = "0px";
+    }
+  }, []);
+
+  return (
+    <div ref={containerRef}>
+      <TopBarWithIntro title="Memorial" />
+    </div>
+  );
+}
+
+/* ===== Компонент шага ===== */
 type Props = {
   onBack?: () => void;
-  onSend?: (payload?: any) => void; // вызываем по успешной отправке
+  onSend?: (payload?: any) => void;
 };
 
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const draft = useMemo(() => loadOrderDraft(), []);
+  const itemUrl = (draft as any)?.item?.url as string | undefined;
+
+  // Превью сторон (мини‑версии)
   const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
   const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
 
@@ -53,14 +188,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>("");
 
-  // При изменении чекбоксов — сохраняем в draft.extras (чтобы не потерялось при перезагрузке)
   useEffect(() => {
-    try {
-      const { saveOrderDraft } = require("../lib/order");
-      const prev = loadOrderDraft();
-      const extras = { base: extraBase, headstonePlate: extraPlate, flowerbed: extraFlowerbed };
-      saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-    } catch {}
+    const prev = loadOrderDraft();
+    const extras = { base: extraBase, headstonePlate: extraPlate, flowerbed: extraFlowerbed };
+    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
   }, [extraBase, extraPlate, extraFlowerbed]);
 
   const handleSend = async () => {
@@ -78,43 +209,36 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   };
 
   return (
-    <div style={{ color: "#fff", padding: 12, maxWidth: 820, margin: "0 auto" }}>
-      <TopBarWithIntro title="Обзор и подтверждение" />
+    <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
+      {/* Блок редактирования заказа (контакты/размеры/люди/элементы) — без «шапки» */}
+      <section style={{ ...glassPanelStyle(), padding: 10 }}>
+        <InlineOrderPanel />
+      </section>
 
-      <section style={{ ...glassPanelStyle(), padding: 12, margin: "10px 0" }}>
+      {/* Подсказка */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ lineHeight: 1.4 }}>
-          <div style={{ marginBottom: 6 }}>
-            Подсказка: Проверьте данные заказа в шапке (нажмите на заголовок, чтобы раскрыть — там можно отредактировать контактные данные,
-            размеры, людей, списки графики и эпитафий, а также посмотреть эскизы).
-          </div>
-          <div>Когда всё верно — нажмите «Отправить заказ».</div>
+          Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные выше.
+          Когда всё верно — нажмите «Отправить заказ».
         </div>
       </section>
 
-      <section style={{ ...glassPanelStyle(), padding: 12, margin: "10px 0" }}>
-        <h3 style={{ margin: "0 0 8px 0" }}>Эскизы</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div style={{ ...glassPanelStyle(), padding: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
-            {frontMini ? (
-              <img src={frontMini} alt="Эскиз лицевой" style={{ width: "100%", height: "auto", borderRadius: 8 }} />
-            ) : (
-              <div style={{ opacity: 0.7 }}>Эскиз отсутствует</div>
-            )}
-          </div>
-          <div style={{ ...glassPanelStyle(), padding: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
-            {backMini ? (
-              <img src={backMini} alt="Эскиз тыльной" style={{ width: "100%", height: "auto", borderRadius: 8 }} />
-            ) : (
-              <div style={{ opacity: 0.7 }}>Эскиз отсутствует</div>
-            )}
-          </div>
+      {/* Две стороны: Лицевая / Тыльная (без слова «эскиз»), с подложкой и зеркалом для тыльной */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12
+          }}
+        >
+          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} />
+          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror />
         </div>
       </section>
 
       {/* Дополнительно */}
-      <section style={{ margin: "10px 0" }}>
+      <section>
         <div style={{ ...glassPanelStyle(), padding: 0 }}>
           <button
             type="button"
@@ -157,20 +281,20 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </div>
       </section>
 
-      {/* Сообщение об ошибке */}
+      {/* Ошибка */}
       {err && (
-        <div style={{ ...glassPanelStyle(), padding: 12, margin: "10px 0", color: "#ffb4b4" }}>
+        <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>
           {err}
         </div>
       )}
 
       {/* Подсказка над кнопками */}
-      <section style={{ ...glassPanelStyle(), padding: 12, margin: "10px 0" }}>
-        Если нужного пункта или изображения нет, ничего страшного: детали подтвердим по телефону или при личной встрече.
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        Если нужного пункта или изображения нет, ничего страшного: детали подтвердим по телефону или при встрече.
       </section>
 
       {/* Кнопки */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>
           Назад
         </button>
