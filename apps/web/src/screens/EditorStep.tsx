@@ -1,12 +1,13 @@
 // src/screens/EditorStep.tsx
 // Лёгкий редактор БЕЗ SketchTemplate и БЕЗ измерения DOM:
-// - Рисуем фон (изделие) сами, элементы задаём простыми правилами.
-// - «Помним, любим, скорбим…»:
-//     • В строку — три слова строго в одну строку (без переноса).
-//     • Лесенкой — 1-я строка слева, 2-я — по центру, 3-я — справа (общий размер шрифта).
-// - Фото по умолчанию Ч/Б.
-// - Ручки ресайза точно по углам/сторонам рамки.
-// - Минимум нагрузки: расчёты шрифтов — простые, без измерения DOM.
+// - Строим расположение элементов самостоятельно по простым правилам (как в шаблонах).
+// - Фон изделия рендерим сразу (img с opacity).
+// - Перетаскивание/ресайз сохраняют элементы в драфт. Превью рисуем по тем же правилам.
+// - Эпитафия «помним, любим, скорбим…»:
+//     • В строку — все слова в одну строку, без переносов.
+//     • Лесенкой — три строки: «Помним,» слева, «любим,» по центру, «скорбим,» справа.
+// - Портреты по умолчанию ч/б.
+// - Ручки ресайза выровнены точно по рамке (исправлен сдвиг).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -50,7 +51,7 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты внутри контента
+  x: number; y: number; w: number; h: number; // проценты
   z: number;
   title?: string;
   locked?: boolean;
@@ -58,7 +59,7 @@ type EditorEl = {
   italic?: boolean;    // metric/epitaph
   flipH?: boolean;     // graphic
   bw?: boolean;        // portrait
-  staircase?: boolean; // эпитафия: лесенка/в строку
+  staircase?: boolean; // «Помним, любим, скорбим…»
 };
 
 /* ===== Helpers ===== */
@@ -96,10 +97,10 @@ function splitRememberPreserve(text: string) {
   const top = parts[0] || "Помним,";
   const mid = parts[1] || "любим,";
   const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим…").trim();
-  return { top, mid, bot, inline: `${top} ${mid} ${bot}`.replace(/\s+/g, " ").trim() };
+  return { top, mid, bot };
 }
 
-/* ===== Fit helpers (минимально необходимые) ===== */
+/* ===== Fit helpers ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -114,39 +115,75 @@ function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: bool
   setFontOnCtx(ctx, italic, sizePx, family);
   return ctx.measureText(text).width;
 }
-// Подгон размера под ОДНУ строку (учёт высоты и ширины)
-function fitSingleLineFontPx({
-  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 8, maxPx = 120
-}: {
-  text: string; boxW: number; boxH: number; italic: boolean; family: string;
-  padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
-}) {
-  const ctx = getMeasureCtx();
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const hFit = usableH / lineHeight;
-  const w100 = Math.max(1, measureTextAt(ctx, text || " ", italic, family, 100));
-  const wFit = (usableW * 100) / w100;
-  return clamp(Math.floor(Math.min(hFit, wFit, maxPx)), minPx, maxPx);
-}
-// Общий размер для трёх строк (лесенка), чтобы все влезли по ширине и высоте
-function fitStairFontsPx({
-  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 8, maxPx = 120
+
+// Подгон одного шрифта под три строки «лесенкой» с разными выравниваниями.
+// Учитываем ограничения по ширине (по самой длинной строке) и по высоте (делим на 3).
+function fitStairRLMFontPx({
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
 }: {
   lines: string[]; boxW: number; boxH: number; italic: boolean; family: string;
   padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
-}) {
+}): number {
   const ctx = getMeasureCtx();
   const usableW = Math.max(8, boxW - padX * 2);
   const usableH = Math.max(8, boxH - padY * 2);
-  const hFit = usableH / (3 * lineHeight);
-  let wFitAll = maxPx;
-  for (const ln of lines) {
-    const w100 = Math.max(1, measureTextAt(ctx, ln || " ", italic, family, 100));
-    const wFit = (usableW * 100) / w100;
-    wFitAll = Math.min(wFitAll, wFit);
+  const perLineH = usableH / Math.max(1, lines.length) / lineHeight;
+  // лимит по высоте
+  let fH = perLineH;
+  // лимит по ширине — по самой длинной строке
+  let fW = maxPx;
+  for (const ln of lines.length ? lines : [" "]) {
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const fLine = (usableW * 100) / w100;
+    fW = Math.min(fW, fLine);
   }
-  return clamp(Math.floor(Math.min(hFit, wFitAll, maxPx)), minPx, maxPx);
+  const fontPx = clamp(Math.floor(Math.min(fH, fW, maxPx)), minPx, maxPx);
+  return fontPx;
+}
+
+function fitMultilineFontPx({
+  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
+}: {
+  text: string; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
+}) {
+  const ctx = getMeasureCtx();
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const count = Math.max(1, lines.length);
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const fByH = usableH / (count * lineHeight);
+  let fByW = maxPx;
+  for (const ln of lines.length ? lines : [" "]) {
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const fLine = (usableW * 100) / w100;
+    fByW = Math.min(fByW, fLine);
+  }
+  const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
+  return { fontPx, lines: lines.length ? lines : [""] };
+}
+function fitMetricFontsPx({
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
+}: {
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
+}) {
+  const ctx = getMeasureCtx();
+  const L = Math.min(3, lines.length);
+  if (L === 0) return [];
+  const usableW = Math.max(8, boxW - padX * 2);
+  const usableH = Math.max(8, boxH - padY * 2);
+  const wSum = weights.slice(0, L).reduce((a, b) => a + b, 0);
+  const baseByH = usableH / (lineHeight * wSum);
+  const initial = Array.from({ length: L }, (_, i) => baseByH * weights[i]);
+  let sW = 1;
+  for (let i = 0; i < L; i++) {
+    const ln = lines[i] || "";
+    if (!ln) continue;
+    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
+    const maxFi = (usableW * 100) / w100;
+    sW = Math.min(sW, maxFi / initial[i]);
+  }
+  return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
 }
 
 /* ===== Компонент ===== */
@@ -174,7 +211,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const engr: any = draft?.engraving || {};
   const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
 
-  // Люди
+  // Блоки людей
   const peopleBlocks = useMemo(() => {
     if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
       return engr.persons.map((p: any, idx: number) => {
@@ -202,82 +239,80 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   }, [engr]);
 
   // Графика
-  const crosses = useMemo(
-    () => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)),
-    [graphics]
-  );
-  const others = useMemo(
-    () => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)),
-    [graphics]
-  );
+  const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
+  const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  /* ===== Построение элементов по простым правилам ===== */
+  /* ===== Построение элементов по данным драфта (простые «правила») ===== */
   const buildOrMergeElements = React.useCallback(() => {
     setElements((prev) => {
       const existById = new Map(prev.map((e) => [e.id, e]));
       const next: EditorEl[] = [];
 
-      // Портреты и метрики — колонками
+      // Люди: портрет + метрика — равные колонки
       const cnt = peopleBlocks.length || 0;
       const cw = cnt > 0 ? 100 / cnt : 100;
       let z = 10;
 
       peopleBlocks.forEach((pb, i) => {
         const pid = pb.id;
-
-        const idPortrait = `portrait-${pid}`;
-        if (existById.has(idPortrait)) next.push(existById.get(idPortrait)!);
+        const pidPortrait = `portrait-${pid}`;
+        if (existById.has(pidPortrait)) next.push(existById.get(pidPortrait)!);
         else {
+          // по умолчанию Ч/Б
           const w = cw * 0.8, h = 35, x = i * cw + (cw - w) / 2, y = 10;
-          // Фото по умолчанию Ч/Б
-          next.push({ id: idPortrait, type: "portrait", x, y, w, h, z: z++, bw: true, title: "Портрет" });
+          next.push({ id: pidPortrait, type: "portrait", x, y, w, h, z: z++, bw: true, title: "Портрет" });
         }
-
-        const idMetric = `metric-${pid}`;
-        if (existById.has(idMetric)) next.push(existById.get(idMetric)!);
+        const pidMetric = `metric-${pid}`;
+        if (existById.has(pidMetric)) next.push(existById.get(pidMetric)!);
         else {
           const w = cw * 0.9, h = 20, x = i * cw + (cw - w) / 2, y = 10 + 35 + 4;
-          next.push({ id: idMetric, type: "metric", x, y, w, h, z: z++, uppercase: false, italic: false, title: "Метрика" });
+          next.push({ id: pidMetric, type: "metric", x, y, w, h, z: z++, uppercase: false, italic: false, title: "Метрика" });
         }
       });
 
-      const coreBottom = next
+      // Низ текущего «контента»
+      const topContentBottom = next
         .filter((e) => e.type === "portrait" || e.type === "metric")
         .reduce((m, e) => Math.max(m, e.y + e.h), 0);
 
-      // Эпитафии — под
+      // Эпитафии — под контентом
       epitaphs.forEach((_, i) => {
         const id = `epitaph-${i}`;
         if (existById.has(id)) next.push(existById.get(id)!);
         else {
-          const w = 80, h = 16, x = 10, y = Math.min(95, (coreBottom || 28) + 6);
-          next.push({ id, type: "epitaph", x, y: y + i * (h + 4), w, h, z: 100 + i, uppercase: false, italic: false, staircase: false, title: "Эпитафия" });
+          const w = 80, h = 16, x = 10, y = Math.min(95, (topContentBottom || 28) + 6) + i * (16 + 4);
+          next.push({ id, type: "epitaph", x, y, w, h, z: 100 + i, uppercase: false, italic: false, staircase: false, title: "Эпитафия" });
         }
       });
 
       // Крест — сверху слева
+      const anyCore = next.length > 0;
       crosses.forEach((_, i) => {
         const id = `cross-${i}`;
         if (existById.has(id)) next.push(existById.get(id)!);
-        else next.push({ id, type: "cross", x: 4, y: 4, w: 18, h: 18, z: 200 + i, title: "Крест" });
+        else {
+          const w = anyCore ? 18 : 28, h = anyCore ? 18 : 28;
+          const x = 4, y = 4;
+          next.push({ id, type: "cross", x, y, w, h, z: 200 + i, title: "Крест" });
+        }
       });
 
       // Графика — снизу центр
       others.forEach((_, i) => {
         const id = `graphic-${i}`;
         if (existById.has(id)) next.push(existById.get(id)!);
-        else next.push({ id, type: "graphic", x: 30, y: 76, w: 40, h: 18, z: 300 + i, flipH: false, title: "Графика" });
+        else {
+          const w = 40, h = 18, x = 50 - w / 2, y = Math.max(0, 100 - h - 4);
+          next.push({ id, type: "graphic", x, y, w, h, z: 300 + i, flipH: false, title: "Графика" });
+        }
       });
 
-      // Сохранить пользовательские флаги
+      // Сохраняем флаги пользователя
       const kept = next.map((e) => {
         const old = existById.get(e.id);
-        return old
-          ? { ...e, uppercase: old.uppercase ?? e.uppercase, italic: old.italic ?? e.italic, flipH: old.flipH ?? e.flipH, bw: old.bw ?? e.bw, staircase: old.staircase ?? e.staircase }
-          : e;
+        return old ? { ...e, uppercase: old.uppercase ?? e.uppercase, italic: old.italic ?? e.italic, flipH: old.flipH ?? e.flipH, bw: old.bw ?? e.bw, staircase: old.staircase ?? e.staircase } : e;
       });
 
-      // Запись в драфт
       const cur = loadOrderDraft();
       saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: kept, wishes, updatedAt: Date.now() } });
       return kept;
@@ -309,7 +344,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     const contentW = rect.width - SKETCH_PAD * 2;
     const contentH = rect.height - SKETCH_PAD * 2;
     if (contentW <= 0 || contentH <= 0) return;
-
     const dxPct = ((e.clientX - d.startX) / contentW) * 100;
     const dyPct = ((e.clientY - d.startY) / contentH) * 100;
     const withSnap = !e.altKey;
@@ -338,7 +372,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       return { ...el, ...clampBox(nx, ny, nw, nh) };
     }));
   };
-
   const onPointerUp = () => {
     if (dragRef.current) {
       const cur = loadOrderDraft();
@@ -348,7 +381,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  /* ===== Превью (лёгкий canvas) ===== */
+  /* ===== Превью в драфт ===== */
   const queuePreviewGeneration = () => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -362,17 +395,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         canvas.height = Math.max(1, Math.floor(H));
         const ctx = canvas.getContext("2d"); if (!ctx) return null;
 
-        // фон (градиент + фото)
+        // фон
         const grad = ctx.createLinearGradient(0, 0, 0, H);
         grad.addColorStop(0, "#6e6e6e"); grad.addColorStop(0.2, "#464545");
         grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
         ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
 
+        // изделие
         const base = await new Promise<HTMLImageElement | null>((resolve) => {
           const url = item?.url || ""; if (!url) return resolve(null);
           const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url;
         });
-
         const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
         if (base) {
           const sr = base.width / base.height, dr = PW / PH;
@@ -397,14 +430,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
           const key = el.id.split("-").slice(1).join("-");
           if (el.type === "portrait") {
-            // фото Ч/Б по умолчанию — bw=true
+            // по умолчанию ч/б — учитываем флаг
             const p = peopleBlocks.find((pp) => pp.id === key);
             const url = p?.photo || ""; if (!url) continue;
             const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url; });
             if (!im) continue;
             const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             ctx.save(); ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
-            if (el.bw !== false) ctx.filter = "grayscale(100%)"; // по умолчанию Ч/Б
+            if (el.bw) ctx.filter = "grayscale(100%)";
             if (sr2 > dr2) { const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
             else { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
             ctx.restore(); ctx.filter = "none";
@@ -413,7 +446,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
             const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
             ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)); const padY2 = Math.max(2, Math.round(rbox.h * 0.10));
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.10));
             const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
             const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
             let y = rbox.y + (rbox.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
@@ -421,48 +454,39 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             ctx.restore();
           } else if (el.type === "epitaph") {
             const idx = safeIndex(key, epitaphs.length);
-            const raw = epitaphs[idx] || "";
-            const isRLM = isRememberLoveMourn(raw);
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)); const padY2 = Math.max(2, Math.round(rbox.h * 0.06));
-            ctx.save(); ctx.fillStyle = "#fff"; ctx.textBaseline = "middle"; // textAlign задаём ниже
+            const tRaw = epitaphs[idx] || "";
+            const isRLM = isRememberLoveMourn(tRaw);
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            ctx.save(); ctx.fillStyle = "#fff"; ctx.textBaseline = "middle"; // textAlign настраиваем построчно
             if (isRLM) {
-              const { top, mid, bot, inline } = splitRememberPreserve(raw);
-              if (el.staircase) {
-                // Лесенкой: слева / центр / справа — общий размер
-                const commonPx = fitStairFontsPx({ lines: [top, mid, bot], boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2 });
-                setFontOnCtx(ctx, !!el.italic, commonPx, fam);
-                const lineH = (rbox.h - padY2 * 2) / 3;
-                // 1: слева
-                ctx.textAlign = "left";
-                ctx.fillText(top, rbox.x + padX2, rbox.y + padY2 + lineH * 0.5);
-                // 2: центр
-                ctx.textAlign = "center";
-                ctx.fillText(mid, rbox.x + rbox.w / 2, rbox.y + padY2 + lineH * 1.5);
-                // 3: справа
-                ctx.textAlign = "right";
-                ctx.fillText(bot, rbox.x + rbox.w - padX2, rbox.y + padY2 + lineH * 2.5);
-              } else {
-                // В строку: одна строка, без переноса
-                const px = fitSingleLineFontPx({ text: el.uppercase ? inline.toUpperCase() : inline, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2 });
-                setFontOnCtx(ctx, !!el.italic, px, fam);
-                ctx.textAlign = "center";
-                ctx.fillText(el.uppercase ? inline.toUpperCase() : inline, rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
-              }
-            } else {
-              // Обычная многострочная
-              ctx.textAlign = "center";
-              const { fontPx, lines } = fitMultilineFontPx({ text: el.uppercase ? raw.toUpperCase() : raw, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
+              const r = splitRememberPreserve(tRaw);
+              const lines = [r.top, r.mid, r.bot];
+              const fontPx = fitStairRLMFontPx({ lines, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15, minPx: 10, maxPx: 96 });
               setFontOnCtx(ctx, !!el.italic, fontPx, fam);
-              const count = Math.max(1, lines.length);
-              const lineH = (rbox.h - padY2 * 2) / count;
-              for (let i = 0; i < count; i++) {
-                const yy = rbox.y + padY2 + lineH * (i + 0.5);
-                ctx.fillText(lines[i], rbox.x + rbox.w / 2, yy);
-              }
+              const lineCount = 3;
+              const slotH = (rbox.h - padY2 * 2) / lineCount;
+              // Первая — слева, вторая — центр, третья — справа
+              // Y — середина каждой полосы
+              // X — по выравниванию
+              // 1) слева
+              ctx.textAlign = "left";
+              ctx.fillText(lines[0], rbox.x + padX2, rbox.y + padY2 + slotH * 0.5);
+              // 2) по центру
+              ctx.textAlign = "center";
+              ctx.fillText(lines[1], rbox.x + rbox.w / 2, rbox.y + padY2 + slotH * 1.5);
+              // 3) справа
+              ctx.textAlign = "right";
+              ctx.fillText(lines[2], rbox.x + rbox.w - padX2, rbox.y + padY2 + slotH * 2.5);
+            } else {
+              // В одну строку, без переносов
+              const { fontPx } = fitMultilineFontPx({ text: tRaw, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
+              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              ctx.textAlign = "center";
+              ctx.fillText(el.uppercase ? tRaw.toUpperCase() : tRaw, rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
             }
             ctx.restore();
           } else if (el.type === "graphic") {
-            const idx = safeIndex(key, others.length); const g = others[idx]; if (!g?.url) continue;
+            const idx = Number(key); const g = Number.isFinite(idx) ? others[idx] : null; if (!g?.url) continue;
             const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = g.url; });
             if (!im) continue;
             ctx.save();
@@ -472,7 +496,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             else { const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
             ctx.restore();
           } else if (el.type === "cross") {
-            const idx = safeIndex(key, crosses.length); const c = crosses[idx]; if (!c?.url) continue;
+            const idx = Number(key); const c = Number.isFinite(idx) ? crosses[idx] : null; if (!c?.url) continue;
             const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = c.url; });
             if (!im) continue;
             const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
@@ -480,7 +504,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             else { const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
           }
         }
-
         return canvas.toDataURL("image/jpeg", 0.9);
       }
 
@@ -502,16 +525,16 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           wishes
         }
       });
-    }, 300) as unknown as number;
+    }, 350) as unknown as number;
   };
 
-  // Автосохранение и превью
+  // Автосохранение и превью при изменениях
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       const cur = loadOrderDraft();
       saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-    }, 220) as unknown as number;
+    }, 250) as unknown as number;
 
     queuePreviewGeneration();
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -587,7 +610,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         )}
         {isPortrait && (
           <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, bw: !e.bw } : e)))}>
-            {el.bw === false ? "Ч/Б" : "Цвет"}
+            {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
       </div>
@@ -621,13 +644,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             pointerEvents: "none",
             willChange: "transform",
             contain: "layout paint style",
-            backfaceVisibility: "hidden"
+            backfaceVisibility: "hidden",
+            boxSizing: "border-box"
           };
 
           if (el.type === "portrait") {
             const p = peopleBlocks.find((pp) => pp.id === key);
             const url = p?.photo || "";
-            const filt = el.bw !== false ? "grayscale(100%)" : "none"; // Ч/Б по умолчанию
+            const filt = el.bw ? "grayscale(100%)" : "none";
             return (
               <div key={`content-${el.id}`} style={wrapperStyle}>
                 {url ? (
@@ -665,43 +689,51 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
           if (el.type === "epitaph") {
             const idx = safeIndex(key, epitaphs.length);
-            const raw = epitaphs[idx] || "";
-            const isRLM = isRememberLoveMourn(raw);
+            const tRaw = epitaphs[idx] || "";
+            const isRLM = isRememberLoveMourn(tRaw);
+
             const padX = Math.max(4, Math.round(boxPx.w * 0.04));
             const padY = Math.max(2, Math.round(boxPx.h * 0.06));
+
             if (isRLM) {
-              const { top, mid, bot, inline } = splitRememberPreserve(raw);
+              // Лесенка/Строка для «помним, любим, скорбим…»
+              const r = splitRememberPreserve(tRaw);
+              const parts = [r.top, r.mid, r.bot];
               if (el.staircase) {
-                // Лесенка: слева/центр/справа, общий размер
-                const commonPx = fitStairFontsPx({ lines: [top, mid, bot], boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY });
+                // Лесенкой — рассчитанный общий размер, далее три строки с разным выравниванием
+                const fontPx = fitStairRLMFontPx({ lines: parts, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15, minPx: 10, maxPx: 96 });
+                const lineCount = 3;
+                const slotH = (boxPx.h - padY * 2) / lineCount;
+
                 return (
                   <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
-                    <div style={{ position: "absolute", left: padX, right: padX, top: padY, bottom: padY, display: "grid", gridTemplateRows: "1fr 1fr 1fr" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", fontWeight: 700, fontSize: commonPx, lineHeight: 1.15 }}>{el.uppercase ? top.toUpperCase() : top}</div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: commonPx, lineHeight: 1.15 }}>{el.uppercase ? mid.toUpperCase() : mid}</div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", fontWeight: 700, fontSize: commonPx, lineHeight: 1.15 }}>{el.uppercase ? bot.toUpperCase() : bot}</div>
+                    <div style={{ position: "absolute", left: padX, top: padY, right: padX, bottom: padY, display: "grid", gridTemplateRows: "1fr 1fr 1fr" }}>
+                      <div style={{ alignSelf: "center", justifySelf: "start", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[0]}</div>
+                      <div style={{ alignSelf: "center", justifySelf: "center", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[1]}</div>
+                      <div style={{ alignSelf: "center", justifySelf: "end", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[2]}</div>
                     </div>
                   </div>
                 );
               } else {
-                // В строку: одна строка без переноса
-                const one = el.uppercase ? inline.toUpperCase() : inline;
-                const fontPx = fitSingleLineFontPx({ text: one, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY });
+                // В строку — однословное сочетание, без переноса
+                const oneLine = `${parts[0]} ${parts[1]} ${parts[2]}`.replace(/\s+/g, " ");
+                const { fontPx } = fitMultilineFontPx({ text: oneLine, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
                 return (
                   <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box" }}>
-                      <div style={{ fontWeight: 700, fontSize: fontPx, whiteSpace: "nowrap", lineHeight: 1.15 }}>{one}</div>
+                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "nowrap" }}>{el.uppercase ? oneLine.toUpperCase() : oneLine}</div>
                     </div>
                   </div>
                 );
               }
             } else {
-              // Обычная многострочная
-              const { fontPx, lines } = fitMultilineFontPx({ text: el.uppercase ? raw.toUpperCase() : raw, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
+              // Обычная эпитафия (многострочная)
+              const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const { fontPx, lines } = fitMultilineFontPx({ text: textDisplay, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
               return (
                 <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box" }}>
-                    <div style={{ fontWeight: 700, fontSize: fontPx, whiteSpace: "pre-wrap", lineHeight: 1.15 }}>{lines.join("\n")}</div>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
                   </div>
                 </div>
               );
@@ -768,6 +800,30 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   const MAX_W = 600;
 
+  // Ручки ресайза: точно к рамке (без translate(-50%,-50%) на родителе).
+  const KNOB_HIT = 28;
+  const KNOB_VIS = 14;
+  const knob = (left: string, top: string, cursor: string) => ({
+    position: "absolute",
+    left,
+    top,
+    width: KNOB_HIT,
+    height: KNOB_HIT,
+    cursor,
+    pointerEvents: "auto",
+    // внутренний визуальный квадрат выровнен по центру hit-area
+    display: "grid",
+    placeItems: "center"
+  } as React.CSSProperties);
+  const knobDot: React.CSSProperties = {
+    width: KNOB_VIS,
+    height: KNOB_VIS,
+    background: "#fff",
+    border: "1px solid #000",
+    borderRadius: 3,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
+  };
+
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 240ms ease", backgroundImage: `url(/data/bg.svg)`, backgroundSize: "cover", backgroundPosition: "center center", backgroundAttachment: "fixed" }}>
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
@@ -777,7 +833,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           Разместите элементы условно. Укажите порядок и выравнивание. Финальный вариант сделает специалист согласно этой схеме.
         </section>
 
-        {/* Эскиз */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={editorWrapRef}
@@ -797,23 +852,35 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               <img
                 src={item.url}
                 alt=""
-                style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, width: `calc(100% - ${SKETCH_PAD * 2}px)`, height: `calc(100% - ${SKETCH_PAD * 2}px)`, objectFit: "contain", opacity: 0.35, pointerEvents: "none" }}
+                style={{
+                  position: "absolute",
+                  left: SKETCH_PAD,
+                  top: SKETCH_PAD,
+                  width: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                  height: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                  objectFit: "contain",
+                  opacity: 0.35,
+                  pointerEvents: "none"
+                }}
                 draggable={false}
               />
             )}
-            {/* Технический img для aspectRatio */}
+            {/* Тех. img для aspectRatio */}
             <img
               src={item?.url || ""}
               alt=""
               style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
-              onLoad={(e) => { const im = e.currentTarget; if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight }); }}
+              onLoad={(e) => {
+                const im = e.currentTarget;
+                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
+              }}
               onError={() => { if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 }); }}
             />
 
             {/* Контент */}
             <ContentOverlay />
 
-            {/* Фреймы + ручки (точно на рамке) */}
+            {/* Рамки + ручки */}
             <div
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
@@ -822,100 +889,34 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             >
               {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
                 const selected = el.id === selectedId;
-                const FRAME_BORDER = selected ? 2 : 1;
-                const HANDLE_VIS = 14;
-                const HANDLE_HIT = 26;
-                const handle = (pos: "tl" | "tr" | "br" | "bl" | "t" | "r" | "b" | "l", cursor: string, mode: EditorEl["type"] extends never ? never : any) => {
-                  const base: React.CSSProperties = {
-                    position: "absolute",
-                    width: HANDLE_HIT,
-                    height: HANDLE_HIT,
-                    pointerEvents: "auto",
-                    cursor: cursor
-                  };
-                  const inner: React.CSSProperties = {
-                    width: HANDLE_VIS,
-                    height: HANDLE_VIS,
-                    background: "#fff",
-                    border: "1px solid #000",
-                    borderRadius: 3,
-                    boxSizing: "border-box",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
-                  };
-                  switch (pos) {
-                    case "tl": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={{ ...base, left: 0, top: 0, marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "tr": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={{ ...base, left: "100%", top: 0, marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "br": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={{ ...base, left: "100%", top: "100%", marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "bl": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={{ ...base, left: 0, top: "100%", marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "t": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={{ ...base, left: "50%", top: 0, marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "r": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={{ ...base, left: "100%", top: "50%", marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "b": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={{ ...base, left: "50%", top: "100%", marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                    case "l": return (
-                      <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={{ ...base, left: 0, top: "50%", marginLeft: -HANDLE_HIT/2, marginTop: -HANDLE_HIT/2 }}>
-                        <div style={{ ...inner, marginLeft: (HANDLE_HIT-HANDLE_VIS)/2, marginTop: (HANDLE_HIT-HANDLE_VIS)/2 }} />
-                      </div>
-                    );
-                  }
+                const frameStyle: React.CSSProperties = {
+                  position: "absolute",
+                  left: `${el.x}%`, top: `${el.y}%`,
+                  width: `${el.w}%`, height: `${el.h}%`,
+                  border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
+                  borderRadius: 4,
+                  boxSizing: "border-box",
+                  background: "transparent",
+                  pointerEvents: "auto",
+                  cursor: el.locked ? "not-allowed" : "move",
+                  touchAction: "none"
                 };
-
                 return (
-                  <div
-                    key={el.id}
-                    onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")}
-                    style={{
-                      position: "absolute",
-                      left: `${el.x}%`, top: `${el.y}%`,
-                      width: `${el.w}%`, height: `${el.h}%`,
-                      border: `${FRAME_BORDER}px dashed rgba(255,255,255,0.9)`,
-                      borderRadius: 4,
-                      background: "transparent",
-                      pointerEvents: "auto",
-                      cursor: el.locked ? "not-allowed" : "move",
-                      touchAction: "none",
-                      boxSizing: "border-box"
-                    }}
-                    title={el.title || el.id}
-                  >
+                  <div key={el.id} onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")} style={frameStyle} title={el.title || el.id}>
                     {selected && <MiniToolbar el={el} />}
-
                     {selected && !el.locked && (
                       <>
-                        {handle("tl", "nwse-resize", "nw")}
-                        {handle("tr", "nesw-resize", "ne")}
-                        {handle("br", "nwse-resize", "se")}
-                        {handle("bl", "nesw-resize", "sw")}
-                        {handle("t", "ns-resize", "n")}
-                        {handle("r", "ew-resize", "e")}
-                        {handle("b", "ns-resize", "s")}
-                        {handle("l", "ew-resize", "w")}
+                        {/* Углы: позиционируем hit-area таким образом, чтобы центр визуальной «точки» приходился на угол рамки */}
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT/2}px`, `-${KNOB_HIT/2}px`, "nwse-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "nesw-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "nwse-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT/2}px`, `calc(100% - ${KNOB_HIT/2}px)`, "nesw-resize")}><div style={knobDot} /></div>
+
+                        {/* Стороны */}
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "ns-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT/2}px`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
                       </>
                     )}
                   </div>
