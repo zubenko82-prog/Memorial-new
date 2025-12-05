@@ -255,6 +255,12 @@ function cmValue(n?: number): string {
   if (typeof n !== "number" || !isFinite(n)) return "—";
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
 }
+// Определение ориентации по размерам (мм)
+function orientationLabel(w?: number, h?: number): string | undefined {
+  if (typeof w !== "number" || typeof h !== "number" || !isFinite(w) || !isFinite(h)) return undefined;
+  if (w === h) return undefined; // квадрат — ориентацию не показываем
+  return h > w ? "вертикально" : "горизонтально";
+}
 
 /* ===== Компонент ===== */
 export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
@@ -391,6 +397,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     setOrder(next);
   };
 
+  // Метка ориентации для размера
+  const sizeOrientation = useMemo(
+    () => orientationLabel(order.size?.width, order.size?.height),
+    [order.size?.width, order.size?.height]
+  );
+
   const coll = useCollapse(open, 280);
   const panelId = "order-panel";
   const p = palette(theme);
@@ -526,6 +538,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 <div style={{ fontWeight: 600 }}>Характеристики</div>
                 <div style={{ opacity: 0.95 }}>
                   {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
+                  {sizeOrientation && <span style={{ marginLeft: 8, opacity: 0.85 }}>• {sizeOrientation}</span>}
                 </div>
                 {(editing || sizeNotes.trim()) && (
                   <div>
