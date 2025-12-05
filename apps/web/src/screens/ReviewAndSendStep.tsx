@@ -1,22 +1,20 @@
 // src/screens/ReviewAndSendStep.tsx
-// Обзор и подтверждение (без TopBar заголовка, редактирование — прямо над эскизами).
-// Изменения:
-// - Слово «эскиз» убрано (и из заголовков, и из alt).
-// - Топбар не показываем; вместо этого отображаем его содержимое всегда раскрытым над эскизами
-//   (хак: программно раскрываем TopBarWithIntro и скрываем его «шапку»-кнопку).
-// - Фон тыльной стороны исправлен: под мини‑превью рисуем такой же подложенный фон (градиент + изделие),
-//   при этом изделие для тыльной стороны зеркалится по X, как в редакторе.
-// - Сохранили возможность редактировать (через раскрытую панель TopBarWithIntro).
+// Обзор и подтверждение (без TopBar заголовка).
+// Правки:
+// - Не рендерим TopBar. Показываем данные заказа (контакты, резная работа/размеры) над превью и даём их редактировать.
+// - Фон для тыльной стороны исправлен: под мини‑превью рисуем ту же подложку (градиент + изделие),
+//   причём изделие зеркалится по X. Если превью прозрачное — фон просвечивает, если непрозрачное — выглядит как раньше.
+// - Убрали слово «эскиз» (и из alt, и из заголовков).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
+import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
 
 /* ===== UI ===== */
 function glassPanelStyle() {
   return {
-    background: "rgba(20,20,24,0.95)",
+    background: "rgba(20,20,24,0.90)",
     border: "1px solid rgba(255,255,255,0.14)",
     borderRadius: 12,
     color: "#fff",
@@ -37,28 +35,39 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false) {
     boxShadow:
       "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1,
-    transition: "opacity 220ms ease"
+    transition: "opacity 180ms ease"
   } as React.CSSProperties;
+}
+function inputStyle(): React.CSSProperties {
+  return {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid rgba(255,255,255,0.18)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    outline: "none",
+    boxSizing: "border-box"
+  };
 }
 
 /* ===== Подложка под превью (градиент + изделие) ===== */
 function Underlay({
   itemUrl,
-  mirror = false
-}: {
-  itemUrl?: string;
-  mirror?: boolean;
-}) {
+  mirror = false,
+  inset = 8
+}: { itemUrl?: string; mirror?: boolean; inset?: number }) {
   return (
     <div
       aria-hidden
       style={{
         position: "absolute",
         inset: 0,
-        borderRadius: 8,
+        borderRadius: 10,
         overflow: "hidden",
         background:
-          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+        zIndex: 0
       }}
     >
       {!!itemUrl && (
@@ -67,13 +76,15 @@ function Underlay({
           alt=""
           style={{
             position: "absolute",
-            inset: 8,
-            width: "calc(100% - 16px)",
-            height: "calc(100% - 16px)",
+            left: inset,
+            top: inset,
+            width: `calc(100% - ${inset * 2}px)`,
+            height: `calc(100% - ${inset * 2}px)`,
             objectFit: "contain",
             opacity: 0.35,
             transform: mirror ? "scaleX(-1)" : "none",
-            filter: "saturate(100%)"
+            zIndex: 0,
+            pointerEvents: "none"
           }}
           draggable={false}
         />
@@ -82,23 +93,33 @@ function Underlay({
   );
 }
 
-/* ===== Карточка превью стороны ===== */
+/* ===== Превью стороны ===== */
 function SidePreview({
   title,
   miniUrl,
   itemUrl,
-  mirror = false
+  mirror = false,
+  aspect
 }: {
   title: string;
   miniUrl?: string;
   itemUrl?: string;
   mirror?: boolean;
+  aspect?: string; // например "4 / 3"
 }) {
   return (
-    <div style={{ ...glassPanelStyle(), padding: 8 }}>
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>{title}</div>
-      <div style={{ position: "relative", borderRadius: 8, overflow: "hidden" }}>
-        {/* Подложка с фоном/изделием (для тыльной — зеркалим) */}
+    <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
+      <div style={{ fontWeight: 600 }}>{title}</div>
+      <div
+        style={{
+          position: "relative",
+          borderRadius: 10,
+          overflow: "hidden",
+          // Ставим контейнер с аспектом изделия (если известен), иначе адаптивно по контенту
+          aspectRatio: aspect || undefined,
+          minHeight: aspect ? undefined : 200
+        }}
+      >
         <Underlay itemUrl={itemUrl} mirror={mirror} />
         {miniUrl ? (
           <img
@@ -106,20 +127,24 @@ function SidePreview({
             alt=""
             style={{
               position: "relative",
-              width: "100%",
-              height: "auto",
               display: "block",
-              borderRadius: 8
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              zIndex: 1
             }}
+            draggable={false}
           />
         ) : (
           <div
             style={{
               position: "relative",
-              minHeight: 200,
+              zIndex: 1,
+              width: "100%",
+              height: "100%",
               display: "grid",
               placeItems: "center",
-              opacity: 0.8
+              opacity: 0.9
             }}
           >
             Превью отсутствует
@@ -130,36 +155,105 @@ function SidePreview({
   );
 }
 
-/* ===== Инлайновое отображение TopBarWithIntro (содержимое, без «шапки») ===== */
-/* Хак: рендерим TopBarWithIntro, программно раскрываем и скрываем его заголовок-кнопку. */
-function InlineOrderPanel() {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+/* ===== Редактируемый блок заказа (минимум нужного) ===== */
+function EditableOrderSummary() {
+  const [draft, setDraft] = useState(() => loadOrderDraft());
+  const introState = loadIntroState();
+  const [name, setName] = useState<string>(introState.intro?.customerName || "");
+  const [phone, setPhone] = useState<string>(introState.intro?.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState<string>(introState.intro?.customerNotes || "");
+  const [sizeNotes, setSizeNotes] = useState<string>(draft?.size?.notes || "");
 
-  useEffect(() => {
-    const root = containerRef.current;
-    if (!root) return;
+  // Сохранение с дебаунсом
+  const saveTimer = useRef<number | null>(null);
+  const scheduleSave = () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      const nextIntro: Intro = {
+        customerName: (name || "").trim(),
+        customerPhone: (phone || "").trim(),
+        customerNotes: (contactNotes || "").trim() || undefined
+      };
+      saveIntro(nextIntro, { lock: false });
 
-    // Найти кнопку‑шапку и кликнуть один раз, чтобы раскрыть панель
-    const headerBtn = root.querySelector("button[aria-controls]") as HTMLButtonElement | null;
-    if (headerBtn && headerBtn.getAttribute("aria-expanded") !== "true") {
-      headerBtn.click();
-    }
+      const cur = loadOrderDraft();
+      const next = saveOrderDraft({
+        ...cur,
+        size: { ...(cur.size || {}), notes: (sizeNotes || "").trim() || undefined },
+        updatedAt: Date.now()
+      });
+      setDraft(next);
+    }, 250) as unknown as number;
+  };
 
-    // Скрыть шапку визуально (оставить только содержимое)
-    if (headerBtn) {
-      (headerBtn as HTMLElement).style.display = "none";
-    }
+  useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
 
-    // Чуть сжать внешние отступы панели
-    const panel = root.querySelector("[id]") as HTMLElement | null;
-    if (panel) {
-      panel.style.marginTop = "0px";
-    }
-  }, []);
+  const dims =
+    `${draft?.size?.width ? Math.round(draft.size.width / 10) : "—"}×` +
+    `${draft?.size?.height ? Math.round(draft.size.height / 10) : "—"}×` +
+    `${draft?.size?.thickness ? Math.round(draft.size.thickness / 10) : "—"} см`;
 
   return (
-    <div ref={containerRef}>
-      <TopBarWithIntro title="Memorial" />
+    <div style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
+      <div style={{ fontWeight: 700 }}>Данные заказа</div>
+
+      {/* Контакты */}
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 600, opacity: 0.95 }}>Контакты</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
+          <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+        </div>
+        <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание (удобное время, мессенджер…)" style={inputStyle()} />
+      </div>
+
+      {/* Резная работа / размеры */}
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 600, opacity: 0.95 }}>Резная работа</div>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
+          <div
+            style={{
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.14)",
+              background:
+                "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+              width: 96,
+              height: 96,
+              overflow: "hidden",
+              display: "grid",
+              placeItems: "center"
+            }}
+          >
+            {draft?.item?.url ? (
+              <img
+                src={draft.item.url}
+                alt=""
+                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                draggable={false}
+              />
+            ) : (
+              <div style={{ opacity: 0.7, fontSize: 12 }}>нет</div>
+            )}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {draft?.item?.name || (draft?.item?.url ? decodeURIComponent(draft.item.url.split("/").pop() || "") : "—")}
+            </div>
+            <div style={{ opacity: 0.9, marginTop: 2 }}>Размеры: {dims}</div>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 13, opacity: 0.9, marginBottom: 4 }}>Примечание</div>
+          <textarea
+            value={sizeNotes}
+            onChange={(e) => { setSizeNotes(e.target.value); scheduleSave(); }}
+            rows={3}
+            placeholder="Примечание по размерам…"
+            style={{ ...inputStyle(), resize: "vertical" }}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -173,6 +267,18 @@ type Props = {
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const draft = useMemo(() => loadOrderDraft(), []);
   const itemUrl = (draft as any)?.item?.url as string | undefined;
+
+  // Для корректного соотношения сторон подложки
+  const [aspect, setAspect] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!itemUrl) return;
+    const im = new Image();
+    im.onload = () => {
+      const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
+      if (w > 0 && h > 0) setAspect(`${w} / ${h}`);
+    };
+    im.src = itemUrl;
+  }, [itemUrl]);
 
   // Превью сторон (мини‑версии)
   const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
@@ -210,30 +316,27 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   return (
     <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
-      {/* Блок редактирования заказа (контакты/размеры/люди/элементы) — без «шапки» */}
-      <section style={{ ...glassPanelStyle(), padding: 10 }}>
-        <InlineOrderPanel />
-      </section>
+      {/* Редактируемые данные заказа */}
+      <EditableOrderSummary />
 
       {/* Подсказка */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ lineHeight: 1.4 }}>
-          Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные выше.
-          Когда всё верно — нажмите «Отправить заказ».
-        </div>
+        Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные выше.
+        Когда всё верно — нажмите «Отправить заказ».
       </section>
 
-      {/* Две стороны: Лицевая / Тыльная (без слова «эскиз»), с подложкой и зеркалом для тыльной */}
+      {/* Две стороны (без слова «эскиз») с фоном для обеих, тыльная — зеркальная */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 12
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            gap: 12,
+            alignItems: "stretch"
           }}
         >
-          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} />
-          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror />
+          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} />
+          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} />
         </div>
       </section>
 
