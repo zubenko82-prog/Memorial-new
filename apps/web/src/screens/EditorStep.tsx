@@ -1,10 +1,12 @@
 // src/screens/EditorStep.tsx
 // Редактор поверх SketchTemplate, БЕЗ измерения DOM:
-// - Берём данные напрямую из драфта (люди, эпитафии, графика) и строим элементы по понятным шаблонам.
-// - Контент SketchTemplate скрываем (чтобы не дублировался), виден только фон/изделие.
+// - Контент для размещения берём из драфта (люди, эпитафии, графика/кресты).
+// - Контент SketchTemplate скрываем (виден только фон изделия), подсказку из шаблона тоже скрываем.
 // - Наш слой: портрет/метрика/эпитафии/графика/кресты с перетаскиванием и ресайзом.
 // - Узлы ресайза увеличены (проще попасть на телефоне).
-// - Превью эскиза сохраняем в драфт (но не отправляем в TopBar).
+// - «Помним, любим, скорбим…»: вернул переключатель «Лесенкой/В строку» для эпитафии.
+// - Устранено мерцание графики/крестов: позиционируем в пикселях + GPU-акселерация, не ремонтируем картинки.
+// - Превью эскиза сохраняем в драфт (TopBar не трогаем).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -49,7 +51,7 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // %
+  x: number; y: number; w: number; h: number; // проценты
   z: number;
   title?: string;
   locked?: boolean;
@@ -79,7 +81,25 @@ function linesFromPerson(p: any) {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const normRemember = (t?: string) => (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
+const normRemember = (t?: string) =>
+  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
+const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
+function splitRememberPreserve(text: string) {
+  // Сохраняем запятые/многоточие, если есть
+  const t = (text || "").trim();
+  const parts: string[] = [];
+  let buf = "";
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    buf += ch;
+    if (ch === ",") { parts.push(buf.trim()); buf = ""; }
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  const top = parts[0] || "Помним,";
+  const mid = parts[1] || "любим,";
+  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим…").trim();
+  return { top, mid, bot };
+}
 
 /* ===== Fit helpers ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
@@ -96,8 +116,11 @@ function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: bool
   setFontOnCtx(ctx, italic, sizePx, family);
   return ctx.measureText(text).width;
 }
-function fitMultilineFontPx({ text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96 }:
-{ text: string; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number; }) {
+function fitMultilineFontPx({
+  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
+}: {
+  text: string; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
+}) {
   const ctx = getMeasureCtx();
   const raw = String(text || "");
   const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -114,8 +137,11 @@ function fitMultilineFontPx({ text, boxW, boxH, italic, family, padX = 4, padY =
   const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
   return { fontPx, lines: lines.length ? lines : [""] };
 }
-function fitMetricFontsPx({ lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26] }:
-{ lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[]; }) {
+function fitMetricFontsPx({
+  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
+}: {
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
+}) {
   const ctx = getMeasureCtx();
   const L = Math.min(3, lines.length);
   if (L === 0) return [];
@@ -192,13 +218,28 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
   const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  /* ===== Скрыть контент SketchTemplate (оставить фон) ===== */
+  /* ===== Скрыть контент/подсказку SketchTemplate (оставить фон) ===== */
   useEffect(() => {
     const st = document.createElement("style");
-    st.innerHTML = `[data-editor-wrap] [data-sketch-el]{visibility:hidden!important;opacity:0!important;pointer-events:none!important}`;
+    st.setAttribute("data-editor-suppression", "1");
+    st.innerHTML = `
+      [data-editor-wrap] [data-sketch-el]{visibility:hidden!important;opacity:0!important;pointer-events:none!important}
+      [data-editor-wrap] [data-sketch-hint], 
+      [data-editor-wrap] .sketch-hint,
+      [data-editor-wrap] .hint{display:none!important}
+    `;
     document.head.appendChild(st);
     return () => { document.head.removeChild(st); };
   }, []);
+
+  // На всякий случай скрываем «соседнюю» подсказку, если она отдельным узлом перед контейнером
+  useEffect(() => {
+    const root = templateRootRef.current;
+    if (!root) return;
+    const orient = root.querySelector("[data-sketch-orient]") as HTMLElement | null;
+    const hint = orient?.previousElementSibling as HTMLElement | null;
+    if (hint) hint.style.display = "none";
+  }, [item?.url]);
 
   /* ===== Построение элементов по данным драфта (шаблоны) ===== */
   const buildOrMergeElements = React.useCallback(() => {
@@ -213,39 +254,32 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
       peopleBlocks.forEach((pb, i) => {
         const pid = pb.id;
-        // Портрет
         const pidPortrait = `portrait-${pid}`;
-        if (existById.has(pidPortrait)) {
-          next.push(existById.get(pidPortrait)!);
-        } else {
+        if (existById.has(pidPortrait)) next.push(existById.get(pidPortrait)!);
+        else {
           const w = cw * 0.8, h = 35, x = i * cw + (cw - w) / 2, y = 12;
           next.push({ id: pidPortrait, type: "portrait", x, y, w, h, z: z++, bw: false, title: "Портрет" });
         }
-        // Метрика: под портретом
         const pidMetric = `metric-${pid}`;
-        if (existById.has(pidMetric)) {
-          next.push(existById.get(pidMetric)!);
-        } else {
+        if (existById.has(pidMetric)) next.push(existById.get(pidMetric)!);
+        else {
           const w = cw * 0.9, h = 20, x = i * cw + (cw - w) / 2, y = 12 + 35 + 4;
           next.push({ id: pidMetric, type: "metric", x, y, w, h, z: z++, uppercase: false, italic: false, title: "Метрика" });
         }
       });
 
-      // Эпитафии: одна/несколько
+      // Эпитафии
       const hasPhotoOrMetric = next.some((e) => e.type === "portrait" || e.type === "metric");
       let underY = 0;
       if (hasPhotoOrMetric) {
-        next.forEach((e) => {
-          if (e.type === "portrait" || e.type === "metric") underY = Math.max(underY, e.y + e.h);
-        });
+        next.forEach((e) => { if (e.type === "portrait" || e.type === "metric") underY = Math.max(underY, e.y + e.h); });
       }
       epitaphs.forEach((_, i) => {
         const id = `epitaph-${i}`;
-        if (existById.has(id)) {
-          next.push(existById.get(id)!);
-        } else {
+        if (existById.has(id)) next.push(existById.get(id)!);
+        else {
           let x = 10, y = hasPhotoOrMetric ? Math.min(95, underY + 4) : 30, w = 80, h = hasPhotoOrMetric ? 16 : 18;
-          next.push({ id, type: "epitaph", x, y, w, h, z: z++, uppercase: false, italic: false, title: "Эпитафия" });
+          next.push({ id, type: "epitaph", x, y, w, h, z: z++, uppercase: false, italic: false, staircase: false, title: "Эпитафия" });
         }
       });
 
@@ -253,9 +287,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const anyContent = next.length > 0;
       crosses.forEach((_, i) => {
         const id = `cross-${i}`;
-        if (existById.has(id)) {
-          next.push(existById.get(id)!);
-        } else {
+        if (existById.has(id)) next.push(existById.get(id)!);
+        else {
           const w = anyContent ? 18 : 28, h = anyContent ? 18 : 28;
           const x = anyContent ? 4 : (50 - w / 2);
           const y = anyContent ? 4 : 30;
@@ -266,9 +299,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       // Прочая графика
       others.forEach((_, i) => {
         const id = `graphic-${i}`;
-        if (existById.has(id)) {
-          next.push(existById.get(id)!);
-        } else {
+        if (existById.has(id)) next.push(existById.get(id)!);
+        else {
           const empty = !anyContent && crosses.length === 0 && epitaphs.length === 0;
           const w = empty ? 40 : 50, h = empty ? 28 : 18;
           const x = 50 - w / 2;
@@ -277,12 +309,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         }
       });
 
-      // Удаляем отсутствующие (если что-то убрали в драфте)
-      const allowedIds = new Set(next.map((e) => e.id));
+      // Сохраняем пользовательские флаги, удаляем отсутствующие
       const kept = next.map((e) => {
         const old = existById.get(e.id);
         return old
-          ? { ...old, ...e, // сохраняем флаги пользователя
+          ? {
+              ...e,
               uppercase: old.uppercase ?? e.uppercase,
               italic: old.italic ?? e.italic,
               flipH: old.flipH ?? e.flipH,
@@ -291,23 +323,15 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             }
           : e;
       });
-      const changed =
-        kept.length !== prev.length ||
-        kept.some((e, idx) => !prev[idx] || prev[idx].id !== e.id);
 
-      if (changed) {
-        // Сохранить в драфт
-        const cur = loadOrderDraft();
-        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: kept, wishes, updatedAt: Date.now() } });
-      }
+      const cur = loadOrderDraft();
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: kept, wishes, updatedAt: Date.now() } });
       return kept;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [peopleBlocks, epitaphs, crosses, others]);
 
-  useEffect(() => {
-    buildOrMergeElements();
-  }, [buildOrMergeElements]);
+  useEffect(() => { buildOrMergeElements(); }, [buildOrMergeElements]);
 
   /* ===== DnD / Resize ===== */
   const dragRef = useRef<{
@@ -371,7 +395,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  /* ===== Превью (мини/большое) в драфт (TopBar не используем) ===== */
+  /* ===== Превью (мини/большое) в драфт ===== */
   const queuePreviewGeneration = () => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -446,7 +470,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const tRaw = epitaphs[idx] || ""; const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
             ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
             const padX2 = Math.max(4, Math.round(rbox.w * 0.04)); const padY2 = Math.max(2, Math.round(rbox.h * 0.06));
-            const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
+            // Учтём «лесенку»
+            let textForFit = txt;
+            const isRLM = isRememberLoveMourn(tRaw);
+            if (isRLM && el.staircase) {
+              const r = splitRememberPreserve(tRaw);
+              textForFit = `${r.top}\n${r.mid}\n${r.bot}`;
+            }
+            const { fontPx, lines } = fitMultilineFontPx({ text: textForFit, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
             setFontOnCtx(ctx, !!el.italic, fontPx, fam);
             const count = Math.max(1, lines.length); const lineH = (rbox.h - padY2 * 2) / count;
             for (let i = 0; i < count; i++) { const yy = rbox.y + padY2 + lineH * (i + 0.5); ctx.fillText(lines[i], rbox.x + rbox.w / 2, yy); }
@@ -494,9 +525,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   };
 
   // Сохранять при изменениях
-  useEffect(() => {
-    buildOrMergeElements();
-  }, [peopleBlocks, epitaphs, crosses, others]); // уже есть в колбэке, но ок
+  useEffect(() => { buildOrMergeElements(); }, [peopleBlocks, epitaphs, crosses, others]);
 
   useEffect(() => {
     const onUpd = () => setDraft(loadOrderDraft());
@@ -520,13 +549,25 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [elements, wishes, item?.url, peopleBlocks, crosses, others, epitaphs]);
 
-  /* ===== Мини‑панель инструментов (до использования) ===== */
+  /* ===== Мини‑панель инструментов ===== */
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
     const isMetric = el.type === "metric";
     const isEpitaph = el.type === "epitaph";
     const isGraphic = el.type === "graphic";
     const isPortrait = el.type === "portrait";
+
+    // Для эпитафии «помним, любим, скорбим…» показываем переключатель лесенка/строка
+    let canStair = false;
+    let epitaphIndex = -1;
+    if (isEpitaph) {
+      const key = el.id.split("-").slice(1).join("-");
+      const idx = Number(key);
+      epitaphIndex = Number.isFinite(idx) ? idx : -1;
+      const tRaw = epitaphIndex >= 0 ? (epitaphs[epitaphIndex] || "") : "";
+      canStair = isRememberLoveMourn(tRaw);
+    }
+
     return (
       <div
         onPointerDown={(ev) => ev.stopPropagation()}
@@ -545,9 +586,24 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           </button>
         )}
         {isEpitaph && (
-          <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, italic: !e.italic } : e)))}>
-            {el.italic ? "Обычный" : "Курсив"}
-          </button>
+          <>
+            <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, italic: !e.italic } : e)))}>
+              {el.italic ? "Обычный" : "Курсив"}
+            </button>
+            {canStair && (
+              <button
+                type="button"
+                style={btn}
+                onClick={() =>
+                  setElements((prev) =>
+                    prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e))
+                  )
+                }
+              >
+                {el.staircase ? "В строку" : "Лесенкой"}
+              </button>
+            )}
+          </>
         )}
         {isGraphic && (
           <button type="button" style={btn} onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))}>
@@ -580,13 +636,42 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const key = el.id.split("-").slice(1).join("-");
           const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
 
+          // Общие пиксельные позиции для устранения мерцания
+          const wrapperStyle: React.CSSProperties = {
+            position: "absolute",
+            left: boxPx.x,
+            top: boxPx.y,
+            width: boxPx.w,
+            height: boxPx.h,
+            zIndex: el.z,
+            pointerEvents: "none",
+            willChange: "transform",
+            contain: "layout paint style",
+            backfaceVisibility: "hidden"
+          };
+
           if (el.type === "portrait") {
             const p = peopleBlocks.find((pp) => pp.id === key);
             const url = p?.photo || "";
             const filt = el.bw ? "grayscale(100%)" : "none";
             return (
-              <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
-                {url ? <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block" }} draggable={false} /> : null}
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {url ? (
+                  <img
+                    src={url}
+                    alt="Портрет"
+                    style={{
+                      width: "100%", height: "100%",
+                      objectFit: "cover",
+                      filter: filt, display: "block",
+                      transform: "translateZ(0)",
+                      willChange: "transform",
+                      pointerEvents: "none"
+                    }}
+                    decoding="async"
+                    draggable={false}
+                  />
+                ) : null}
               </div>
             );
           }
@@ -599,7 +684,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const padY = Math.max(2, Math.round(boxPx.h * 0.10));
             const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
             return (
-              <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+              <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: fam, textAlign: "center" }}>
                 <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.12, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
                   <div style={{ display: "grid", gap: 2, width: "100%" }}>
                     {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
@@ -614,12 +699,18 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           if (el.type === "epitaph") {
             const idx = safeIndex(key, epitaphs.length);
             const tRaw = epitaphs[idx] || "";
-            const txt = el.uppercase ? tRaw.toUpperCase() : tRaw;
+            const isRLM = isRememberLoveMourn(tRaw);
+            const textDisplay = (() => {
+              if (!isRLM) return el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const r = splitRememberPreserve(tRaw);
+              const ladder = `${r.top}\n${r.mid}\n${r.bot}`;
+              return el.staircase ? (el.uppercase ? ladder.toUpperCase() : ladder) : (el.uppercase ? tRaw.toUpperCase() : tRaw);
+            })();
             const padX = Math.max(4, Math.round(boxPx.w * 0.04));
             const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-            const { fontPx, lines } = fitMultilineFontPx({ text: txt, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
+            const { fontPx, lines } = fitMultilineFontPx({ text: textDisplay, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
             return (
-              <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
+              <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
                 <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
                   <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
                 </div>
@@ -631,8 +722,24 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const idx = safeIndex(key, crosses.length);
             const c = crosses[idx];
             return (
-              <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
-                {c?.url ? <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {c?.url ? (
+                  <img
+                    src={c.url}
+                    alt={c.name || "Крест"}
+                    style={{
+                      width: "100%", height: "100%",
+                      objectFit: "contain",
+                      display: "block",
+                      filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                      transform: "translateZ(0)",
+                      willChange: "transform",
+                      pointerEvents: "none"
+                    }}
+                    decoding="async"
+                    draggable={false}
+                  />
+                ) : null}
               </div>
             );
           }
@@ -640,10 +747,26 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           if (el.type === "graphic") {
             const idx = safeIndex(key, others.length);
             const g = others[idx];
-            const tr = el.flipH ? "scaleX(-1)" : "none";
+            const tr = el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
             return (
-              <div key={`content-${el.id}`} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, zIndex: el.z }}>
-                {g?.url ? <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {g?.url ? (
+                  <img
+                    src={g.url}
+                    alt={g.name || "Графика"}
+                    style={{
+                      width: "100%", height: "100%",
+                      objectFit: "contain",
+                      display: "block",
+                      transform: tr,
+                      filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                      willChange: "transform",
+                      pointerEvents: "none"
+                    }}
+                    decoding="async"
+                    draggable={false}
+                  />
+                ) : null}
               </div>
             );
           }
@@ -720,7 +843,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               minHeight: aspect ? undefined : 540
             }}
           >
-            {/* Подложка */}
+            {/* Подложка (скрываем её контент/подсказки, оставляем фон) */}
             <div ref={templateRootRef}>
               <SketchTemplate
                 item={item}
