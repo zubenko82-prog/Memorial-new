@@ -1,47 +1,55 @@
-// src/screens/EditorStep.tsx
-// Лёгкий редактор БЕЗ SketchTemplate и БЕЗ измерения DOM:
+// src/components/SketchTemplate.tsx
+// Общий шаблон предпросмотра для шагов Engraving/Graphics/Epitaph.
 //
-// Исправления:
-// - Кнопки в мини‑панели элементов (ПРОПИСНЫЕ/Курсив/Лесенка/Ч-Б/Отразить) теперь работают:
-//   • слой рамок принимает события (pointerEvents: "auto"),
-//   • все кнопки стопорят всплытие (stopPropagation),
-//   • убран «бесконечный» цикл сохранений (сейв/прослушка/пересборка): сохраняем и строим превью
-//     только при изменениях элементов/пожеланий; добавлена защита от повторного сейва без изменений.
-// - Ручки ресайза выровнены по рамке (не смещаются).
-// - Портрет по умолчанию Ч/Б.
-// - «Помним, любим, скорбим…»:
-//   • В строку — три слова в одну строку без переносов (whiteSpace: "nowrap").
-//   • Лесенкой — 3 строки: «Помним,» слева, «любим,» по центру, «скорбим,» справа (и в Canvas‑превью тоже).
+// Правки:
+// - Горизонтальный эскиз для двух людей: портрет 65% H, метрика 25% H, между ними ~1% H; блок сдвинут немного ниже (top ≈ 8% H).
+// - Шрифт метрики уменьшен, особенно на телефоне (<= 480px по ширине рендер‑области).
+// - Эпитафия и графика больше не зависят от нижней границы метрики — допускаем наложение объектов.
+//   Эпитафия масштабируется в разумных пределах и якорится над графикой; графика прижата к низу.
+// - Для 3+ людей слегка уменьшили метрику на телефоне и сдвинули блок чуть ниже, чтобы разгрузить низ.
+// Остальное — без изменений.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import TopBarWithIntro from "../components/TopBarWithIntro";
-import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
-/* ===== UI ===== */
-function glassPanelStyle() {
-  return {
-    background: "rgba(20,20,24,0.55)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: 12,
-    color: "#fff",
-    boxSizing: "border-box"
-  } as React.CSSProperties;
-}
-function glassButtonStyle(size: "nano" | "sm" | "md" = "sm") {
-  const pad = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
-  return {
-    padding: pad[size],
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.28)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.1)",
-    color: "#fff",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-    boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)"
-  } as React.CSSProperties;
-}
+type Orientation = "vertical" | "horizontal";
+
+export type SketchTemplateProps = {
+  item: { url?: string; name?: string } | null;
+  peopleBlocks: Array<{ id: string; lines: string[]; photo?: string | null }>;
+  crosses?: Array<{ url: string; name?: string }>;
+  others?: Array<{ url: string; name?: string }>;
+  epitaphs?: string[];
+  carvingOpacity?: number;
+  style?: React.CSSProperties;
+  orientationOverride?: Orientation;
+};
+
+const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
+
+const CFG = {
+  general: {
+    minContainerHeight: 200,
+    containerPadding: 8,
+    carvingOpacityDefault: 0.4
+  },
+  horizontal: {
+    layout: { gap: 12, columnMinW: 140 },
+    one: { blocks: { cross: { size: { width: "8%", height: "auto" } } } },
+    two: { blocks: { cross: { size: { width: "8%", height: "auto" } } } },
+    many: { blocks: { cross: { size: { width: "7%", height: "auto" } } } }
+  },
+  vertical: {
+    layout: { rowsHeightFactor: 0.5, rowGapPx: 10 },
+    one: { blocks: { cross: { size: { width: "14%", height: "auto" } } } },
+    two: { blocks: { cross: { size: { width: "14%", height: "auto" } } } },
+    many: { blocks: { cross: { size: { width: "13%", height: "auto" } } } }
+  }
+} as const;
+
+const EPS = 0.0005;
+const pxChanged = (a: number, b: number, tol = 0.5) => Math.abs(a - b) > tol;
+
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
     backgroundColor: "#000",
@@ -50,892 +58,739 @@ function bottomUnderlayGradient(): React.CSSProperties {
   };
 }
 
-/* ===== Types ===== */
-type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
-type EditorEl = {
-  id: string;
-  type: ElType;
-  x: number; y: number; w: number; h: number; // проценты
-  z: number;
-  title?: string;
-  locked?: boolean;
-  uppercase?: boolean; // metric/epitaph
-  italic?: boolean;    // metric/epitaph
-  flipH?: boolean;     // graphic
-  bw?: boolean;        // portrait
-  staircase?: boolean; // «Помним, любим, скорбим…»
-};
-
-/* ===== Helpers ===== */
-const SKETCH_PAD = 8;
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
-const clampBox = (x: number, y: number, w: number, h: number) => ({
-  x: clamp(x, 0, 100 - w),
-  y: clamp(y, 0, 100 - h),
-  w: clamp(w, 2, 100),
-  h: clamp(h, 2, 100)
-});
-const snap = (v: number, step = 1) => Math.round(v / step) * step;
-const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
-const isCrossCategoryName = (s?: string) => (s || "").toLowerCase().includes("крест") || (s || "").toLowerCase().includes("cross");
-
-function linesFromPerson(p: any) {
-  const l1 = (p?.lastName || "").trim();
-  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
-  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
-  return [l1, l2, l3].filter(Boolean);
-}
-const normRemember = (t?: string) =>
-  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
-const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
-function splitRememberPreserve(text: string) {
-  const t = (text || "").trim();
-  const parts: string[] = [];
-  let buf = "";
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    buf += ch;
-    if (ch === ",") { parts.push(buf.trim()); buf = ""; }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  const top = parts[0] || "Помним,";
-  const mid = parts[1] || "любим,";
-  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим…").trim();
-  return { top, mid, bot };
+function pickTplKey(n: number): "one" | "two" | "many" {
+  if (n <= 1) return "one";
+  if (n === 2) return "two";
+  return "many";
 }
 
-/* ===== Fit helpers ===== */
-let __measureCtx: CanvasRenderingContext2D | null = null;
-function getMeasureCtx(): CanvasRenderingContext2D {
-  if (__measureCtx) return __measureCtx;
-  const c = document.createElement("canvas");
-  __measureCtx = c.getContext("2d");
-  return __measureCtx!;
-}
-function setFontOnCtx(ctx: CanvasRenderingContext2D, italic: boolean, px: number, family: string) {
-  ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.round(px))}px ${family}`;
-}
-function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: boolean, family: string, sizePx: number) {
-  setFontOnCtx(ctx, italic, sizePx, family);
-  return ctx.measureText(text).width;
-}
+export default function SketchTemplate({
+  item,
+  peopleBlocks,
+  crosses = [],
+  others = [],
+  epitaphs = [],
+  carvingOpacity = CFG.general.carvingOpacityDefault,
+  style,
+  orientationOverride
+}: SketchTemplateProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-// Фит «лесенки» (3 строки) с одним размером шрифта
-function fitStairRLMFontPx({
-  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
-}: {
-  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string;
-  padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
-}): number {
-  const ctx = getMeasureCtx();
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const perLineH = usableH / Math.max(1, lines.length) / lineHeight;
-  let fW = maxPx;
-  for (const ln of lines.length ? lines : [" "]) {
-    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
-    fW = Math.min(fW, (usableW * 100) / w100);
-  }
-  return clamp(Math.floor(Math.min(perLineH, fW, maxPx)), minPx, maxPx);
-}
-function fitMultilineFontPxGeneric({
-  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
-}: {
-  text: string; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
-}) {
-  const ctx = getMeasureCtx();
-  const raw = String(text || "");
-  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  const count = Math.max(1, lines.length);
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const fByH = usableH / (count * lineHeight);
-  let fByW = maxPx;
-  for (const ln of lines.length ? lines : [" "]) {
-    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
-    const fLine = (usableW * 100) / w100;
-    fByW = Math.min(fByW, fLine);
-  }
-  const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
-  return { fontPx, lines: lines.length ? lines : [""] };
-}
-function fitMetricFontsPx({
-  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
-}: {
-  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
-}) {
-  const ctx = getMeasureCtx();
-  const L = Math.min(3, lines.length);
-  if (L === 0) return [];
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const wSum = weights.slice(0, L).reduce((a, b) => a + b, 0);
-  const baseByH = usableH / (lineHeight * wSum);
-  const initial = Array.from({ length: L }, (_, i) => baseByH * weights[i]);
-  let sW = 1;
-  for (let i = 0; i < L; i++) {
-    const ln = lines[i] || "";
-    if (!ln) continue;
-    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
-    const maxFi = (usableW * 100) / w100;
-    sW = Math.min(sW, maxFi / initial[i]);
-  }
-  return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
-}
+  // Измерители (оставляем, но ниже перестаём «выталкивать» эпитафию/графику по ним)
+  const [metricBottomPx, setMetricBottomPx] = useState(0);
+  const metricMeasureSigRef = useRef<string>("");
+  const metricRafRef = useRef<number | null>(null);
 
-/* ===== Компонент ===== */
-type Props = { onBack?: () => void; onContinue?: (payload?: any) => void; onRearSide?: (payload?: any) => void; onSendOrder?: (payload?: any) => void; };
+  const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
 
-export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
-  const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
-  const [outro, setOutro] = useState(false);
+  // Масштаб метрики (горизонтальный/1 человек)
+  const metricMeasureRef = useRef<HTMLDivElement | null>(null);
+  const [metricScaleH1, setMetricScaleH1] = useState(1);
+  const metricH1SigRef = useRef<string>("");
 
-  const [elements, setElements] = useState<EditorEl[]>(() => (draft as any)?.editor?.elements || []);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
+  const [forcedOrientation, setForcedOrientation] = useState<Orientation | null>(null);
 
-  const editorWrapRef = useRef<HTMLDivElement | null>(null);
-
-  const saveTimerRef = useRef<number | null>(null);
-  const previewTimerRef = useRef<number | null>(null);
-
-  // aspectRatio
-  const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
-
-  // Источники
-  const item = draft?.item || null;
-  const engr: any = draft?.engraving || {};
-  const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
-
-  // Блоки людей
-  const peopleBlocks = useMemo(() => {
-    if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
-      return engr.persons.map((p: any, idx: number) => {
-        const lines = linesFromPerson(p);
-        const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null;
-        return { id: p.id || `person-${idx}`, lines, photo };
-      });
-    }
-    const legacyLines: string[] = [];
-    if (engr?.fullName) legacyLines.push(String(engr.fullName));
-    const dates: string[] = [];
-    if (engr?.birthDate) dates.push(String(engr.birthDate));
-    if (engr?.deathDate) dates.push(String(engr.deathDate));
-    if (dates.length) legacyLines.push(dates.join(" — "));
-    if (Array.isArray(engr?.lines)) legacyLines.push(...(engr.lines as string[]).filter(Boolean));
-    const photo = engr?.photoPreview || engr?.photoDataUrl || engr?.photoUrl || engr?.photo || null;
-    return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
-  }, [engr]);
-
-  // Эпитафии
-  const epitaphs = useMemo(() => {
-    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
-    return [];
-  }, [engr]);
-
-  // Графика
-  const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
-  const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
-
-  /* ===== Построение элементов (простые «правила») ===== */
-  const buildOrMergeElements = React.useCallback(() => {
-    setElements((prev) => {
-      const existById = new Map(prev.map((e) => [e.id, e]));
-      const next: EditorEl[] = [];
-
-      const cnt = peopleBlocks.length || 0;
-      const cw = cnt > 0 ? 100 / cnt : 100;
-      let z = 10;
-
-      peopleBlocks.forEach((pb, i) => {
-        const pid = pb.id;
-        const pidPortrait = `portrait-${pid}`;
-        if (existById.has(pidPortrait)) next.push(existById.get(pidPortrait)!);
-        else {
-          // Портрет по умолчанию — ч/б
-          const w = cw * 0.8, h = 35, x = i * cw + (cw - w) / 2, y = 10;
-          next.push({ id: pidPortrait, type: "portrait", x, y, w, h, z: z++, bw: true, title: "Портрет" });
-        }
-        const pidMetric = `metric-${pid}`;
-        if (existById.has(pidMetric)) next.push(existById.get(pidMetric)!);
-        else {
-          const w = cw * 0.9, h = 20, x = i * cw + (cw - w) / 2, y = 10 + 35 + 4;
-          next.push({ id: pidMetric, type: "metric", x, y, w, h, z: z++, uppercase: false, italic: false, title: "Метрика" });
-        }
-      });
-
-      const topContentBottom = next
-        .filter((e) => e.type === "portrait" || e.type === "metric")
-        .reduce((m, e) => Math.max(m, e.y + e.h), 0);
-
-      epitaphs.forEach((_, i) => {
-        const id = `epitaph-${i}`;
-        if (existById.has(id)) next.push(existById.get(id)!);
-        else {
-          const w = 80, h = 16, x = 10, y = Math.min(95, (topContentBottom || 28) + 6) + i * (16 + 4);
-          next.push({ id, type: "epitaph", x, y, w, h, z: 100 + i, uppercase: false, italic: false, staircase: false, title: "Эпитафия" });
-        }
-      });
-
-      const anyCore = next.length > 0;
-      crosses.forEach((_, i) => {
-        const id = `cross-${i}`;
-        if (existById.has(id)) next.push(existById.get(id)!);
-        else {
-          const w = anyCore ? 18 : 28, h = anyCore ? 18 : 28;
-          const x = 4, y = 4;
-          next.push({ id, type: "cross", x, y, w, h, z: 200 + i, title: "Крест" });
-        }
-      });
-
-      others.forEach((_, i) => {
-        const id = `graphic-${i}`;
-        if (existById.has(id)) next.push(existById.get(id)!);
-        else {
-          const w = 40, h = 18, x = 50 - w / 2, y = Math.max(0, 100 - h - 4);
-          next.push({ id, type: "graphic", x, y, w, h, z: 300 + i, flipH: false, title: "Графика" });
-        }
-      });
-
-      // Сохраняем пользовательские флаги
-      const kept = next.map((e) => {
-        const old = existById.get(e.id);
-        return old ? { ...e, uppercase: old.uppercase ?? e.uppercase, italic: old.italic ?? e.italic, flipH: old.flipH ?? e.flipH, bw: old.bw ?? e.bw, staircase: old.staircase ?? e.staircase } : e;
-      });
-
-      // Защита от «бесконечного» сейва (сравнение по id/полям)
-      const norm = (arr: EditorEl[]) =>
-        arr
-          .map(({ id, type, x, y, w, h, z, uppercase, italic, flipH, bw, staircase }) => ({
-            id, type, x, y, w, h, z, uppercase: !!uppercase, italic: !!italic, flipH: !!flipH, bw: !!bw, staircase: !!staircase
-          }))
-          .sort((a, b) => a.id.localeCompare(b.id));
-      const same =
-        JSON.stringify(norm(kept)) === JSON.stringify(norm(prev));
-
-      if (!same) {
-        const cur = loadOrderDraft();
-        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: kept, wishes, updatedAt: Date.now() } });
-      }
-
-      return kept;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peopleBlocks, epitaphs, crosses, others, wishes]);
-
-  useEffect(() => { buildOrMergeElements(); }, [buildOrMergeElements]);
-
-  /* ===== DnD / Resize ===== */
-  const dragRef = useRef<{
-    id: string; mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-    startX: number; startY: number; start: EditorEl;
-  } | null>(null);
-
-  const onPointerDownBox = (e: React.PointerEvent, id: string, mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move") => {
-    e.stopPropagation();
-    const el = elements.find((x) => x.id === id);
-    if (!el || el.locked) return;
-    setSelectedId(id);
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-    dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, start: { ...el } };
-  };
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current; if (!d) return;
-    e.preventDefault();
-    const rect = editorWrapRef.current?.getBoundingClientRect(); if (!rect) return;
-    const contentW = rect.width - SKETCH_PAD * 2;
-    const contentH = rect.height - SKETCH_PAD * 2;
-    if (contentW <= 0 || contentH <= 0) return;
-
-    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
-    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
-
-    const withSnap = !e.altKey;
-    const snapStep = e.shiftKey ? 1.5 : 1;
-
-    setElements((prev) => prev.map((el) => {
-      if (el.id !== d.id) return el;
-      let { x, y, w, h } = d.start;
-      if (d.mode === "move") {
-        let nx = x + dxPct, ny = y + dyPct;
-        if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); }
-        return { ...el, ...clampBox(nx, ny, w, h) };
-      }
-      const keepRatio = e.shiftKey;
-      let nx = x, ny = y, nw = w, nh = h;
-      const ratio = (w || 1) / (h || 1);
-      if (d.mode.includes("e")) nw = w + dxPct;
-      if (d.mode.includes("s")) nh = h + dyPct;
-      if (d.mode.includes("w")) { nx = x + dxPct; nw = w - dxPct; }
-      if (d.mode.includes("n")) { ny = y + dyPct; nh = h - dyPct; }
-      if (keepRatio) {
-        if (["e","w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
-        if (["n","s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
-      }
-      if (withSnap) { nx = snap(nx, snapStep); ny = snap(ny, snapStep); nw = snap(nw, snapStep); nh = snap(nh, snapStep); }
-      return { ...el, ...clampBox(nx, ny, nw, nh) };
-    }));
-  };
-  const onPointerUp = () => {
-    if (dragRef.current) {
-      const cur = loadOrderDraft();
-      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-      queuePreviewGeneration();
-    }
-    dragRef.current = null;
-  };
-
-  /* ===== Превью в драфт ===== */
-  const queuePreviewGeneration = () => {
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
-    previewTimerRef.current = window.setTimeout(async () => {
-      const wrap = editorWrapRef.current; if (!wrap) return;
-      const r = wrap.getBoundingClientRect();
-      const pad = SKETCH_PAD;
-
-      async function drawPreview(W: number, H: number): Promise<string | null> {
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.floor(W));
-        canvas.height = Math.max(1, Math.floor(H));
-        const ctx = canvas.getContext("2d"); if (!ctx) return null;
-
-        // фон
-        const grad = ctx.createLinearGradient(0, 0, 0, H);
-        grad.addColorStop(0, "#6e6e6e"); grad.addColorStop(0.2, "#464545");
-        grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
-        ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
-
-        // изделие
-        const base = await new Promise<HTMLImageElement | null>((resolve) => {
-          const url = item?.url || ""; if (!url) return resolve(null);
-          const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url;
-        });
-        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
-        if (base) {
-          const sr = base.width / base.height, dr = PW / PH;
-          ctx.globalAlpha = 0.35;
-          if (sr > dr) {
-            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
-            ctx.drawImage(base, rx, ry, rw, rh);
-          } else {
-            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
-            ctx.drawImage(base, rx, ry, rw, rh);
-          }
-          ctx.globalAlpha = 1;
-        }
-
-        const fam = FONT_CENTURY;
-        const safeIndex = (raw: string, max: number) => {
-          const n = parseInt(raw, 10); if (!Number.isFinite(n) || n < 0) return 0;
-          return Math.min(n, Math.max(0, max - 1));
-        };
-
-        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
-          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
-          const key = el.id.split("-").slice(1).join("-");
-          if (el.type === "portrait") {
-            const p = peopleBlocks.find((pp) => pp.id === key);
-            const url = p?.photo || ""; if (!url) continue;
-            const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = url; });
-            if (!im) continue;
-            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
-            ctx.save(); ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
-            if (el.bw) ctx.filter = "grayscale(100%)";
-            if (sr2 > dr2) { const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
-            else { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
-            ctx.restore(); ctx.filter = "none";
-          } else if (el.type === "metric") {
-            const p = peopleBlocks.find((pp) => pp.id === key);
-            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-            ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.10));
-            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
-            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
-            let y = rbox.y + (rbox.h - totalH) / 2 + (fitted[0] || 10) * 1.12 / 2;
-            for (let i = 0; i < fitted.length; i++) { setFontOnCtx(ctx, !!el.italic, fitted[i], fam); ctx.fillText(tf(lines[i]), rbox.x + rbox.w / 2, y); y += fitted[i] * 1.12; }
-            ctx.restore();
-          } else if (el.type === "epitaph") {
-            const idx = safeIndex(key, epitaphs.length);
-            const tRaw = epitaphs[idx] || "";
-            const isRLM = isRememberLoveMourn(tRaw);
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.06));
-            ctx.save(); ctx.fillStyle = "#fff"; ctx.textBaseline = "middle";
-            if (isRLM && el.staircase) {
-              const r = splitRememberPreserve(tRaw);
-              const parts = [r.top, r.mid, r.bot];
-              const fontPx = fitStairRLMFontPx({ lines: parts, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15, minPx: 10, maxPx: 96 });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
-              const slotH = (rbox.h - padY2 * 2) / 3;
-              ctx.textAlign = "left";
-              ctx.fillText(parts[0], rbox.x + padX2, rbox.y + padY2 + slotH * 0.5);
-              ctx.textAlign = "center";
-              ctx.fillText(parts[1], rbox.x + rbox.w / 2, rbox.y + padY2 + slotH * 1.5);
-              ctx.textAlign = "right";
-              ctx.fillText(parts[2], rbox.x + rbox.w - padX2, rbox.y + padY2 + slotH * 2.5);
-            } else {
-              // В одну строку без переносов
-              const oneLine = isRLM
-                ? `${splitRememberPreserve(tRaw).top} ${splitRememberPreserve(tRaw).mid} ${splitRememberPreserve(tRaw).bot}`.replace(/\s+/g, " ")
-                : tRaw;
-              const { fontPx } = fitMultilineFontPxGeneric({ text: oneLine, boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.15 });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
-              ctx.textAlign = "center";
-              ctx.fillText(el.uppercase ? oneLine.toUpperCase() : oneLine, rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
-            }
-            ctx.restore();
-          } else if (el.type === "graphic") {
-            const idx = Number(key); const g = Number.isFinite(idx) ? others[idx] : null; if (!g?.url) continue;
-            const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = g.url; });
-            if (!im) continue;
-            ctx.save();
-            if (el.flipH) { ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2); ctx.scale(-1, 1); ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2)); }
-            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
-            if (sr2 > dr2) { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
-            else { const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
-            ctx.restore();
-          } else if (el.type === "cross") {
-            const idx = Number(key); const c = Number.isFinite(idx) ? crosses[idx] : null; if (!c?.url) continue;
-            const im = await new Promise<HTMLImageElement | null>((resolve) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => resolve(i); i.onerror = () => resolve(null); i.src = c.url; });
-            if (!im) continue;
-            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
-            if (sr2 > dr2) { const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2); ctx.drawImage(im, xx, yy, ww, hh); }
-            else { const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y; ctx.drawImage(im, xx, yy, ww, hh); }
-          }
-        }
-        return canvas.toDataURL("image/jpeg", 0.9);
-      }
-
-      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
-      const maxSide = 1600, ratio = r.width / Math.max(1, r.height);
-      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
-      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
-      const big = await drawPreview(bigW, bigH);
-
-      const cur = loadOrderDraft();
-      saveOrderDraft({
-        ...cur,
-        editor: {
-          ...(cur as any).editor,
-          previewUrl: mini || (cur as any).editor?.previewUrl || null,
-          previewHiUrl: big || (cur as any).editor?.previewHiUrl || null,
-          previewUpdatedAt: Date.now(),
-          elements,
-          wishes
-        }
-      });
-    }, 300) as unknown as number;
-  };
-
-  // Автосохранение и превью — только при изменении элементов/пожеланий (чтобы не ловить циклы)
   useEffect(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      const cur = loadOrderDraft();
-      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-    }, 250) as unknown as number;
-    queuePreviewGeneration();
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [elements, wishes]);
-
-  // aspectRatio для изделия
-  useEffect(() => {
-    if (!item?.url) return;
-    const im = new Image();
-    im.onload = () => setImgWH({ w: im.naturalWidth || 4, h: im.naturalHeight || 3 });
-    im.onerror = () => setImgWH({ w: 4, h: 3 });
-    im.src = item.url;
-  }, [item?.url]);
-
-  // Внешние обновления драфта
-  useEffect(() => {
-    const onUpd = () => setDraft(loadOrderDraft());
-    window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-    window.addEventListener("storage", onUpd);
-    return () => {
-      window.removeEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-      window.removeEventListener("storage", onUpd);
+    const apply = () => {
+      const draft = loadOrderDraft();
+      const o = (draft.size?.orientation as Orientation | undefined) ?? (draft as any).orientation ?? null;
+      setForcedOrientation(o);
     };
+    apply();
+    const handler = () => apply();
+    window.addEventListener(DRAFT_UPDATED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, handler as EventListener);
   }, []);
 
-  /* ===== Мини‑панель инструментов (кнопки с stopPropagation) ===== */
-  const MiniToolbar = ({ el }: { el: EditorEl }) => {
-    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
-    const stop = (e: React.PointerEvent | React.MouseEvent) => { e.stopPropagation(); };
+  const recalc = useCallback(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    const r = img.getBoundingClientRect();
+    setImgRect((prev) => (prev.w !== r.width || prev.h !== r.height ? { w: r.width, h: r.height } : prev));
+  }, []);
 
-    const isMetric = el.type === "metric";
-    const isEpitaph = el.type === "epitaph";
-    const isGraphic = el.type === "graphic";
-    const isPortrait = el.type === "portrait";
-
-    let canStair = false;
-    if (isEpitaph) {
-      const idx = Number(el.id.split("-")[1]);
-      const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
-      canStair = isRememberLoveMourn(tRaw);
+  useEffect(() => {
+    const onResize = () => recalc();
+    window.addEventListener("resize", onResize);
+    const RO = (window as any).ResizeObserver as typeof ResizeObserver | undefined;
+    let ro: ResizeObserver | null = null;
+    if (RO && imgRef.current) {
+      ro = new RO(onResize);
+      ro.observe(imgRef.current);
     }
+    return () => {
+      window.removeEventListener("resize", onResize);
+      ro?.disconnect();
+    };
+  }, [recalc]);
+
+  const isVerticalByImage = imgRect.h > imgRect.w;
+  const orientation: Orientation | null = orientationOverride ?? forcedOrientation ?? null;
+  const isVertical = orientation ? orientation === "vertical" : isVerticalByImage;
+
+  const tplKey = pickTplKey(peopleBlocks.length);
+  const H = imgRect.h;
+  const W = imgRect.w;
+
+  /* ===== Метрика (универсальная) — уменьшенные шрифты, переносы ===== */
+  function PersonMetricText({ lines, sizeMult = 1 }: { lines: string[]; sizeMult?: number }) {
+    const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
+    const toUp = (s: string) => s.toUpperCase();
+    const S = (minPx: number, vw: number, maxPx: number) =>
+      `clamp(${Math.round(minPx * sizeMult)}px, ${vw * sizeMult}vw, ${Math.round(maxPx * sizeMult)}px)`;
+    const lineBase: React.CSSProperties = { wordBreak: "break-word", whiteSpace: "normal" };
+    return (
+      <div style={{ width: "100%", display: "grid", gap: 4, textAlign: "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+        {!!L[0] && (
+          <div style={{ ...lineBase, font: `700 ${S(14, 2.2, 22)} ${FONT_CENTURY}`, lineHeight: 1.14, letterSpacing: "0.3px" }}>
+            {toUp(L[0])}
+          </div>
+        )}
+        {!!L[1] && (
+          <div style={{ ...lineBase, font: `600 ${S(13, 2.0, 20)} ${FONT_CENTURY}`, lineHeight: 1.14, letterSpacing: "0.25px" }}>
+            {toUp(L[1])}
+          </div>
+        )}
+        {!!L[2] && (
+          <div style={{ ...lineBase, font: `400 ${S(12, 1.8, 18)} ${FONT_CENTURY}`, lineHeight: 1.12, letterSpacing: "0.2px", opacity: 0.95 }}>
+            {toUp(L[2])}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ===== Измерение нижней границы метрики (для справки) ===== */
+  useEffect(() => {
+    if (!H || !W) return;
+    const root = containerRef.current;
+    if (!root) return;
+
+    const sig = [H, W, isVertical ? "v" : "h", tplKey, peopleBlocks.map((p) => p.lines.join("|")).join("||")].join("::");
+    if (metricMeasureSigRef.current === sig) return;
+    metricMeasureSigRef.current = sig;
+
+    if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
+    metricRafRef.current = requestAnimationFrame(() => {
+      const rootRect = root.getBoundingClientRect();
+      const nodes = root.querySelectorAll('[data-sketch-el="metric"]');
+      let maxBottom = 0;
+      nodes.forEach((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        const bottom = r.bottom - rootRect.top;
+        if (bottom > maxBottom) maxBottom = bottom;
+      });
+      const next = Math.max(0, Math.min(maxBottom, H));
+      setMetricBottomPx((prev) => (pxChanged(prev, next) ? next : prev));
+    });
+
+    return () => {
+      if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
+      metricRafRef.current = null;
+    };
+  }, [H, W, isVertical, tplKey, peopleBlocks]);
+
+  /* ===== Горизонтальный: 1 человек (без изменений) ===== */
+  const h1 = useMemo(() => {
+    if (isVertical || tplKey !== "one") return null;
+    const gap = Math.round(0.015 * H);
+    const topOffset = Math.round(0.06 * H);
+    let portraitH = Math.max(40, Math.round(0.40 * H));
+    let portraitW = Math.round(portraitH * (3 / 4));
+    if (portraitW > W * 0.9) {
+      const k = (W * 0.9) / portraitW;
+      portraitW = Math.max(40, Math.round(portraitW * k));
+      portraitH = Math.max(40, Math.round(portraitH * k));
+    }
+    const portraitTop = topOffset;
+    const metricTargetH = Math.max(24, Math.round(0.20 * H));
+    const metricTop = portraitTop + portraitH + gap;
+    const metricW = Math.round(W * 0.8);
+    return { gap, portraitH, portraitW, portraitTop, metricTargetH, metricTop, metricW };
+  }, [isVertical, tplKey, H, W]);
+
+  useEffect(() => {
+    if (!h1) return;
+    const holder = metricMeasureRef.current;
+    if (!holder) return;
+
+    const sig = [h1.metricTargetH, peopleBlocks[0]?.lines?.join("|") || ""].join("::");
+    if (metricH1SigRef.current === sig) return;
+    metricH1SigRef.current = sig;
+
+    const t = requestAnimationFrame(() => {
+      const natural = holder.scrollHeight || holder.offsetHeight || 1;
+      const available = Math.max(1, h1.metricTargetH - 2);
+      const next = Math.min(1, available / natural);
+      setMetricScaleH1((prev) => (Math.abs(prev - next) > EPS ? next : prev));
+    });
+
+    return () => cancelAnimationFrame(t);
+  }, [h1, peopleBlocks]);
+
+  /* ===== Кресты (без изменений) ===== */
+  const CrossOverlay = () => {
+    if (!crosses.length) return null;
+
+    const isHorizontalTwo = !isVertical && tplKey === "two";
+    const baseSize = (isVertical
+      ? (tplKey === "one" ? CFG.vertical.one.blocks.cross.size : tplKey === "two" ? CFG.vertical.two.blocks.cross.size : CFG.vertical.many.blocks.cross.size)
+      : (tplKey === "one" ? CFG.horizontal.one.blocks.cross.size : tplKey === "two" ? CFG.horizontal.two.blocks.cross.size : CFG.horizontal.many.blocks.cross.size)
+    ) as any;
+
+    const baseFilter: React.CSSProperties = {
+      objectFit: "contain",
+      filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+      zIndex: 3,
+      position: "absolute"
+    };
+
+    const topLeftPos: React.CSSProperties = { top: "6%", left: "4%" };
+    const topCenterPos: React.CSSProperties = { top: "6%", left: "50%", transform: "translateX(-50%)" };
+    const topRightPos: React.CSSProperties = { top: "6%", right: "4%" };
+
+    if (isHorizontalTwo) {
+      if (crosses.length === 1) {
+        const c = crosses[0];
+        return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topCenterPos }} draggable={false} />;
+      }
+      if (crosses.length >= 2) {
+        const [cL, cR] = [crosses[0], crosses[1]];
+        return (
+          <>
+            <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />
+            <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topRightPos }} draggable={false} />
+          </>
+        );
+      }
+    }
+
+    if (crosses.length === 1) {
+      const c = crosses[0];
+      return <img data-sketch-el="cross" data-sketch-key="0" src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />;
+    }
+    if (crosses.length >= 2) {
+      const [cL, cR] = [crosses[0], crosses[1]];
+      return (
+        <>
+          <img data-sketch-el="cross" data-sketch-key="0" src={cL.url} alt={cL.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topLeftPos }} draggable={false} />
+          <img data-sketch-el="cross" data-sketch-key="1" src={cR.url} alt={cR.name || "Крест"} style={{ ...baseFilter, ...baseSize, ...topRightPos }} draggable={false} />
+        </>
+      );
+    }
+    return null;
+  };
+
+  /* ===== PEOPLE ===== */
+
+  const HorizontalOne = () => {
+    const p = peopleBlocks[0];
+    if (!H || !W || !p) return null;
+    const s = h1!;
+    return (
+      <>
+        {/* Портрет */}
+        <div
+          style={{
+            position: "absolute",
+            top: s.portraitTop,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: s.portraitW,
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none"
+          }}
+        >
+          <div
+            data-sketch-el="portrait"
+            data-sketch-key={p.id}
+            style={{
+              width: s.portraitW,
+              height: s.portraitH,
+              borderRadius: 4,
+              overflow: "hidden",
+              background: "rgba(255,255,255,0.04)",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+            }}
+          >
+            {p.photo ? (
+              <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+            ) : (
+              <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+            )}
+          </div>
+        </div>
+
+        {/* Метрика */}
+        <div
+          data-sketch-el="metric"
+          data-sketch-key={p.id}
+          style={{
+            position: "absolute",
+            top: s.metricTop,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: s.metricW,
+            height: s.metricTargetH,
+            overflow: "hidden",
+            pointerEvents: "none",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-start"
+          }}
+        >
+          <div style={{ transform: `scale(${metricScaleH1})`, transformOrigin: "top center", width: "100%" }}>
+            <PersonMetricText lines={p.lines} />
+          </div>
+        </div>
+
+        {/* Offscreen измеритель метрики */}
+        <div style={{ position: "absolute", left: -99999, top: -99999, width: s.metricW }}>
+          <div ref={metricMeasureRef} style={{ width: s.metricW }}>
+            <PersonMetricText lines={p.lines} />
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  // Горизонтальный: ДВОЕ — портрет 65% H, метрика 25% H; блок сдвинут ниже; метрика меньше (особенно на телефоне)
+  const HorizontalTwo = () => {
+    if (!H || !W) return null;
+    const topOffset = Math.round(0.08 * H); // ниже, чем было
+    const gapSide = 16;
+    const colGap = CFG.horizontal.layout.gap;
+    const availableW = Math.max(0, W - gapSide * 2 - colGap);
+    const colW = Math.min(320, Math.max(CFG.horizontal.layout.columnMinW, Math.floor(availableW / 2)));
+
+    const isPhone = W <= 480;
+
+    const interGap = Math.max(4, Math.round(0.01 * H)); // между портретом/метрикой
+
+    const ph = Math.min(Math.round(0.65 * H), Math.round(colW / 0.75)); // портрет 65% H, ограничить по колоночной ширине
+    const pw = Math.round(ph * 0.75);
+
+    const mh = Math.max(22, Math.round(0.25 * H)); // метрика 25% H
+    const metricWpx = Math.min(colW, Math.round(pw * 1.08)); // чуть шире портрета
+    const metricSizeMult = isPhone ? 0.6 : 0.72; // сильнее уменьшаем шрифт на телефоне
 
     return (
       <div
-        onPointerDown={stop}
-        onMouseDown={stop}
         style={{
-          position: "absolute", left: 0, top: -30,
-          display: "flex", gap: 6,
-          background: "rgba(0,0,0,0.6)",
-          border: "1px solid rgba(255,255,255,0.25)",
-          borderRadius: 6, padding: "2px 6px",
-          alignItems: "center", pointerEvents: "auto", zIndex: 3000
+          position: "absolute",
+          left: gapSide,
+          right: gapSide,
+          top: topOffset,
+          display: "grid",
+          gridTemplateColumns: `repeat(2, ${colW}px)`,
+          gap: colGap,
+          justifyContent: "center",
+          alignItems: "start",
+          pointerEvents: "none"
         }}
       >
-        {isMetric && (
-          <button
-            type="button"
-            style={btn}
-            onPointerDown={stop} onMouseDown={stop}
-            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x))); }}
-          >
-            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
-          </button>
-        )}
-        {isEpitaph && (
-          <>
-            <button
-              type="button"
-              style={btn}
-              onPointerDown={stop} onMouseDown={stop}
-              onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x))); }}
-            >
-              {el.italic ? "Обычный" : "Курсив"}
-            </button>
-            {canStair && (
-              <button
-                type="button"
-                style={btn}
-                onPointerDown={stop} onMouseDown={stop}
-                onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x))); }}
+        {peopleBlocks.slice(0, 2).map((p) => (
+          <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            {/* Портрет */}
+            <div style={{ width: pw, height: ph }}>
+              <div
+                data-sketch-el="portrait"
+                data-sketch-key={p.id}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                }}
               >
-                {el.staircase ? "В строку" : "Лесенкой"}
-              </button>
-            )}
-          </>
-        )}
-        {isGraphic && (
-          <button
-            type="button"
-            style={btn}
-            onPointerDown={stop} onMouseDown={stop}
-            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x))); }}
-          >
-            Отразить ⇄
-          </button>
-        )}
-        {isPortrait && (
-          <button
-            type="button"
-            style={btn}
-            onPointerDown={stop} onMouseDown={stop}
-            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x))); }}
-          >
-            {el.bw ? "Цвет" : "Ч/Б"}
-          </button>
-        )}
+                {p.photo ? (
+                  <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ height: interGap, width: 1 }} />
+
+            {/* Метрика */}
+            <div
+              data-sketch-el="metric"
+              data-sketch-key={p.id}
+              style={{ width: metricWpx, height: mh, display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              <PersonMetricText lines={p.lines} sizeMult={metricSizeMult} />
+            </div>
+          </div>
+        ))}
       </div>
     );
   };
 
-  /* ===== Контент поверх ===== */
-  const ContentOverlay = () => {
-    const fam = FONT_CENTURY;
-    const wrap = editorWrapRef.current?.getBoundingClientRect();
-    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
-    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
+  // Горизонтальный: 3+ — подвинем немного ниже и уменьшим метрику на телефоне
+  const HorizontalMany = () => {
+    if (!H || !W) return null;
+    const topOffset = Math.round(0.08 * H); // чуть ниже
+    const gapSide = 16;
+    const colGap = CFG.horizontal.layout.gap;
+    const cols = Math.min(4, Math.max(3, peopleBlocks.length));
+    const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
+    const perCol = Math.min(260, Math.max(CFG.horizontal.layout.columnMinW, Math.floor(availableW / cols)));
+
+    const isPhone = W <= 480;
+    const interGap = Math.max(6, Math.round(0.02 * H));
 
     return (
-      <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, pointerEvents: "none", zIndex: 1000 }}>
-        {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
-          const key = el.id.split("-").slice(1).join("-");
-          const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
-          const wrapperStyle: React.CSSProperties = {
-            position: "absolute",
-            left: boxPx.x,
-            top: boxPx.y,
-            width: boxPx.w,
-            height: boxPx.h,
-            zIndex: el.z,
-            pointerEvents: "none",
-            contain: "layout paint style",
-            backfaceVisibility: "hidden",
-            boxSizing: "border-box"
-          };
-
-          if (el.type === "portrait") {
-            const p = peopleBlocks.find((pp) => pp.id === key);
-            const url = p?.photo || "";
-            const filt = el.bw ? "grayscale(100%)" : "none";
-            return (
-              <div key={`content-${el.id}`} style={wrapperStyle}>
-                {url ? <img src={url} alt="Портрет" style={{ width: "100%", height: "100%", objectFit: "cover", filter: filt, display: "block" }} draggable={false} /> : null}
-              </div>
-            );
-          }
-
-          if (el.type === "metric") {
-            const p = peopleBlocks.find((pp) => pp.id === key);
-            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-            const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-            const padY = Math.max(2, Math.round(boxPx.h * 0.10));
-            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
-            return (
-              <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: fam, textAlign: "center" }}>
-                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.12, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-                  <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                    {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
-                    {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
-                    {lines[2] && <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>}
-                  </div>
+      <div
+        style={{
+          position: "absolute",
+          left: gapSide,
+          right: gapSide,
+          top: topOffset,
+          display: "grid",
+          gridTemplateColumns: `repeat(${cols}, ${perCol}px)`,
+          gap: colGap,
+          alignItems: "start",
+          justifyContent: "center",
+          pointerEvents: "none"
+        }}
+      >
+        {peopleBlocks.map((p) => {
+          const ph = Math.min(Math.round(0.50 * H), Math.round(perCol / 0.75));
+          const pw = Math.round(ph * 0.75);
+          const mh = Math.max(24, Math.round(0.40 * H));
+          const metricWpx = Math.min(perCol, Math.round(pw * 1.08));
+          return (
+            <div key={p.id} style={{ width: perCol, display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <div style={{ width: pw, height: ph }}>
+                <div
+                  data-sketch-el="portrait"
+                  data-sketch-key={p.id}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    borderRadius: 4,
+                    overflow: "hidden",
+                    background: "rgba(255,255,255,0.04)",
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                  }}
+                >
+                  {p.photo ? (
+                    <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                  ) : (
+                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                  )}
                 </div>
               </div>
-            );
-          }
 
-          if (el.type === "epitaph") {
-            const idx = Number(key);
-            const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
-            const isRLM = isRememberLoveMourn(tRaw);
+              <div style={{ height: interGap, width: 1 }} />
 
-            const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-            const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-
-            if (isRLM) {
-              const r = splitRememberPreserve(tRaw);
-              const parts = [r.top, r.mid, r.bot];
-
-              if (el.staircase) {
-                const fontPx = fitStairRLMFontPx({ lines: parts, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15, minPx: 10, maxPx: 96 });
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
-                    <div style={{ position: "absolute", left: padX, top: padY, right: padX, bottom: padY, display: "grid", gridTemplateRows: "1fr 1fr 1fr" }}>
-                      <div style={{ alignSelf: "center", justifySelf: "start", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[0]}</div>
-                      <div style={{ alignSelf: "center", justifySelf: "center", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[1]}</div>
-                      <div style={{ alignSelf: "center", justifySelf: "end", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[2]}</div>
-                    </div>
-                  </div>
-                );
-              } else {
-                const oneLine = `${parts[0]} ${parts[1]} ${parts[2]}`.replace(/\s+/g, " ");
-                const { fontPx } = fitMultilineFontPxGeneric({ text: oneLine, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                    <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "nowrap" }}>{el.uppercase ? oneLine.toUpperCase() : oneLine}</div>
-                    </div>
-                  </div>
-                );
-              }
-            } else {
-              const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
-              const { fontPx, lines } = fitMultilineFontPxGeneric({ text: textDisplay, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
-              return (
-                <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
-                  </div>
-                </div>
-              );
-            }
-          }
-
-          if (el.type === "cross") {
-            const idx = Number(key);
-            const c = Number.isFinite(idx) ? crosses[idx] : null;
-            return (
-              <div key={`content-${el.id}`} style={wrapperStyle}>
-                {c?.url ? <img src={c.url} alt={c.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: mh, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <PersonMetricText lines={p.lines} sizeMult={isPhone ? 0.75 : 0.82} />
               </div>
-            );
-          }
-
-          if (el.type === "graphic") {
-            const idx = Number(key);
-            const g = Number.isFinite(idx) ? others[idx] : null;
-            const tr = el.flipH ? "scaleX(-1)" : "none";
-            return (
-              <div key={`content-${el.id}`} style={wrapperStyle}>
-                {g?.url ? <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }} draggable={false} /> : null}
-              </div>
-            );
-          }
-
-          return null;
+            </div>
+          );
         })}
       </div>
     );
   };
 
-  /* ===== Навигация ===== */
-  const handleBack = () => {
-    const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-    setOutro(true);
-    setTimeout(() => onBack?.(), 150);
-  };
-  const handleContinue = () => {
-    const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-    const go = onRearSide || onSendOrder || onContinue; if (!go) return;
-    setOutro(true);
-    setTimeout(() => go({ elements, wishes }), 150);
-  };
-
-  const MAX_W = 600;
-
-  // Ручки ресайза: выравнивание по рамке
-  const KNOB_HIT = 28;
-  const KNOB_VIS = 14;
-  const knob = (left: string, top: string, cursor: string) => ({
-    position: "absolute",
-    left,
-    top,
-    width: KNOB_HIT,
-    height: KNOB_HIT,
-    cursor,
-    pointerEvents: "auto",
-    display: "grid",
-    placeItems: "center"
-  } as React.CSSProperties);
-  const knobDot: React.CSSProperties = {
-    width: KNOB_VIS,
-    height: KNOB_VIS,
-    background: "#fff",
-    border: "1px solid #000",
-    borderRadius: 3,
-    boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
+  /* ===== Вертикальные раскладки (без изменений) ===== */
+  const VerticalOne = () => {
+    const p = peopleBlocks[0];
+    if (!p) return null;
+    return (
+      <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
+        <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <div style={{ width: "60%", maxWidth: 400 }}>
+            <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
+              {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+            </div>
+          </div>
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "82%", maxWidth: 560 }}>
+            <PersonMetricText lines={p.lines} sizeMult={1.12} />
+          </div>
+        </div>
+      </div>
+    );
   };
 
-  return (
-    <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 240ms ease", backgroundImage: `url(/data/bg.svg)`, backgroundSize: "cover", backgroundPosition: "center center", backgroundAttachment: "fixed" }}>
-      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        <TopBarWithIntro title="Memorial" />
+  const VerticalTwo = () => {
+    const rowsH = Math.max(100, Math.floor(H * (CFG.vertical.layout as any).rowsHeightFactor));
+    return (
+      <div
+        style={{
+          position: "absolute",
+          top: "12%",
+          left: 16,
+          right: 16,
+          display: "grid",
+          gridTemplateRows: `repeat(2, minmax(${Math.floor(rowsH / 2)}px, 1fr))`,
+          rowGap: CFG.vertical.layout.rowGapPx,
+          pointerEvents: "none"
+        }}
+      >
+        {peopleBlocks.slice(0, 2).map((p) => (
+          <div key={p.id} style={{ width: "100%", height: "100%", display: "grid", gridTemplateColumns: `45% 55%`, columnGap: 12, alignItems: "center", padding: "6px 8px", boxSizing: "border-box" }}>
+            <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+              <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "60%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
+                {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+              </div>
+            </div>
 
-        <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
-          Визуализация состава заказа; не является эскизом. Возможны наслоения объектов. Макет для гравировки подготовит специалист.
-        </section>
+            <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "92%" }}>
+                <PersonMetricText lines={p.lines} sizeMult={0.9} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
-        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
+  const VerticalMany = () => {
+    const rowsH = Math.max(100, Math.floor(H * (CFG.vertical.layout as any).rowsHeightFactor));
+    const rowCount = peopleBlocks.length;
+    return (
+      <div
+        style={{
+          position: "absolute",
+          top: "12%",
+          left: 16,
+          right: 16,
+          display: "grid",
+          gridTemplateRows: `repeat(${rowCount}, minmax(${Math.floor(rowsH / rowCount)}px, 1fr))`,
+          rowGap: CFG.vertical.layout.rowGapPx,
+          pointerEvents: "none"
+        }}
+      >
+        {peopleBlocks.map((p) => (
+          <div key={p.id} style={{ width: "100%", height: "100%", display: "grid", gridTemplateColumns: `42% 58%`, columnGap: 12, alignItems: "center", padding: "6px 8px", boxSizing: "border-box" }}>
+            <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+              <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "52%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
+                {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+              </div>
+            </div>
+
+            <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+              <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "92%" }}>
+                <PersonMetricText lines={p.lines} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderPeople = () => {
+    const n = peopleBlocks.length;
+    if (n === 0) return null;
+    if (!isVertical) {
+      if (tplKey === "one") return <HorizontalOne />;
+      if (tplKey === "two") return <HorizontalTwo />;
+      return <HorizontalMany />;
+    }
+    if (tplKey === "one") return <VerticalOne />;
+    if (tplKey === "two") return <VerticalTwo />;
+    return <VerticalMany />;
+  };
+
+  /* ===== Эпитафия + графика — не зависят от метрики, допускаем наложение ===== */
+  const EpitaphAndGraphics = () => {
+    if (!H || !W) return null;
+
+    const gap = Math.round(0.015 * H);
+    const bottomPadPx = Math.max(8, Math.round(0.02 * H));
+    const epW = Math.round(W * 0.88);
+
+    // Натуральная высота эпитафии
+    const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
+
+    // Высота графики — фиксировано по ориентации
+    const desiredGfxH = isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H);
+    const gfxH = desiredGfxH;
+    const gfxTop = H - bottomPadPx - gfxH;
+
+    // Эпитафия: ограничиваем максимумом (чтобы была видна), но НЕ подстраиваемся под метрику
+    const epMaxH = Math.round(0.20 * H);
+    const finalEpitaphScale = Math.min(1, epMaxH / naturalEp);
+    const scaledEpH = Math.floor(naturalEp * finalEpitaphScale);
+
+    // Якорим эпитафию над графикой; допускаем перекрытие с метрикой
+    const epTop = Math.max(Math.round(0.58 * H), gfxTop - gap - scaledEpH);
+
+    const gfxWrapW = Math.floor(W * 0.9);
+    const gfxGap = 10;
+    const n = others.length;
+    let perItemW = 0;
+    if (n > 0) {
+      const totalGaps = (n - 1) * gfxGap;
+      perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
+    }
+    const perItemMaxH = Math.max(16, Math.floor(gfxH * 0.9));
+
+    return (
+      <>
+        {Array.isArray(epitaphs) && epitaphs.length > 0 && finalEpitaphScale > 0 && (
           <div
-            ref={editorWrapRef}
             style={{
-              position: "relative",
-              width: "100%",
-              borderRadius: 10,
+              position: "absolute",
+              top: epTop,
+              left: "50%",
+              transform: `translateX(-50%) scale(${finalEpitaphScale})`,
+              transformOrigin: "top center",
+              width: epW,
+              color: "#fff",
+              textAlign: "center" as const,
+              textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              zIndex: 4,
               overflow: "hidden",
-              userSelect: "none",
-              ...bottomUnderlayGradient(),
-              aspectRatio: aspect,
-              minHeight: aspect ? undefined : 540
+              pointerEvents: "none"
             }}
           >
-            {/* Фон-изделие */}
-            {item?.url && (
+            <div
+              style={{
+                fontStyle: "italic",
+                textTransform: "uppercase",
+                fontFamily: FONT_CENTURY,
+                lineHeight: 1.2,
+                letterSpacing: "0.3px",
+                fontSize: "clamp(10px, 2.6vw, 20px)",
+                display: "grid",
+                gap: 8
+              }}
+            >
+              {epitaphs.slice(0, 8).map((t, idx) => (
+                <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {others.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              transform: "translateX(-50%)",
+              top: gfxTop,
+              width: "90%",
+              height: gfxH,
+              maxHeight: gfxH,
+              overflow: "hidden",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: `${gfxGap}px`,
+              flexWrap: "nowrap",
+              zIndex: 3,
+              pointerEvents: "none"
+            }}
+          >
+            {others.map((g, i) => (
               <img
-                src={item.url}
-                alt=""
+                key={`other-bottom-${i}`}
+                data-sketch-el="graphic"
+                data-sketch-key={`${i}`}
+                src={g.url}
+                alt={g.name || "Графика"}
                 style={{
-                  position: "absolute",
-                  left: SKETCH_PAD,
-                  top: SKETCH_PAD,
-                  width: `calc(100% - ${SKETCH_PAD * 2}px)`,
-                  height: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                  width: perItemW ? `${perItemW}px` : "auto",
+                  height: "auto",
+                  maxHeight: `${perItemMaxH}px`,
                   objectFit: "contain",
-                  opacity: 0.35,
-                  pointerEvents: "none"
+                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                  flex: "0 0 auto"
                 }}
                 draggable={false}
               />
-            )}
-            {/* Тех. img для aspectRatio */}
-            <img
-              src={item?.url || ""}
-              alt=""
-              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
-              onLoad={(e) => {
-                const im = e.currentTarget;
-                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
-              }}
-              onError={() => { if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 }); }}
-            />
+            ))}
+          </div>
+        )}
 
-            {/* Контент */}
-            <ContentOverlay />
-
-            {/* Рамки + ручки — слой интерактивный (pointerEvents: "auto") */}
+        {/* Offscreen — натуральная высота эпитафии */}
+        <div style={{ position: "absolute", left: -99999, top: -99999, width: epW }}>
+          <div ref={epitaphMeasureRef} style={{ width: epW }}>
             <div
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerDown={(e) => { if (e.target === e.currentTarget) setSelectedId(null); }}
-              style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1001, pointerEvents: "auto" }}
+              style={{
+                fontStyle: "italic",
+                textTransform: "uppercase",
+                fontFamily: FONT_CENTURY,
+                lineHeight: 1.2,
+                letterSpacing: "0.3px",
+                fontSize: "clamp(10px, 2.6vw, 20px)",
+                display: "grid",
+                gap: 8
+              }}
             >
-              {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
-                const selected = el.id === selectedId;
-                const frameStyle: React.CSSProperties = {
-                  position: "absolute",
-                  left: `${el.x}%`, top: `${el.y}%`,
-                  width: `${el.w}%`, height: `${el.h}%`,
-                  border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
-                  borderRadius: 4,
-                  boxSizing: "border-box",
-                  background: "transparent",
-                  pointerEvents: "auto",
-                  cursor: el.locked ? "not-allowed" : "move",
-                  touchAction: "none"
-                };
-                return (
-                  <div key={el.id} onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")} style={frameStyle} title={el.title || el.id}>
-                    {selected && <MiniToolbar el={el} />}
-                    {selected && !el.locked && (
-                      <>
-                        {/* Углы */}
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT/2}px`, `-${KNOB_HIT/2}px`, "nwse-resize")}><div style={knobDot} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "nesw-resize")}><div style={knobDot} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "nwse-resize")}><div style={knobDot} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT/2}px`, `calc(100% - ${KNOB_HIT/2}px)`, "nesw-resize")}><div style={knobDot} /></div>
-                        {/* Стороны */}
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "ns-resize")}><div style={knobDot} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT/2}px`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
+              {epitaphs?.slice(0, 8).map((t, idx) => (
+                <div key={`ep-measure-${idx}`} style={{ whiteSpace: "pre-wrap" }}>
+                  {t}
+                </div>
+              ))}
             </div>
           </div>
-        </section>
-
-        {/* Пожелания */}
-        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-          <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>Пожелания по эскизу</label>
-          <textarea
-            id="wishes"
-            value={wishes}
-            onChange={(e) => setWishes(e.target.value)}
-            rows={4}
-            placeholder="Например: ещё уменьшить портрет, метрику сузить, эпитафию сделать лесенкой…"
-            style={{ width: "100%", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(0,0,0,0.35)", color: "#fff", padding: 10, resize: "vertical", outline: "none", boxSizing: "border-box" }}
-          />
-        </section>
-
-        <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
-          <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
-          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
         </div>
+      </>
+    );
+  };
+
+  return (
+    <>
+      <div
+        style={{
+          color: "#fff",
+          opacity: 0.9,
+          fontSize: 13,
+          lineHeight: 1.25,
+          margin: "6px 0 8px",
+          textAlign: "center"
+        }}
+      >
+        Это визуализация состава заказа, она не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
       </div>
-    </div>
+
+      <div
+        ref={containerRef}
+        style={{
+          ...bottomUnderlayGradient(),
+          borderRadius: 10,
+          position: "relative",
+          width: "100%",
+          height: Math.max(CFG.general.minContainerHeight, H + CFG.general.containerPadding * 2),
+          overflow: "hidden",
+          userSelect: "none",
+          padding: CFG.general.containerPadding,
+          boxSizing: "border-box",
+          color: "#fff",
+          ...style
+        }}
+        data-sketch-orient={isVertical ? "vertical" : "horizontal"}
+        data-sketch-orient-source={orientation ? "draft" : "image"}
+      >
+        <img
+          ref={imgRef}
+          src={item?.url || ""}
+          alt={item?.name || "Изделие"}
+          style={{ display: "block", width: "100%", height: "auto", objectFit: "contain", borderRadius: 8, opacity: carvingOpacity }}
+          draggable={false}
+          onLoad={() => requestAnimationFrame(recalc)}
+        />
+
+        {/* Контент */}
+        {renderPeople()}
+        <CrossOverlay />
+        <EpitaphAndGraphics />
+      </div>
+    </>
   );
 }
