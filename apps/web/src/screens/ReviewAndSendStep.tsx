@@ -1,27 +1,23 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Что изменено по задаче:
-// - Миниатюры: у всех превью и миниатюр object-fit: contain (вписываем изображение полностью).
-// - В «Резная работа» добавили ориентацию к размерам (вертикальная/горизонтальная), пересчёт «на месте».
-// - На тыльной стороне если нет людей — не показываем пустые строки/миниатюры вообще (строки фильтруем).
-// - Скрываем все пустые строки (люди без ФИО/дат/фото, графика без имени и url, пустые эпитафии).
-// - Визуально разделяем блоки ненавязчивым фоном (легкие подкарточки внутри секций).
-// - На эскизе тыльной стороны добавлен «выбранный рисунок изделия», зеркало по X и цветная заливка по маске
-//   поверх превью (чтобы было видно даже при непрозрачном PNG).
-// - Подсказка (точный текст): «Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные.
-//   Для редактирования элементов гравировки перейдите на соответствующий шаг, используйте навигацию вверху.
-//   Когда всё верно — нажмите «Отправить заказ».»
-// - Навигация берётся из src/components/StepNav.tsx («липко» сверху).
-//
-// Примечание: компонент StepNav импортируется как есть (active="review").
-// Этот экран позволяет редактировать контакты и раздел «Резная работа/размеры».
+// Правки по задаче:
+// - Миниатюры: везде object-fit: contain (вписываем по ширине/высоте).
+// - На эскизе тыльной стороны подложка (резная работа) всегда растянута на всю область (object-fit: cover).
+// - «Дополнительно» больше не аккордеон — это простой раздел.
+// - Добавлен аккордеон «Редактор плиты» (как тыльный выбор графики, но без эскиза). Изначально закрыт.
+// - Чекбокс «Надгробная плита» перенесён вниз рядом с чекбоксом «Гравировка» (всегда в одной строке).
+//   Если «Надгробная плита» отмечен — аккордеон редактора плиты автоматически открывается.
+// - В «Резная работа» показана ориентация (вертикальная/горизонтальная), пересчитываем «на месте».
+// - Фильтруем пустые данные (нет людей/пустые строки/без url/имени графики/пустые эпитафии).
+// - Навигация — StepNav (sticky), подсказка сверху.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
 import StepNav from "../components/StepNav";
+import { fetchCatalog } from "../api";
 
 /* ===== UI ===== */
 function glassPanelStyle() {
@@ -116,23 +112,14 @@ function orientationLabel(o?: string) {
 function Underlay({
   itemUrl,
   mirror = false,
-  inset = 8,
   withTintMaskTop = false,
   tint = "rgba(80, 160, 255, 0.30)"
 }: {
   itemUrl?: string;
   mirror?: boolean;
-  inset?: number;
   withTintMaskTop?: boolean;
   tint?: string;
 }) {
-  const insetStyle: React.CSSProperties = {
-    position: "absolute",
-    left: inset,
-    top: inset,
-    width: `calc(100% - ${inset * 2}px)`,
-    height: `calc(100% - ${inset * 2}px)`
-  };
   return (
     <div
       aria-hidden
@@ -148,15 +135,18 @@ function Underlay({
     >
       {!!itemUrl && (
         <>
-          {/* Базовый рисунок изделия, зеркалим при тыле */}
+          {/* Базовый рисунок изделия — растягиваем НА ВСЮ ОБЛАСТЬ (cover), зеркалим при тыле */}
           <img
             src={itemUrl}
             alt=""
             style={{
-              ...insetStyle,
-              objectFit: "contain",
-              opacity: 0.35,
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
               transform: mirror ? "scaleX(-1)" : "none",
+              opacity: 0.35,
               pointerEvents: "none"
             }}
             draggable={false}
@@ -165,18 +155,17 @@ function Underlay({
           {withTintMaskTop && (
             <div
               style={{
-                ...insetStyle,
+                position: "absolute",
+                inset: 0,
                 background: tint,
-                // маска по альфе исходного изделия
                 WebkitMaskImage: `url(${itemUrl})`,
                 WebkitMaskRepeat: "no-repeat",
                 WebkitMaskPosition: "center",
-                WebkitMaskSize: "contain",
+                WebkitMaskSize: "cover",
                 maskImage: `url(${itemUrl})`,
                 maskRepeat: "no-repeat",
                 maskPosition: "center",
-                maskSize: "contain",
-                // чтобы маска совпала с базовым зеркалом
+                maskSize: "cover",
                 transform: "scaleX(-1)",
                 transformOrigin: "center",
                 zIndex: 2,
@@ -241,7 +230,7 @@ function SidePreview({
   );
 }
 
-/* ===== Редактируемый блок «Данные заказа» (контакты + резная работа/размеры) ===== */
+/* ===== Редактируемый блок «Данные заказа» ===== */
 function EditableOrderSummary() {
   const [draft, setDraft] = useState(() => loadOrderDraft());
   const introState = loadIntroState();
@@ -347,6 +336,45 @@ function EditableOrderSummary() {
   );
 }
 
+/* ===== Простой Аккордеон ===== */
+function Accordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const m = () => setH(contentRef.current?.scrollHeight || 0);
+    m();
+    const ro = new ResizeObserver(m);
+    if (contentRef.current) ro.observe(contentRef.current);
+    return () => ro.disconnect();
+  }, [children]);
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 0 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          textAlign: "left",
+          padding: "12px 14px",
+          background: "rgba(255,255,255,0.06)",
+          border: "none",
+          color: "#fff",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between"
+        }}
+      >
+        <strong>{title}</strong>
+        <span aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
+        <div ref={contentRef} style={{ padding: 12 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== Компонент шага ===== */
 type Props = {
   onBack?: () => void;
@@ -366,7 +394,7 @@ export default function ReviewAndSendStep({
   const draft = useMemo(() => loadOrderDraft(), []);
   const itemUrl = (draft as any)?.item?.url as string | undefined;
 
-  // Соотношение сторон подложки «на месте»
+  // Соотношение сторон подложки
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
@@ -385,7 +413,6 @@ export default function ReviewAndSendStep({
 
   // Данные по сторонам
   const frontPersonsRaw: any[] = (draft.engraving?.persons as any[])?.filter(Boolean) || [];
-  // фильтруем пустые строки: без ФИО/дат/фото
   const frontPersons = frontPersonsRaw.filter((p) => {
     const fio1 = (p.lastName || "").trim();
     const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
@@ -462,25 +489,98 @@ export default function ReviewAndSendStep({
     return () => clearTimeout(t);
   }, [frontWishes, backWishes]);
 
-  // Дополнительно
+  // Дополнительно (простая секция)
   const initialExtras = (draft as any)?.extras || {};
   const [extraBase, setExtraBase] = useState<boolean>(initialExtras.base ?? true);
   const [extraPlate, setExtraPlate] = useState<boolean>(initialExtras.headstonePlate ?? false);
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(initialExtras.flowerbed ?? false);
-  const [extraOpen, setExtraOpen] = useState<boolean>(true);
+  const [extraEngraving, setExtraEngraving] = useState<boolean>((initialExtras as any)?.engraving ?? false);
+
   useEffect(() => {
     const prev = loadOrderDraft();
-    const extras = { base: extraBase, headstonePlate: extraPlate, flowerbed: extraFlowerbed };
+    const extras: any = { base: extraBase, headstonePlate: extraPlate, flowerbed: extraFlowerbed, engraving: extraEngraving };
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-  }, [extraBase, extraPlate, extraFlowerbed]);
+  }, [extraBase, extraPlate, extraFlowerbed, extraEngraving]);
 
+  // Аккордеон редактора плиты (как тыльный выбор графики, без эскиза)
+  const [plateOpen, setPlateOpen] = useState<boolean>(!!extraPlate);
+  useEffect(() => { if (extraPlate) setPlateOpen(true); }, [extraPlate]);
+
+  // Данные для редактора плиты
+  const [catsLoading, setCatsLoading] = useState(false);
+  const [catsError, setCatsError] = useState("");
+  const [cats, setCats] = useState<any[]>([]);
+  const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
+  const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      if (!plateOpen) return;
+      setCatsLoading(true); setCatsError("");
+      try {
+        const data = await fetchCatalog("graphics");
+        const arr = Array.isArray((data as any)?.categories) ? (data as any).categories : data;
+        const flat: any[] = [];
+        const walk = (node: any) => {
+          if (!node) return;
+          if (Array.isArray(node)) return node.forEach(walk);
+          if (node.items) node.items.forEach((it: any) => flat.push(it));
+          if (node.children) node.children.forEach(walk);
+          if (node.categories) node.categories.forEach(walk);
+          if (node.subcategories) node.subcategories.forEach(walk);
+        };
+        walk(arr);
+        setCats(arr && arr.categories ? arr.categories : (Array.isArray(arr) ? arr : []));
+      } catch (e) {
+        if (!alive) return;
+        setCatsError("Не удалось загрузить каталог графики.");
+      } finally {
+        if (alive) setCatsLoading(false);
+      }
+    };
+    load();
+    return () => { alive = false; };
+  }, [plateOpen]);
+
+  useEffect(() => {
+    const prev = loadOrderDraft();
+    const extras: any = {
+      ...(prev as any).extras,
+      plateGraphicsIds: plateIds,
+      plateGraphicsMeta: plateMeta
+    };
+    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+  }, [plateIds, plateMeta]);
+
+  const addPlateGraphic = (g: any) => {
+    const gid = String(g.id || g.relPath || g.url || g.name);
+    const next = plateIds.concat(gid);
+    setPlateIds(next);
+    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.url || g.preview || "", preview: g.preview || g.url || "" } }));
+  };
+  const removePlateGraphic = (gid: string) => {
+    const idx = plateIds.findIndex((x) => x === gid);
+    if (idx === -1) return;
+    const next = plateIds.slice();
+    next.splice(idx, 1);
+    setPlateIds(next);
+  };
+
+  // Состояния
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>("");
 
   const handleSend = async () => {
     setBusy(true);
     setErr("");
-    const extras: Extras = { base: extraBase, headstonePlate: extraPlate, flowerbed: extraFlowerbed };
+    const extras: Extras & { engraving?: boolean; plateGraphicsIds?: string[] } = {
+      base: extraBase,
+      headstonePlate: extraPlate,
+      flowerbed: extraFlowerbed,
+      engraving: extraEngraving,
+      plateGraphicsIds: plateIds
+    };
     try {
       await sendOrderEmailAndNotifyTg(extras);
       onSend?.({ extras });
@@ -532,12 +632,12 @@ export default function ReviewAndSendStep({
       {/* Редактируемые данные заказа */}
       <EditableOrderSummary />
 
-      {/* Лицевая: Люди → Графика → Эпитафии → Пожелания */}
+      {/* Лицевая */}
       {hasFront && (
         <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая")}</div>
 
-          {/* Люди (лицевая) */}
+          {/* Люди */}
           {frontPersons.length > 0 && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Люди</div>
@@ -561,7 +661,7 @@ export default function ReviewAndSendStep({
             </div>
           )}
 
-          {/* Графика (лицевая) */}
+          {/* Графика */}
           {frontUnique.length > 0 && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
@@ -582,7 +682,7 @@ export default function ReviewAndSendStep({
             </div>
           )}
 
-          {/* Эпитафии (лицевая) */}
+          {/* Эпитафии */}
           {frontEpitaphs.length > 0 && (
             <AccentBox>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
@@ -594,7 +694,7 @@ export default function ReviewAndSendStep({
             </AccentBox>
           )}
 
-          {/* Пожелания (лицевая) */}
+          {/* Пожелания */}
           {!!frontWishes && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
@@ -604,12 +704,12 @@ export default function ReviewAndSendStep({
         </section>
       )}
 
-      {/* Тыльная: Люди → Графика → Эпитафии → Пожелания */}
+      {/* Тыльная */}
       {hasBack && (
         <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
 
-          {/* Люди (тыльная) — если нет людей, секция не рендерится */}
+          {/* Люди */}
           {rearPeople.length > 0 && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Люди</div>
@@ -633,7 +733,7 @@ export default function ReviewAndSendStep({
             </div>
           )}
 
-          {/* Графика (тыльная) */}
+          {/* Графика */}
           {rearUnique.length > 0 && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
@@ -654,7 +754,7 @@ export default function ReviewAndSendStep({
             </div>
           )}
 
-          {/* Эпитафии (тыльная) */}
+          {/* Эпитафии */}
           {rearEpitaphs.length > 0 && (
             <AccentBox>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
@@ -666,7 +766,7 @@ export default function ReviewAndSendStep({
             </AccentBox>
           )}
 
-          {/* Пожелания (тыльная) */}
+          {/* Пожелания */}
           {!!backWishes && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
@@ -676,7 +776,7 @@ export default function ReviewAndSendStep({
         </section>
       )}
 
-      {/* Превью сторон — 2 столбца; тыльная — с зеркалом и заливкой по маске поверх (видно всегда) */}
+      {/* Превью сторон — 2 столбца */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} />
@@ -684,47 +784,107 @@ export default function ReviewAndSendStep({
         </div>
       </section>
 
-      {/* Дополнительно */}
-      <section>
-        <div style={{ ...glassPanelStyle(), padding: 0 }}>
-          <button
-            type="button"
-            onClick={() => setExtraOpen((v) => !v)}
-            style={{
-              width: "100%",
-              textAlign: "left",
-              padding: "12px 14px",
-              background: "rgba(255,255,255,0.06)",
-              border: "none",
-              color: "#fff",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between"
-            }}
-          >
-            <strong>Дополнительно</strong>
-            <span aria-hidden>{extraOpen ? "▾" : "▸"}</span>
-          </button>
+      {/* Дополнительно — теперь просто раздел */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>Дополнительно</div>
 
-          {extraOpen && (
-            <div style={{ padding: 12, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
-              <div style={{ display: "grid", gap: 10 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
-                  <span>Тумба</span>
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
-                  <span>Надгробная плита</span>
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
-                  <span>Цветник</span>
-                </label>
+        {/* Верх — прочие чекбоксы */}
+        <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <span>Тумба</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <span>Цветник</span>
+          </label>
+        </div>
+
+        {/* Аккордеон редактора плиты (по умолчанию закрыт, но открываем если Plate = true) */}
+        <div style={{ marginBottom: 10 }}>
+          <Accordion title="Редактор плиты (графика)" open={plateOpen} onToggle={() => setPlateOpen((v) => !v)}>
+            {/* Простая сетка выбора графики (как в тыльном, без эскиза) */}
+            {catsLoading && <div>Загрузка каталога…</div>}
+            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+            {!catsLoading && !catsError && cats.length === 0 && <div>Каталог пуст.</div>}
+            {!catsLoading && cats.length > 0 && (
+              <div style={{ display: "grid", gap: 12 }}>
+                {cats.map((cat: any) => (
+                  <div key={cat._id || cat.name}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{cat.name}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
+                      {(cat.items || []).map((g: any) => {
+                        const gid = String(g.id || g.relPath || g.url || g.name);
+                        const qty = plateIds.filter((x) => x === gid).length;
+                        return (
+                          <div key={gid} style={{ ...sectionBox, padding: 8 }}>
+                            <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
+                              {g.url ? (
+                                <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                              ) : (
+                                <div style={{ ...smallText() }}>нет</div>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+                              <button type="button" onClick={() => removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
+                              <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
+                              <button type="button" onClick={() => addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {(cat.children || []).map((sub: any) =>
+                        (sub.items || []).map((g: any) => {
+                          const gid = String(g.id || g.relPath || g.url || g.name);
+                          const qty = plateIds.filter((x) => x === gid).length;
+                          return (
+                            <div key={`${sub._id || sub.name}-${gid}`} style={{ ...sectionBox, padding: 8 }}>
+                              <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
+                                {g.url ? (
+                                  <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                                ) : (
+                                  <div style={{ ...smallText() }}>нет</div>
+                                )}
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+                                <button type="button" onClick={() => removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
+                                <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
+                                <button type="button" onClick={() => addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          )}
+            )}
+          </Accordion>
+        </div>
+
+        {/* Нижняя строка — ВСЕГДА вместе: Надгробная плита + Гравировка */}
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={extraPlate}
+              onChange={(e) => {
+                setExtraPlate(e.target.checked);
+                if (e.target.checked) setPlateOpen(true);
+              }}
+            />
+            <span>Надгробная плита</span>
+          </label>
+
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={extraEngraving}
+              onChange={(e) => setExtraEngraving(e.target.checked)}
+            />
+            <span>Гравировка</span>
+          </label>
         </div>
       </section>
 
