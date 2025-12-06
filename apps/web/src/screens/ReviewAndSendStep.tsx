@@ -1,16 +1,18 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Правки по задаче:
-// - Миниатюры: везде object-fit: contain (вписываем по ширине/высоте).
-// - На эскизе тыльной стороны подложка (резная работа) всегда растянута на всю область (object-fit: cover).
-// - «Дополнительно» больше не аккордеон — это простой раздел.
-// - Добавлен аккордеон «Редактор плиты» (как тыльный выбор графики, но без эскиза). Изначально закрыт.
-// - Чекбокс «Надгробная плита» перенесён вниз рядом с чекбоксом «Гравировка» (всегда в одной строке).
-//   Если «Надгробная плита» отмечен — аккордеон редактора плиты автоматически открывается.
-// - В «Резная работа» показана ориентация (вертикальная/горизонтальная), пересчитываем «на месте».
-// - Фильтруем пустые данные (нет людей/пустые строки/без url/имени графики/пустые эпитафии).
-// - Навигация — StepNav (sticky), подсказка сверху.
+// Обновления по задаче:
+// - Миниатюры ВЕЗДЕ вписывают изображение целиком: width:100%; height:100%; object-fit: contain (включая кресты, графику и «резную работу»).
+// - Тыльная подложка (фон изделия) растягивается на всю область: object-fit: cover (под превью).
+// - «Редактор плиты (графика)»:
+//    • Заголовок-аккордеон заменён на панель с двумя чекбоксами: «Надгробная плита» и «Гравировка (редактор)».
+//    • Если отмечен «Надгробная плита» — НЕ открываем аккордеон автоматически.
+//    • Если включён чекбокс «Гравировка (редактор)» или пользователь открывает аккордеон — также включаем «Надгробная плита» (если не включена) и открываем аккордеон.
+//    • Галерея выбора графики — как на шаге «Тыл»: сетка, превью с object-fit: contain, кнопки +/− и счётчики.
+// - Секция «Дополнительно» остаётся простой (не аккордеон).
+// - Навигация StepNav (sticky), подсказка сверху.
+// - Ориентация у «Резной работы» отображается и пересчитывается «на месте».
+// - Пустые строки скрываем (нет людей/пустых строк/графики без url/имени/пустых эпитафий).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
@@ -135,7 +137,7 @@ function Underlay({
     >
       {!!itemUrl && (
         <>
-          {/* Базовый рисунок изделия — растягиваем НА ВСЮ ОБЛАСТЬ (cover), зеркалим при тыле */}
+          {/* Базовый рисунок изделия (cover для полного покрытия) */}
           <img
             src={itemUrl}
             alt=""
@@ -151,7 +153,7 @@ function Underlay({
             }}
             draggable={false}
           />
-          {/* Цветная маска поверх (по альфа‑каналу), только для тыла */}
+          {/* Цветная маска — также на всю область */}
           {withTintMaskTop && (
             <div
               style={{
@@ -299,6 +301,7 @@ function EditableOrderSummary() {
               placeItems: "center"
             }}
           >
+            {/* object-fit: contain — вписываем «резную работу» в миниатюру 96×96 */}
             {draft?.item?.url ? (
               <img
                 src={draft.item.url}
@@ -316,7 +319,7 @@ function EditableOrderSummary() {
             )}
             <div style={{ opacity: 0.9 }}>
               Размеры: {dims}
-              {orient ? ` · ориентация: ${orient}` : ""}
+              {orientationLabel(draft?.size?.orientation || (draft as any)?.orientation) ? ` · ориентация: ${orientationLabel(draft?.size?.orientation || (draft as any)?.orientation)}` : ""}
             </div>
           </div>
         </div>
@@ -336,7 +339,25 @@ function EditableOrderSummary() {
   );
 }
 
-/* ===== Простой Аккордеон ===== */
+/* ===== Вписывающая миниатюра (общая) ===== */
+const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?: number }) => (
+  <div
+    style={{
+      borderRadius: 8,
+      border: "1px solid rgba(255,255,255,0.10)",
+      overflow: "hidden",
+      background: "rgba(255,255,255,0.04)",
+      width: size,
+      height: size,
+      display: "grid",
+      placeItems: "center"
+    }}
+  >
+    {url ? <img src={url} alt={alt} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} /> : null}
+  </div>
+);
+
+/* ===== Простой Аккордеон (контент внутри) ===== */
 function Accordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
@@ -502,9 +523,8 @@ export default function ReviewAndSendStep({
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
   }, [extraBase, extraPlate, extraFlowerbed, extraEngraving]);
 
-  // Аккордеон редактора плиты (как тыльный выбор графики, без эскиза)
-  const [plateOpen, setPlateOpen] = useState<boolean>(!!extraPlate);
-  useEffect(() => { if (extraPlate) setPlateOpen(true); }, [extraPlate]);
+  // Аккордеон «Редактор плиты (графика)» — управляется чекбоксом «Гравировка (редактор)»
+  const [plateOpen, setPlateOpen] = useState<boolean>(false);
 
   // Данные для редактора плиты
   const [catsLoading, setCatsLoading] = useState(false);
@@ -520,21 +540,11 @@ export default function ReviewAndSendStep({
       setCatsLoading(true); setCatsError("");
       try {
         const data = await fetchCatalog("graphics");
-        const arr = Array.isArray((data as any)?.categories) ? (data as any).categories : data;
-        const flat: any[] = [];
-        const walk = (node: any) => {
-          if (!node) return;
-          if (Array.isArray(node)) return node.forEach(walk);
-          if (node.items) node.items.forEach((it: any) => flat.push(it));
-          if (node.children) node.children.forEach(walk);
-          if (node.categories) node.categories.forEach(walk);
-          if (node.subcategories) node.subcategories.forEach(walk);
-        };
-        walk(arr);
-        setCats(arr && arr.categories ? arr.categories : (Array.isArray(arr) ? arr : []));
+        const root = (data as any)?.categories || data;
+        const catsArr = Array.isArray(root) ? root : [];
+        if (alive) setCats(catsArr);
       } catch (e) {
-        if (!alive) return;
-        setCatsError("Не удалось загрузить каталог графики.");
+        if (alive) setCatsError("Не удалось загрузить каталог графики.");
       } finally {
         if (alive) setCatsLoading(false);
       }
@@ -567,7 +577,6 @@ export default function ReviewAndSendStep({
     setPlateIds(next);
   };
 
-  // Состояния
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>("");
 
@@ -593,24 +602,6 @@ export default function ReviewAndSendStep({
 
   const StepNavAny = StepNav as any;
 
-  // Вписывающая миниатюра
-  const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?: number }) => (
-    <div
-      style={{
-        borderRadius: 8,
-        border: "1px solid rgba(255,255,255,0.10)",
-        overflow: "hidden",
-        background: "rgba(255,255,255,0.04)",
-        width: size,
-        height: size,
-        display: "grid",
-        placeItems: "center"
-      }}
-    >
-      {url ? <img src={url} alt={alt} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} /> : null}
-    </div>
-  );
-
   const hasFront =
     frontPersons.length > 0 || frontUnique.length > 0 || frontEpitaphs.length > 0 || !!frontWishes;
   const hasBack =
@@ -623,7 +614,7 @@ export default function ReviewAndSendStep({
         <StepNavAny active="review" />
       </div>
 
-      {/* Подсказка — сверху (точный текст) */}
+      {/* Подсказка — сверху */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
         гравировки перейдите на соответствующий шаг, используйте навигацию вверху. Когда всё верно — нажмите «Отправить заказ».
@@ -784,26 +775,68 @@ export default function ReviewAndSendStep({
         </div>
       </section>
 
-      {/* Дополнительно — теперь просто раздел */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>Дополнительно</div>
+      {/* Дополнительно — раздел с чекбоксами и редактором плиты */}
+      <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+        <div style={{ fontWeight: 700 }}>Дополнительно</div>
 
-        {/* Верх — прочие чекбоксы */}
-        <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
+        {/* Верхние чекбоксы */}
+        <div style={{ display: "grid", gap: 10 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={extraBase}
+              onChange={(e) => setExtraBase(e.target.checked)}
+            />
             <span>Тумба</span>
           </label>
+
           <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={extraFlowerbed}
+              onChange={(e) => setExtraFlowerbed(e.target.checked)}
+            />
             <span>Цветник</span>
           </label>
         </div>
 
-        {/* Аккордеон редактора плиты (по умолчанию закрыт, но открываем если Plate = true) */}
-        <div style={{ marginBottom: 10 }}>
-          <Accordion title="Редактор плиты (графика)" open={plateOpen} onToggle={() => setPlateOpen((v) => !v)}>
-            {/* Простая сетка выбора графики (как в тыльном, без эскиза) */}
+        {/* Строка «Надгробная плита» и «Гравировка (редактор)» */}
+        <div style={{ ...sectionBox }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={extraPlate}
+                onChange={(e) => {
+                  // Если пользователь отмечает «Надгробная плита», НЕ открываем аккордеон автоматически
+                  setExtraPlate(e.target.checked);
+                  if (!e.target.checked) {
+                    // если отключили плиту — редактор можно оставить как есть (не обязательно закрывать)
+                  }
+                }}
+              />
+              <span>Надгробная плита</span>
+            </label>
+
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={plateOpen}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setPlateOpen(next);
+                  if (next && !extraPlate) setExtraPlate(true); // включаем плиту, если открывают редактор
+                }}
+              />
+              <span>Гравировка (редактор)</span>
+            </label>
+          </div>
+        </div>
+
+        {/* «Редактор плиты (графика)» — показываем, если plateOpen = true */}
+        {plateOpen && (
+          <div style={{ ...sectionBox }}>
+            {/* каталог как на шаге «Тыл»: сетка, превью contain, +/− */}
             {catsLoading && <div>Загрузка каталога…</div>}
             {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
             {!catsLoading && !catsError && cats.length === 0 && <div>Каталог пуст.</div>}
@@ -817,10 +850,10 @@ export default function ReviewAndSendStep({
                         const gid = String(g.id || g.relPath || g.url || g.name);
                         const qty = plateIds.filter((x) => x === gid).length;
                         return (
-                          <div key={gid} style={{ ...sectionBox, padding: 8 }}>
+                          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
                             <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
                               {g.url ? (
-                                <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                                <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
                               ) : (
                                 <div style={{ ...smallText() }}>нет</div>
                               )}
@@ -838,10 +871,10 @@ export default function ReviewAndSendStep({
                           const gid = String(g.id || g.relPath || g.url || g.name);
                           const qty = plateIds.filter((x) => x === gid).length;
                           return (
-                            <div key={`${sub._id || sub.name}-${gid}`} style={{ ...sectionBox, padding: 8 }}>
+                            <div key={`${sub._id || sub.name}-${gid}`} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
                               <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
                                 {g.url ? (
-                                  <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                                  <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
                                 ) : (
                                   <div style={{ ...smallText() }}>нет</div>
                                 )}
@@ -860,32 +893,8 @@ export default function ReviewAndSendStep({
                 ))}
               </div>
             )}
-          </Accordion>
-        </div>
-
-        {/* Нижняя строка — ВСЕГДА вместе: Надгробная плита + Гравировка */}
-        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={extraPlate}
-              onChange={(e) => {
-                setExtraPlate(e.target.checked);
-                if (e.target.checked) setPlateOpen(true);
-              }}
-            />
-            <span>Надгробная плита</span>
-          </label>
-
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={extraEngraving}
-              onChange={(e) => setExtraEngraving(e.target.checked)}
-            />
-            <span>Гравировка</span>
-          </label>
-        </div>
+          </div>
+        )}
       </section>
 
       {/* Ошибка */}
