@@ -307,7 +307,7 @@ function EditableOrderSummary() {
             )}
             <div style={{ opacity: 0.9 }}>
               Размеры: {dims}
-              {orient ? ` · ориентация: ${orient}` : ""}
+              {orient ? ` · ${orient}` : ""}
             </div>
           </div>
         </div>
