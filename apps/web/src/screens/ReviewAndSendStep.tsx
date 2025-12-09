@@ -3,10 +3,12 @@
 //
 // Исправления:
 // - Эскизы отображаем один раз (нижний дубль удалён).
-// - Размеры НП (радио): 100×50, 120×60, 140×70; Толщина: 5, 8, 10 см.
-// - На тыльной стороне: фон инвертирован (invert), резная работа видна поверх превью (маска, зеркалирование).
-// - Галерея «Графика на надгробной плите»: категории в закрытых аккордеонах (категория «Цветы» — с подкатегориями).
-// - Все миниатюры и превью вписываются (object-fit: contain).
+// - Тыльная: заливка резной работы сделана через маску (прозрачное остаётся прозрачным, непрозрачное — сплошной цвет),
+//   маска расположена поверх превью, зеркалирована по X — всегда видна.
+// - Вернули полный состав заказа в просмотре: Усопшие, Графика, Эпитафии (лицевая/тыльная), Пожелания, Контакты, Резная работа.
+// - Ориентацию выводим «вертикально/горизонтально» вместо «вертикальная/горизонтальная».
+// - Галерея «Графика на надгробной плите»: категории как закрытые аккордеоны; «Цветы» с подкатегориями.
+// - Все миниатюры и превью — object-fit: contain (вписаны).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
@@ -96,11 +98,11 @@ function AccentBox({ children }: { children: React.ReactNode }) {
 }
 
 /* ===== Утилиты ===== */
-function orientationLabel(o?: string) {
+function orientationLabelShort(o?: string) {
   if (!o) return "";
   const k = String(o).toLowerCase();
-  if (k.startsWith("h")) return "горизонтальная";
-  if (k.startsWith("v")) return "вертикальная";
+  if (k.startsWith("h")) return "горизонтально";
+  if (k.startsWith("v")) return "вертикально";
   return "";
 }
 
@@ -113,21 +115,20 @@ function Underlay({
   side: "front" | "back";
 }) {
   // Лицевая: градиент + изделие (contain, opacity 85%).
-  // Тыльная: инвертированный градиент (invert) — изделие и маска добавим сверху в SidePreview.
-  const base: React.CSSProperties = {
-    position: "absolute",
-    inset: 0,
-    borderRadius: 10,
-    overflow: "hidden",
-    background:
-      "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-    zIndex: 0
-  };
-  const style =
-    side === "back" ? { ...base, filter: "invert(1)" as any } : base;
-
+  // Тыльная: только градиент (маску добавим сверху в SidePreview).
   return (
-    <div aria-hidden style={style}>
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        inset: 0,
+        borderRadius: 10,
+        overflow: "hidden",
+        background:
+          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+        zIndex: 0
+      }}
+    >
       {itemUrl && side === "front" && (
         <img
           src={itemUrl}
@@ -198,7 +199,7 @@ function SidePreview({
           </div>
         )}
 
-        {/* Тыльная: маска над превью (всегда видна), зеркалим */}
+        {/* Тыльная: маска над превью — непрозрачное заливаем цветом, прозрачное остаётся прозрачным; зеркалим */}
         {itemUrl && side === "back" && (
           <div
             aria-hidden
@@ -262,7 +263,7 @@ function EditableOrderSummary() {
     `${draft?.size?.width ? Math.round(draft.size.width / 10) : "—"}×` +
     `${draft?.size?.height ? Math.round(draft.size.height / 10) : "—"}×` +
     `${draft?.size?.thickness ? Math.round(draft.size.thickness / 10) : "—"} см`;
-  const orient = orientationLabel(draft?.size?.orientation || (draft as any)?.orientation);
+  const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
 
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
@@ -388,7 +389,7 @@ function Accordion({ title, open, onToggle, children }: { title: string; open: b
   );
 }
 
-/* ===== Грид для категорий/подкатегорий плиты ===== */
+/* ===== Грид категорій/подкатегорий плиты ===== */
 function CatGrid({
   items,
   plateIds,
@@ -426,7 +427,7 @@ function CatGrid({
   );
 }
 
-/* ===== Компонент шага ===== */
+/* ===== Основной компонент ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void; };
 
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
@@ -445,330 +446,58 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Для эскизов
   const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
   const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
 
-  // Данные по сторонам (опущено ради сокращения — как в предыдущей версии)
+  // Лицевая сторона — данные
+  const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
+  const frontGraphicsRaw: any[] = (draft.graphics as any[])?.filter(Boolean) || [];
+  const frontUnique: any[] = useMemo(() => {
+    const first: Record<string, any> = {};
+    frontGraphicsRaw.forEach((g) => { const id = g?.id || g?.url || g?.name; if (id && !first[id]) first[id] = g; });
+    return Object.values(first);
+  }, [frontGraphicsRaw]);
+  const frontCountsById: Record<string, number> = useMemo(() => {
+    const m: Record<string, number> = {};
+    frontGraphicsRaw.forEach((g) => { const id = g?.id || g?.url || g?.name || ""; if (id) m[id] = (m[id] || 0) + 1; });
+    return m;
+  }, [frontGraphicsRaw]);
+  const frontEpitaphs: string[] = useMemo(() => {
+    const arr = Array.isArray(draft.engraving?.epitaphs) ? draft.engraving!.epitaphs!.filter(Boolean) : [];
+    if (arr.length) return arr;
+    const single = (draft.engraving?.epitaphText || "").trim();
+    return single ? [single] : [];
+  }, [draft.engraving]);
+  const frontWishes = ((draft as any)?.editor?.wishes || "").trim();
 
-  /* ===== Дополнительно: Тумба / Цветник / Плита ===== */
+  // Тыльная сторона — данные
+  const rearPeople = ((((draft as any)?.editorBack?.people as any[]) || []).filter(Boolean)) as Array<{
+    id?: string;
+    lastName?: string;
+    firstName?: string;
+    middleName?: string;
+    birthDate?: string;
+    deathDate?: string;
+    photoPreview?: string | null;
+  }>;
+  const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+  const rearCountsById = useMemo(() => {
+    const m: Record<string, number> = {};
+    (rearIds || []).forEach((id) => { m[id] = (m[id] || 0) + 1; });
+    return m;
+  }, [rearIds]);
+  const rearUnique: any[] = useMemo(() => {
+    const ids = Array.from(new Set(rearIds || []));
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
+  }, [rearIds, rearMeta]);
+  const rearEpitaphs: string[] = useMemo(
+    () => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)),
+    [draft]
+  );
+  const backWishes = (((draft as any)?.editorBack?.wishes || "").trim());
 
-  const initialExtras = (draft as any)?.extras || {};
-  const [extraBase, setExtraBase] = useState<boolean>(!!initialExtras.base);
-  const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
-
-  const [extraPlate, setExtraPlate] = useState<boolean>(!!initialExtras.headstonePlate);
-  const stelaOrientation = (draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase();
-  const defaultPlateOrientation = stelaOrientation.startsWith("h") ? "horizontal" : "vertical";
-
-  const sizeOptions = ["100×50 см", "120×60 см", "140×70 см"];
-  const thicknessOptions = ["5 см", "8 см", "10 см"];
-  const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize && sizeOptions.includes((initialExtras as any)?.plateSize) ? (initialExtras as any)?.plateSize : sizeOptions[0]);
-  const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && thicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : thicknessOptions[0]);
-  const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
-  const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
-
-  const [plateOpen, setPlateOpen] = useState<boolean>(false);
-  const [catsLoading, setCatsLoading] = useState(false);
-  const [catsError, setCatsError] = useState("");
-  const [cats, setCats] = useState<any[]>([]);
-  const [catOpen, setCatOpen] = useState<Record<string, boolean>>({});
-  const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
-  const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
-
-  const chosenPlateList = useMemo(() => {
-    const uniq = Array.from(new Set(plateIds));
-    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" }).filter((x) => x?.url || x?.name);
-  }, [plateIds, plateMeta]);
-
-  // Загрузка каталога при открытии
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!plateOpen) return;
-      setCatsLoading(true); setCatsError("");
-      try {
-        const data = await fetchCatalog("graphics");
-        const root = (data as any)?.categories || data;
-        const catsArr = Array.isArray(root) ? root : [];
-        if (alive) setCats(catsArr);
-      } catch {
-        if (alive) setCatsError("Не удалось загрузить каталог графики.");
-      } finally {
-        if (alive) setCatsLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, [plateOpen]);
-
-  // Изначально все категории закрыты
-  useEffect(() => {
-    if (!plateOpen || !cats.length) return;
-    setCatOpen((prev) => {
-      const next = { ...prev };
-      for (const c of cats) {
-        const key = String(c._id || c.name || "");
-        if (!(key in next)) next[key] = false;
-      }
-      return next;
-    });
-  }, [plateOpen, cats]);
-
-  const isFlowersCat = (name?: string) => {
-    const s = (name || "").toLowerCase();
-    return s.includes("цвет") || s.includes("flower");
-  };
-
-  const addPlateGraphic = (g: any) => {
-    const gid = String(g.id || g.relPath || g.url || g.name);
-    const next = plateIds.concat(gid);
-    setPlateIds(next);
-    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.url || g.preview || "", preview: g.preview || g.url || "" } }));
-  };
-  const removePlateGraphic = (gid: string) => {
-    const idx = plateIds.findIndex((x) => x === gid);
-    if (idx === -1) return;
-    const next = plateIds.slice();
-    next.splice(idx, 1);
-    setPlateIds(next);
-  };
-  const handleDeletePlate = () => {
-    setExtraPlate(false);
-    setPlateIds([]);
-    setPlateMeta({});
-    setPlateEpitaph("");
-  };
-
-  // Сохранение extras
-  useEffect(() => {
-    const prev = loadOrderDraft();
-    const extras: any = {
-      ...(prev as any).extras,
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : [],
-      plateGraphicsMeta: extraPlate ? plateMeta : {}
-    };
-    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-  }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
-
-  // Отправка
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>("");
-  const handleSend = async () => {
-    setBusy(true); setErr("");
-    const name = (introState.intro?.customerName || "").trim();
-
-    const attachments: any = {
-      frontPreview: (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null,
-      backPreview: (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null,
-      itemUrl: itemUrl || null,
-      plateGraphics: chosenPlateList
-    };
-
-    const extras: Extras & {
-      base?: boolean;
-      flowerbed?: boolean;
-      headstonePlate?: boolean;
-      plateSize?: string;
-      plateThickness?: string;
-      plateOrientation?: string;
-      plateEpitaph?: string;
-      plateGraphicsIds?: string[];
-      attachments?: any;
-    } = {
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : undefined,
-      attachments
-    };
-
-    try {
-      await sendOrderEmailAndNotifyTg(extras);
-      const nm = name || "Заказчик";
-      window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами по указанному номеру для уточнения деталей и подтверждения заказа.`);
-      onSend?.({ extras });
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
-      {/* Навигация */}
-      <div style={{ position: "sticky", top: "calc(env(safe-area-inset-top, 0px))", zIndex: 50 }}>
-        <StepNav active="review" />
-      </div>
-
-      {/* Подсказка */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
-        гравировки перейдите на соответствующий шаг, используйте навигацию вверху. Когда всё верно — нажмите «Отправить заказ».
-      </section>
-
-      {/* Данные */}
-      <EditableOrderSummary />
-
-      {/* Эскизы — только один блок (нижний дубль удалён) */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          <SidePreview title="Лицевая" miniUrl={(draft as any)?.editor?.previewUrl} itemUrl={itemUrl} side="front" aspect={aspect} />
-          <SidePreview title="Тыльная" miniUrl={(draft as any)?.editorBack?.previewUrl} itemUrl={itemUrl} side="back" aspect={aspect} />
-        </div>
-      </section>
-
-      {/* Дополнительно — Тумба/Цветник/Плита */}
-      <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
-        <div style={{ fontWeight: 700 }}>Дополнительно</div>
-
-        {/* Тумба / Цветник */}
-        <div style={{ ...sectionBox }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
-              <span>Тумба</span>
-            </label>
-
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
-              <span>Цветник</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Надгробная плита */}
-        <div style={{ ...sectionBox, display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
-              <span style={{ fontWeight: 600 }}>Надгробная плита</span>
-            </label>
-
-            {extraPlate && (
-              <button type="button" onClick={handleDeletePlate} style={glassButtonStyle("nano")}>
-                Удалить плиту
-              </button>
-            )}
-          </div>
-
-          {extraPlate && (
-            <>
-              {/* Размеры НП */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["100×50 см", "120×60 см", "140×70 см"].map((v) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
-                      <span>{v}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Толщина НП */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["5 см", "8 см", "10 см"].map((v) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
-                      <span>{v}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Ориентация */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {[
-                    { v: "vertical", t: "вертикальная" },
-                    { v: "horizontal", t: "горизонтальная" }
-                  ].map(({ v, t }) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => setPlateOrientation(v)} />
-                      <span>{t}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Эпитафия плиты */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
-                <textarea
-                  value={plateEpitaph}
-                  onChange={(e) => setPlateEpitaph(e.target.value)}
-                  rows={3}
-                  placeholder="Текст эпитафии на плите…"
-                  style={{ ...inputStyle(), resize: "vertical" }}
-                />
-              </div>
-
-              {/* Галерея плиты (категории — закрытые) */}
-              <Accordion
-                title="Графика на надгробной плите"
-                open={plateOpen}
-                onToggle={() => setPlateOpen((v) => !v)}
-              >
-                {catsLoading && <div>Загрузка каталога…</div>}
-                {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-                {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-                {!catsLoading && cats.length > 0 && (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {cats.map((cat: any, idx: number) => {
-                      const catKey = String(cat._id || cat.name || idx);
-                      const open = !!catOpen[catKey];
-                      const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
-                      return (
-                        <Accordion
-                          key={catKey}
-                          title={cat.name || `Категория ${idx + 1}`}
-                          open={open}
-                          onToggle={() => setCatOpen((prev) => ({ ...prev, [catKey]: !prev[catKey] }))}
-                        >
-                          {showSubs ? (
-                            <div style={{ display: "grid", gap: 12 }}>
-                              {(cat.items || []).length > 0 && (
-                                <div>
-                                  <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>Общее</div>
-                                  <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                                </div>
-                              )}
-                              {(cat.children || []).map((sub: any, j: number) => (
-                                <div key={sub._id || `${catKey}-sub-${j}`}>
-                                  <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                                  <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                          )}
-                        </Accordion>
-                      );
-                    })}
-                  </div>
-                )}
-              </Accordion>
-
-              {/* Выбрано для плиты */}
-              {(chosenPlateList.length > 0 || plateEpitaph.trim()) && (
-                <div style={{ ...sectionBox, marginTop: 8 }}>
+  // Дополнительно — тумба/цветник={{ ...sectionBox, marginTop: 8 }}>
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>Выбрано для плиты</div>
                   {chosenPlateList.length > 0 && (
                     <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
@@ -791,6 +520,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               )}
             </>
           )}
+        </div>
+      </section>
+
+      {/* Эскизы — один раз */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
+          <SidePreview title="Лицевая" miniUrl={(draft as any)?.editor?.previewUrl} itemUrl={itemUrl} side="front" aspect={aspect} />
+          <SidePreview title="Тыльная" miniUrl={(draft as any)?.editorBack?.previewUrl} itemUrl={itemUrl} side="back" aspect={aspect} />
         </div>
       </section>
 
