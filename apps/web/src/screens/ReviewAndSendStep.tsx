@@ -1,11 +1,17 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Обновление:
-// - Силуэт резной работы теперь заливается сплошным цветом rgba(25,25,25,0.9)
-//   и расположен МЕЖДУ градиентом фона и превью (т.е. над градиентом, под изображением превью).
-// - Силуэт формируется по маске изделия (mask-image/WebkitMaskImage), для тыльной стороны зеркалится по X.
-// - Остальной функционал и компоновка — без изменений.
+// Что реализовано:
+// - Навигация по шагам (StepNav) «липко» сверху.
+// - Подсказка сверху (точный текст).
+// - Редактируемые «Контакты» и «Резная работа/размеры (с ориентацией)».
+// - Сортировка данных по сторонам: Лицевая/Тыльная (Усопшие → Графика → Эпитафии → Пожелания).
+//   Пустые секции не показываем. Миниатюры вписывают изображение (object-fit: contain).
+// - Эскизы показываем один раз, в 2 столбца.
+// - Силуэт резной работы заливается сплошным цветом rgba(25,25,25,0.9) и расположен
+//   ПОД превью, НО ПЕРЕД градиентом (то есть «между фоном и превью»).
+//   Для PNG используется маска (mask-image), для JPG/WebP — fallback-слой (чёрный силуэт через фильтры).
+//   Для тыльной стороны силуэт зеркалится по X.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StepNav from "../components/StepNav";
@@ -102,7 +108,7 @@ function orientationLabelShort(o?: string) {
   return "";
 }
 
-/* ===== Underlay (фон под превью + СИЛУЭТ) ===== */
+/* ===== Underlay (градиент + СИЛУЭТ ПОД превью) ===== */
 function Underlay({
   itemUrl,
   mirror = false
@@ -110,26 +116,68 @@ function Underlay({
   itemUrl?: string;
   mirror?: boolean;
 }) {
-  const maskLayer: React.CSSProperties = {
-    position: "absolute",
-    inset: 0,
-    // Силуэт сплошным цветом
-    background: "rgba(25,25,25,0.9)",
-    // Маска — рисунок изделия
-    WebkitMaskImage: itemUrl ? `url(${itemUrl})` : undefined,
-    WebkitMaskRepeat: "no-repeat",
-    WebkitMaskPosition: "center",
-    WebkitMaskSize: "contain",
-    maskImage: itemUrl ? `url(${itemUrl})` : undefined,
-    maskRepeat: "no-repeat",
-    maskPosition: "center",
-    maskSize: "contain",
-    // Зеркалим для тыльной стороны
-    transform: mirror ? "scaleX(-1)" : "none",
-    transformOrigin: "center",
-    zIndex: 1, // Силуэт над градиентом
-    pointerEvents: "none"
-  };
+  const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
+
+  // Градиентный фон — самый нижний слой
+  const gradient = (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        background:
+          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+        zIndex: 0
+      }}
+    />
+  );
+
+  // Силуэт через маску (для PNG с альфой)
+  const maskSilhouette =
+    itemUrl && isPng ? (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "rgba(25,25,25,0.9)",
+          WebkitMaskImage: `url(${itemUrl})`,
+          WebkitMaskRepeat: "no-repeat",
+          WebkitMaskPosition: "center",
+          WebkitMaskSize: "contain",
+          maskImage: `url(${itemUrl})`,
+          maskRepeat: "no-repeat",
+          maskPosition: "center",
+          maskSize: "contain",
+          transform: mirror ? "scaleX(-1)" : "none",
+          transformOrigin: "center",
+          zIndex: 1,
+          pointerEvents: "none"
+        }}
+      />
+    ) : null;
+
+  // Fallback для JPG/WebP: окрас по исходному изображению
+  const tintSilhouette =
+    itemUrl && !isPng ? (
+      <img
+        src={itemUrl}
+        alt=""
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          // Приближение к «силуэту»: в чёрный с небольшой прозрачностью.
+          filter: "grayscale(1) brightness(0) opacity(0.9)",
+          mixBlendMode: "multiply",
+          transform: mirror ? "scaleX(-1)" : "none",
+          transformOrigin: "center",
+          zIndex: 1,
+          pointerEvents: "none"
+        }}
+        draggable={false}
+      />
+    ) : null;
 
   return (
     <div
@@ -141,23 +189,14 @@ function Underlay({
         overflow: "hidden"
       }}
     >
-      {/* Градиентный фон (самый нижний слой) */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-          zIndex: 0
-        }}
-      />
-      {/* Силуэт изделия над градиентом, под превью */}
-      {itemUrl && <div style={maskLayer} />}
+      {gradient}
+      {maskSilhouette}
+      {tintSilhouette}
     </div>
   );
 }
 
-/* ===== SidePreview (эскизы) ===== */
+/* ===== SidePreview (карточка превью) ===== */
 function SidePreview({
   title,
   miniUrl,
@@ -183,7 +222,7 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Градиент + Силуэт (силуэт под превью, над градиентом) */}
+        {/* Фон + Силуэт (силуэт под превью, над фоном) */}
         <Underlay itemUrl={itemUrl} mirror={side === "back"} />
 
         {/* Превью (верхний слой) */}
@@ -849,7 +888,37 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>Назад</button>
-        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>
+        <button type="button" onClick={async () => {
+          setBusy(true); setErr("");
+          try {
+            const name = (intro.intro?.customerName || "").trim();
+            const attachments: any = {
+              frontPreview: (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null,
+              backPreview: (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null,
+              itemUrl: itemUrl || null,
+              plateGraphics: chosenPlateList
+            };
+            const extras: any = {
+              base: extraBase,
+              flowerbed: extraFlowerbed,
+              headstonePlate: extraPlate,
+              plateSize: extraPlate ? plateSize : undefined,
+              plateThickness: extraPlate ? plateThickness : undefined,
+              plateOrientation: extraPlate ? plateOrientation : undefined,
+              plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
+              plateGraphicsIds: extraPlate ? plateIds : undefined,
+              attachments
+            };
+            await sendOrderEmailAndNotifyTg(extras as Extras);
+            const nm = name || "Заказчик";
+            window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами по указанному номеру для уточнения деталей и подтверждения заказа.`);
+            onSend?.({ extras });
+          } catch (e: any) {
+            setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
+          } finally {
+            setBusy(false);
+          }
+        }} style={glassButtonStyle("sm", busy)} disabled={busy}>
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
@@ -981,32 +1050,32 @@ function PlateBlock(props: {
               <div style={{ display: "grid", gap: 12 }}>
                 {cats.map((cat: any, idx: number) => {
                   const catKey = String(cat._id || cat.name || idx);
-                  const open = !!catOpen[catKey];
+                  const open = !!(props.catOpen as any)[catKey];
                   const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
                   return (
                     <Accordion
                       key={catKey}
                       title={cat.name || `Категория ${idx + 1}`}
                       open={open}
-                      onToggle={() => setCatOpen({ ...catOpen, [catKey]: !open })}
+                      onToggle={() => props.setCatOpen({ ...(props.catOpen as any), [catKey]: !open })}
                     >
                       {showSubs ? (
                         <div style={{ display: "grid", gap: 12 }}>
                           {(cat.items || []).length > 0 && (
                             <div>
                               <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>Общее</div>
-                              <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                              <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
                             </div>
                           )}
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                        <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
                       )}
                     </Accordion>
                   );
@@ -1025,7 +1094,7 @@ function PlateBlock(props: {
                     <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "56px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
                       {g.url && <Thumb url={g.url} />}
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                      <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
+                      <button type="button" onClick={() => props.removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
                     </div>
                   ))}
                 </div>
