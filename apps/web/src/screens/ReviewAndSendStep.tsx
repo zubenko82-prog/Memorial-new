@@ -1,17 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Что реализовано:
-// - Навигация по шагам (StepNav) «липко» сверху.
-// - Подсказка сверху (точный текст).
-// - Редактируемые «Контакты» и «Резная работа/размеры (с ориентацией)».
-// - Сортировка данных по сторонам: Лицевая/Тыльная (Усопшие → Графика → Эпитафии → Пожелания).
-//   Пустые секции не показываем. Миниатюры вписывают изображение (object-fit: contain).
-// - Эскизы показываем один раз, в 2 столбца.
-// - Силуэт резной работы заливается сплошным цветом rgba(25,25,25,0.9) и расположен
-//   ПОД превью, НО ПЕРЕД градиентом (то есть «между фоном и превью»).
-//   Для PNG используется маска (mask-image), для JPG/WebP — fallback-слой (чёрный силуэт через фильтры).
-//   Для тыльной стороны силуэт зеркалится по X.
+// Исправлено:
+// - Эскизы рендерятся ОДИН раз (нижний дубль удалён).
+// - Тыльная сторона: сплошная заливка резной работы цветом rgba(255,255,255,0.06) по маске,
+//   прозрачные пиксели остаются прозрачными, маска поверх превью, зеркалим по X.
+// - Ориентация выводится как «вертикально/горизонтально».
+// - Сохранён полный состав сведений: Усопшие / Графика / Эпитафии / Пожелания по обеим сторонам.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StepNav from "../components/StepNav";
@@ -108,77 +103,8 @@ function orientationLabelShort(o?: string) {
   return "";
 }
 
-/* ===== Underlay (градиент + СИЛУЭТ ПОД превью) ===== */
-function Underlay({
-  itemUrl,
-  mirror = false
-}: {
-  itemUrl?: string;
-  mirror?: boolean;
-}) {
-  const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
-
-  // Градиентный фон — самый нижний слой
-  const gradient = (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        background:
-          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-        zIndex: 0
-      }}
-    />
-  );
-
-  // Силуэт через маску (для PNG с альфой)
-  const maskSilhouette =
-    itemUrl && isPng ? (
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "rgba(25,25,25,0.9)",
-          WebkitMaskImage: `url(${itemUrl})`,
-          WebkitMaskRepeat: "no-repeat",
-          WebkitMaskPosition: "center",
-          WebkitMaskSize: "contain",
-          maskImage: `url(${itemUrl})`,
-          maskRepeat: "no-repeat",
-          maskPosition: "center",
-          maskSize: "contain",
-          transform: mirror ? "scaleX(-1)" : "none",
-          transformOrigin: "center",
-          zIndex: 1,
-          pointerEvents: "none"
-        }}
-      />
-    ) : null;
-
-  // Fallback для JPG/WebP: окрас по исходному изображению
-  const tintSilhouette =
-    itemUrl && !isPng ? (
-      <img
-        src={itemUrl}
-        alt=""
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
-          // Приближение к «силуэту»: в чёрный с небольшой прозрачностью.
-          filter: "grayscale(1) brightness(0) opacity(0.9)",
-          mixBlendMode: "multiply",
-          transform: mirror ? "scaleX(-1)" : "none",
-          transformOrigin: "center",
-          zIndex: 1,
-          pointerEvents: "none"
-        }}
-        draggable={false}
-      />
-    ) : null;
-
+/* ===== Underlay (фон под превью) ===== */
+function Underlay({ itemUrl, side }: { itemUrl?: string; side: "front" | "back" }) {
   return (
     <div
       aria-hidden
@@ -186,17 +112,33 @@ function Underlay({
         position: "absolute",
         inset: 0,
         borderRadius: 10,
-        overflow: "hidden"
+        overflow: "hidden",
+        background:
+          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+        zIndex: 0
       }}
     >
-      {gradient}
-      {maskSilhouette}
-      {tintSilhouette}
+      {itemUrl && side === "front" && (
+        <img
+          src={itemUrl}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            opacity: 0.85,
+            pointerEvents: "none"
+          }}
+          draggable={false}
+        />
+      )}
     </div>
   );
 }
 
-/* ===== SidePreview (карточка превью) ===== */
+/* ===== SidePreview (эскизы) ===== */
 function SidePreview({
   title,
   miniUrl,
@@ -222,10 +164,8 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Фон + Силуэт (силуэт под превью, над фоном) */}
-        <Underlay itemUrl={itemUrl} mirror={side === "back"} />
+        <Underlay itemUrl={itemUrl} side={side} />
 
-        {/* Превью (верхний слой) */}
         {miniUrl ? (
           <img
             src={miniUrl}
@@ -235,7 +175,7 @@ function SidePreview({
               width: "100%",
               height: "100%",
               objectFit: "contain",
-              zIndex: 2,
+              zIndex: 1,
               display: "block"
             }}
             draggable={false}
@@ -244,7 +184,7 @@ function SidePreview({
           <div
             style={{
               position: "relative",
-              zIndex: 2,
+              zIndex: 1,
               width: "100%",
               height: "100%",
               display: "grid",
@@ -254,6 +194,30 @@ function SidePreview({
           >
             Превью отсутствует
           </div>
+        )}
+
+        {/* Тыльная: маска поверх превью, прозрачное остаётся прозрачным, непрозрачное — заливка rgba(255,255,255,0.06) */}
+        {itemUrl && side === "back" && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(255,255,255,0.06)",
+              WebkitMaskImage: `url(${itemUrl})`,
+              WebkitMaskRepeat: "no-repeat",
+              WebkitMaskPosition: "center",
+              WebkitMaskSize: "contain",
+              maskImage: `url(${itemUrl})`,
+              maskRepeat: "no-repeat",
+              maskPosition: "center",
+              maskSize: "contain",
+              transform: "scaleX(-1)",
+              transformOrigin: "center",
+              zIndex: 3,
+              pointerEvents: "none"
+            }}
+          />
         )}
       </div>
     </div>
@@ -630,8 +594,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       plateThickness: extraPlate ? plateThickness : undefined,
       plateOrientation: extraPlate ? plateOrientation : undefined,
       plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : undefined,
-      plateGraphicsMeta: extraPlate ? plateMeta : undefined
+      plateGraphicsIds: extraPlate ? plateIds : [],
+      plateGraphicsMeta: extraPlate ? plateMeta : {}
     };
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
@@ -831,7 +795,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       ) : null}
 
-      {/* Эскизы — один раз */}
+      {/* Эскизы — ОДИН раз */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
@@ -888,37 +852,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>Назад</button>
-        <button type="button" onClick={async () => {
-          setBusy(true); setErr("");
-          try {
-            const name = (intro.intro?.customerName || "").trim();
-            const attachments: any = {
-              frontPreview: (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null,
-              backPreview: (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null,
-              itemUrl: itemUrl || null,
-              plateGraphics: chosenPlateList
-            };
-            const extras: any = {
-              base: extraBase,
-              flowerbed: extraFlowerbed,
-              headstonePlate: extraPlate,
-              plateSize: extraPlate ? plateSize : undefined,
-              plateThickness: extraPlate ? plateThickness : undefined,
-              plateOrientation: extraPlate ? plateOrientation : undefined,
-              plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-              plateGraphicsIds: extraPlate ? plateIds : undefined,
-              attachments
-            };
-            await sendOrderEmailAndNotifyTg(extras as Extras);
-            const nm = name || "Заказчик";
-            window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами по указанному номеру для уточнения деталей и подтверждения заказа.`);
-            onSend?.({ extras });
-          } catch (e: any) {
-            setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
-          } finally {
-            setBusy(false);
-          }
-        }} style={glassButtonStyle("sm", busy)} disabled={busy}>
+        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
@@ -1050,32 +984,32 @@ function PlateBlock(props: {
               <div style={{ display: "grid", gap: 12 }}>
                 {cats.map((cat: any, idx: number) => {
                   const catKey = String(cat._id || cat.name || idx);
-                  const open = !!(props.catOpen as any)[catKey];
+                  const open = !!catOpen[catKey];
                   const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
                   return (
                     <Accordion
                       key={catKey}
                       title={cat.name || `Категория ${idx + 1}`}
                       open={open}
-                      onToggle={() => props.setCatOpen({ ...(props.catOpen as any), [catKey]: !open })}
+                      onToggle={() => setCatOpen({ ...catOpen, [catKey]: !open })}
                     >
                       {showSubs ? (
                         <div style={{ display: "grid", gap: 12 }}>
                           {(cat.items || []).length > 0 && (
                             <div>
                               <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>Общее</div>
-                              <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                              <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
                             </div>
                           )}
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                              <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                        <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
                       )}
                     </Accordion>
                   );
@@ -1094,7 +1028,7 @@ function PlateBlock(props: {
                     <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "56px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
                       {g.url && <Thumb url={g.url} />}
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                      <button type="button" onClick={() => props.removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
+                      <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
                     </div>
                   ))}
                 </div>
