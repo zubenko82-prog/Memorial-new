@@ -1,12 +1,11 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Исправлено:
-// - Эскизы рендерятся ОДИН раз (нижний дубль удалён).
-// - Тыльная сторона: сплошная заливка резной работы цветом rgba(255,255,255,0.06) по маске,
-//   прозрачные пиксели остаются прозрачными, маска поверх превью, зеркалим по X.
-// - Ориентация выводится как «вертикально/горизонтально».
-// - Сохранён полный состав сведений: Усопшие / Графика / Эпитафии / Пожелания по обеим сторонам.
+// Обновление:
+// - Силуэт резной работы теперь заливается сплошным цветом rgba(25,25,25,0.9)
+//   и расположен МЕЖДУ градиентом фона и превью (т.е. над градиентом, под изображением превью).
+// - Силуэт формируется по маске изделия (mask-image/WebkitMaskImage), для тыльной стороны зеркалится по X.
+// - Остальной функционал и компоновка — без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StepNav from "../components/StepNav";
@@ -103,8 +102,35 @@ function orientationLabelShort(o?: string) {
   return "";
 }
 
-/* ===== Underlay (фон под превью) ===== */
-function Underlay({ itemUrl, side }: { itemUrl?: string; side: "front" | "back" }) {
+/* ===== Underlay (фон под превью + СИЛУЭТ) ===== */
+function Underlay({
+  itemUrl,
+  mirror = false
+}: {
+  itemUrl?: string;
+  mirror?: boolean;
+}) {
+  const maskLayer: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    // Силуэт сплошным цветом
+    background: "rgba(25,25,25,0.9)",
+    // Маска — рисунок изделия
+    WebkitMaskImage: itemUrl ? `url(${itemUrl})` : undefined,
+    WebkitMaskRepeat: "no-repeat",
+    WebkitMaskPosition: "center",
+    WebkitMaskSize: "contain",
+    maskImage: itemUrl ? `url(${itemUrl})` : undefined,
+    maskRepeat: "no-repeat",
+    maskPosition: "center",
+    maskSize: "contain",
+    // Зеркалим для тыльной стороны
+    transform: mirror ? "scaleX(-1)" : "none",
+    transformOrigin: "center",
+    zIndex: 1, // Силуэт над градиентом
+    pointerEvents: "none"
+  };
+
   return (
     <div
       aria-hidden
@@ -112,28 +138,21 @@ function Underlay({ itemUrl, side }: { itemUrl?: string; side: "front" | "back" 
         position: "absolute",
         inset: 0,
         borderRadius: 10,
-        overflow: "hidden",
-        background:
-          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-        zIndex: 0
+        overflow: "hidden"
       }}
     >
-      {itemUrl && side === "front" && (
-        <img
-          src={itemUrl}
-          alt=""
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "contain",
-            opacity: 0.85,
-            pointerEvents: "none"
-          }}
-          draggable={false}
-        />
-      )}
+      {/* Градиентный фон (самый нижний слой) */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+          zIndex: 0
+        }}
+      />
+      {/* Силуэт изделия над градиентом, под превью */}
+      {itemUrl && <div style={maskLayer} />}
     </div>
   );
 }
@@ -164,8 +183,10 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        <Underlay itemUrl={itemUrl} side={side} />
+        {/* Градиент + Силуэт (силуэт под превью, над градиентом) */}
+        <Underlay itemUrl={itemUrl} mirror={side === "back"} />
 
+        {/* Превью (верхний слой) */}
         {miniUrl ? (
           <img
             src={miniUrl}
@@ -175,7 +196,7 @@ function SidePreview({
               width: "100%",
               height: "100%",
               objectFit: "contain",
-              zIndex: 1,
+              zIndex: 2,
               display: "block"
             }}
             draggable={false}
@@ -184,7 +205,7 @@ function SidePreview({
           <div
             style={{
               position: "relative",
-              zIndex: 1,
+              zIndex: 2,
               width: "100%",
               height: "100%",
               display: "grid",
@@ -194,30 +215,6 @@ function SidePreview({
           >
             Превью отсутствует
           </div>
-        )}
-
-        {/* Тыльная: маска поверх превью, прозрачное остаётся прозрачным, непрозрачное — заливка rgba(255,255,255,0.06) */}
-        {itemUrl && side === "back" && (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "rgba(255,255,255,0.06)",
-              WebkitMaskImage: `url(${itemUrl})`,
-              WebkitMaskRepeat: "no-repeat",
-              WebkitMaskPosition: "center",
-              WebkitMaskSize: "contain",
-              maskImage: `url(${itemUrl})`,
-              maskRepeat: "no-repeat",
-              maskPosition: "center",
-              maskSize: "contain",
-              transform: "scaleX(-1)",
-              transformOrigin: "center",
-              zIndex: 3,
-              pointerEvents: "none"
-            }}
-          />
         )}
       </div>
     </div>
@@ -594,8 +591,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       plateThickness: extraPlate ? plateThickness : undefined,
       plateOrientation: extraPlate ? plateOrientation : undefined,
       plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : [],
-      plateGraphicsMeta: extraPlate ? plateMeta : {}
+      plateGraphicsIds: extraPlate ? plateIds : undefined,
+      plateGraphicsMeta: extraPlate ? plateMeta : undefined
     };
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
@@ -795,7 +792,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       ) : null}
 
-      {/* Эскизы — ОДИН раз */}
+      {/* Эскизы — один раз */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
