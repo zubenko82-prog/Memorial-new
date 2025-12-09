@@ -1,21 +1,15 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Что сделано по задаче:
-// - Вернули чекбоксы «Тумба» и «Цветник». Под ними располагается блок «Надгробная плита».
-// - Убрали секцию «Выбранные». Её содержимое (данные по плите) теперь в самом блоке «Надгробная плита».
-//   Добавлена кнопка «Удалить плиту», которая снимает чекбокс плиты и очищает выбранные элементы/эпитафию.
-// - Все миниатюры, включая галерею, вписывают изображение (object-fit: contain) — ничего не обрезается.
-// - Эскизы:
-//   • Лицевая: на фоне (под превью) показываем выбранную резную работу (order.item.url),
-//     вписанную (contain), непрозрачность 85%.
-//   • Тыльная: выбранная резная работа отображена зеркально, непрозрачные пиксели окрашены в сплошной цвет
-//     (CSS-mask + однотонная заливка). Фон всегда растянут на всю область.
-// - Выбор параметров плиты (размер, толщина, ориентация) выполнен радиопереключателями.
-// - Галерея плиты — с категориями и подпапками (не сплошной список). Превью contain.
-// - По «Отправить» собираем информацию, добавляем оригиналы (itemUrl, фото людей, превью лицевой/тыльной, элементы плиты)
-//   и отправляем в менеджер-чат. После — показываем сообщение: «(Имя), Ваш заказ принят…».
-//   (Реальная отправка — через sendOrderEmailAndNotifyTg(extras); вложения передаём в extras.attachments.)
+// Обновления:
+// - Эскизы отображаем один раз (нижний дубль удалён).
+// - Размеры НП: только 100*50, 120*60, 140*70 (радио).
+// - Толщина НП: только 5, 8, 10 см (радио).
+// - Аккордеон «Гравировка (редактор)» переименован в «Графика на надгробной плите».
+// - Все миниатюры (в т.ч. галерея) вписывают изображение (object-fit: contain).
+// - Эскизы: лицевая — выбранная резная работа (order.item.url) на фоне, contain, opacity 85%.
+//            тыльная — та же работа зеркально, заливка по маске одним цветом (CSS mask).
+// - По «Отправить» собираем данные, добавляем оригиналы и показываем подтверждение с именем.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
@@ -113,7 +107,7 @@ function orientationLabel(o?: string) {
   return "";
 }
 
-/* ===== Подложка под превью (градиент + изделие) ===== */
+/* ===== Подложка под превью ===== */
 function Underlay({
   itemUrl,
   side
@@ -122,8 +116,8 @@ function Underlay({
   side: "front" | "back";
 }) {
   // Градиент всегда подложен.
-  // Лицевая: показываем изделие как картинку поверх градиента (contain, opacity: 0.85).
-  // Тыльная: заливаем сплошным цветом по маске (все непрозрачные пиксели изделия), зеркалим по X.
+  // Лицевая: изделие поверх градиента (contain, opacity 85%).
+  // Тыльная: сплошная заливка по маске (contain), зеркалим по X.
   return (
     <div
       aria-hidden
@@ -178,7 +172,7 @@ function Underlay({
   );
 }
 
-/* ===== Превью стороны (карточка) ===== */
+/* ===== Превью стороны ===== */
 function SidePreview({
   title,
   miniUrl,
@@ -334,7 +328,7 @@ function EditableOrderSummary() {
   );
 }
 
-/* ===== Вписывающая миниатюра (общая) ===== */
+/* ===== Вписывающая миниатюра ===== */
 const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?: number }) => (
   <div
     style={{
@@ -402,7 +396,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const introState = loadIntroState();
   const itemUrl = (draft as any)?.item?.url as string | undefined;
 
-  // Соотношение сторон подложки
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
@@ -417,7 +410,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
   const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
 
-  // Стороны (фильтруем пустые строки)
+  // Стороны
   const frontPersons: any[] = (draft.engraving?.persons as any[])?.filter(Boolean).filter((p: any) => {
     const fio1 = (p.lastName || "").trim();
     const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
@@ -433,7 +426,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return fio1 || fio2 || metric || hasPhoto;
   });
 
-  // Графика лицевой
   const frontGraphicsRaw: any[] = (draft.graphics as any[])?.filter(Boolean) || [];
   const frontGraphics = frontGraphicsRaw.filter((g) => g?.url || g?.name || g?.id);
   const frontCountsById: Record<string, number> = useMemo(() => {
@@ -453,7 +445,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return Object.values(first);
   }, [frontGraphics]);
 
-  // Графика тыльной
   const rearSelectedIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCountsById: Record<string, number> = useMemo(() => {
@@ -468,7 +459,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       .filter((g) => g?.url || g?.name || g?.id);
   }, [rearSelectedIds, rearMeta]);
 
-  // Эпитафии
   const frontEpitaphs: string[] = useMemo(() => {
     const arr = Array.isArray(draft.engraving?.epitaphs) ? draft.engraving!.epitaphs!.map((t) => (t || "").trim()).filter(Boolean) : [];
     if (arr.length) return arr;
@@ -495,23 +485,28 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return () => clearTimeout(t);
   }, [frontWishes, backWishes]);
 
-  /* ===== Дополнительно: чекбоксы «Тумба» и «Цветник», блок «Надгробная плита» ===== */
+  /* ===== Дополнительно ===== */
 
   const initialExtras = (draft as any)?.extras || {};
-  const [extraBase, setExtraBase] = useState<boolean>(!!initialExtras.base);        // Тумба
-  const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed); // Цветник
+  const [extraBase, setExtraBase] = useState<boolean>(!!initialExtras.base);
+  const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
 
   // Плита
   const [extraPlate, setExtraPlate] = useState<boolean>(!!initialExtras.headstonePlate);
   const stelaOrientation = (draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase();
   const defaultPlateOrientation = stelaOrientation.startsWith("h") ? "horizontal" : "vertical";
-  const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize || "100×50 см");
-  const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness || "5 см");
+
+  // Значения по умолчанию + список вариантов
+  const plateSizeOptions = ["100*50 см", "120*60 см", "140*70 см"];
+  const plateThicknessOptions = ["5 см", "8 см", "10 см"];
+
+  const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize && plateSizeOptions.includes((initialExtras as any)?.plateSize) ? (initialExtras as any)?.plateSize : plateSizeOptions[0]);
+  const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && plateThicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : plateThicknessOptions[0]);
   const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
   const [plateOpen, setPlateOpen] = useState<boolean>(false);
   const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
 
-  // Каталог (категории/подкатегории) для плиты
+  // Каталог плиты
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -522,7 +517,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" }).filter((x) => x?.url || x?.name);
   }, [plateIds, plateMeta]);
 
-  // Подгрузка каталога по открытию редактора
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -542,7 +536,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return () => { alive = false; };
   }, [plateOpen]);
 
-  // Сохранение Extras
+  // Сохранить extras
   useEffect(() => {
     const prev = loadOrderDraft();
     const extras: any = {
@@ -573,8 +567,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     next.splice(idx, 1);
     setPlateIds(next);
   };
-
-  // Удалить плиту: снимаем чекбокс и очищаем связанные данные
   const handleDeletePlate = () => {
     setExtraPlate(false);
     setPlateIds([]);
@@ -585,12 +577,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   // Отправка
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>("");
-
   const handleSend = async () => {
     setBusy(true); setErr("");
-    const name = (loadIntroState().intro?.customerName || "").trim();
+    const name = (introState.intro?.customerName || "").trim();
 
-    // attachments — добавим оригиналы
     const attachments: any = {
       frontPreview: (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null,
       backPreview: (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null,
@@ -638,18 +628,18 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   return (
     <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
-      {/* Липкая навигация */}
+      {/* Навигация */}
       <div style={{ position: "sticky", top: "calc(env(safe-area-inset-top, 0px))", zIndex: 50 }}>
         <StepNav active="review" />
       </div>
 
-      {/* Подсказка — сверху */}
+      {/* Подсказка */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
         гравировки перейдите на соответствующий шаг, используйте навигацию вверху. Когда всё верно — нажмите «Отправить заказ».
       </section>
 
-      {/* Редактируемые данные заказа */}
+      {/* Редактируемые данные */}
       <EditableOrderSummary />
 
       {/* Лицевая */}
@@ -796,7 +786,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Превью сторон — 2 столбца */}
+      {/* Эскизы — 2 столбца (только один раз, нижний дубль удалён) */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
@@ -804,45 +794,30 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </div>
       </section>
 
-      {/* Дополнительно — чекбоксы Тумба/Цветник + блок Надгробная плита */}
+      {/* Дополнительно — Тумба/Цветник/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700 }}>Дополнительно</div>
 
-        {/* Чекбоксы «Тумба» и «Цветник» */}
+        {/* Тумба / Цветник */}
         <div style={{ ...sectionBox }}>
           <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={extraBase}
-                onChange={(e) => setExtraBase(e.target.checked)}
-              />
+              <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
               <span>Тумба</span>
             </label>
 
             <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={extraFlowerbed}
-                onChange={(e) => setExtraFlowerbed(e.target.checked)}
-              />
+              <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
               <span>Цветник</span>
             </label>
           </div>
         </div>
 
-        {/* Надгробная плита (блок) */}
+        {/* Надгробная плита */}
         <div style={{ ...sectionBox, display: "grid", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={extraPlate}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  setExtraPlate(checked);
-                }}
-              />
+              <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
               <span style={{ fontWeight: 600 }}>Надгробная плита</span>
             </label>
 
@@ -853,13 +828,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             )}
           </div>
 
-          {/* Параметры плиты (радио-переключатели) */}
           {extraPlate && (
             <>
+              {/* Размеры НП: 100*50, 120*60, 140*70 */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["100×50 см", "120×60 см", "140×70 см", "160×80 см"].map((v) => (
+                  {["100*50 см", "120*60 см", "140*70 см"].map((v) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                       <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
                       <span>{v}</span>
@@ -868,10 +843,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 </div>
               </div>
 
+              {/* Толщина НП: 5, 8, 10 см */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["3 см", "5 см", "7 см"].map((v) => (
+                  {["5 см", "8 см", "10 см"].map((v) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                       <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
                       <span>{v}</span>
@@ -880,6 +856,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 </div>
               </div>
 
+              {/* Ориентация */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -895,7 +872,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 </div>
               </div>
 
-              {/* Эпитафия плиты (свободный ввод) */}
+              {/* Эпитафия плиты */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
                 <textarea
@@ -907,9 +884,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 />
               </div>
 
-              {/* Редактор плиты (аккордеон, галерея с подпапками) */}
+              {/* Галерея: «Графика на надгробной плите» */}
               <Accordion
-                title="Гравировка (редактор)"
+                title="Графика на надгробной плите"
                 open={plateOpen}
                 onToggle={() => setPlateOpen((v) => !v)}
               >
@@ -971,7 +948,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 )}
               </Accordion>
 
-              {/* Выбранные элементы плиты (внутри блока) */}
+              {/* Выбранные для плиты (в самом блоке) */}
               {(chosenPlateList.length > 0 || plateEpitaph.trim()) && (
                 <div style={{ ...sectionBox, marginTop: 8 }}>
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>Выбрано для плиты</div>
@@ -996,14 +973,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               )}
             </>
           )}
-        </div>
-      </section>
-
-      {/* Превью сторон — 2 столбца (соблюдаем требования к фону) */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
-          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} side="back" aspect={aspect} />
         </div>
       </section>
 
