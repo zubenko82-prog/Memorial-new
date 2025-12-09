@@ -1,35 +1,43 @@
-// src/screens/ReviewAndSendStep.tsx
-// Обзор и подтверждение без TopBar.
-//
-// Исправления по запросу:
-// - Эскизы показаны один раз (нижний дубль удалён).
-// - Размеры НП (радио): 100×50, 120×60, 140×70 (знак ×).
-// - Толщина НП (радио): 5, 8, 10 см.
-// - На эскизе тыльной стороны резная работа отображается корректно (маска над превью, зеркалирование по X).
-// - Галерея «Графика на надгробной плите»: по категориям, каждая категория — отдельный закрытый аккордеон; «Цветы» с подкатегориями.
-// - Все миниатюры (включая галерею) — object-fit: contain.
+// src/screens/SizeStep.tsx
+// Автоориентация (исправлено: переопределяется при каждом выборе другой работы):
+// 1) При КАЖДОЙ смене item (id/url) сбрасываем состояние ориентации и снова пытаемся определить по изображению.
+// 2) Если не удалось (ошибка/таймаут) — берём по выбранным размерам (Ш×В).
+// 3) Сохраняем в драфт только после того, как ориентация реально определена.
+// 4) Если после определения источник = "size", то при изменении размеров ориентир обновляется динамически.
+// 5) Начальное значение берём из драфта, но оно будет переопределено при загрузке новой картинки.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
+import type { CatalogItem } from "../api";
+import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
-import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
-import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
-import StepNav from "../components/StepNav";
-import { fetchCatalog } from "../api";
 
-/* ===== UI ===== */
-function glassPanelStyle() {
-  return {
-    background: "rgba(20,20,24,0.90)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: 12,
-    color: "#fff",
-    boxSizing: "border-box"
-  } as React.CSSProperties;
+const PRESET_SIZES = ["40×60", "40×80", "50×100", "60×120"] as const; // см (Ш×В)
+const PRESET_THICKNESS = ["5", "8", "10"] as const; // см
+
+type SizeMode = "preset" | "custom";
+type ThickMode = "preset" | "custom";
+export type Orientation = "vertical" | "horizontal";
+export type SizeStepResult = { size: string; thickness: string; orientation: Orientation };
+
+function useAnimationsOnce(): void {
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.innerHTML = `
+      @keyframes fade-slide-in-slow {
+        from { opacity: 0; transform: translateY(12px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
 }
-function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false) {
-  const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
+
+type BtnSize = "nano" | "sm" | "md";
+function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProperties {
+  const paddings: Record<BtnSize, string> = { nano: "4px 8px", sm: "8px 12px", md: "12px 18px" };
   return {
-    padding: map[size],
+    padding: paddings[size],
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
     background:
@@ -39,867 +47,470 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false) {
     whiteSpace: "nowrap",
     boxShadow:
       "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
+    backdropFilter: "blur(14px) saturate(140%)",
+    WebkitBackdropFilter: "blur(14px) saturate(140%)",
     opacity: disabled ? 0.6 : 1,
-    transition: "opacity 160ms ease"
-  } as React.CSSProperties;
+    transition: "transform 420ms ease, opacity 420ms ease, box-shadow 420ms ease",
+    willChange: "transform"
+  };
 }
-function inputStyle(): React.CSSProperties {
+function glassPanelStyle(): React.CSSProperties {
   return {
-    width: "100%",
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#fff",
-    outline: "none",
-    boxSizing: "border-box"
+    background: "rgba(20,20,24,0.55)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    backdropFilter: "blur(12px) saturate(140%)",
+    WebkitBackdropFilter: "blur(12px) saturate(140%)",
+    borderRadius: 12
   };
 }
-function smallText(): React.CSSProperties {
-  return { opacity: 0.8, fontSize: 12 };
+
+const optionWrapStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 10 };
+const optionLabelStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", marginRight: 4 };
+
+function parsePresetWHcm(s: string): [number, number] {
+  const parts = String(s).split(/[×xX]/);
+  const w = Number(parts[0]);
+  const h = Number(parts[1]);
+  return [w, h];
 }
-const sectionBox: React.CSSProperties = {
-  background: "rgba(255,255,255,0.04)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  borderRadius: 10,
-  padding: 10
-};
-function chip(txt: string) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 999,
-        fontSize: 12,
-        background: "rgba(138,180,255,0.18)",
-        color: "#dbe7ff",
-        whiteSpace: "nowrap"
-      }}
-    >
-      {txt}
-    </span>
-  );
+function mmToCm(mm?: number | null): number | undefined {
+  if (typeof mm !== "number" || !isFinite(mm)) return undefined;
+  return mm / 10;
 }
-function AccentBox({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        background: "rgba(255,242,201,0.15)",
-        border: "1px solid rgba(255,242,201,0.35)",
-        borderRadius: 10,
-        padding: 8
-      }}
-    >
-      {children}
-    </div>
-  );
+function cmToMm(cm?: number): number | undefined {
+  if (typeof cm !== "number" || !isFinite(cm)) return undefined;
+  return Math.round(cm * 10);
+}
+function findPresetFor(widthCm?: number, heightCm?: number): (typeof PRESET_SIZES)[number] | undefined {
+  if (typeof widthCm !== "number" || typeof heightCm !== "number") return undefined;
+  const cand = `${widthCm}×${heightCm}`;
+  return (PRESET_SIZES as readonly string[]).includes(cand as any) ? (cand as any) : undefined;
+}
+function orientFromSize(widthCm?: number, heightCm?: number): Orientation {
+  if (typeof widthCm === "number" && typeof heightCm === "number" && isFinite(widthCm) && isFinite(heightCm) && widthCm > 0 && heightCm > 0) {
+    return widthCm > heightCm ? "horizontal" : "vertical";
+  }
+  return "vertical";
 }
 
-/* ===== Утилиты ===== */
-function orientationLabel(o?: string) {
-  if (!o) return "";
-  const k = String(o).toLowerCase();
-  if (k.startsWith("h")) return "горизонтальная";
-  if (k.startsWith("v")) return "вертикальная";
-  return "";
-}
-
-/* ===== Подложка под превью (фон + изделие) ===== */
-function Underlay({
-  itemUrl,
-  side
-}: {
-  itemUrl?: string;
-  side: "front" | "back";
-}) {
-  // Градиент подложен всегда.
-  // Лицевая: изделие поверх градиента (contain, opacity 85%).
-  // Тыльная: маска сделана отдельным слоем сверху превью (см. SidePreview), поэтому здесь только градиент.
-  return (
-    <div
-      aria-hidden
-      style={{
-        position: "absolute",
-        inset: 0,
-        borderRadius: 10,
-        overflow: "hidden",
-        background:
-          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-        zIndex: 0
-      }}
-    >
-      {itemUrl && side === "front" && (
-        <img
-          src={itemUrl}
-          alt=""
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "contain",
-            opacity: 0.85,
-            pointerEvents: "none"
-          }}
-          draggable={false}
-        />
-      )}
-    </div>
-  );
-}
-
-/* ===== Превью стороны ===== */
-function SidePreview({
-  title,
-  miniUrl,
-  itemUrl,
-  side,
-  aspect
-}: {
-  title: string;
-  miniUrl?: string;
-  itemUrl?: string;
-  side: "front" | "back";
-  aspect?: string;
-}) {
-  return (
-    <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
-      <div style={{ fontWeight: 600 }}>{title}</div>
-      <div
-        style={{
-          position: "relative",
-          borderRadius: 10,
-          overflow: "hidden",
-          aspectRatio: aspect || undefined,
-          minHeight: aspect ? undefined : 240
-        }}
-      >
-        {/* Фон и базовый рисунок (для лицевой) */}
-        <Underlay itemUrl={itemUrl} side={side} />
-
-        {/* Превью эскиза */}
-        {miniUrl ? (
-          <img
-            src={miniUrl}
-            alt=""
-            style={{
-              position: "relative",
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              zIndex: 1,
-              display: "block"
-            }}
-            draggable={false}
-          />
-        ) : (
-          <div style={{ position: "relative", zIndex: 1, width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.9 }}>
-            Превью отсутствует
-          </div>
-        )}
-
-        {/* Для тыльной: накладываем маску (заливка сплошным цветом) СВЕРХУ превью, чтобы было видно всегда */}
-        {itemUrl && side === "back" && (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "rgba(80, 160, 255, 0.30)",
-              WebkitMaskImage: `url(${itemUrl})`,
-              WebkitMaskRepeat: "no-repeat",
-              WebkitMaskPosition: "center",
-              WebkitMaskSize: "contain",
-              maskImage: `url(${itemUrl})`,
-              maskRepeat: "no-repeat",
-              maskPosition: "center",
-              maskSize: "contain",
-              transform: "scaleX(-1)",
-              transformOrigin: "center",
-              zIndex: 3,
-              pointerEvents: "none"
-            }}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ===== Редактируемый блок «Данные заказа» ===== */
-function EditableOrderSummary() {
-  const [draft, setDraft] = useState(() => loadOrderDraft());
-  const introState = loadIntroState();
-
-  const [name, setName] = useState<string>(introState.intro?.customerName || "");
-  const [phone, setPhone] = useState<string>(introState.intro?.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(introState.intro?.customerNotes || "");
-  const [sizeNotes, setSizeNotes] = useState<string>(draft?.size?.notes || "");
-
-  const saveTimer = useRef<number | null>(null);
-  const scheduleSave = () => {
-    if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      const nextIntro: Intro = {
-        customerName: (name || "").trim(),
-        customerPhone: (phone || "").trim(),
-        customerNotes: (contactNotes || "").trim() || undefined
-      };
-      saveIntro(nextIntro, { lock: false });
-
-      const cur = loadOrderDraft();
-      const next = saveOrderDraft({
-        ...cur,
-        size: { ...(cur.size || {}), notes: (sizeNotes || "").trim() || undefined },
-        updatedAt: Date.now()
-      });
-      setDraft(next);
-    }, 250) as unknown as number;
-  };
-  useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
-
-  const dims =
-    `${draft?.size?.width ? Math.round(draft.size.width / 10) : "—"}×` +
-    `${draft?.size?.height ? Math.round(draft.size.height / 10) : "—"}×` +
-    `${draft?.size?.thickness ? Math.round(draft.size.thickness / 10) : "—"} см`;
-  const orient = orientationLabel(draft?.size?.orientation || (draft as any)?.orientation);
-
-  return (
-    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      <div style={{ fontWeight: 700 }}>Данные заказа</div>
-
-      {/* Контакты */}
-      <div style={{ ...sectionBox, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 600, opacity: 0.95 }}>Контакты</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
-          <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
-        </div>
-        <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание (удобное время, мессенджер…)" style={inputStyle()} />
-      </div>
-
-      {/* Резная работа / размеры */}
-      <div style={{ ...sectionBox, display: "grid", gap: 10 }}>
-        <div style={{ fontWeight: 600, opacity: 0.95 }}>Резная работа</div>
-        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
-          <div
-            style={{
-              borderRadius: 10,
-              border: "1px solid rgba(255,255,255,0.14)",
-              background: "rgba(255,255,255,0.04)",
-              width: 96,
-              height: 96,
-              overflow: "hidden",
-              display: "grid",
-              placeItems: "center"
-            }}
-          >
-            {draft?.item?.url ? (
-              <img
-                src={draft.item.url}
-                alt=""
-                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                draggable={false}
-              />
-            ) : null}
-          </div>
-          <div style={{ minWidth: 0, display: "grid", gap: 4 }}>
-            {(draft?.item?.name || draft?.item?.url) && (
-              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}
-              </div>
-            )}
-            <div style={{ opacity: 0.9 }}>
-              Размеры: {dims}
-              {orient ? ` · ориентация: ${orient}` : ""}
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <div style={{ fontSize: 13, opacity: 0.9, marginBottom: 4 }}>Примечание</div>
-          <textarea
-            value={sizeNotes}
-            onChange={(e) => { setSizeNotes(e.target.value); scheduleSave(); }}
-            rows={3}
-            placeholder="Примечание по размерам…"
-            style={{ ...inputStyle(), resize: "vertical" }}
-          />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ===== Вписывающая миниатюра ===== */
-const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?: number }) => (
-  <div
-    style={{
-      borderRadius: 8,
-      border: "1px solid rgba(255,255,255,0.10)",
-      overflow: "hidden",
-      background: "rgba(255,255,255,0.04)",
-      width: size,
-      height: size,
-      display: "grid",
-      placeItems: "center"
-    }}
-  >
-    {url ? <img src={url} alt={alt} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} /> : null}
-  </div>
-);
-
-/* ===== Простой Аккордеон ===== */
-function Accordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const [h, setH] = useState(0);
-  useEffect(() => {
-    const m = () => setH(contentRef.current?.scrollHeight || 0);
-    m();
-    const ro = new ResizeObserver(m);
-    if (contentRef.current) ro.observe(contentRef.current);
-    return () => ro.disconnect();
-  }, [children]);
-  return (
-    <div style={{ ...glassPanelStyle(), padding: 0 }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          width: "100%",
-          textAlign: "left",
-          padding: "12px 14px",
-          background: "rgba(255,255,255,0.06)",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between"
-        }}
-      >
-        <strong>{title}</strong>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
-      </button>
-      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
-        <div ref={contentRef} style={{ padding: 12 }}>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/* ===== Компонент шага ===== */
-type Props = {
+interface SizeStepProps {
+  item: CatalogItem;
   onBack?: () => void;
-  onSend?: (payload?: any) => void;
-};
-
-export default function ReviewAndSendStep({ onBack, onSend }: Props) {
-  const draft = useMemo(() => loadOrderDraft(), []);
-  const introState = loadIntroState();
-  const itemUrl = (draft as any)?.item?.url as string | undefined;
-
-  const [aspect, setAspect] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    if (!itemUrl) return;
-    const im = new Image();
-    im.onload = () => {
-      const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
-      if (w > 0 && h > 0) setAspect(`${w} / ${h}`);
-    };
-    im.src = itemUrl;
-  }, [itemUrl]);
-
-  const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
-  const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
-
-  // Стороны
-  const frontPersons: any[] = (draft.engraving?.persons as any[])?.filter(Boolean).filter((p: any) => {
-    const fio1 = (p.lastName || "").trim();
-    const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-    const metric = [p.birthDate, p.deathDate].map((x: string) => (x || "").trim()).filter(Boolean).join("");
-    const hasPhoto = !!p.photoPreview;
-    return fio1 || fio2 || metric || hasPhoto;
-  }) || [];
-  const rearPeople: any[] = (((draft as any)?.editorBack?.people as any[]) || []).filter(Boolean).filter((p: any) => {
-    const fio1 = (p.lastName || "").trim();
-    const fio2 = [p.firstName, p.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-    const metric = [p.birthDate, p.deathDate].map((x: string) => (x || "").trim()).filter(Boolean).join("");
-    const hasPhoto = !!p.photoPreview;
-    return fio1 || fio2 || metric || hasPhoto;
-  });
-
-  const frontGraphicsRaw: any[] = (draft.graphics as any[])?.filter(Boolean) || [];
-  const frontGraphics = frontGraphicsRaw.filter((g) => g?.url || g?.name || g?.id);
-  const frontCountsById: Record<string, number> = useMemo(() => {
-    const m: Record<string, number> = {};
-    frontGraphics.forEach((g) => {
-      const id = g?.id || g?.url || g?.name || "";
-      if (id) m[id] = (m[id] || 0) + 1;
-    });
-    return m;
-  }, [frontGraphics]);
-  const frontUnique: any[] = useMemo(() => {
-    const first: Record<string, any> = {};
-    frontGraphics.forEach((g) => {
-      const id = g?.id || g?.url || g?.name;
-      if (id && !first[id]) first[id] = g;
-    });
-    return Object.values(first);
-  }, [frontGraphics]);
-
-  const rearSelectedIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-  const rearCountsById: Record<string, number> = useMemo(() => {
-    const m: Record<string, number> = {};
-    (rearSelectedIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
-    return m;
-  }, [rearSelectedIds]);
-  const rearUnique: any[] = useMemo(() => {
-    const ids = Array.from(new Set(rearSelectedIds || []));
-    return ids
-      .map((id) => rearMeta?.[id] || { id, name: id, url: "" })
-      .filter((g) => g?.url || g?.name || g?.id);
-  }, [rearSelectedIds, rearMeta]);
-
-  const frontEpitaphs: string[] = useMemo(() => {
-    const arr = Array.isArray(draft.engraving?.epitaphs) ? draft.engraving!.epitaphs!.map((t) => (t || "").trim()).filter(Boolean) : [];
-    if (arr.length) return arr;
-    const single = (draft.engraving?.epitaphText || "").trim();
-    return single ? [single] : [];
-  }, [draft.engraving]);
-  const rearEpitaphs: string[] = useMemo(
-    () => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).map((t) => (t || "").trim()).filter(Boolean)),
-    [draft]
-  );
-
-  const [frontWishes, setFrontWishes] = useState<string>(((draft as any)?.editor?.wishes || "").trim());
-  const [backWishes, setBackWishes] = useState<string>(((draft as any)?.editorBack?.wishes || "").trim());
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const cur = loadOrderDraft();
-      saveOrderDraft({
-        ...cur,
-        editor: { ...(cur as any).editor, wishes: frontWishes || undefined },
-        editorBack: { ...(cur as any).editorBack, wishes: backWishes || undefined },
-        updatedAt: Date.now()
-      });
-    }, 300);
-    return () => clearTimeout(t);
-  }, [frontWishes, backWishes]);
-
-  /* ===== Дополнительно: Тумба / Цветник / Плита ===== */
-
-  const initialExtras = (draft as any)?.extras || {};
-  const [extraBase, setExtraBase] = useState<boolean>(!!initialExtras.base);
-  const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
-
-  const [extraPlate, setExtraPlate] = useState<boolean>(!!initialExtras.headstonePlate);
-  const stelaOrientation = (draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase();
-  const defaultPlateOrientation = stelaOrientation.startsWith("h") ? "horizontal" : "vertical";
-
-  // Размеры НП и толщина (радио) — со знаком ×
-  const sizeOptions = ["100×50 см", "120×60 см", "140×70 см"];
-  const thicknessOptions = ["5 см", "8 см", "10 см"];
-  const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize && sizeOptions.includes((initialExtras as any)?.plateSize) ? (initialExtras as any)?.plateSize : sizeOptions[0]);
-  const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && thicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : thicknessOptions[0]);
-  const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
-  const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
-
-  // Галерея по категориям (каждая — закрытый аккордеон)
-  const [plateOpen, setPlateOpen] = useState<boolean>(false);
-  const [catsLoading, setCatsLoading] = useState(false);
-  const [catsError, setCatsError] = useState("");
-  const [cats, setCats] = useState<any[]>([]);
-  const [catOpenMap, setCatOpenMap] = useState<Record<string, boolean>>({});
-  const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
-  const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
-  const chosenPlateList = useMemo(() => {
-    const uniq = Array.from(new Set(plateIds));
-    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" }).filter((x) => x?.url || x?.name);
-  }, [plateIds, plateMeta]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!plateOpen) return;
-      setCatsLoading(true); setCatsError("");
-      try {
-        const data = await fetchCatalog("graphics");
-        const root = (data as any)?.categories || data;
-        const catsArr = Array.isArray(root) ? root : [];
-        if (alive) setCats(catsArr);
-      } catch {
-        if (alive) setCatsError("Не удалось загрузить каталог графики.");
-      } finally {
-        if (alive) setCatsLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, [plateOpen]);
-
-  useEffect(() => {
-    if (!plateOpen || !cats.length) return;
-    setCatOpenMap((prev) => {
-      const next = { ...prev };
-      for (const c of cats) {
-        const key = String(c._id || c.name || "");
-        if (!(key in next)) next[key] = false; // по умолчанию закрыты
-      }
-      return next;
-    });
-  }, [plateOpen, cats]);
-
-  const isFlowersCat = (name?: string) => {
-    const s = (name || "").toLowerCase();
-    return s.includes("цвет") || s.includes("flower");
-    // можно расширить, если у вас другие варианты названий
-  };
-
-  const addPlateGraphic = (g: any) => {
-    const gid = String(g.id || g.relPath || g.url || g.name);
-    const next = plateIds.concat(gid);
-    setPlateIds(next);
-    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.url || g.preview || "", preview: g.preview || g.url || "" } }));
-  };
-  const removePlateGraphic = (gid: string) => {
-    const idx = plateIds.findIndex((x) => x === gid);
-    if (idx === -1) return;
-    const next = plateIds.slice();
-    next.splice(idx, 1);
-    setPlateIds(next);
-  };
-  const handleDeletePlate = () => {
-    setExtraPlate(false);
-    setPlateIds([]);
-    setPlateMeta({});
-    setPlateEpitaph("");
-  };
-
-  // Сохранить extras
-  useEffect(() => {
-    const prev = loadOrderDraft();
-    const extras: any = {
-      ...(prev as any).extras,
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : [],
-      plateGraphicsMeta: extraPlate ? plateMeta : {}
-    };
-    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-  }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
-
-  // Отправка
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>("");
-  const handleSend = async () => {
-    setBusy(true); setErr("");
-    const name = (introState.intro?.customerName || "").trim();
-
-    const attachments: any = {
-      frontPreview: (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null,
-      backPreview: (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null,
-      itemUrl: itemUrl || null,
-      peoplePhotos: [
-        ...(frontPersons.map((p: any) => p.photoPreview).filter(Boolean) as string[]),
-        ...(rearPeople.map((p: any) => p.photoPreview).filter(Boolean) as string[])
-      ].filter(Boolean),
-      plateGraphics: chosenPlateList
-    };
-
-    const extras: Extras & {
-      base?: boolean;
-      flowerbed?: boolean;
-      headstonePlate?: boolean;
-      plateSize?: string;
-      plateThickness?: string;
-      plateOrientation?: string;
-      plateEpitaph?: string;
-      plateGraphicsIds?: string[];
-      attachments?: any;
-    } = {
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : undefined,
-      attachments
-    };
-
-    try {
-      await sendOrderEmailAndNotifyTg(extras);
-      const nm = name || "Заказчик";
-      window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами по указанному номеру для уточнения деталей и подтверждения заказа.`);
-      onSend?.({ extras });
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
-      {/* Навигация */}
-      <div style={{ position: "sticky", top: "calc(env(safe-area-inset-top, 0px))", zIndex: 50 }}>
-        <StepNav active="review" />
-      </div>
-
-      {/* Подсказка */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
-        гравировки перейдите на соответствующий шаг, используйте навигацию вверху. Когда всё верно — нажмите «Отправить заказ».
-      </section>
-
-      {/* Редактируемые данные */}
-      <EditableOrderSummary />
-
-      {/* Контент по сторонам (Лицевая/Тыльная) можно оставить как в предыдущей версии — опущено для краткости */}
-
-      {/* Эскизы — ОДИН раз (нижний дубль удалён) */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
-          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} side="back" aspect={aspect} />
-        </div>
-      </section>
-
-      {/* Дополнительно — Тумба / Цветник / Плита */}
-      <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
-        <div style={{ fontWeight: 700 }}>Дополнительно</div>
-
-        {/* Тумба / Цветник */}
-        <div style={{ ...sectionBox }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={!!(draft as any)?.extras?.base || extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
-              <span>Тумба</span>
-            </label>
-
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={!!(draft as any)?.extras?.flowerbed || extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
-              <span>Цветник</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Надгробная плита */}
-        <div style={{ ...sectionBox, display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
-              <span style={{ fontWeight: 600 }}>Надгробная плита</span>
-            </label>
-
-            {extraPlate && (
-              <button type="button" onClick={handleDeletePlate} style={glassButtonStyle("nano")}>
-                Удалить плиту
-              </button>
-            )}
-          </div>
-
-          {extraPlate && (
-            <>
-              {/* Размеры НП — 100×50, 120×60, 140×70 */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["100×50 см", "120×60 см", "140×70 см"].map((v) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
-                      <span>{v}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Толщина НП — 5, 8, 10 см */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["5 см", "8 см", "10 см"].map((v) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
-                      <span>{v}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Ориентация */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {[
-                    { v: "vertical", t: "вертикальная" },
-                    { v: "horizontal", t: "горизонтальная" }
-                  ].map(({ v, t }) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => setPlateOrientation(v)} />
-                      <span>{t}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Эпитафия плиты */}
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
-                <textarea
-                  value={plateEpitaph}
-                  onChange={(e) => setPlateEpitaph(e.target.value)}
-                  rows={3}
-                  placeholder="Текст эпитафии на плите…"
-                  style={{ ...inputStyle(), resize: "vertical" }}
-                />
-              </div>
-
-              {/* Галерея плиты — по категориям (каждая категория — закрытый аккордеон), «Цветы» с подкатегориями */}
-              <Accordion
-                title="Графика на надгробной плите"
-                open={plateOpen}
-                onToggle={() => setPlateOpen((v) => !v)}
-              >
-                {catsLoading && <div>Загрузка каталога…</div>}
-                {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-                {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-                {!catsLoading && cats.length > 0 && (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {cats.map((cat: any, idx: number) => {
-                      const catKey = String(cat._id || cat.name || idx);
-                      const open = !!catOpenMap[catKey];
-                      const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
-                      return (
-                        <Accordion
-                          key={catKey}
-                          title={cat.name || `Категория ${idx + 1}`}
-                          open={open}
-                          onToggle={() => setCatOpenMap((prev) => ({ ...prev, [catKey]: !prev[catKey] }))}
-                        >
-                          {showSubs ? (
-                            <div style={{ display: "grid", gap: 12 }}>
-                              {(cat.items || []).length > 0 && (
-                                <div>
-                                  <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>Общее</div>
-                                  <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                                </div>
-                              )}
-                              {(cat.children || []).map((sub: any, j: number) => (
-                                <div key={sub._id || `${catKey}-sub-${j}`}>
-                                  <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                                  <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                          )}
-                        </Accordion>
-                      );
-                    })}
-                  </div>
-                )}
-              </Accordion>
-
-              {/* Выбрано для плиты */}
-              {(chosenPlateList.length > 0 || plateEpitaph.trim()) && (
-                <div style={{ ...sectionBox, marginTop: 8 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Выбрано для плиты</div>
-                  {chosenPlateList.length > 0 && (
-                    <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
-                      {chosenPlateList.map((g, i) => (
-                        <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "56px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
-                          {g.url && <Thumb url={g.url} />}
-                          <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                          <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {plateEpitaph.trim() && (
-                    <AccentBox>
-                      <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафия</div>
-                      <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaph.trim()}</div>
-                    </AccentBox>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </section>
-
-      {/* Эскизы — 2 столбца (единственный блок с эскизами) */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          <SidePreview title="Лицевая" miniUrl={(draft as any)?.editor?.previewUrl} itemUrl={itemUrl} side="front" aspect={aspect} />
-          <SidePreview title="Тыльная" miniUrl={(draft as any)?.editorBack?.previewUrl} itemUrl={itemUrl} side="back" aspect={aspect} />
-        </div>
-      </section>
-
-      {/* Ошибка */}
-      {err && (
-        <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>
-          {err}
-        </div>
-      )}
-
-      {/* Кнопки */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-        <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>
-          Назад
-        </button>
-        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>
-          {busy ? "Отправляем…" : "Отправить заказ"}
-        </button>
-      </div>
-    </div>
-  );
+  onDone?: (data: SizeStepResult) => void;
+  onConfirm?: (data: SizeStepResult) => void;
 }
 
-/* ===== Грид для одной категории/подкатегории ===== */
-function CatGrid({
-  items,
-  plateIds,
-  addGraphic,
-  removeGraphic
-}: {
-  items: any[];
-  plateIds: string[];
-  addGraphic: (g: any) => void;
-  removeGraphic: (gid: string) => void;
-}) {
+export default function SizeStep(props: SizeStepProps) {
+  const { item, onBack = () => {}, onDone, onConfirm } = props;
+
+  useAnimationsOnce();
+
+  const draft = loadOrderDraft();
+  const draftWcm = mmToCm(draft.size?.width);
+  const draftHcm = mmToCm(draft.size?.height);
+  const draftTcm = mmToCm(draft.size?.thickness);
+
+  const draftOrientation = (draft.size?.orientation as Orientation | undefined)
+    || (draft.orientation as Orientation | undefined)
+    || "vertical";
+
+  const draftPreset = findPresetFor(draftWcm, draftHcm);
+
+  const [sizeMode, setSizeMode] = useState<SizeMode>(() => (draftWcm && draftHcm ? (draftPreset ? "preset" : "custom") : "preset"));
+  const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "50×100");
+  const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "50"));
+  const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "100"));
+
+  const [thickMode, setThickMode] = useState<ThickMode>(() => {
+    if (typeof draftTcm === "number") {
+      const s = String(draftTcm);
+      return (PRESET_THICKNESS as readonly string[]).includes(s) ? "preset" : "custom";
+    }
+    return "preset";
+  });
+  const [thickPreset, setThickPreset] = useState<(typeof PRESET_THICKNESS)[number]>(() => {
+    if (typeof draftTcm === "number") {
+      const s = String(draftTcm);
+      return (PRESET_THICKNESS as readonly string[]).includes(s) ? (s as any) : "8";
+    }
+    return "8";
+  });
+  const [thickCustom, setThickCustom] = useState<string>(() => (typeof draftTcm === "number" ? String(draftTcm) : "8"));
+
+  // Состояние ориентации: из драфта как старт, далее будет переопределено после загрузки новой картинки
+  const [orientation, setOrientation] = useState<Orientation>(draftOrientation);
+  const [orientationSource, setOrientationSource] = useState<"image" | "size" | "default">("default");
+  const [orientationReady, setOrientationReady] = useState<boolean>(false);
+
+  // Флаги детекта
+  const detectionDoneRef = useRef<boolean>(false);
+  const detectingRef = useRef<boolean>(false);
+
+  const currentWHcm = useMemo((): [number | undefined, number | undefined] => {
+    if (sizeMode === "preset") {
+      const [wcm, hcm] = parsePresetWHcm(sizePreset);
+      return [wcm, hcm];
+    }
+    const wcm = Number(w);
+    const hcm = Number(h);
+    return [
+      Number.isFinite(wcm) && wcm > 0 ? wcm : undefined,
+      Number.isFinite(hcm) && hcm > 0 ? hcm : undefined
+    ];
+  }, [sizeMode, sizePreset, w, h]);
+
+  function persistDraft(currentOrientation: Orientation) {
+    // вычислим см из UI
+    let widthCm: number | undefined;
+    let heightCm: number | undefined;
+
+    if (sizeMode === "preset") {
+      const [wcm, hcm] = parsePresetWHcm(sizePreset);
+      widthCm = wcm; heightCm = hcm;
+    } else {
+      const wcm = Number(w);
+      const hcm = Number(h);
+      if (Number.isFinite(wcm) && wcm > 0) widthCm = wcm;
+      if (Number.isFinite(hcm) && hcm > 0) heightCm = hcm;
+    }
+
+    let thickCm: number | undefined;
+    if (thickMode === "preset") {
+      const t = Number(thickPreset);
+      if (Number.isFinite(t) && t > 0) thickCm = t;
+    } else {
+      const t = Number(thickCustom);
+      if (Number.isFinite(t) && t > 0) thickCm = t;
+    }
+
+    const toMm = (cm?: number) => (typeof cm === "number" ? Math.round(cm * 10) : undefined);
+    const sizePatch: any = { orientation: currentOrientation };
+    const wmm = toMm(widthCm), hmm = toMm(heightCm), tmm = toMm(thickCm);
+    if (typeof wmm === "number") sizePatch.width = wmm;
+    if (typeof hmm === "number") sizePatch.height = hmm;
+    if (typeof tmm === "number") sizePatch.thickness = tmm;
+
+    saveOrderDraft({ size: sizePatch, orientation: currentOrientation });
+  }
+
+  // Переопределяем ориентацию КАЖДЫЙ раз при смене резной работы (id/url)
+  useEffect(() => {
+    const url = item?.url;
+    const id = (item as any)?.id || "";
+
+    // Сброс состояния детекта
+    detectionDoneRef.current = false;
+    detectingRef.current = false;
+    setOrientationReady(false);
+    setOrientationSource("default");
+
+    // Быстрый предварительный ориентир по размерам (визуально до загрузки)
+    const [wcm, hcm] = currentWHcm;
+    const initialBySize = orientFromSize(wcm, hcm);
+    setOrientation(initialBySize);
+
+    let cancelled = false;
+    let timer: number | undefined;
+    detectingRef.current = true;
+
+    const fallbackToSize = () => {
+      if (cancelled || detectionDoneRef.current) return;
+      const [cw, ch] = currentWHcm;
+      const next = orientFromSize(cw, ch);
+      detectionDoneRef.current = true;
+      detectingRef.current = false;
+      setOrientation(next);
+      setOrientationSource("size");
+      setOrientationReady(true);
+      persistDraft(next);
+    };
+
+    if (!url) {
+      fallbackToSize();
+      return () => {};
+    }
+
+    // Таймаут ожидания загрузки картинки
+    timer = window.setTimeout(() => {
+      if (cancelled) return;
+      fallbackToSize();
+    }, 1500);
+
+    // Детект по изображению — добавляем «бастёр» к URL, чтобы гарантировать срабатывание onload при смене работы
+    try {
+      const img = new Image();
+      img.decoding = "async";
+      img.onload = () => {
+        if (cancelled || detectionDoneRef.current) return;
+        if (timer) window.clearTimeout(timer);
+        const next: Orientation = img.naturalWidth > img.naturalHeight ? "horizontal" : "vertical";
+        detectionDoneRef.current = true;
+        detectingRef.current = false;
+        setOrientation(next);
+        setOrientationSource("image");
+        setOrientationReady(true);
+        persistDraft(next);
+      };
+      img.onerror = () => {
+        if (cancelled || detectionDoneRef.current) return;
+        if (timer) window.clearTimeout(timer);
+        fallbackToSize();
+      };
+      const sig = encodeURIComponent(`${id}|${url}`);
+      const bust = url.includes("?") ? `${url}&__o=${sig}` : `${url}?__o=${sig}`;
+      img.src = bust;
+    } catch {
+      if (!cancelled) {
+        if (timer) window.clearTimeout(timer);
+        fallbackToSize();
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      detectingRef.current = false;
+      if (timer) window.clearTimeout(timer);
+    };
+    // ВАЖНО: завязываемся на id и url — любое изменение работы перезапускает детект
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id, item?.url]); // при смене выбранной работы переопределяем ориентацию
+
+  // Если источник ориентации = "size" — поддерживаем актуальность при изменении размеров
+  useEffect(() => {
+    if (!detectionDoneRef.current) return; // детект ещё идёт
+    if (orientationSource !== "size") return; // если по картинке — размеры не влияют
+    const [wcm, hcm] = currentWHcm;
+    const next = orientFromSize(wcm, hcm);
+    if (next !== orientation) {
+      setOrientation(next);
+      setOrientationReady(true);
+      persistDraft(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sizeMode, sizePreset, w, h, orientationSource]);
+
+  const sizeValid = useMemo(() => {
+    if (sizeMode === "preset") return true;
+    const wn = Number(w);
+    const hn = Number(h);
+    return Number.isFinite(wn) && Number.isFinite(hn) && wn > 0 && hn > 0 && wn <= 300 && hn <= 300;
+  }, [sizeMode, w, h]);
+  const thickValid = useMemo(() => {
+    if (thickMode === "preset") return true;
+    const tn = Number(thickCustom);
+    return Number.isFinite(tn) && tn > 0 && tn <= 50;
+  }, [thickMode, thickCustom]);
+  const canContinue = sizeValid && thickValid;
+
+  const finalSize = sizeMode === "preset" ? sizePreset : `${Number(w)}×${Number(h)}`;
+  const finalThick = thickMode === "preset" ? thickPreset : `${Number(thickCustom)}`;
+  const payload: SizeStepResult = { size: finalSize, thickness: finalThick, orientation };
+
+  // Страхующий авто-сейв: когда ориентация определена — фиксируем текущие параметры
+  useEffect(() => {
+    if (!orientationReady) return;
+
+    let widthCm: number | undefined;
+    let heightCm: number | undefined;
+
+    if (sizeMode === "preset") {
+      const [wcm, hcm] = parsePresetWHcm(sizePreset);
+      widthCm = wcm; heightCm = hcm;
+    } else {
+      const wcm = Number(w);
+      const hcm = Number(h);
+      if (Number.isFinite(wcm) && wcm > 0) widthCm = wcm;
+      if (Number.isFinite(hcm) && hcm > 0) heightCm = hcm;
+    }
+
+    let thickCm: number | undefined;
+    if (thickMode === "preset") {
+      const t = Number(thickPreset);
+      if (Number.isFinite(t) && t > 0) thickCm = t;
+    } else {
+      const t = Number(thickCustom);
+      if (Number.isFinite(t) && t > 0) thickCm = t;
+    }
+
+    const sizePatch: any = { orientation };
+    const wmm = cmToMm(widthCm), hmm = cmToMm(heightCm), tmm = cmToMm(thickCm);
+    if (typeof wmm === "number") sizePatch.width = wmm;
+    if (typeof hmm === "number") sizePatch.height = hmm;
+    if (typeof tmm === "number") sizePatch.thickness = tmm;
+
+    saveOrderDraft({ size: sizePatch, orientation });
+  }, [sizeMode, sizePreset, w, h, thickMode, thickPreset, thickCustom, orientation, orientationReady]);
+
+  const handleContinue = () => {
+    // если по какой-то причине детект ещё не завершён — зафиксируем по размеру
+    if (!orientationReady) {
+      const [wcm, hcm] = currentWHcm;
+      const next = orientFromSize(wcm, hcm);
+      persistDraft(next);
+    }
+    const fn = (typeof onDone === "function" ? onDone : typeof onConfirm === "function" ? onConfirm : undefined);
+    if (fn) fn(payload);
+    else console.error("SizeStep: ни onDone, ни onConfirm не переданы в props");
+  };
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
-      {items.map((g: any, idx: number) => {
-        const gid = String(g.id || g.relPath || g.url || g.name || idx);
-        const qty = plateIds.filter((x) => x === gid).length;
-        return (
-          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
-            <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
-              {g.url ? (
-                <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-              ) : (
-                <div style={{ ...smallText() }}>нет</div>
+    <div
+      style={{
+        color: "#fff",
+        maxWidth: 600,
+        margin: "0 auto",
+        fontFamily: "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
+        animation: "fade-slide-in-slow 480ms ease both",
+        padding: 16
+      }}
+    >
+      <TopBarWithIntro title="Memorial" />
+
+      <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
+      <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
+       Выберите размер и толщину памятника.</div>
+
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
+        {/* Размер */}
+        <div style={{ ...glassPanelStyle(), padding: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input type="radio" name="sizeMode" checked={sizeMode === "preset"} onChange={() => setSizeMode("preset")} />
+                <span>Стандартный</span>
+              </label>
+              {sizeMode === "preset" && (
+                <div style={{ marginTop: 6, ...optionWrapStyle }}>
+                  {PRESET_SIZES.map((s) => (
+                    <label key={s} style={optionLabelStyle}>
+                      <input type="radio" name="sizePreset" checked={sizePreset === s} onChange={() => setSizePreset(s)} />
+                      <span>{s} см</span>
+                    </label>
+                  ))}
+                </div>
               )}
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
-              <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
-              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+
+            <div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input type="radio" name="sizeMode" checked={sizeMode === "custom"} onChange={() => setSizeMode("custom")} />
+                <span>Свой вариант</span>
+              </label>
+
+              {sizeMode === "custom" && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span>Ширина, см</span>
+                    <input type="number" min={1} max={300} value={w} onChange={(e) => setW(e.target.value)} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span>Высота, см</span>
+                    <input type="number" min={1} max={300} value={h} onChange={(e) => setH(e.target.value)} style={{ width: 90 }} />
+                  </label>
+                  {!sizeValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>}
+                </div>
+              )}
             </div>
           </div>
-        );
-      })}
+        </div>
+
+        {/* Толщина */}
+        <div style={{ ...glassPanelStyle(), padding: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Толщина</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input type="radio" name="thickMode" checked={thickMode === "preset"} onChange={() => setThickMode("preset")} />
+              <span>Стандартная</span>
+            </label>
+            {thickMode === "preset" && (
+              <div style={optionWrapStyle}>
+                {PRESET_THICKNESS.map((t) => (
+                  <label key={t} style={optionLabelStyle}>
+                    <input type="radio" name="thickPreset" checked={thickPreset === t} onChange={() => setThickPreset(t)} />
+                    <span>{t} см</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
+              <span>Свой вариант</span>
+            </label>
+            {thickMode === "custom" && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span>Толщина, см</span>
+                  <input type="number" min={1} max={50} value={thickCustom} onChange={(e) => setThickCustom(e.target.value)} style={{ width: 90 }} />
+                </label>
+                {!thickValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Выбранная работа (превью) */}
+        <div style={{ ...glassPanelStyle(), padding: 12 }}>
+          <div style={{ marginBottom: 6, opacity: 0.9 }}>Выбранная резная работа</div>
+          <div style={{ display: "grid", gap: 10 }}>
+            <div
+              style={{
+                backgroundColor: "#000000",
+                backgroundImage:
+                  "linear-gradient(to bottom, #6e6e6eff 0%, #464545ff 20%, #424242ff 40%, #888888 70%, #ffffff 100%)",
+                borderRadius: 10,
+                padding: 12,
+                textAlign: "center",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+              }}
+            >
+              <img
+                src={item.url}
+                alt={item.name}
+                style={{ width: "100%", maxWidth: 640, maxHeight: "55vh", objectFit: "contain", borderRadius: 8, display: "block" }}
+              />
+            </div>
+            <div
+              style={{
+                fontWeight: 600,
+                fontSize: 18,
+                textAlign: "center",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+              }}
+              title={item.name}
+            >
+              {item.name}
+            </div>
+          </div>
+        </div>
+
+        {/* Действия */}
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+          <button
+            onClick={onBack}
+            style={glassButtonStyle("sm")}
+            onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+            onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+            onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+          >
+            Назад
+          </button>
+          <button
+            disabled={!canContinue}
+            onClick={handleContinue}
+            style={glassButtonStyle("sm", !canContinue)}
+            onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+            onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+            onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+          >
+            Продолжить
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
