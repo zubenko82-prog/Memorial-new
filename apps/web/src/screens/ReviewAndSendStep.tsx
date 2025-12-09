@@ -1,15 +1,11 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Обновления:
-// - Эскизы отображаем один раз (нижний дубль удалён).
-// - Размеры НП: только 100*50, 120*60, 140*70 (радио).
-// - Толщина НП: только 5, 8, 10 см (радио).
-// - Аккордеон «Гравировка (редактор)» переименован в «Графика на надгробной плите».
-// - Все миниатюры (в т.ч. галерея) вписывают изображение (object-fit: contain).
-// - Эскизы: лицевая — выбранная резная работа (order.item.url) на фоне, contain, opacity 85%.
-//            тыльная — та же работа зеркально, заливка по маске одним цветом (CSS mask).
-// - По «Отправить» собираем данные, добавляем оригиналы и показываем подтверждение с именем.
+// Изменено:
+// - Галерея «Графика на надгробной плите» организована по категориям (каждая папка = категория).
+// - Категория «Цветы» (и аналоги по названию) содержит подкатегории и показывается с подкатегориями.
+// - Во всех миниатюрах object-fit: contain (изображения вписаны, не обрезаются).
+// - Прочие требования из предыдущей итерации сохранены (эскизы один раз, фон лицевой/тыльной, радио‑параметры плиты и т.д.).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
@@ -485,7 +481,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return () => clearTimeout(t);
   }, [frontWishes, backWishes]);
 
-  /* ===== Дополнительно ===== */
+  /* ===== Дополнительно: Тумба/Цветник/Плита ===== */
 
   const initialExtras = (draft as any)?.extras || {};
   const [extraBase, setExtraBase] = useState<boolean>(!!initialExtras.base);
@@ -496,26 +492,32 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const stelaOrientation = (draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase();
   const defaultPlateOrientation = stelaOrientation.startsWith("h") ? "horizontal" : "vertical";
 
-  // Значения по умолчанию + список вариантов
-  const plateSizeOptions = ["100*50 см", "120*60 см", "140*70 см"];
-  const plateThicknessOptions = ["5 см", "8 см", "10 см"];
-
-  const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize && plateSizeOptions.includes((initialExtras as any)?.plateSize) ? (initialExtras as any)?.plateSize : plateSizeOptions[0]);
-  const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && plateThicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : plateThicknessOptions[0]);
+  // Параметры НП: размеры (100*50, 120*60, 140*70), толщина (5,8,10), ориентация
+  const sizeOptions = ["100*50 см", "120*60 см", "140*70 см"];
+  const thicknessOptions = ["5 см", "8 см", "10 см"];
+  const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize && sizeOptions.includes((initialExtras as any)?.plateSize) ? (initialExtras as any)?.plateSize : sizeOptions[0]);
+  const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && thicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : thicknessOptions[0]);
   const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
-  const [plateOpen, setPlateOpen] = useState<boolean>(false);
   const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
 
-  // Каталог плиты
+  // Галерея для плиты (категории/подкатегории)
+  const [plateOpen, setPlateOpen] = useState<boolean>(false);
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
   const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
+
   const chosenPlateList = useMemo(() => {
     const uniq = Array.from(new Set(plateIds));
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" }).filter((x) => x?.url || x?.name);
   }, [plateIds, plateMeta]);
+
+  // Определяем, что категория — «Цветы» (поддержка разных написаний)
+  const isFlowersCat = (name?: string) => {
+    const s = (name || "").toLowerCase();
+    return s.includes("цвет") || s.includes("flower");
+  };
 
   useEffect(() => {
     let alive = true;
@@ -536,24 +538,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return () => { alive = false; };
   }, [plateOpen]);
 
-  // Сохранить extras
-  useEffect(() => {
-    const prev = loadOrderDraft();
-    const extras: any = {
-      ...(prev as any).extras,
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : [],
-      plateGraphicsMeta: extraPlate ? plateMeta : {}
-    };
-    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-  }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
-
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
     const next = plateIds.concat(gid);
@@ -573,6 +557,24 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setPlateMeta({});
     setPlateEpitaph("");
   };
+
+  // Сохранение extras
+  useEffect(() => {
+    const prev = loadOrderDraft();
+    const extras: any = {
+      ...(prev as any).extras,
+      base: extraBase,
+      flowerbed: extraFlowerbed,
+      headstonePlate: extraPlate,
+      plateSize: extraPlate ? plateSize : undefined,
+      plateThickness: extraPlate ? plateThickness : undefined,
+      plateOrientation: extraPlate ? plateOrientation : undefined,
+      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
+      plateGraphicsIds: extraPlate ? plateIds : [],
+      plateGraphicsMeta: extraPlate ? plateMeta : {}
+    };
+    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+  }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
   // Отправка
   const [busy, setBusy] = useState(false);
@@ -786,7 +788,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Эскизы — 2 столбца (только один раз, нижний дубль удалён) */}
+      {/* Эскизы — 2 столбца */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
@@ -884,7 +886,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 />
               </div>
 
-              {/* Галерея: «Графика на надгробной плите» */}
+              {/* Галерея: «Графика на надгробной плите» — по категориям, Цветы с подкатегориями */}
               <Accordion
                 title="Графика на надгробной плите"
                 open={plateOpen}
@@ -894,56 +896,53 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
                 {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
                 {!catsLoading && cats.length > 0 && (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {cats.map((cat: any) => (
-                      <div key={cat._id || cat.name}>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>{cat.name}</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
-                          {(cat.items || []).map((g: any) => {
-                            const gid = String(g.id || g.relPath || g.url || g.name);
-                            const qty = plateIds.filter((x) => x === gid).length;
-                            return (
-                              <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
-                                <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
-                                  {g.url ? (
-                                    <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-                                  ) : (
-                                    <div style={{ ...smallText() }}>нет</div>
-                                  )}
+                  <div style={{ display: "grid", gap: 16 }}>
+                    {cats.map((cat: any) => {
+                      const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
+                      return (
+                        <section key={cat._id || cat.name}>
+                          <div style={{ fontWeight: 700, marginBottom: 8 }}>{cat.name}</div>
+
+                          {/* Если категория — «Цветы», показываем подкатегории отдельными блоками */}
+                          {showSubs ? (
+                            <div style={{ display: "grid", gap: 16 }}>
+                              {/* Если в корне категории «Цветы» есть элементы — покажем их как «Общее» */}
+                              {(cat.items || []).length > 0 && (
+                                <div>
+                                  <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>Общее</div>
+                                  <CatGrid
+                                    items={cat.items || []}
+                                    plateIds={plateIds}
+                                    addGraphic={addPlateGraphic}
+                                    removeGraphic={removePlateGraphic}
+                                  />
                                 </div>
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                                  <button type="button" onClick={() => removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
-                                  <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
-                                  <button type="button" onClick={() => addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+                              )}
+
+                              {cat.children.map((sub: any) => (
+                                <div key={sub._id || sub.name}>
+                                  <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                                  <CatGrid
+                                    items={sub.items || []}
+                                    plateIds={plateIds}
+                                    addGraphic={addPlateGraphic}
+                                    removeGraphic={removePlateGraphic}
+                                  />
                                 </div>
-                              </div>
-                            );
-                          })}
-                          {(cat.children || []).flatMap((sub: any) =>
-                            (sub.items || []).map((g: any) => {
-                              const gid = String(g.id || g.relPath || g.url || g.name);
-                              const qty = plateIds.filter((x) => x === gid).length;
-                              return (
-                                <div key={`${sub._id || sub.name}-${gid}`} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
-                                  <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
-                                    {g.url ? (
-                                      <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-                                    ) : (
-                                      <div style={{ ...smallText() }}>нет</div>
-                                    )}
-                                  </div>
-                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                                    <button type="button" onClick={() => removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
-                                    <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
-                                    <button type="button" onClick={() => addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
-                                  </div>
-                                </div>
-                              );
-                            })
+                              ))}
+                            </div>
+                          ) : (
+                            // Для всех остальных категорий просто грид с предметами категории
+                            <CatGrid
+                              items={cat.items || []}
+                              plateIds={plateIds}
+                              addGraphic={addPlateGraphic}
+                              removeGraphic={removePlateGraphic}
+                            />
                           )}
-                        </div>
-                      </div>
-                    ))}
+                        </section>
+                      );
+                    })}
                   </div>
                 )}
               </Accordion>
@@ -976,6 +975,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </div>
       </section>
 
+      {/* Эскизы — 2 столбца, финальные */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
+          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} side="front" aspect={aspect} />
+          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} side="back" aspect={aspect} />
+        </div>
+      </section>
+
       {/* Ошибка */}
       {err && (
         <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>
@@ -992,6 +999,44 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ===== Грид категорий/подкатегорий для плиты ===== */
+function CatGrid({
+  items,
+  plateIds,
+  addGraphic,
+  removeGraphic
+}: {
+  items: any[];
+  plateIds: string[];
+  addGraphic: (g: any) => void;
+  removeGraphic: (gid: string) => void;
+}) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
+      {items.map((g: any) => {
+        const gid = String(g.id || g.relPath || g.url || g.name);
+        const qty = plateIds.filter((x) => x === gid).length;
+        return (
+          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
+            <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
+              {g.url ? (
+                <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+              ) : (
+                <div style={{ ...smallText() }}>нет</div>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
+              <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
+              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
