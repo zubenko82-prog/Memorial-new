@@ -21,6 +21,10 @@ import {
 } from "../lib/intro";
 import { saveOrderDraft } from "../lib/order";
 
+// === ВСТАВКА НАВИГАЦИИ (StepNav) — импорт ===
+import StepNav from "../components/StepNav";
+// === КОНЕЦ ВСТАВКИ НАВИГАЦИИ ===
+
 /* ============== Стили и утилиты ============== */
 
 type BtnSize = "nano" | "sm" | "md";
@@ -516,7 +520,23 @@ export default function Start({
   const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
   const [outro, setOutro] = useState(false);
 
-  // Липкая навигация — только навигация прилипает (TopBar не липкий)
+  // === ВСТАВКА НАВИГАЦИИ (StepNav) — измеряем высоту, чтобы сдвинуть липкую категорийную панель ниже StepNav ===
+  const stepNavWrapRef = useRef<HTMLDivElement | null>(null);
+  const [stepNavH, setStepNavH] = useState<number>(0);
+  useLayoutEffect(() => {
+    const measure = () => setStepNavH(stepNavWrapRef.current?.getBoundingClientRect().height ?? 0);
+    measure();
+    window.addEventListener("resize", measure);
+    const ro = new ResizeObserver(measure);
+    if (stepNavWrapRef.current) ro.observe(stepNavWrapRef.current);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro.disconnect();
+    };
+  }, []);
+  // === КОНЕЦ ВСТАВКИ НАВИГАЦИИ ===
+
+  // Липкая навигация по категориям
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState<number>(56);
 
@@ -547,7 +567,7 @@ export default function Start({
     const el = document.getElementById(id);
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const y = window.scrollY + rect.top - (navH + 12);
+    const y = window.scrollY + rect.top - (navH + stepNavH + 12); // учитываем высоту StepNav
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   };
 
@@ -596,6 +616,12 @@ export default function Start({
         margin: "0 auto"
       }}
     >
+      {/* === ВСТАВКА НАВИГАЦИИ (StepNav) — липкая панель шагов в самом верху === */}
+      <div ref={stepNavWrapRef}>
+        <StepNav currentId="item" />
+      </div>
+      {/* === КОНЕЦ ВСТАВКИ НАВИГАЦИИ === */}
+
       {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
       <TopBarWithIntro title="Memorial" />
 
@@ -603,13 +629,13 @@ export default function Start({
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
 
-      {/* Липкая панель навигации по категориям */}
+      {/* Липкая панель навигации по категориям (сдвинута ниже StepNav) */}
       {cats && cats.length > 0 && (
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: 0,
+            top: stepNavH, // <= ключевой момент: учитываем высоту StepNav
             zIndex: 50,
             paddingTop: "env(safe-area-inset-top)",
             ...glassPanelStyle(),
@@ -654,7 +680,7 @@ export default function Start({
           const catId = makeCatId(cat, idx);
           const items = sortedItems(cat.items);
           return (
-            <section id={catId} key={`cat-${catId}`} style={{ paddingTop: 2, scrollMarginTop: `${navH + 14}px` }}>
+            <section id={catId} key={`cat-${catId}`} style={{ paddingTop: 2, scrollMarginTop: `${navH + stepNavH + 14}px` }}>
               <FiligreeSeparator top={2} bottom={6} widthPct={60} />
               <h3 style={{ margin: "0 0 6px 0" }}>{cat.name}</h3>
 
