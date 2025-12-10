@@ -11,7 +11,7 @@
 // - Силуэт резной работы заливается сплошным цветом rgba(25,25,25,0.9) и расположен
 //   ПОД превью, НО ПЕРЕД градиентом фона (между фоном и превью).
 //   Для маски используем CSS mask-image (и -webkit- префикс), а также ВСЕГДА рисуем «подкрашенную» картинку-фолбек.
-//   Для тыльной стороны силуэт зеркалим по X.
+//   Для тыльной стороны силуэт зеркалим по X и РАСТЯГИВАЕМ на всю ширину/высоту (object-fit: cover; 100%/100%).
 // - Все списки/превью — выше силуэта.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -109,16 +109,8 @@ function orientationLabelShort(o?: string) {
   return "";
 }
 
-/* ===== Underlay (градиент + СИЛУЭТ под превью) ===== */
-/* ВАЖНО: всегда рисуем и маску (div с background и mask-image), и подкрашенную картинку (img с фильтром).
-   Это гарантирует видимость силуэта даже при отсутствии поддержки mask-image/префиксов/особенностях кросс‑доменной загрузки. */
-function Underlay({
-  itemUrl,
-  mirror = false
-}: {
-  itemUrl?: string;
-  mirror?: boolean;
-}) {
+/* ===== Underlay FRONT (градиент + «слабый» контур изделия, contain) ===== */
+function UnderlayFront({ itemUrl }: { itemUrl?: string }) {
   return (
     <div
       aria-hidden
@@ -129,7 +121,6 @@ function Underlay({
         overflow: "hidden"
       }}
     >
-      {/* 1) Градиент фона (самый нижний слой) */}
       <div
         style={{
           position: "absolute",
@@ -139,8 +130,6 @@ function Underlay({
           zIndex: 0
         }}
       />
-
-      {/* 2) Подкрашенная картинка (фолбек силуэта) */}
       {itemUrl && (
         <img
           src={itemUrl}
@@ -151,18 +140,64 @@ function Underlay({
             width: "100%",
             height: "100%",
             objectFit: "contain",
+            opacity: 0.35,
+            userSelect: "none",
+            pointerEvents: "none",
+            zIndex: 1
+          }}
+          draggable={false}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ===== Underlay BACK (градиент + зеркальный силуэт, COVER) ===== */
+/* ВСЕГДА растягиваем подложку на всю область (object-fit: cover; 100%/100%). */
+function UnderlayBack({ itemUrl }: { itemUrl?: string }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        inset: 0,
+        borderRadius: 10,
+        overflow: "hidden"
+      }}
+    >
+      {/* 1. Градиент — самый нижний слой */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+          zIndex: 0
+        }}
+      />
+      {/* 2. Фолбек‑силуэт тёмным тоном, зеркалим и COVER */}
+      {itemUrl && (
+        <img
+          src={itemUrl}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",         // важно: cover
+            transform: "scaleX(-1)",    // зеркалим по X
+            transformOrigin: "center",
             filter: "grayscale(1) brightness(0) opacity(0.9)",
             mixBlendMode: "multiply",
-            transform: mirror ? "scaleX(-1)" : "none",
-            transformOrigin: "center",
             zIndex: 1,
+            userSelect: "none",
             pointerEvents: "none"
           }}
           draggable={false}
         />
       )}
-
-      {/* 3) Маска по альфе/яркости (если поддерживается браузером) */}
+      {/* 3. Маска‑заливка поверх — тоже зеркалим и COVER */}
       {itemUrl && (
         <div
           style={{
@@ -172,12 +207,12 @@ function Underlay({
             WebkitMaskImage: `url(${itemUrl})`,
             WebkitMaskRepeat: "no-repeat",
             WebkitMaskPosition: "center",
-            WebkitMaskSize: "contain",
+            WebkitMaskSize: "cover",    // важно: cover
             maskImage: `url(${itemUrl})`,
             maskRepeat: "no-repeat",
             maskPosition: "center",
-            maskSize: "contain",
-            transform: mirror ? "scaleX(-1)" : "none",
+            maskSize: "cover",          // важно: cover
+            transform: "scaleX(-1)",
             transformOrigin: "center",
             zIndex: 2,
             pointerEvents: "none"
@@ -214,10 +249,12 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Фон + Силуэт (силуэт ПОД превью, НО НАД фоном) */}
-        <Underlay itemUrl={itemUrl} mirror={mirror} />
+        {/* Подложка:
+            - Лицевая: UnderlayFront (contain)
+            - Тыльная: UnderlayBack (mirror + cover) */}
+        {mirror ? <UnderlayBack itemUrl={itemUrl} /> : <UnderlayFront itemUrl={itemUrl} />}
 
-        {/* Превью (все элементы — сверху) */}
+        {/* Превью (все элементы — СВЕРХУ) */}
         {miniUrl ? (
           <img
             src={miniUrl}
