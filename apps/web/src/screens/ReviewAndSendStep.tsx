@@ -7,15 +7,6 @@ import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
 import { fetchCatalog } from "../api";
 
 /* ===== UI (облегчённый стиль) ===== */
-function glassPanelStyle(): React.CSSProperties {
-  return {
-    background: "rgba(20,20,24,0.90)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: 12,
-    color: "#fff",
-    boxSizing: "border-box"
-  };
-}
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
   const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
@@ -45,11 +36,11 @@ function inputStyle(): React.CSSProperties {
 function smallText(): React.CSSProperties {
   return { opacity: 0.8, fontSize: 12 };
 }
-/* Основной мягкий блок (без рамки) */
-const softBlock: React.CSSProperties = {
+/* Мягкий «контейнер-секция» без рамки */
+const softSection: React.CSSProperties = {
   background: "rgba(255,255,255,0.04)",
-  borderRadius: 10,
-  padding: 10
+  borderRadius: 12,
+  padding: 12
 };
 /* Тонкий разделитель */
 const dividerLine: React.CSSProperties = {
@@ -75,7 +66,7 @@ function chip(txt: string) {
     </span>
   );
 }
-/* Мягкая плашка для эпитафий (без рамки) */
+/* Мягкая плашка для эпитафий/выделений (без рамки) */
 function EpBox({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -201,7 +192,7 @@ function UnderlayBack({ itemUrl }: { itemUrl?: string }) {
   );
 }
 
-/* ===== SidePreview (карточка превью) ===== */
+/* ===== SidePreview (карточка превью, без рамки у контейнера) ===== */
 function SidePreview({
   title,
   miniUrl,
@@ -216,7 +207,7 @@ function SidePreview({
   aspect?: string;
 }) {
   return (
-    <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
+    <div style={{ ...softSection, padding: 10, display: "grid", gap: 8 }}>
       <div style={{ fontWeight: 600 }}>{title}</div>
       <div
         style={{
@@ -262,7 +253,7 @@ function SidePreview({
   );
 }
 
-/* ===== Editable summary (контакты + резная работа) — меньше вложенных рамок ===== */
+/* ===== Editable summary (контакты + резная работа) — без рамки-обводки, с линиями ===== */
 function EditableOrderSummary() {
   const [draft, setDraft] = useState(() => loadOrderDraft());
   const introState = loadIntroState();
@@ -301,69 +292,64 @@ function EditableOrderSummary() {
   const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
 
   return (
-    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+    <section style={{ ...softSection, display: "grid", gap: 10 }}>
       <div style={{ fontWeight: 700 }}>Данные заказа</div>
 
-      {/* Контакты — компактная рамка */}
-      <div style={{ ...softBlock }}>
-        <div style={{ fontWeight: 600, opacity: 0.95, marginBottom: 8 }}>Контакты</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
-          <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
-        </div>
-        <div style={{ height: 8 }} />
-        <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание (удобное время, мессенджер…)" style={inputStyle()} />
+      {/* Контакты */}
+      <div style={{ fontWeight: 600, opacity: 0.95 }}>Контакты</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
+        <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
       </div>
+      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание (удобное время, мессенджер…)" style={inputStyle()} />
 
-      {/* Разделитель */}
       <div style={dividerLine} />
 
-      {/* Резная работа — отдельная рамка */}
-      <div style={{ ...softBlock, display: "grid", gap: 10 }}>
-        <div style={{ fontWeight: 600, opacity: 0.95 }}>Резная работа</div>
-        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
-          <div
-            style={{
-              borderRadius: 10,
-              background: "rgba(255,255,255,0.04)",
-              width: 96,
-              height: 96,
-              overflow: "hidden",
-              display: "grid",
-              placeItems: "center"
-            }}
-          >
-            {draft?.item?.url && (
-              <img
-                src={draft.item.url}
-                alt=""
-                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                draggable={false}
-              />
-            )}
-          </div>
-          <div style={{ minWidth: 0, display: "grid", gap: 4 }}>
-            {(draft?.item?.name || draft?.item?.url) && (
-              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}
-              </div>
-            )}
-            <div style={{ opacity: 0.9 }}>
-              Размеры: {dims}
-              {orient ? ` · ${orient}` : ""}
+      {/* Резная работа */}
+      <div style={{ fontWeight: 600, opacity: 0.95 }}>Резная работа</div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
+        <div
+          style={{
+            borderRadius: 10,
+            background: "rgba(255,255,255,0.04)",
+            width: 96,
+            height: 96,
+            overflow: "hidden",
+            display: "grid",
+            placeItems: "center"
+          }}
+        >
+          {draft?.item?.url && (
+            <img
+              src={draft.item.url}
+              alt=""
+              style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+              draggable={false}
+            />
+          )}
+        </div>
+        <div style={{ minWidth: 0, display: "grid", gap: 4 }}>
+          {(draft?.item?.name || draft?.item?.url) && (
+            <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}
             </div>
+          )}
+          <div style={{ opacity: 0.9 }}>
+            Размеры: {dims}
+            {orient ? ` · ${orient}` : ""}
           </div>
         </div>
-        <div>
-          <div style={{ fontSize: 13, opacity: 0.9, marginBottom: 4 }}>Примечание</div>
-          <textarea
-            value={sizeNotes}
-            onChange={(e) => { setSizeNotes(e.target.value); scheduleSave(); }}
-            rows={3}
-            placeholder="Примечание по размерам…"
-            style={{ ...inputStyle(), resize: "vertical" }}
-          />
-        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 13, opacity: 0.9, marginBottom: 4 }}>Примечание</div>
+        <textarea
+          value={sizeNotes}
+          onChange={(e) => { setSizeNotes(e.target.value); scheduleSave(); }}
+          rows={3}
+          placeholder="Примечание по размерам…"
+          style={{ ...inputStyle(), resize: "vertical" }}
+        />
       </div>
     </section>
   );
@@ -398,7 +384,7 @@ function Accordion({ title, open, onToggle, children }: { title: string; open: b
     return () => ro.disconnect();
   }, [children]);
   return (
-    <div style={{ ...glassPanelStyle(), padding: 0 }}>
+    <div style={{ ...softSection, padding: 0 }}>
       <button
         type="button"
         onClick={onToggle}
@@ -412,7 +398,8 @@ function Accordion({ title, open, onToggle, children }: { title: string; open: b
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between"
+          justifyContent: "space-between",
+          borderRadius: 12
         }}
       >
         <strong>{title}</strong>
@@ -437,15 +424,14 @@ function CatGrid({
   addGraphic: (g: any) => void;
   removeGraphic: (gid: string) => void;
 }) {
-  // min 2 columns: каждая ячейка — минимум половина ширины контейнера (мин. 140px)
-  const gridCols = "repeat(auto-fill, minmax(clamp(140px, (100% - 10px)/2, 1fr), 1fr))";
+  const gridCols = "repeat(auto-fill, minmax(clamp(140px, (100% - 10px)/2, 1fr), 1fr))"; // min 2 columns
   return (
     <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10 }}>
       {items.map((g: any, idx: number) => {
         const gid = String(g.id || g.relPath || g.url || g.name || idx);
         const qty = plateIds.filter((x) => x === gid).length;
         return (
-          <div key={gid} style={{ ...softBlock }}>
+          <div key={gid} style={{ ...softSection }}>
             <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.03)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
               {g.url ? (
                 <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
@@ -690,22 +676,22 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       </div>
 
       {/* Подсказка */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+      <section style={{ ...softSection }}>
         Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
         гравировки перейдите на соответствующий шаг, используйте навигацию вверху. Когда всё верно — нажмите «Отправить заказ».
       </section>
 
-      {/* Контакты + Резная работа — меньше рамок */}
+      {/* Данные заказа */}
       <EditableOrderSummary />
 
       {/* Лицевая */}
       {(frontPersons.length || frontUnique.length || frontEpitaphs.length || frontWishes) ? (
-        <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+        <section style={{ ...softSection, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая")}</div>
 
           {frontPersons.length > 0 && (
-            <div style={{ ...softBlock }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие</div>
+            <>
+              <div style={{ fontWeight: 700, marginTop: 2 }}>Усопшие</div>
               <div style={{ display: "grid", gap: 8 }}>
                 {frontPersons.map((p: any, idx: number) => {
                   const fio1 = (p.lastName || "").trim();
@@ -723,12 +709,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   );
                 })}
               </div>
-            </div>
+              <div style={dividerLine} />
+            </>
           )}
 
           {frontUnique.length > 0 && (
-            <div style={{ ...softBlock }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
+            <>
+              <div style={{ fontWeight: 700 }}>Графика</div>
               <div style={{ display: "grid", gap: 8 }}>
                 {frontUnique.map((g: any) => {
                   const id = g?.id || g?.url || g?.name;
@@ -743,37 +730,41 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   );
                 })}
               </div>
-            </div>
+              <div style={dividerLine} />
+            </>
           )}
 
           {frontEpitaphs.length > 0 && (
-            <EpBox>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {frontEpitaphs.map((t, i) => (
-                  <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                ))}
-              </div>
-            </EpBox>
+            <>
+              <div style={{ fontWeight: 700 }}>Эпитафии</div>
+              <EpBox>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {frontEpitaphs.map((t, i) => (
+                    <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                  ))}
+                </div>
+              </EpBox>
+              <div style={dividerLine} />
+            </>
           )}
 
           {frontWishes && (
-            <div style={{ ...softBlock }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
+            <>
+              <div style={{ fontWeight: 700 }}>Пожелания</div>
               <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes}</div>
-            </div>
+            </>
           )}
         </section>
       ) : null}
 
       {/* Тыльная */}
       {(rearPeople.length || rearUnique.length || rearEpitaphs.length || backWishes) ? (
-        <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+        <section style={{ ...softSection, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
 
           {rearPeople.length > 0 && (
-            <div style={{ ...softBlock }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие</div>
+            <>
+              <div style={{ fontWeight: 700, marginTop: 2 }}>Усопшие</div>
               <div style={{ display: "grid", gap: 8 }}>
                 {rearPeople.map((p: any, idx: number) => {
                   const fio1 = (p.lastName || "").trim();
@@ -791,12 +782,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   );
                 })}
               </div>
-            </div>
+              <div style={dividerLine} />
+            </>
           )}
 
           {rearUnique.length > 0 && (
-            <div style={{ ...softBlock }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
+            <>
+              <div style={{ fontWeight: 700 }}>Графика</div>
               <div style={{ display: "grid", gap: 8 }}>
                 {rearUnique.map((g: any) => {
                   const gid = g?.id || g?.relPath || g?.url || g?.name;
@@ -811,31 +803,36 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   );
                 })}
               </div>
-            </div>
+              <div style={dividerLine} />
+            </>
           )}
 
           {rearEpitaphs.length > 0 && (
-            <EpBox>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {rearEpitaphs.map((t, i) => (
-                  <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                ))}
-              </div>
-            </EpBox>
+            <>
+              <div style={{ fontWeight: 700 }}>Эпитафии</div>
+              <EpBox>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {rearEpitaphs.map((t, i) => (
+                    <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                  ))}
+                </div>
+              </EpBox>
+              <div style={dividerLine} />
+            </>
           )}
 
           {backWishes && (
-            <div style={{ ...softBlock }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
+            <>
+              <div style={{ fontWeight: 700 }}>Пожелания</div>
               <div style={{ whiteSpace: "pre-wrap" }}>{backWishes}</div>
-            </div>
+            </>
           )}
         </section>
       ) : null}
 
       {/* Эскизы — один раз (2 столбца) */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+      <section style={{ ...softSection }}>
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>{chip("Эскизы")}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} />
           <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} />
@@ -843,20 +840,18 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       </section>
 
       {/* Дополнительно — тумба/цветник/плита */}
-      <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
-        <div style={{ fontWeight: 700 }}>Дополнительно</div>
+      <section style={{ ...softSection, display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "center" }}>{chip("Дополнительно")}</div>
 
-        <div style={{ ...softBlock }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
-              <span>Тумба</span>
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
-              <span>Цветник</span>
-            </label>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <span>Тумба</span>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <span>Цветник</span>
+          </label>
         </div>
 
         <PlateBlock
@@ -886,7 +881,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       </section>
 
       {err && (
-        <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>
+        <div style={{ ...softSection, color: "#ffb4b4" }}>{err}</div>
       )}
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
@@ -899,7 +894,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   );
 }
 
-/* ===== Блок плиты (вынесен) ===== */
+/* ===== Блок плиты (вынесен, облегчён) ===== */
 function PlateBlock(props: {
   extraPlate: boolean;
   setExtraPlate: (v: boolean) => void;
@@ -940,91 +935,90 @@ function PlateBlock(props: {
   const gridCols = "repeat(auto-fill, minmax(clamp(140px, (100% - 10px)/2, 1fr), 1fr))";
 
   return (
-    <div style={{ ...softBlock, display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-          <input type="checkbox" checked={props.extraPlate} onChange={(e) => props.setExtraPlate(e.target.checked)} />
+          <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
           <span style={{ fontWeight: 600 }}>Надгробная плита</span>
         </label>
-        {props.extraPlate && (
-          <button type="button" onClick={props.handleDeletePlate} style={glassButtonStyle("nano")}>
+        {extraPlate && (
+          <button type="button" onClick={handleDeletePlate} style={glassButtonStyle("nano")}>
             Удалить плиту
           </button>
         )}
       </div>
 
-      {props.extraPlate && (
+      {extraPlate && (
         <>
           {/* Параметры плиты */}
-          <div style={{ display: "grid", gap: 10 }}>
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {["100×50 см", "120×60 см", "140×70 см"].map((v) => (
-                  <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                    <input type="radio" name="plate-size" checked={props.plateSize === v} onChange={() => props.setPlateSize(v)} />
-                    <span>{v}</span>
-                  </label>
-                ))}
-              </div>
+          <div style={{ ...softSection }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+              {["100×50 см", "120×60 см", "140×70 см"].map((v) => (
+                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
+                  <span>{v}</span>
+                </label>
+              ))}
             </div>
 
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {["5 см", "8 см", "10 см"].map((v) => (
-                  <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                    <input type="radio" name="plate-thickness" checked={props.plateThickness === v} onChange={() => props.setPlateThickness(v)} />
-                    <span>{v}</span>
-                  </label>
-                ))}
-              </div>
+            <div style={dividerLine} />
+
+            <div style={{ fontWeight: 600, margin: "10px 0 6px" }}>Толщина</div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+              {["5 см", "8 см", "10 см"].map((v) => (
+                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
+                  <span>{v}</span>
+                </label>
+              ))}
             </div>
 
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {[
-                  { v: "vertical", t: "вертикально" },
-                  { v: "horizontal", t: "горизонтально" }
-                ].map(({ v, t }) => (
-                  <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                    <input type="radio" name="plate-orient" checked={props.plateOrientation === v} onChange={() => props.setPlateOrientation(v)} />
-                    <span>{t}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
+            <div style={dividerLine} />
 
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
-              <textarea
-                value={props.plateEpitaph}
-                onChange={(e) => props.setPlateEpitaph(e.target.value)}
-                rows={3}
-                placeholder="Текст эпитафии на плите…"
-                style={{ ...inputStyle(), resize: "vertical" }}
-              />
+            <div style={{ fontWeight: 600, margin: "10px 0 6px" }}>Ориентация</div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {[
+                { v: "vertical", t: "вертикально" },
+                { v: "horizontal", t: "горизонтально" }
+              ].map(({ v, t }) => (
+                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => setPlateOrientation(v)} />
+                  <span>{t}</span>
+                </label>
+              ))}
             </div>
+          </div>
+
+          {/* Эпитафия */}
+          <div style={{ ...softSection }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
+            <textarea
+              value={plateEpitaph}
+              onChange={(e) => setPlateEpitaph(e.target.value)}
+              rows={3}
+              placeholder="Текст эпитафии на плите…"
+              style={{ ...inputStyle(), resize: "vertical" }}
+            />
           </div>
 
           {/* Галерея */}
           <Accordion
             title="Графика на надгробной плите"
-            open={props.plateOpen}
-            onToggle={() => props.setPlateOpen(!props.plateOpen)}
+            open={plateOpen}
+            onToggle={() => setPlateOpen(!plateOpen)}
           >
-            {props.catsLoading && <div>Загрузка каталога…</div>}
-            {props.catsError && <div style={{ color: "#ffb4b4" }}>{props.catsError}</div>}
-            {!props.catsLoading && props.cats.length === 0 && !props.catsError && <div>Каталог пуст.</div>}
-            {!props.catsLoading && props.cats.length > 0 && (
+            {catsLoading && <div>Загрузка каталога…</div>}
+            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+            {!catsLoading && cats.length > 0 && (
               <div style={{ display: "grid", gap: 12 }}>
-                {props.cats.map((cat: any, idx: number) => {
+                {cats.map((cat: any, idx: number) => {
                   const catKey = String(cat._id || cat.name || idx);
-                  const open = !!props.catOpen[catKey];
-                  const toggle = () => props.setCatOpen({ ...props.catOpen, [catKey]: !open });
+                  const open = !!catOpen[catKey];
+                  const toggle = () => setCatOpen({ ...catOpen, [catKey]: !open });
                   return (
-                    <div key={catKey} style={{ ...softBlock }}>
+                    <div key={catKey} style={{ ...softSection }}>
                       <button
                         type="button"
                         onClick={toggle}
@@ -1042,14 +1036,14 @@ function PlateBlock(props: {
                         <strong>{cat.name || `Категория ${idx + 1}`}</strong> {open ? "▾" : "▸"}
                       </button>
                       {open && (
-                        <div style={{ padding: 10, display: "grid", gap: 12 }}>
+                        <div style={{ paddingTop: 10, display: "grid", gap: 12 }}>
                           {cat.items?.length > 0 && (
                             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10 }}>
                               {cat.items.map((g: any, i: number) => {
                                 const gid = String(g.id || g.relPath || g.url || g.name || i);
-                                const qty = props.plateIds.filter((x) => x === gid).length;
+                                const qty = plateIds.filter((x) => x === gid).length;
                                 return (
-                                  <div key={gid} style={{ ...softBlock }}>
+                                  <div key={gid} style={{ ...softSection }}>
                                     <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.03)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
                                       {g.url ? (
                                         <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
@@ -1058,9 +1052,9 @@ function PlateBlock(props: {
                                       )}
                                     </div>
                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                                      <button type="button" onClick={() => props.removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
+                                      <button type="button" onClick={() => removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
                                       <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
-                                      <button type="button" onClick={() => props.addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+                                      <button type="button" onClick={() => addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
                                     </div>
                                   </div>
                                 );
@@ -1069,10 +1063,10 @@ function PlateBlock(props: {
                           )}
                           {cat.children?.map((sub: any, j: number) => {
                             const subKey = String(sub._id || `${catKey}-sub-${j}`);
-                            const subOpen = !!props.catOpen[subKey];
-                            const toggleSub = () => props.setCatOpen({ ...props.catOpen, [subKey]: !subOpen });
+                            const subOpen = !!catOpen[subKey];
+                            const toggleSub = () => setCatOpen({ ...catOpen, [subKey]: !subOpen });
                             return (
-                              <div key={subKey} style={{ ...softBlock }}>
+                              <div key={subKey} style={{ ...softSection }}>
                                 <button
                                   type="button"
                                   onClick={toggleSub}
@@ -1090,12 +1084,12 @@ function PlateBlock(props: {
                                   <strong>{sub.name}</strong> {subOpen ? "▾" : "▸"}
                                 </button>
                                 {subOpen && (
-                                  <div style={{ padding: 10, display: "grid", gridTemplateColumns: gridCols, gap: 10 }}>
+                                  <div style={{ paddingTop: 10, display: "grid", gridTemplateColumns: gridCols, gap: 10 }}>
                                     {sub.items?.map((g: any, k: number) => {
                                       const gid = String(g.id || g.relPath || g.url || g.name || k);
-                                      const qty = props.plateIds.filter((x) => x === gid).length;
+                                      const qty = plateIds.filter((x) => x === gid).length;
                                       return (
-                                        <div key={gid} style={{ ...softBlock }}>
+                                        <div key={gid} style={{ ...softSection }}>
                                           <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.03)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
                                             {g.url ? (
                                               <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
@@ -1104,9 +1098,9 @@ function PlateBlock(props: {
                                             )}
                                           </div>
                                           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                                            <button type="button" onClick={() => props.removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
+                                            <button type="button" onClick={() => removePlateGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
                                             <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
-                                            <button type="button" onClick={() => props.addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+                                            <button type="button" onClick={() => addPlateGraphic(g)} style={glassButtonStyle("nano")}>+</button>
                                           </div>
                                         </div>
                                       );
@@ -1127,7 +1121,7 @@ function PlateBlock(props: {
 
           {/* Выбрано */}
           {(chosenPlateList.length > 0 || (plateEpitaph || "").trim()) && (
-            <div style={{ ...softBlock }}>
+            <div style={{ ...softSection }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Выбрано для плиты</div>
               {chosenPlateList.length > 0 && (
                 <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
