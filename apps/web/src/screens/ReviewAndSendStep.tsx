@@ -9,10 +9,10 @@
 //   Пустые секции не показываем. Миниатюры изображений «вписываются» (object-fit: contain).
 // - Эскизы показываем один раз, в 2 столбца.
 // - Силуэт резной работы заливается сплошным цветом rgba(25,25,25,0.9) и расположен
-//   ПОД превью, НО ПЕРЕД градиентом фона (т.е. между фоном и превью).
-//   Для PNG используем mask-image; для JPG/WebP — fallback (подкрашенная картинка).
+//   ПОД превью, НО ПЕРЕД градиентом фона (между фоном и превью).
+//   Для маски используем CSS mask-image (и -webkit- префикс), а также ВСЕГДА рисуем «подкрашенную» картинку-фолбек.
 //   Для тыльной стороны силуэт зеркалим по X.
-// - Все добавленные элементы (превью, списки и т.д.) выше силуэта (над силуэтом).
+// - Все списки/превью — выше силуэта.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import StepNav from "../components/StepNav";
@@ -110,6 +110,8 @@ function orientationLabelShort(o?: string) {
 }
 
 /* ===== Underlay (градиент + СИЛУЭТ под превью) ===== */
+/* ВАЖНО: всегда рисуем и маску (div с background и mask-image), и подкрашенную картинку (img с фильтром).
+   Это гарантирует видимость силуэта даже при отсутствии поддержки mask-image/префиксов/особенностях кросс‑доменной загрузки. */
 function Underlay({
   itemUrl,
   mirror = false
@@ -117,68 +119,6 @@ function Underlay({
   itemUrl?: string;
   mirror?: boolean;
 }) {
-  const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
-
-  // Градиент (низ)
-  const gradient = (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        background:
-          "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-        zIndex: 0
-      }}
-    />
-  );
-
-  // Силуэт через маску для PNG
-  const maskSilhouette =
-    itemUrl && isPng ? (
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "rgba(25,25,25,0.9)",
-          WebkitMaskImage: `url(${itemUrl})`,
-          WebkitMaskRepeat: "no-repeat",
-          WebkitMaskPosition: "center",
-          WebkitMaskSize: "contain",
-          maskImage: `url(${itemUrl})`,
-          maskRepeat: "no-repeat",
-          maskPosition: "center",
-          maskSize: "contain",
-          transform: mirror ? "scaleX(-1)" : "none",
-          transformOrigin: "center",
-          zIndex: 1,
-          pointerEvents: "none"
-        }}
-      />
-    ) : null;
-
-  // Fallback для JPEG/WebP — «подкрашенная» картинка (будет под превью)
-  const tintSilhouette =
-    itemUrl && !isPng ? (
-      <img
-        src={itemUrl}
-        alt=""
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
-          filter: "grayscale(1) brightness(0) opacity(0.9)",
-          mixBlendMode: "multiply",
-          transform: mirror ? "scaleX(-1)" : "none",
-          transformOrigin: "center",
-          zIndex: 1,
-          pointerEvents: "none"
-        }}
-        draggable={false}
-      />
-    ) : null;
-
   return (
     <div
       aria-hidden
@@ -189,9 +129,61 @@ function Underlay({
         overflow: "hidden"
       }}
     >
-      {gradient}
-      {maskSilhouette}
-      {tintSilhouette}
+      {/* 1) Градиент фона (самый нижний слой) */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+          zIndex: 0
+        }}
+      />
+
+      {/* 2) Подкрашенная картинка (фолбек силуэта) */}
+      {itemUrl && (
+        <img
+          src={itemUrl}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            filter: "grayscale(1) brightness(0) opacity(0.9)",
+            mixBlendMode: "multiply",
+            transform: mirror ? "scaleX(-1)" : "none",
+            transformOrigin: "center",
+            zIndex: 1,
+            pointerEvents: "none"
+          }}
+          draggable={false}
+        />
+      )}
+
+      {/* 3) Маска по альфе/яркости (если поддерживается браузером) */}
+      {itemUrl && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(25,25,25,0.9)",
+            WebkitMaskImage: `url(${itemUrl})`,
+            WebkitMaskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            WebkitMaskSize: "contain",
+            maskImage: `url(${itemUrl})`,
+            maskRepeat: "no-repeat",
+            maskPosition: "center",
+            maskSize: "contain",
+            transform: mirror ? "scaleX(-1)" : "none",
+            transformOrigin: "center",
+            zIndex: 2,
+            pointerEvents: "none"
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -222,7 +214,7 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Фон + Силуэт (силуэт под превью, над фоном) */}
+        {/* Фон + Силуэт (силуэт ПОД превью, НО НАД фоном) */}
         <Underlay itemUrl={itemUrl} mirror={mirror} />
 
         {/* Превью (все элементы — сверху) */}
@@ -235,7 +227,7 @@ function SidePreview({
               width: "100%",
               height: "100%",
               objectFit: "contain",
-              zIndex: 2,
+              zIndex: 3, // выше силуэта
               display: "block"
             }}
             draggable={false}
@@ -244,7 +236,7 @@ function SidePreview({
           <div
             style={{
               position: "relative",
-              zIndex: 2,
+              zIndex: 3,
               width: "100%",
               height: "100%",
               display: "grid",
