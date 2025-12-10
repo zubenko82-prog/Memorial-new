@@ -1,21 +1,32 @@
 // src/components/StepNav.tsx
 // Компактная навигация по шагам, одна строка, равномерно по ширине.
-// Переходы работают в 3 режимах:
-// 1) Если передан onSelect(index, id) — вызываем его (управление навигацией у родителя).
-// 2) Иначе, если передан linkForId — используем <a href={linkForId(id)}> (браузер/роутер сам перейдёт).
+// Фиксы:
+// - Убрали шаг «Доп. элементы» из дефолтного списка.
+// - Навигация теперь корректно работает, даже если родитель передаёт активный шаг по id
+//   (currentId/activeId/active — совместимость). Если onSelect не передан — используем href.
+//
+// Режимы перехода:
+// 1) Если передан onSelect(index, id) — вызываем его (управление у родителя).
+// 2) Иначе, если передан linkForId — используем <a href={linkForId(id)}>.
 // 3) Иначе — по умолчанию <a href={`#/wizard/${id}`}> (hash-route).
+
 import React from 'react';
 
 export type StepDef = { id: string; title: string; icon?: React.ReactNode };
 
 export type StepNavProps = {
   steps?: StepDef[];
-  current: number; // 0-based
+  current?: number;            // 0-based. Если не задан, можно указать currentId/activeId/active.
+  currentId?: string;          // id активного шага
+  activeId?: string;           // alias для currentId
+  // @deprecated: для совместимости со старым кодом
+  active?: string;             // alias для currentId
   onSelect?: (index: number, id: string) => void;
   hint?: string;
   linkForId?: (id: string) => string; // например: (id)=>`/wizard/${id}` или `#/${id}`
 };
 
+// Без «extras»
 const defaultSteps: StepDef[] = [
   { id: 'item',    title: 'Резная работа' },
   { id: 'params',  title: 'Размеры стелы' },
@@ -24,7 +35,6 @@ const defaultSteps: StepDef[] = [
   { id: 'epitaph', title: 'Эпитафия' },
   { id: 'editor',  title: 'Редактор' },
   { id: 'rear',    title: 'Тыльная сторона' },
-  { id: 'extras',  title: 'Доп. элементы' },
   { id: 'finish',  title: 'Завершение' }
 ];
 
@@ -45,8 +55,6 @@ function Icon({ id }: { id: string }) {
       return (<svg {...p} aria-hidden><path d="M4 5h16v14H4z" stroke="currentColor" strokeWidth="2" fill="none" /><path d="M9 9h6v6H9z" /></svg>);
     case 'rear':
       return (<svg {...p} aria-hidden><path d="M5 6h9v12H5z" stroke="currentColor" strokeWidth="2" fill="none" /><path d="M10 6h9v12h-9z" /></svg>);
-    case 'extras':
-      return (<svg {...p} aria-hidden><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" fill="none" /></svg>);
     case 'finish':
       return (<svg {...p} aria-hidden><path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2" fill="none" /></svg>);
     default:
@@ -54,7 +62,23 @@ function Icon({ id }: { id: string }) {
   }
 }
 
-export default function StepNav({ steps = defaultSteps, current, onSelect, hint, linkForId }: StepNavProps) {
+export default function StepNav({
+  steps = defaultSteps,
+  current,
+  currentId,
+  activeId,
+  active, // deprecated
+  onSelect,
+  hint,
+  linkForId
+}: StepNavProps) {
+  // Текущий индекс: сначала число, затем поиск по id (currentId/activeId/active)
+  const idFromProps = currentId || activeId || active;
+  const idxFromId = typeof idFromProps === 'string'
+    ? Math.max(0, steps.findIndex(s => s.id === idFromProps))
+    : 0;
+  const curIndex = Number.isInteger(current!) ? Math.max(0, Math.min(steps.length - 1, Number(current))) : idxFromId;
+
   const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/wizard/${id}`);
 
   return (
@@ -76,13 +100,13 @@ export default function StepNav({ steps = defaultSteps, current, onSelect, hint,
         }}
       >
         {steps.map((s, idx) => {
-          const active = idx === current;
+          const isActive = idx === curIndex;
           return (
             <a
               key={s.id}
               href={hrefOf(s.id)}
               title={s.title}
-              aria-current={active ? 'step' : undefined}
+              aria-current={isActive ? 'step' : undefined}
               onClick={(e) => {
                 if (onSelect) {
                   e.preventDefault();
@@ -93,11 +117,11 @@ export default function StepNav({ steps = defaultSteps, current, onSelect, hint,
                 display: 'inline-flex',
                 justifyContent: 'center',
                 alignItems: 'center',
-                height: 10,
+                height: 12,                // чуть выше для удобного тап‑таргета
                 borderRadius: 999,
-                color: active ? '#cfe0ff' : '#ffffff',
-                background: active ? 'rgba(138,180,255,0.18)' : 'transparent',
-                border: active ? '1px solid #8ab4ff' : '1px solid transparent',
+                color: isActive ? '#cfe0ff' : '#ffffff',
+                background: isActive ? 'rgba(138,180,255,0.18)' : 'transparent',
+                border: isActive ? '1px solid #8ab4ff' : '1px solid transparent',
                 textDecoration: 'none',
                 transition: 'transform 160ms ease, background 160ms ease, border-color 160ms ease',
                 willChange: 'transform',
