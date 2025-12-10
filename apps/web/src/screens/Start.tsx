@@ -1,12 +1,11 @@
 // src/screens/Start.tsx
 // Стартовый экран каталога «Резьба».
-// «Знакомство» (контактные данные) показывается ТОЛЬКО после клика «Подтвердить».
-// Если валидные контакты уже сохранены — «знакомство» не спрашиваем, а при подтверждении фиксируем (lock=true) и назначаем номер заказа.
-// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остается видимой
-// (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
-// в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
+// Встроена панель навигации StepNav:
+// - НЕ показывается изначально;
+// - автоматически показывается, если переход на этот шаг выполнен через StepNav (URL содержит /wizard/item или ?step=item);
+// - при показе StepNav корректно сдвигается внутренняя «липкая» навигация по категориям, чтобы не перекрывать панель.
 //
-// FIX: увеличили высоту всплывающего окна до 98svh, чтобы на телефонах в Telegram влезал «Альтернативный способ связи».
+// Места правок помечены: [NAV-INTEGRATION] ...
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -21,9 +20,8 @@ import {
 } from "../lib/intro";
 import { saveOrderDraft } from "../lib/order";
 
-// === ВСТАВКА НАВИГАЦИИ (StepNav) — импорт ===
+// [NAV-INTEGRATION] импорт StepNav (липкая панель шагов)
 import StepNav from "../components/StepNav";
-// === КОНЕЦ ВСТАВКИ НАВИГАЦИИ ===
 
 /* ============== Стили и утилиты ============== */
 
@@ -339,7 +337,7 @@ function PreviewBottomSheet({
             paddingBottom: 8
           }}
         >
-          {/* Картинка — всегда видима; по центру; уменьшаем высоту при открытом «знакомстве» */}
+          {/* Картинка — всегда видима */}
           <div
             style={{
               ...bottomUnderlayGradient(),
@@ -349,7 +347,7 @@ function PreviewBottomSheet({
               alignItems: "center",
               justifyContent: "center",
               overflow: "hidden",
-              maxHeight: showIntro ? "18vh" : "48vh", // уменьшили верхний блок, чтобы кнопки точно помещались
+              maxHeight: showIntro ? "18vh" : "48vh",
               transition: "max-height 260ms ease, padding 260ms ease"
             }}
           >
@@ -372,7 +370,7 @@ function PreviewBottomSheet({
             />
           </div>
 
-          {/* «Знакомство» — плавное раскрытие: высота + fade + лёгкий slide */}
+          {/* «Знакомство» — плавное раскрытие */}
           <div ref={introColl.ref} style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}>
             {showIntro && (
               <section
@@ -437,21 +435,21 @@ function PreviewBottomSheet({
                   </label>
 
                   {/* ВНИМАНИЕ: внутренних кнопок здесь нет.
-                      Кнопки «Назад/Продолжить» вынесены в нижнюю фиксированную панель (см. ниже). */}
+                      Кнопки «Назад/Продолжить» вынесены в нижнюю фиксированную панель. */}
                 </form>
               </section>
             )}
           </div>
         </div>
 
-        {/* Нижние кнопки — всегда видимы; учтён нижний inset для Telegram/Safe Area */}
+        {/* Нижние кнопки */}
         <div
           style={{
             display: "flex",
             justifyContent: "center",
             gap: 8,
             flexWrap: "wrap",
-            paddingBottom: bottomInset // гарантированно над системными панелями
+            paddingBottom: bottomInset
           }}
         >
           {!showIntro ? (
@@ -520,11 +518,41 @@ export default function Start({
   const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
   const [outro, setOutro] = useState(false);
 
-  // === ВСТАВКА НАВИГАЦИИ (StepNav) — измеряем высоту, чтобы сдвинуть липкую категорийную панель ниже StepNav ===
+  // [NAV-INTEGRATION] состояние отображения StepNav: скрыт по умолчанию; показываем, если URL соответствует «переходу с панелью»
+  const [showStepNav, setShowStepNav] = useState<boolean>(false);
   const stepNavWrapRef = useRef<HTMLDivElement | null>(null);
   const [stepNavH, setStepNavH] = useState<number>(0);
+
+  // [NAV-INTEGRATION] детектор по URL: #/wizard/item, /wizard/item или ?step=item
+  const detectFromUrl = () => {
+    if (typeof window === "undefined") return false;
+    const ids = ["item"];
+    const hash = (window.location.hash || "").replace(/^#/, "");
+    const hParts = hash.split(/[/?#&=]/).filter(Boolean);
+    if (hParts.some((t) => ids.includes(decodeURIComponent(t)))) return true;
+    const pathParts = (window.location.pathname || "").split("/").filter(Boolean);
+    if (pathParts.some((t) => ids.includes(decodeURIComponent(t)))) return true;
+    const sp = new URLSearchParams(window.location.search);
+    const step = sp.get("step");
+    if (step && ids.includes(step)) return true;
+    return false;
+  };
+
+  useEffect(() => {
+    // начальная проверка
+    setShowStepNav(detectFromUrl());
+    const onChange = () => setShowStepNav(detectFromUrl());
+    window.addEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
+    return () => {
+      window.removeEventListener("hashchange", onChange);
+      window.removeEventListener("popstate", onChange);
+    };
+  }, []);
+
+  // [NAV-INTEGRATION] измеряем высоту StepNav только когда он виден
   useLayoutEffect(() => {
-    const measure = () => setStepNavH(stepNavWrapRef.current?.getBoundingClientRect().height ?? 0);
+    const measure = () => setStepNavH(showStepNav ? (stepNavWrapRef.current?.getBoundingClientRect().height ?? 0) : 0);
     measure();
     window.addEventListener("resize", measure);
     const ro = new ResizeObserver(measure);
@@ -533,10 +561,9 @@ export default function Start({
       window.removeEventListener("resize", measure);
       ro.disconnect();
     };
-  }, []);
-  // === КОНЕЦ ВСТАВКИ НАВИГАЦИИ ===
+  }, [showStepNav]);
 
-  // Липкая навигация по категориям
+  // Липкая навигация по категориям (внутри шага)
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState<number>(56);
 
@@ -567,7 +594,8 @@ export default function Start({
     const el = document.getElementById(id);
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const y = window.scrollY + rect.top - (navH + stepNavH + 12); // учитываем высоту StepNav
+    // [NAV-INTEGRATION] учитываем высоту StepNav ТОЛЬКО если он показан
+    const y = window.scrollY + rect.top - ((showStepNav ? stepNavH : 0) + navH + 12);
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   };
 
@@ -616,11 +644,13 @@ export default function Start({
         margin: "0 auto"
       }}
     >
-      {/* === ВСТАВКА НАВИГАЦИИ (StepNav) — липкая панель шагов в самом верху === */}
-      <div ref={stepNavWrapRef}>
-        <StepNav currentId="item" />
-      </div>
-      {/* === КОНЕЦ ВСТАВКИ НАВИГАЦИИ === */}
+      {/* [NAV-INTEGRATION] StepNav: НЕ показываем изначально, показываем если переход выполнен через StepNav */}
+      {showStepNav && (
+        <div ref={stepNavWrapRef}>
+          {/* currentId — «item» (текущий шаг) */}
+          <StepNav currentId="item" />
+        </div>
+      )}
 
       {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
       <TopBarWithIntro title="Memorial" />
@@ -629,15 +659,15 @@ export default function Start({
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
 
-      {/* Липкая панель навигации по категориям (сдвинута ниже StepNav) */}
+      {/* Липкая панель навигации по категориям (не должна «съезжать»; учитываем StepNav только когда он виден) */}
       {cats && cats.length > 0 && (
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: stepNavH, // <= ключевой момент: учитываем высоту StepNav
+            top: showStepNav ? stepNavH : 0, // [NAV-INTEGRATION] только если StepNav виден
             zIndex: 50,
-            paddingTop: "env(safe-area-inset-top)",
+            paddingTop: showStepNav ? 0 : "env(safe-area-inset-top)", // [NAV-INTEGRATION] без двойного safe-area
             ...glassPanelStyle(),
             borderRadius: 0,
             borderLeft: "none",
@@ -680,7 +710,15 @@ export default function Start({
           const catId = makeCatId(cat, idx);
           const items = sortedItems(cat.items);
           return (
-            <section id={catId} key={`cat-${catId}`} style={{ paddingTop: 2, scrollMarginTop: `${navH + stepNavH + 14}px` }}>
+            <section
+              id={catId}
+              key={`cat-${catId}`}
+              style={{
+                paddingTop: 2,
+                // [NAV-INTEGRATION] корректируем scrollMarginTop (StepNav учитывается только если показан)
+                scrollMarginTop: `${navH + (showStepNav ? stepNavH : 0) + 14}px`
+              }}
+            >
               <FiligreeSeparator top={2} bottom={6} widthPct={60} />
               <h3 style={{ margin: "0 0 6px 0" }}>{cat.name}</h3>
 
