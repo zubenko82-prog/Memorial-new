@@ -1,8 +1,9 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
+// Глобальная навигация (StepNav) рендерится в App и не является липкой.
+// Здесь только контент шага подтверждения.
 //
 // Реализовано:
-// - Липкая навигация (StepNav) сверху.
 // - Подсказка сверху (точный текст).
 // - Редактируемые «Контакты» и «Резная работа/размеры (с ориентацией)».
 // - Данные сгруппированы по сторонам (Лицевая/Тыльная): Усопшие → Графика → Эпитафии → Пожелания.
@@ -403,136 +404,7 @@ function Accordion({ title, open, onToggle, children }: { title: string; open: b
           padding: "12px 14px",
           background: "rgba(255,255,255,0.06)",
           border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between"
-        }}
-      >
-        <strong>{title}</strong>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
-      </button>
-      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
-        <div ref={ref} style={{ padding: 12 }}>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/* ===== Grid (категории/подкатегории плиты) ===== */
-function CatGrid({
-  items,
-  plateIds,
-  addGraphic,
-  removeGraphic
-}: {
-  items: any[];
-  plateIds: string[];
-  addGraphic: (g: any) => void;
-  removeGraphic: (gid: string) => void;
-}) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
-      {items.map((g: any, idx: number) => {
-        const gid = String(g.id || g.relPath || g.url || g.name || idx);
-        const qty = plateIds.filter((x) => x === gid).length;
-        return (
-          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 10 }}>
-            <div style={{ borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "grid", placeItems: "center" }}>
-              {g.url ? (
-                <img src={g.preview || g.url} alt={g.name || gid} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-              ) : (
-                <div style={{ ...smallText() }}>нет</div>
-              )}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
-              <span style={{ minWidth: 18, textAlign: "center" }}>{qty}</span>
-              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>+</button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ===== Main ===== */
-type Props = { onBack?: () => void; onSend?: (payload?: any) => void; };
-
-export default function ReviewAndSendStep({ onBack, onSend }: Props) {
-  const draft = useMemo(() => loadOrderDraft(), []);
-  const intro = loadIntroState();
-  const itemUrl = (draft as any)?.item?.url as string | undefined;
-
-  const [aspect, setAspect] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    if (!itemUrl) return;
-    const im = new Image();
-    im.onload = () => {
-      const w = im.naturalWidth || 0;
-      const h = im.naturalHeight || 0;
-      if (w && h) setAspect(`${w} / ${h}`);
-    };
-    im.src = itemUrl;
-  }, [itemUrl]);
-
-  const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
-  const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
-
-  /* ——— Лицевая сторона ——— */
-  const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
-  const frontGraphicsRaw: any[] = (draft.graphics as any[])?.filter(Boolean) || [];
-  const frontUnique = useMemo(() => {
-    const first: Record<string, any> = {};
-    frontGraphicsRaw.forEach((g) => {
-      const id = g?.id || g?.url || g?.name;
-      if (id && !first[id]) first[id] = g;
-    });
-    return Object.values(first);
-  }, [frontGraphicsRaw]);
-  const frontCounts: Record<string, number> = useMemo(() => {
-    const m: Record<string, number> = {};
-    frontGraphicsRaw.forEach((g) => {
-      const id = g?.id || g?.url || g?.name || "";
-      if (id) m[id] = (m[id] || 0) + 1;
-    });
-    return m;
-  }, [frontGraphicsRaw]);
-  const frontEpitaphs: string[] = useMemo(() => {
-    const arr = Array.isArray(draft.engraving?.epitaphs)
-      ? draft.engraving!.epitaphs!.filter(Boolean)
-      : [];
-    if (arr.length) return arr;
-    const single = (draft.engraving?.epitaphText || "").trim();
-    return single ? [single] : [];
-  }, [draft.engraving]);
-  const frontWishes = ((draft as any)?.editor?.wishes || "").trim();
-
-  /* ——— Тыльная сторона ——— */
-  const rearPeople = ((((draft as any)?.editorBack?.people as any[]) || []).filter(Boolean)) as Array<{
-    id?: string;
-    lastName?: string;
-    firstName?: string;
-    middleName?: string;
-    birthDate?: string;
-    deathDate?: string;
-    photoPreview?: string | null;
-  }>;
-  const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-  const rearCounts: Record<string, number> = useMemo(() => {
-    const m: Record<string, number> = {};
-    (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
-    return m;
-  }, [rearIds]);
-  const rearUnique = useMemo(() => {
-    const ids = Array.from(new Set(rearIds || []));
-    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
-  }, [rearIds, rearMeta]);
-  const rearEpitaphs: string[] = useMemo(
-    () => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)),
+          color: as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)),
     [draft]
   );
   const backWishes = (((draft as any)?.editorBack?.wishes || "").trim());
@@ -680,15 +552,15 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   };
 
   return (
-  <>
-    {/* Подсказка */}
-    <section style={{ ...glassPanelStyle(), padding: 12 }}>
-      <p style={{ margin: 0, opacity: 0.95, lineHeight: 1.45 }}>
-        Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные.
-        Для редактирования элементов гравировки перейдите на соответствующий шаг
-        (используйте навигацию вверху). Когда всё верно — нажмите «Отправить заказ».
-      </p>
-    </section>
+    <>
+      {/* Подсказка */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <p style={{ margin: 0, opacity: 0.95, lineHeight: 1.45 }}>
+          Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные.
+          Для редактирования элементов гравировки перейдите на соответствующий шаг
+          (используйте навигацию вверху). Когда всё верно — нажмите «Отправить заказ».
+        </p>
+      </section>
 
       {/* Контакты + Резная работа */}
       <EditableOrderSummary />
@@ -890,18 +762,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
-    </div>
+    </>
   );
 }
 
 /* ===== Блок плиты (вынесен) ===== */
 function PlateBlock(props: {
   extraPlate: boolean;
-  setExtraPlate: (v: boolean) => void;
-  plateSize: string;
-  setPlateSize: (v: string) => void;
-  plateThickness: string;
-  setPlateThickness: (v: string) => void;
+  setExtraPlate  setPlateThickness: (v: string) => void;
   plateOrientation: string;
   setPlateOrientation: (v: string) => void;
   plateEpitaph: string;
@@ -945,137 +813,4 @@ function PlateBlock(props: {
           <span style={{ fontWeight: 600 }}>Надгробная плита</span>
         </label>
         {extraPlate && (
-          <button type="button" onClick={handleDeletePlate} style={glassButtonStyle("nano")}>
-            Удалить плиту
-          </button>
-        )}
-      </div>
-
-      {extraPlate && (
-        <>
-          {/* Размеры / Толщина / Ориентация */}
-          <div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {["100×50 см", "120×60 см", "140×70 см"].map((v) => (
-                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
-                  <span>{v}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {["5 см", "8 см", "10 см"].map((v) => (
-                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
-                  <span>{v}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {[
-                { v: "vertical", t: "вертикально" },
-                { v: "horizontal", t: "горизонтально" }
-              ].map(({ v, t }) => (
-                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => setPlateOrientation(v)} />
-                  <span>{t}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Эпитафия плиты */}
-          <div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
-            <textarea
-              value={plateEpitaph}
-              onChange={(e) => setPlateEpitaph(e.target.value)}
-              rows={3}
-              placeholder="Текст эпитафии на плите…"
-              style={{ ...inputStyle(), resize: "vertical" }}
-            />
-          </div>
-
-          {/* Галерея по категориям */}
-          <Accordion
-            title="Графика на надгробной плите"
-            open={plateOpen}
-            onToggle={() => setPlateOpen(!plateOpen)}
-          >
-            {catsLoading && <div>Загрузка каталога…</div>}
-            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-            {!catsLoading && cats.length > 0 && (
-              <div style={{ display: "grid", gap: 12 }}>
-                {cats.map((cat: any, idx: number) => {
-                  const catKey = String(cat._id || cat.name || idx);
-                  const open = !!catOpen[catKey];
-                  const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
-                  return (
-                    <Accordion
-                      key={catKey}
-                      title={cat.name || `Категория ${idx + 1}`}
-                      open={open}
-                      onToggle={() => setCatOpen({ ...catOpen, [catKey]: !open })}
-                    >
-                      {showSubs ? (
-                        <div style={{ display: "grid", gap: 12 }}>
-                          {(cat.items || []).length > 0 && (
-                            <div>
-                              <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>Общее</div>
-                              <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                            </div>
-                          )}
-                          {(cat.children || []).map((sub: any, j: number) => (
-                            <div key={sub._id || `${catKey}-sub-${j}`}>
-                              <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
-                      )}
-                    </Accordion>
-                  );
-                })}
-              </div>
-            )}
-          </Accordion>
-
-          {/* Выбрано для плиты */}
-          {(chosenPlateList.length > 0 || (plateEpitaph || "").trim()) && (
-            <div style={{ ...sectionBox, marginTop: 8 }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Выбрано для плиты</div>
-              {chosenPlateList.length > 0 && (
-                <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
-                  {chosenPlateList.map((g, i) => (
-                    <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "56px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
-                      {g.url && <Thumb url={g.url} />}
-                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                      <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {(plateEpitaph || "").trim() && (
-                <AccentBox>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафия</div>
-                  <div style={{ whiteSpace: "pre-wrap" }}>{(plateEpitaph || "").trim()}</div>
-                </AccentBox>
-              )}
-            </div>
-          )}
-        )}
-    </div>
-  );
-}
+          <

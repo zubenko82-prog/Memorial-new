@@ -53,6 +53,7 @@ function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
   } as React.CSSProperties;
 }
 
+// Прокрутка к началу при смене шага
 function forceScrollTop() {
   try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); } catch {}
   try { (document.scrollingElement as any).scrollTop = 0; } catch {}
@@ -60,7 +61,8 @@ function forceScrollTop() {
   try { (document.body as any).scrollTop = 0; } catch {}
 }
 
-const NAV_STEPS = STEPS.filter(s => s.id !== 'extras'); // в этом мастере «extras» не используется
+// «extras» в этом мастере не используется
+const NAV_STEPS = STEPS.filter(s => s.id !== 'extras');
 const STEP_IDS = NAV_STEPS.map(s => s.id);
 const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
@@ -112,6 +114,7 @@ function getStepIdFromLocation(win: Window = window): StepId {
   } catch {}
   return 'item';
 }
+
 function setHashForStep(id: StepId, replace = false) {
   const hash = `#/wizard/${encodeURIComponent(id)}`;
   if (replace) {
@@ -148,7 +151,7 @@ export default function App() {
         setDecor(p.decor ?? {});
         setEditorState(p.editorState ?? null);
         setEditorBackState(p.editorBackState ?? null);
-        // восстанавливаем «разблокирована навигация» либо из флага, либо если сохранённый шаг уже был «review/done»
+        // восстанавливаем «разблокирована навигация»
         setNavUnlocked(Boolean(p.navUnlocked) || p.step === 'review' || p.step === 'done');
       }
     } catch {}
@@ -212,20 +215,23 @@ export default function App() {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
     const t1 = setTimeout(forceScrollTop, 150);
-    return () => { clearTimeout(t0); clearTimeout(t1); };
+    return () => {
+      clearTimeout(t0);
+      clearTimeout(t1);
+    };
   }, [step]);
 
-  // Синхронизация hash с локальным шагом
+  // Синхронизация hash с локальным шагом + разблокировка навигации
   useEffect(() => {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
     if (window.location.hash !== need) setHashForStep(id, true);
-    // Разблокировать навигацию после входа на «review»/«done»
     if (step === 'review' || step === 'done') setNavUnlocked(true);
   }, [step]);
 
   // Переход из StepNav
   const handleNavSelect = (_idx: number, id: string) => {
+    if (!isStepId(id)) return;
     const s = localStepFromId(id as StepId);
     setStep(s);
     setHashForStep(id as StepId);
@@ -249,6 +255,7 @@ export default function App() {
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
   const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editor'); };
 
+  // Редактор (лицевая)
   const onEditorBack = () => setStep('epitaph');
   const onEditorSave = (payload: any) => setEditorState(payload);
   const onSendOrder = (payload: any) => { setEditorState(payload); setStep('editorBack'); };
@@ -258,9 +265,14 @@ export default function App() {
   };
   const onRearSide = (payload: any) => { setEditorState(payload); setStep('editorBack'); };
 
+  // Редактор (тыльная)
   const onBackEditorBack = () => setStep('editor');
-  const onBackEditorDone = (payload: any) => { setEditorBackState(payload); setStep('review'); };
+  const onBackEditorDone = (payload: any) => {
+    setEditorBackState(payload);
+    setStep('review');
+  };
 
+  // ReviewAndSend
   const onReviewBack = () => setStep('editorBack');
   const onReviewSend = () => setStep('done');
 
@@ -272,7 +284,7 @@ export default function App() {
     setDecor({});
     setEditorState(null);
     setEditorBackState(null);
-    setNavUnlocked(false); // сброс разблокированной навигации
+    setNavUnlocked(false); // сброс «разблокирована навигация»
     setStep('start');
   };
 
@@ -281,16 +293,17 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', background: '#0f0f12', color: '#fff', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
       {/* Глобальная навигация по шагам — НЕ липкая.
-         Появляется на всех экранах ПОСЛЕ того, как пользователь дошёл до шага подтверждения (review). */}
-      {step !== 'done' && (
-  <StepNav
-    steps={NAV_STEPS}          // STEPS без 'extras'
-    currentId={currentWizardId}
-    onSelect={handleNavSelect}
-    sticky={false}             // панель НЕ липкая
-    // enabled не передаём — StepNav сам активируется на finish и запомнит флаг
-  />
-)}
+          Показывается на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
+      {step !== 'done' && navUnlocked && (
+        <StepNav
+          steps={NAV_STEPS}           // STEPS без 'extras'
+          currentId={currentWizardId}
+          onSelect={handleNavSelect}
+          sticky={false}              // панель НЕ липкая
+          enabled={navUnlocked}       // явно управляем показом из App
+          activateOnFinish={false}    // внутреннюю автоактивацию StepNav отключаем
+        />
+      )}
 
       <div style={{ minHeight: 0, overflow: 'auto' }}>
         {step === 'start' && <Start onConfirm={onStartConfirm} />}
@@ -374,6 +387,7 @@ export default function App() {
           </div>
         )}
 
+        {/* Фолбек на случай неизвестного шага */}
         {!['start','size','inscription','graphics','epitaph','editor','editorBack','review','done'].includes(step) && (
           <div style={{ padding: 16 }}>
             <h3>Неизвестный шаг: {String(step)}</h3>
