@@ -1,14 +1,24 @@
 // src/components/StepNav.tsx
-// Компактная навигация по шагам (без липкости по умолчанию).
-// Фиксы:
-// - Убрали шаг «Доп. элементы» из списка по умолчанию.
-// - Корректно определяем текущий шаг из props (current/currentId/activeId/active) ИЛИ из адреса (hash, pathname, ?step).
-// - Навигация работает: если onSelect не передан — срабатывает обычный переход по href.
-// - Липкий режим теперь опциональный (sticky=false по умолчанию). Для глобальной панели используем не-липкий режим.
+// Компактная навигация по шагам (по умолчанию НЕ липкая).
+// Новое:
+// - Панель может «включаться» автоматически после перехода на шаг завершения (finish)
+//   и затем показываться на всех экранах (даже если перейти назад).
+// - Хранит флаг включения в localStorage (persistKey = "memorial.navEnabled").
+// - Если enabled не передан — StepNav сам решает показываться, глядя на localStorage
+//   и/или текущий URL (активируется на finish).
 //
-// Как использовать:
-//   <StepNav steps={...} currentId="rear" /> или <StepNav current={6} />
-//   Для собственного роутера: передайте linkForId={(id)=>`/wizard/${id}`} или onSelect.
+// Использование в App:
+//   — Рендерите StepNav на всех шагах (кроме "done"), sticky={false}.
+//   — Не нужно больше усложнять экраны — StepNav сам спрячется до «активации».
+//   Например:
+//     {step !== 'done' && (
+//       <StepNav steps={NAV_STEPS} currentId={currentWizardId} onSelect={handleNavSelect} sticky={false} />
+//     )}
+//
+// Поведение:
+//   — Пока пользователь не дошёл до шага finish, StepNav будет возвращать null (не рендерится).
+//   — Как только пользователь откроет finish — StepNav запишет флаг в localStorage и
+//     начнёт всегда показываться на всех шагах.
 
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -16,18 +26,21 @@ export type StepDef = { id: string; title: string; icon?: React.ReactNode };
 
 export type StepNavProps = {
   steps?: StepDef[];
-  // Активный шаг (любая из форм)
-  current?: number;    // 0-based
-  currentId?: string;  // id активного шага
-  activeId?: string;   // alias
-  active?: string;     // alias (совм. со старым кодом)
-  // Переходы
+  current?: number;         // 0-based
+  currentId?: string;       // id активного шага
+  activeId?: string;        // alias
+  active?: string;          // alias (совм. со старым кодом)
   onSelect?: (index: number, id: string) => void;
-  linkForId?: (id: string) => string; // например: (id)=>`/wizard/${id}` или `#/${id}`
-  // Подпись
+  linkForId?: (id: string) => string;
   hint?: string;
-  // Липкое позиционирование (по умолчанию — выкл.)
-  sticky?: boolean;    // default: false
+
+  // Параметры показа/позиционирования
+  sticky?: boolean;         // по умолчанию false (панель НЕ липкая)
+
+  // Управление режимом «появится после завершения»
+  enabled?: boolean;        // если задан — жёстко управляет показом (true/false)
+  activateOnFinish?: boolean; // по умолчанию true: включаемся автоматически на finish
+  persistKey?: string;        // ключ LS для флага включения, по умолчанию "memorial.navEnabled"
 };
 
 // Без «extras»
@@ -70,11 +83,9 @@ function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
 
-// Пытаемся определить id шага из адресной строки
 function detectIdFromLocation(stepIds: string[]): string | null {
   if (typeof window === "undefined") return null;
 
-  // 1) hash: #/wizard/:id или #/:id
   const hash = (window.location.hash || "").replace(/^#/, "");
   const hashParts = hash.split(/[/?#]/).filter(Boolean);
   for (let i = hashParts.length - 1; i >= 0; i--) {
@@ -82,14 +93,12 @@ function detectIdFromLocation(stepIds: string[]): string | null {
     if (stepIds.includes(token)) return token;
   }
 
-  // 2) pathname: /wizard/:id или /:id
   const pathParts = (window.location.pathname || "").split("/").filter(Boolean);
   for (let i = pathParts.length - 1; i >= 0; i--) {
     const token = decodeURIComponent(pathParts[i]);
     if (stepIds.includes(token)) return token;
   }
 
-  // 3) search (?step=id)
   const sp = new URLSearchParams(window.location.search);
   const qp = sp.get("step");
   if (qp && stepIds.includes(qp)) return qp;
@@ -106,9 +115,55 @@ export default function StepNav({
   onSelect,
   hint,
   linkForId,
-  sticky = false // по умолчанию НЕ липкая
+  sticky = false,                 // по умолчанию НЕ липкая
+  enabled: enabledProp,           // внешний контроль показа (опционально)
+  activateOnFinish = true,        // авто-включение после finish
+  persistKey = "memorial.navEnabled"
 }: StepNavProps) {
   const ids = useMemo(() => steps.map(s => s.id), [steps]);
+
+  // Определяем, активирован ли показ панели
+  const [enabled, setEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return !!enabledProp;
+    if (typeof enabledProp === "boolean") return enabledProp;
+    try {
+      return window.localStorage.getItem(persistKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  // Активируем панель, когда попадаем на finish
+  useEffect(() => {
+    if (!activateOnFinish || typeof window === "undefined") return;
+    const idNow = (currentId || activeId || active || detectIdFromLocation(ids)) || "";
+    if (idNow === "finish") {
+      try {
+        window.localStorage.setItem(persistKey, "1");
+      } catch {}
+      setEnabled(true);
+    }
+    const onChange = () => {
+      const idLoc = detectIdFromLocation(ids);
+      if (idLoc === "finish") {
+        try {
+          window.localStorage.setItem(persistKey, "1");
+        } catch {}
+        setEnabled(true);
+      }
+    };
+    window.addEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
+    return () => {
+      window.removeEventListener("hashchange", onChange);
+      window.removeEventListener("popstate", onChange);
+    };
+  }, [activateOnFinish, persistKey, ids, currentId, activeId, active]);
+
+  // Если внешний проп задан — он имеет приоритет
+  useEffect(() => {
+    if (typeof enabledProp === "boolean") setEnabled(enabledProp);
+  }, [enabledProp]);
 
   // первичное определение активного индекса
   const initIndex = (() => {
@@ -116,9 +171,7 @@ export default function StepNav({
       return clamp(Number(current), 0, steps.length - 1);
     }
     const idProp = currentId || activeId || active;
-    if (idProp && ids.includes(idProp)) {
-      return ids.indexOf(idProp);
-    }
+    if (idProp && ids.includes(idProp)) return ids.indexOf(idProp);
     const fromLoc = detectIdFromLocation(ids);
     if (fromLoc) return ids.indexOf(fromLoc);
     return 0;
@@ -126,7 +179,6 @@ export default function StepNav({
 
   const [curIndex, setCurIndex] = useState<number>(initIndex);
 
-  // синхронизация при изменении props.current/ids/локации
   useEffect(() => {
     if (Number.isInteger(current as number)) {
       setCurIndex(clamp(Number(current), 0, steps.length - 1));
@@ -141,7 +193,6 @@ export default function StepNav({
     if (fromLoc) setCurIndex(ids.indexOf(fromLoc));
   }, [current, currentId, activeId, active, ids, steps.length]);
 
-  // слушаем hashchange/popstate — обновляем активный шаг при навигации
   useEffect(() => {
     const onChange = () => {
       const fromLoc = detectIdFromLocation(ids);
@@ -166,6 +217,9 @@ export default function StepNav({
         gap: 6
       }
     : { display: "grid", gap: 6 };
+
+  // До «активации» панель не отображаем вовсе
+  if (!enabled) return null;
 
   return (
     <div style={containerStyle}>
@@ -198,7 +252,6 @@ export default function StepNav({
                   e.preventDefault();
                   onSelect(idx, s.id);
                 } else {
-                  // Даем браузеру перейти по href; для мгновенной подсветки обновим локально
                   setCurIndex(idx);
                 }
               }}
