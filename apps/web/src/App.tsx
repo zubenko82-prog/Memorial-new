@@ -1,8 +1,10 @@
 // src/App.tsx
-// Изменения:
-// - Панель StepNav больше НЕ липкая (sticky={false}).
-// - Показываем StepNav ТОЛЬКО на шаге подтверждения (review).
-// - За счёт этого не дублируется навигация (её не будет внутри экранов, например ReviewAndSendStep).
+// Обновления:
+// - Глобальная навигация по экранам (StepNav) НЕ липкая.
+// - Появляется на ВСЕХ шагах ПОСЛЕ того, как пользователь впервые дошёл до шага подтверждения (review).
+// - Флаг «разблокирована навигация» (navUnlocked) сохраняется в localStorage и действует при возврате на предыдущие шаги и при перезагрузке.
+// - Внутренние «липкие» панели внутри шагов остаются как были (т.к. StepNav не sticky).
+// - Дублирования StepNav на шаге подтверждения нет (мы удалили локальные вставки в ReviewAndSendStep/Start).
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -58,8 +60,7 @@ function forceScrollTop() {
   try { (document.body as any).scrollTop = 0; } catch {}
 }
 
-// Используем STEPS (без extras) для панели
-const NAV_STEPS = STEPS.filter(s => s.id !== 'extras');
+const NAV_STEPS = STEPS.filter(s => s.id !== 'extras'); // в этом мастере «extras» не используется
 const STEP_IDS = NAV_STEPS.map(s => s.id);
 const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
@@ -124,6 +125,8 @@ function setHashForStep(id: StepId, replace = false) {
 
 export default function App() {
   const [step, setStep] = useState<Step>('start');
+  const [navUnlocked, setNavUnlocked] = useState<boolean>(false); // после «review» показываем StepNav на всех экранах
+
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [sizeResult, setSizeResult] = useState<any>(null);
   const [engraving, setEngraving] = useState<any>(null);
@@ -131,6 +134,7 @@ export default function App() {
   const [editorState, setEditorState] = useState<any>(null);
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
+  // Восстановление прогресса
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -144,21 +148,27 @@ export default function App() {
         setDecor(p.decor ?? {});
         setEditorState(p.editorState ?? null);
         setEditorBackState(p.editorBackState ?? null);
+        // восстанавливаем «разблокирована навигация» либо из флага, либо если сохранённый шаг уже был «review/done»
+        setNavUnlocked(Boolean(p.navUnlocked) || p.step === 'review' || p.step === 'done');
       }
     } catch {}
   }, []);
 
+  // Синхронизация c URL при входе
   useEffect(() => {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
     setStep(s);
+    if (s === 'review' || s === 'done') setNavUnlocked(true);
   }, []);
 
+  // Слушаем back/forward
   useEffect(() => {
     const onChange = () => {
       const id = getStepIdFromLocation();
       const s = localStepFromId(id);
       setStep(s);
+      if (s === 'review' || s === 'done') setNavUnlocked(true);
     };
     window.addEventListener('hashchange', onChange);
     window.addEventListener('popstate', onChange);
@@ -168,6 +178,7 @@ export default function App() {
     };
   }, []);
 
+  // Сохранение прогресса (включая флаг navUnlocked)
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -179,12 +190,14 @@ export default function App() {
           engraving,
           decor,
           editorState,
-          editorBackState
+          editorBackState,
+          navUnlocked
         })
       );
     } catch {}
-  }, [step, selectedItem, sizeResult, engraving, decor, editorState, editorBackState]);
+  }, [step, selectedItem, sizeResult, engraving, decor, editorState, editorBackState, navUnlocked]);
 
+  // Guards
   useEffect(() => {
     if (!selectedItem && step !== 'start') { setStep('start'); return; }
     if (step !== 'start' && !sizeResult) { setStep('size'); return; }
@@ -194,6 +207,7 @@ export default function App() {
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
+  // Прокрутка вверх
   useLayoutEffect(() => {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
@@ -201,14 +215,16 @@ export default function App() {
     return () => { clearTimeout(t0); clearTimeout(t1); };
   }, [step]);
 
+  // Синхронизация hash с локальным шагом
   useEffect(() => {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
-    if (window.location.hash !== need) {
-      setHashForStep(id, true);
-    }
+    if (window.location.hash !== need) setHashForStep(id, true);
+    // Разблокировать навигацию после входа на «review»/«done»
+    if (step === 'review' || step === 'done') setNavUnlocked(true);
   }, [step]);
 
+  // Переход из StepNav
   const handleNavSelect = (_idx: number, id: string) => {
     const s = localStepFromId(id as StepId);
     setStep(s);
@@ -256,6 +272,7 @@ export default function App() {
     setDecor({});
     setEditorState(null);
     setEditorBackState(null);
+    setNavUnlocked(false); // сброс разблокированной навигации
     setStep('start');
   };
 
@@ -263,10 +280,9 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0f0f12', color: '#fff', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
-      {/* ВАЖНО:
-         - Панель StepNav НЕ липкая (sticky={false}).
-         - Показываем ТОЛЬКО на шаге подтверждения (review). */}
-      {step === 'review' && (
+      {/* Глобальная навигация по шагам — НЕ липкая.
+         Появляется на всех экранах ПОСЛЕ того, как пользователь дошёл до шага подтверждения (review). */}
+      {navUnlocked && (
         <StepNav
           steps={NAV_STEPS}
           currentId={currentWizardId}

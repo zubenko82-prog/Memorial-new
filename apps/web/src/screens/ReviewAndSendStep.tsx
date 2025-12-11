@@ -15,7 +15,7 @@
 // - Все добавленные элементы (превью, списки и т.д.) выше силуэта (над силуэтом).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import StepNav from "../components/StepNav";
+
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
