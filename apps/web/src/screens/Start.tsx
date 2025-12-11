@@ -1,12 +1,7 @@
 // src/screens/Start.tsx
 // Стартовый экран каталога «Резьба».
-// «Знакомство» (контактные данные) показывается ТОЛЬКО после клика «Подтвердить».
-// Если валидные контакты уже сохранены — «знакомство» не спрашиваем, а при подтверждении фиксируем (lock=true) и назначаем номер заказа.
-// Эффекты: плавное раскрытие «знакомства», лист-предпросмотр с fade, картинка по центру и остаётся видимой
-// (уменьшается до 18vh при открытой форме). Кнопки подтверждения всегда видимы и не «выпадают» за нижнюю границу,
-// в том числе в Telegram Web App: учитываем safe-area и var(--tg-viewport-inset-bottom).
-//
-// FIX: увеличили высоту всплывающего окна до 98svh, чтобы на телефонах в Telegram влезал «Альтернативный способ связи».
+// ВАЖНО: Глобальную StepNav больше не рендерим здесь (она рендерится в App.tsx).
+// Внутренняя навигация по категориям — липкая (sticky) как раньше.
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -294,7 +289,6 @@ function PreviewBottomSheet({
           bottom: 0,
           zIndex: 2147483601,
           width: "100%",
-          // Увеличили высоту на мобильных: до 98svh (было 90svh)
           height: "clamp(560px, 98svh, 1000px)",
           padding: 12,
           paddingBottom: bottomInset,
@@ -431,9 +425,6 @@ function PreviewBottomSheet({
                       style={{ ...inputStyle(), resize: "vertical" }}
                     />
                   </label>
-
-                  {/* ВНИМАНИЕ: внутренних кнопок здесь нет.
-                      Кнопки «Назад/Продолжить» вынесены в нижнюю фиксированную панель. */}
                 </form>
               </section>
             )}
@@ -603,20 +594,21 @@ export default function Start({
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
 
-      {/* Липкая панель навигации по категориям */}
+      {/* Липкая панель навигации по категориям (sticky как раньше) */}
       {cats && cats.length > 0 && (
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: 0,
+            top: 0, // липко относительно скролл-контейнера App
             zIndex: 50,
             paddingTop: "env(safe-area-inset-top)",
             ...glassPanelStyle(),
             borderRadius: 0,
             borderLeft: "none",
             borderRight: "none",
-            marginBottom: 10
+            marginBottom: 10,
+            transform: "translateZ(0)" // iOS/Safari fix внутри overflow контейнера
           }}
         >
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px", overflow: "hidden" }}>
@@ -659,6 +651,7 @@ export default function Start({
               key={`cat-${catId}`}
               style={{
                 paddingTop: 2,
+                // Учитываем высоту липкой панели при переходе к секции
                 scrollMarginTop: `${navH + 14}px`
               }}
             >
