@@ -680,13 +680,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   };
 
   return (
-    <div style={{ color: "#fff", padding: 12, maxWidth: 980, margin: "0 auto", display: "grid", gap: 12 }}>
-      {/* Навигация */}
-      <div style={{ position: "sticky", top: "calc(env(safe-area-inset-top, 0px))", zIndex: 50 }}>
-        <StepNav active="review" />
-      </div>
-
-      {/* Подсказка */}
+          {/* Подсказка */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
         гравировки перейдите на соответствующий шаг, используйте навигацию вверху. Когда всё верно — нажмите «Отправить заказ».

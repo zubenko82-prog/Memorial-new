@@ -1,14 +1,13 @@
 // src/components/StepNav.tsx
-// Компактная навигация по шагам (липкая сверху).
+// Компактная навигация по шагам (без липкости по умолчанию).
 // Фиксы:
 // - Убрали шаг «Доп. элементы» из списка по умолчанию.
 // - Корректно определяем текущий шаг из props (current/currentId/activeId/active) ИЛИ из адреса (hash, pathname, ?step).
 // - Навигация работает: если onSelect не передан — срабатывает обычный переход по href.
-// - Добавлен липкий режим (sticky=true по умолчанию), чтобы панель всегда была вверху экрана на каждом шаге.
+// - Липкий режим теперь опциональный (sticky=false по умолчанию). Для глобальной панели используем не-липкий режим.
 //
 // Как использовать:
-//   <StepNav />  — достаточно поместить в самый верх каждого экрана шага.
-//   Можно принудительно указать активный шаг: <StepNav currentId="rear" /> или <StepNav current={6} />
+//   <StepNav steps={...} currentId="rear" /> или <StepNav current={6} />
 //   Для собственного роутера: передайте linkForId={(id)=>`/wizard/${id}`} или onSelect.
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -27,8 +26,8 @@ export type StepNavProps = {
   linkForId?: (id: string) => string; // например: (id)=>`/wizard/${id}` или `#/${id}`
   // Подпись
   hint?: string;
-  // Липкое позиционирование
-  sticky?: boolean;    // по умолчанию — true
+  // Липкое позиционирование (по умолчанию — выкл.)
+  sticky?: boolean;    // default: false
 };
 
 // Без «extras»
@@ -78,7 +77,6 @@ function detectIdFromLocation(stepIds: string[]): string | null {
   // 1) hash: #/wizard/:id или #/:id
   const hash = (window.location.hash || "").replace(/^#/, "");
   const hashParts = hash.split(/[/?#]/).filter(Boolean);
-  // ищем любой известный id в hash
   for (let i = hashParts.length - 1; i >= 0; i--) {
     const token = decodeURIComponent(hashParts[i]);
     if (stepIds.includes(token)) return token;
@@ -108,7 +106,7 @@ export default function StepNav({
   onSelect,
   hint,
   linkForId,
-  sticky = true
+  sticky = false // по умолчанию НЕ липкая
 }: StepNavProps) {
   const ids = useMemo(() => steps.map(s => s.id), [steps]);
 
@@ -199,12 +197,9 @@ export default function StepNav({
                 if (onSelect) {
                   e.preventDefault();
                   onSelect(idx, s.id);
-                  // Родитель сам выполнит навигацию и на новом экране StepNav тоже будет вверху (sticky=true).
                 } else {
-                  // Даем браузеру перейти по href. Дополнительно синхронизируем состояние (для SPA без роутера)
-                  // чтобы сразу визуально обновить подсветку:
+                  // Даем браузеру перейти по href; для мгновенной подсветки обновим локально
                   setCurIndex(idx);
-                  // Если это hash-маршрут — обновится hashchange; если linkForId — сработает переход.
                 }
               }}
               style={{
