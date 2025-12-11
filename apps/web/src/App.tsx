@@ -1,10 +1,8 @@
 // src/App.tsx
-// Надёжная навигация по шагам через hash + единый StepNav сверху.
-// - Используем ваш список шагов из src/wizard/steps.ts (без «extras», т.к. такого шага в этом мастере нет).
-// - Синхронизируем локальные шаги (start/size/inscription/...) c wizard-идентификаторами (item/params/persons/...).
-// - Слушаем hashchange/popstate и меняем экран.
-// - При смене шага из кода — обновляем hash (#/wizard/:id).
-// - StepNav всегда наверху (кроме экрана «done»), переходы программные (не зависят от браузерного <a>).
+// Изменения:
+// - Панель StepNav больше НЕ липкая (sticky={false}).
+// - Показываем StepNav ТОЛЬКО на шаге подтверждения (review).
+// - За счёт этого не дублируется навигация (её не будет внутри экранов, например ReviewAndSendStep).
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -16,7 +14,6 @@ import EditorStep from './screens/EditorStep';
 import BackEditorStep from './screens/BackEditorStep';
 import ReviewAndSendStep from './screens/ReviewAndSendStep';
 
-// === ВСТАВЛЕНО: StepNav + список шагов ===
 import StepNav from './components/StepNav';
 import { STEPS, type StepId } from './wizard/steps';
 
@@ -54,7 +51,6 @@ function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
   } as React.CSSProperties;
 }
 
-// Прокрутка к началу при смене шага
 function forceScrollTop() {
   try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); } catch {}
   try { (document.scrollingElement as any).scrollTop = 0; } catch {}
@@ -62,9 +58,8 @@ function forceScrollTop() {
   try { (document.body as any).scrollTop = 0; } catch {}
 }
 
-// === ВСТАВЛЕНО: утилиты для hash‑роутинга и маппинг шагов ===
-const NAV_STEPS = STEPS.filter(s => s.id !== 'extras'); // «Доп. элементы» в этом мастере отсутствуют
-
+// Используем STEPS (без extras) для панели
+const NAV_STEPS = STEPS.filter(s => s.id !== 'extras');
 const STEP_IDS = NAV_STEPS.map(s => s.id);
 const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
@@ -77,7 +72,6 @@ const localStepFromId = (id: StepId): Step => {
     case 'epitaph': return 'epitaph';
     case 'editor':  return 'editor';
     case 'rear':    return 'editorBack';
-    // «extras» не используем → отправим на «review»
     case 'extras':  return 'review';
     case 'finish':  return 'review';
     default:        return 'start';
@@ -100,27 +94,23 @@ const idFromLocalStep = (s: Step): StepId => {
 
 function getStepIdFromLocation(win: Window = window): StepId {
   try {
-    // 1) hash: #/wizard/:id или #/:id
     const hash = (win.location.hash || '').replace(/^#/, '');
     const hparts = hash.split(/[/?#]/).filter(Boolean);
     for (let i = hparts.length - 1; i >= 0; i--) {
       const token = decodeURIComponent(hparts[i]);
       if (isStepId(token)) return token as StepId;
     }
-    // 2) pathname: /wizard/:id или /:id
     const pparts = (win.location.pathname || '').split('/').filter(Boolean);
     for (let i = pparts.length - 1; i >= 0; i--) {
       const token = decodeURIComponent(pparts[i]);
       if (isStepId(token)) return token as StepId;
     }
-    // 3) ?step=id
     const sp = new URLSearchParams(win.location.search);
     const q = sp.get('step');
     if (q && isStepId(q)) return q as StepId;
   } catch {}
   return 'item';
 }
-
 function setHashForStep(id: StepId, replace = false) {
   const hash = `#/wizard/${encodeURIComponent(id)}`;
   if (replace) {
@@ -137,11 +127,10 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [sizeResult, setSizeResult] = useState<any>(null);
   const [engraving, setEngraving] = useState<any>(null);
-  const [decor, setDecor] = useState<any>({}); // { graphics:[], epitaphs:[] }
+  const [decor, setDecor] = useState<any>({});
   const [editorState, setEditorState] = useState<any>(null);
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // Восстановление прогресса (локально)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -159,15 +148,12 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Синхронизация с адресной строкой — вход по прямой ссылке
   useEffect(() => {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
-    // Если в локальном сторе уже что-то иное — локальный guards ниже откорректируют
     setStep(s);
   }, []);
 
-  // Слушаем hashchange/popstate — навигация со StepNav/back/forward
   useEffect(() => {
     const onChange = () => {
       const id = getStepIdFromLocation();
@@ -182,7 +168,6 @@ export default function App() {
     };
   }, []);
 
-  // Сохранение прогресса
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -200,9 +185,7 @@ export default function App() {
     } catch {}
   }, [step, selectedItem, sizeResult, engraving, decor, editorState, editorBackState]);
 
-  // Мини-контроль последовательности (guards)
   useEffect(() => {
-    // Пре-регулирование: если перешли на недоступный шаг — мягко вернём на ближайший допустимый
     if (!selectedItem && step !== 'start') { setStep('start'); return; }
     if (step !== 'start' && !sizeResult) { setStep('size'); return; }
     if ((step === 'graphics' || step === 'epitaph' || step === 'editor' || step === 'editorBack' || step === 'review') && !engraving) {
@@ -211,7 +194,6 @@ export default function App() {
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
-  // Скролл к началу на каждом шаге
   useLayoutEffect(() => {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
@@ -219,25 +201,21 @@ export default function App() {
     return () => { clearTimeout(t0); clearTimeout(t1); };
   }, [step]);
 
-  // ВСТАВЛЕНО: При смене шага — обновляем hash (чтобы StepNav и адрес синхронизировались).
   useEffect(() => {
     const id = idFromLocalStep(step);
-    // Если хэш уже соответствует — не трогаем историю.
     const need = `#/wizard/${encodeURIComponent(id)}`;
     if (window.location.hash !== need) {
       setHashForStep(id, true);
     }
   }, [step]);
 
-  // Переход из StepNav (программно)
   const handleNavSelect = (_idx: number, id: string) => {
-    if (!isStepId(id)) return;
-    const s = localStepFromId(id);
-    setStep(s); // guards скорректируют, если что-то не готово
-    setHashForStep(id as StepId); // синхронно обновим адрес
+    const s = localStepFromId(id as StepId);
+    setStep(s);
+    setHashForStep(id as StepId);
   };
 
-  // Навигация и колбэки шагов (как было)
+  // Колбэки шагов
   const onStartConfirm = (item: any) => { setSelectedItem(item); setStep('size'); };
 
   const onSizeBack = () => setStep('start');
@@ -255,31 +233,18 @@ export default function App() {
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
   const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editor'); };
 
-  // Редактор (лицевая)
   const onEditorBack = () => setStep('epitaph');
   const onEditorSave = (payload: any) => setEditorState(payload);
-  const onSendOrder = (payload: any) => { // «Продолжить» с лицевой стороны
-    try { console.log('[App] Continue from Editor -> editorBack'); } catch {}
-    setEditorState(payload);
-    setStep('editorBack');
-  };
+  const onSendOrder = (payload: any) => { setEditorState(payload); setStep('editorBack'); };
   const onGenerateSketch = (payload: any) => {
     console.log('Генерация эскиза (заглушка):', payload);
     alert('Генерация эскиза будет подключена позже.');
   };
-  const onRearSide = (payload: any) => {
-    setEditorState(payload);
-    setStep('editorBack');
-  };
+  const onRearSide = (payload: any) => { setEditorState(payload); setStep('editorBack'); };
 
-  // Редактор (тыльная)
-  const onBackEditorBack = () => setStep('editor'); // назад на лицевую
-  const onBackEditorDone = (payload: any) => {
-    setEditorBackState(payload);
-    setStep('review'); // перейти на шаг «Обзор и подтверждение»
-  };
+  const onBackEditorBack = () => setStep('editor');
+  const onBackEditorDone = (payload: any) => { setEditorBackState(payload); setStep('review'); };
 
-  // ReviewAndSend
   const onReviewBack = () => setStep('editorBack');
   const onReviewSend = () => setStep('done');
 
@@ -294,17 +259,19 @@ export default function App() {
     setStep('start');
   };
 
-  // currentId для StepNav (мапим наш локальный step в wizard:id)
   const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
 
   return (
     <div style={{ minHeight: '100vh', background: '#0f0f12', color: '#fff', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
-      {/* StepNav всегда вверху (кроме экрана «done»). Передаём список из wizard/steps без extras. */}
-      {step !== 'done' && (
+      {/* ВАЖНО:
+         - Панель StepNav НЕ липкая (sticky={false}).
+         - Показываем ТОЛЬКО на шаге подтверждения (review). */}
+      {step === 'review' && (
         <StepNav
           steps={NAV_STEPS}
           currentId={currentWizardId}
           onSelect={handleNavSelect}
+          sticky={false}
         />
       )}
 
@@ -390,7 +357,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Фолбек на случай неизвестного шага */}
         {!['start','size','inscription','graphics','epitaph','editor','editorBack','review','done'].includes(step) && (
           <div style={{ padding: 16 }}>
             <h3>Неизвестный шаг: {String(step)}</h3>
