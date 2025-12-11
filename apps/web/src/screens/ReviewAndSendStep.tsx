@@ -1075,8 +1075,7 @@ function PlateBlock(props: {
               )}
             </div>
           )}
-        </>
-      )}
+        )}
     </div>
   );
 }

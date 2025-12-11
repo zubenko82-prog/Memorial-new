@@ -282,14 +282,15 @@ export default function App() {
     <div style={{ minHeight: '100vh', background: '#0f0f12', color: '#fff', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
       {/* Глобальная навигация по шагам — НЕ липкая.
          Появляется на всех экранах ПОСЛЕ того, как пользователь дошёл до шага подтверждения (review). */}
-      {navUnlocked && (
-        <StepNav
-          steps={NAV_STEPS}
-          currentId={currentWizardId}
-          onSelect={handleNavSelect}
-          sticky={false}
-        />
-      )}
+      {step !== 'done' && (
+  <StepNav
+    steps={NAV_STEPS}          // STEPS без 'extras'
+    currentId={currentWizardId}
+    onSelect={handleNavSelect}
+    sticky={false}             // панель НЕ липкая
+    // enabled не передаём — StepNav сам активируется на finish и запомнит флаг
+  />
+)}
 
       <div style={{ minHeight: 0, overflow: 'auto' }}>
         {step === 'start' && <Start onConfirm={onStartConfirm} />}
