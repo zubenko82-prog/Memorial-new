@@ -890,7 +890,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1075,8 +1075,7 @@ function PlateBlock(props: {
               )}
             </div>
           )}
+        </div>
         </>
-      )}
-    </div>
   );
 }
