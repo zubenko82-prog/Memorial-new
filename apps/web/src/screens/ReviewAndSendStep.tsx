@@ -1,16 +1,15 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Что исправили/добавили по задаче:
-// - Лайв‑обновление драфта: превью сторон подтягиваются по событиям (лицевое больше не показывает «Нет», если появилось позже).
-// - Тыльная: силуэт теперь гарантированно НАД градиентом и ПОД превью (больше не перекрывается градиентом).
-// - Лицевая: силуэт отключён (убран «сплошной, неотзеркаленный контур» под превью в Telegram).
-// - «Если превью отсутствует» — выводим «Нет».
-// - Тумба по умолчанию включена (если не было явного значения), сохраняется в extras.
-// - Эпитафии в раскрывающемся списке грузим из src/data/epitaphs.js (быстрый выбор + группы).
-// - Аккордеон «Графика на надгробной плите» стал заметнее (крупнее заголовок, иконка, рамка, тень).
-// - В «Выбрано для плиты» теперь гарантировано видны миниатюры (ищем превью в метаданных и каталоге).
-// - Миниатюры вписаны (object-fit: contain, внутренние отступы, ничего не уходит под рамку).
+// Обновления по запросу:
+// - Убраны пиктограммы (эмодзи) из заголовков графики.
+// - В галерее: клик по миниатюре сразу добавляет изображение (+ оставлены кнопки +/-).
+// - Тыльный эскиз: силуэт (контур) гарантированно виден — над градиентом и под превью (есть fallback при отсутствии поддержки mask-image).
+// - Блок «Усопшие» на тыльной стороне скрываем, если людей там нет.
+// - Миниатюры: переработана вёрстка — высокие не обрезаются, широкие не выглядят чрезмерно мелкими.
+// - В блоке «Надгробная плита»: отделили размеры/толщину/ориентацию горизонтальной линией от эпитафий.
+// - «Все эпитафии» импортируются из src/data/epitaphs.js (быстрый выбор + разворачиваемый список).
+// - Лайв‑обновление драфта (превью больше не «Нет», если отрендерились позже).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -66,6 +65,10 @@ const sectionBox: React.CSSProperties = {
   borderRadius: 10,
   padding: 10
 };
+const dividerLine: React.CSSProperties = {
+  borderTop: "1px solid rgba(255,255,255,0.12)",
+  margin: "10px 0"
+};
 function chip(txt: string) {
   return (
     <span
@@ -111,25 +114,16 @@ function orientationLabelShort(o?: string) {
 type EpitaphGroup = { title: string; items: string[] };
 async function loadEpitaphData(): Promise<{ quick: string[]; groups: EpitaphGroup[] }> {
   try {
-    // Динамический импорт, чтобы не ломать сборку, если модуль отсутствует в момент разработки
     const mod: any = await import("../data/epitaphs.js");
     const quick: string[] = (mod.quickEpitaphs || mod.quick || []).filter(Boolean);
     const groupsRaw: any[] = (mod.epitaphGroups || mod.groups || []);
     const groups: EpitaphGroup[] = groupsRaw
       .map((g) => ({ title: String(g.title || ""), items: Array.isArray(g.items) ? g.items.filter(Boolean) : [] }))
       .filter((g) => g.title && g.items.length);
-    if (quick.length || groups.length) return { quick, groups };
+    return { quick, groups };
   } catch {
-    /* ignore */
+    return { quick: [], groups: [] };
   }
-  // Фолбэк на случай отсутствия файла
-  return {
-    quick: ["Помним, любим, скорбим…", "Светлая память", "Вечная память"],
-    groups: [
-      { title: "Классические", items: ["Память о тебе будет жить в наших сердцах", "Ты навсегда с нами"] },
-      { title: "Короткие", items: ["Любим. Помним. Скорбим.", "Светлая память"] }
-    ]
-  };
 }
 
 function TagButton({ text, onClick }: { text: string; onClick: () => void }) {
@@ -207,7 +201,18 @@ function EpitaphQuickPicker({
   );
 }
 
-/* ===== Подложка: градиент (низ) + силуэт (середина) ===== */
+/* ===== Подложка: градиент (низ) + силуэт (середина, видимый) ===== */
+function supportsMask(): boolean {
+  try {
+    // @ts-ignore
+    if (typeof CSS !== "undefined" && CSS.supports) {
+      // Наличие любой из масок считается достаточным
+      // @ts-ignore
+      return CSS.supports("mask-image", "url(\"\")") || CSS.supports("-webkit-mask-image", "url(\"\")");
+    }
+  } catch {}
+  return false;
+}
 function Underlay({
   itemUrl,
   mirror = false,
@@ -218,6 +223,7 @@ function Underlay({
   showSilhouette?: boolean;
 }) {
   const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
+  const canMask = supportsMask();
 
   return (
     <div
@@ -229,7 +235,7 @@ function Underlay({
         overflow: "hidden"
       }}
     >
-      {/* Градиент — САМЫЙ НИЖНИЙ слой */}
+      {/* Градиент — НИЖНИЙ слой */}
       <div
         style={{
           position: "absolute",
@@ -239,9 +245,9 @@ function Underlay({
           zIndex: 0
         }}
       />
-      {/* Силуэт — СРЕДНИЙ слой (выше градиента), ТОЛЬКО если showSilhouette */}
+      {/* Силуэт — СРЕДНИЙ слой (над градиентом), всегда, если showSilhouette */}
       {showSilhouette && itemUrl && (
-        isPng ? (
+        isPng && canMask ? (
           <div
             style={{
               position: "absolute",
@@ -282,12 +288,11 @@ function Underlay({
           />
         )
       )}
-      {/* Превью лежит ВЫШЕ (zIndex: 2) — см. SidePreview */}
     </div>
   );
 }
 
-/* ===== Яркий аккордеон (для графики плиты) ===== */
+/* ===== Выразительный аккордеон (без пиктограмм) ===== */
 function LoudAccordion({
   title,
   open,
@@ -340,10 +345,7 @@ function LoudAccordion({
           letterSpacing: 0.2
         }}
       >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <span aria-hidden>🎨</span>
-          <span>{title}</span>
-        </span>
+        <span>{title}</span>
         <span aria-hidden>{open ? "▾" : "▸"}</span>
       </button>
       <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
@@ -353,20 +355,28 @@ function LoudAccordion({
   );
 }
 
-/* ===== Generic thumb (c padding, fully contained) ===== */
-const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?: number }) => (
+/* ===== Универсальная миниатюра (без обрезаний, под центр) ===== */
+const Thumb = ({
+  url,
+  alt = "",
+  size = 60
+}: {
+  url?: string;
+  alt?: string;
+  size?: number;
+}) => (
   <div
     style={{
+      width: size,
+      height: size,
       borderRadius: 10,
       border: "1px solid rgba(255,255,255,0.18)",
       background: "rgba(255,255,255,0.04)",
-      width: size,
-      height: size,
-      display: "grid",
-      placeItems: "center",
-      boxSizing: "border-box",
-      padding: 6,
-      overflow: "hidden"
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+      boxSizing: "border-box"
     }}
   >
     {url ? (
@@ -374,9 +384,10 @@ const Thumb = ({ url, alt = "", size = 56 }: { url?: string; alt?: string; size?
         src={url}
         alt={alt}
         style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
+          maxWidth: "100%",
+          maxHeight: "100%",
+          width: "auto",
+          height: "auto",
           display: "block"
         }}
       />
@@ -404,36 +415,46 @@ function CatGrid({
         const gid = String(g.id || g.relPath || g.url || g.name || idx);
         const qty = plateIds.filter((x) => x === gid).length;
         const thumbUrl = g.preview || g.url || "";
+        const name = g.name || gid;
         return (
           <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 12 }}>
             <div
+              role="button"
+              title={name}
+              onClick={() => addGraphic(g)}
               style={{
                 borderRadius: 10,
                 overflow: "hidden",
                 background: "rgba(255,255,255,0.04)",
                 aspectRatio: "1/1",
-                display: "grid",
-                placeItems: "center",
-                boxSizing: "border-box",
-                padding: 8,
-                border: "1px solid rgba(255,255,255,0.12)"
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid rgba(255,255,255,0.12)",
+                cursor: "pointer"
               }}
             >
               {thumbUrl ? (
                 <img
                   src={thumbUrl}
-                  alt={g.name || gid}
-                  style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                  alt={name}
+                  style={{
+                    maxWidth: "90%",
+                    maxHeight: "90%",
+                    width: "auto",
+                    height: "auto",
+                    display: "block"
+                  }}
                 />
               ) : (
                 <div style={{ ...smallText() }}>нет</div>
               )}
             </div>
             <div
-              title={g.name || gid}
+              title={name}
               style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}
             >
-              {g.name || gid}
+              {name}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
               <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
@@ -476,9 +497,9 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Градиент + (опц.) стела-силуэт */}
+        {/* Градиент + (опц.) силуэт (над градиентом) */}
         <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette={showSilhouette} />
-        {/* Превью ВСЕГДА выше подложки */}
+        {/* Превью — САМЫЙ ВЕРХНИЙ слой */}
         {hasPreview ? (
           <img
             src={miniUrl!}
@@ -523,7 +544,6 @@ function EditableOrderSummary() {
   const [contactNotes, setContactNotes] = useState<string>(introState.intro?.customerNotes || "");
   const [sizeNotes, setSizeNotes] = useState<string>(draft?.size?.notes || "");
 
-  // Лайв‑подписка на обновления драфта
   useEffect(() => {
     const onUpd = () => setDraft(loadOrderDraft());
     window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
@@ -586,9 +606,9 @@ function EditableOrderSummary() {
               width: 96,
               height: 96,
               overflow: "hidden",
-              display: "grid",
-              placeItems: "center",
-              padding: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               boxSizing: "border-box"
             }}
           >
@@ -596,7 +616,7 @@ function EditableOrderSummary() {
               <img
                 src={draft.item.url}
                 alt=""
-                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }}
                 draggable={false}
               />
             ) : null}
@@ -636,7 +656,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const intro = loadIntroState();
 
-  // Лайв‑подписка на внешние обновления (в т.ч. превью сторон)
   useEffect(() => {
     const onUpd = () => setDraft(loadOrderDraft());
     window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
@@ -661,7 +680,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Hi-Res, затем обычное
   const frontMini = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
   const backMini = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
@@ -723,7 +741,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   /* ——— Дополнительно ——— */
   const initialExtras = (draft as any)?.extras || {};
-  // Тумба по умолчанию — если ранее не установлено, включаем
   const initialBase = (initialExtras.base === undefined || initialExtras.base === null) ? true : !!initialExtras.base;
   const [extraBase, setExtraBase] = useState<boolean>(initialBase);
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
@@ -739,7 +756,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
   const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
 
-  const [plateOpen, setPlateOpen] = useState<boolean>(true); // делаем заметнее — открыто по умолчанию
+  const [plateOpen, setPlateOpen] = useState<boolean>(true);
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -747,7 +764,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
   const chosenPlateList = useMemo(() => {
-    // Поднимаем метаданные: если нет превью, поищем в cats
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
       const collect = (arr: any[]) => {
@@ -757,8 +773,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           if (!index[id]) index[id] = {
             id,
             name: it.name || id,
-            url: it.url || it.preview || "",
-            preview: it.preview || it.url || ""
+            url: it.preview || it.url || ""
           };
         });
       };
@@ -767,13 +782,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
     const uniq = Array.from(new Set(plateIds));
     return uniq.map((gid) => {
-      const meta = plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "", preview: "" };
-      const url = meta.preview || meta.url || "";
-      return { id: gid, name: meta.name || gid, url };
+      const meta = plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "" };
+      return { id: gid, name: meta.name || gid, url: meta.url || "" };
     });
   }, [plateIds, plateMeta, cats]);
 
-  // Загрузка каталога (для выбора и для выбранного списка)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -814,7 +827,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setPlateIds(next);
     setPlateMeta((m) => ({
       ...m,
-      [gid]: { id: gid, name: g.name || gid, url: g.url || g.preview || "", preview: g.preview || g.url || "" }
+      [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" }
     }));
   };
   const removePlateGraphic = (gid: string) => {
@@ -831,7 +844,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setPlateEpitaph("");
   };
 
-  // Сохраняем extras на любые изменения (включая дефолт тумбы)
   useEffect(() => {
     const prev = loadOrderDraft();
     const extras: any = {
@@ -847,7 +859,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       plateGraphicsMeta: extraPlate ? plateMeta : undefined
     };
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-    // локально тоже обновим, чтобы отрисовать сразу
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
@@ -922,7 +933,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   const fio2 = [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
                   const dates = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
                   return (
-                    <div key={p.id || `fp-${idx}`} style={{ display: "grid", gridTemplateColumns: (p.photoPreview ? "56px 1fr" : "1fr"), gap: 8, alignItems: "center" }}>
+                    <div key={p.id || `fp-${idx}`} style={{ display: "grid", gridTemplateColumns: (p.photoPreview ? "60px 1fr" : "1fr"), gap: 8, alignItems: "center" }}>
                       {p.photoPreview && <Thumb url={p.photoPreview} />}
                       <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
                         {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
@@ -945,7 +956,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   const qty = id ? (frontCounts[id] || 0) : 0;
                   const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : id);
                   return (
-                    <div key={`fg-${id}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "56px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
+                    <div key={`fg-${id}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "60px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
                       {g.url && <Thumb url={g.url} />}
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
                       {qty > 1 && <div style={{ ...smallText() }}>×{qty}</div>}
@@ -981,6 +992,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
 
+          {/* Усопшие тыльной — показываем ТОЛЬКО если есть */}
           {rearPeople.length > 0 && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие</div>
@@ -990,7 +1002,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   const fio2 = [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
                   const dates = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
                   return (
-                    <div key={p.id || `rp-${idx}`} style={{ display: "grid", gridTemplateColumns: (p.photoPreview ? "56px 1fr" : "1fr"), gap: 8, alignItems: "center" }}>
+                    <div key={p.id || `rp-${idx}`} style={{ display: "grid", gridTemplateColumns: (p.photoPreview ? "60px 1fr" : "1fr"), gap: 8, alignItems: "center" }}>
                       {p.photoPreview && <Thumb url={p.photoPreview} />}
                       <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
                         {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
@@ -1013,7 +1025,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   const qty = rearCounts[gid] || 0;
                   const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : gid);
                   return (
-                    <div key={`rg-${gid}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "56px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
+                    <div key={`rg-${gid}`} style={{ display: "grid", gridTemplateColumns: (g.url ? "60px 1fr auto" : "1fr auto"), gap: 8, alignItems: "center" }}>
                       {g.url && <Thumb url={g.url} />}
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
                       {qty > 1 && <div style={{ ...smallText() }}>×{qty}</div>}
@@ -1049,7 +1061,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           {/* Лицевая — БЕЗ силуэта */}
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} showSilhouette={false} />
-          {/* Тыльная — с силуэтом, ОТЗЕРКАЛЕННАЯ */}
+          {/* Тыльная — с силуэтом, ОТЗЕРКАЛЕННАЯ (силуэт виден) */}
           <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} showSilhouette />
         </div>
       </section>
@@ -1071,7 +1083,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           </div>
         </div>
 
-        {/* Плита */}
         <PlateBlock
           extraPlate={extraPlate}
           setExtraPlate={setExtraPlate}
@@ -1211,6 +1222,9 @@ function PlateBlock(props: {
             </div>
           </div>
 
+          {/* Разделитель — отделяем размеры от эпитафий */}
+          <div style={dividerLine} />
+
           {/* Эпитафия плиты: быстрый выбор + список из файла */}
           <div>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
@@ -1224,7 +1238,7 @@ function PlateBlock(props: {
             />
           </div>
 
-          {/* Галерея по категориям — громкий аккордеон */}
+          {/* Галерея по категориям — яркий аккордеон (без пиктограмм) */}
           <LoudAccordion
             title="Графика на надгробной плите"
             open={plateOpen}
@@ -1271,14 +1285,14 @@ function PlateBlock(props: {
             )}
           </LoudAccordion>
 
-          {/* Выбрано для плиты — показываем миниатюры гарантированно */}
+          {/* Выбрано для плиты */}
           {(chosenPlateList.length > 0 || (plateEpitaph || "").trim()) && (
             <div style={{ ...sectionBox, marginTop: 8 }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
               {chosenPlateList.length > 0 && (
                 <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
                   {chosenPlateList.map((g, i) => (
-                    <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr auto", gap: 8, alignItems: "center" }}>
+                    <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
                       <Thumb url={g.url} />
                       <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
                       <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
