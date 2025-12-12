@@ -1,12 +1,15 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
 //
-// Исправлено:
-// - «Ориентацию» в характеристиках не показываем вовсе (убрано из рендера) — не будет расхождений при смене резной работы.
-// - На телефонах правая часть шапки (№ заявки + контакты) лучше ужимается: уменьшены шрифты, ужат maxWidth,
-//   гарантированно не наезжает на заголовок слева.
-// - При сохранении из шапки гарантированно не теряем «Усопших»: сохраняем engraving с глубоким merge от текущего драфта,
-//   явным сохранением persons (если они уже были добавлены на шагах).
+// Обновлено:
+// - Гарантированная синхронизация драфта и интро при ЛЮБОМ переходе/возврате/фокусе:
+//   слушаем: DRAFT_UPDATED_EVENT, 'memorial:orderDraftUpdated', 'storage', 'visibilitychange',
+//   'focus', 'pageshow', 'popstate', 'hashchange' и выполняем refreshAll().
+// - Интро (имя/телефон/примечание) теперь в state и тоже обновляется в refreshAll().
+// - При неактивном редактировании локальные поля синхронизируются из актуального draf/intros.
+// - После сохранений (saveAll/clear) форсим локальный бродкаст DRAFT_UPDATED_EVENT.
+//
+// Остальное — без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -256,9 +259,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
   const compact = useCompact(420);
 
-  const introState = loadIntroState();
-  const intro = introState.intro;
-  const orderNumber = introState.orderNumber || "—";
+  // ВАЖНО: интро теперь тоже в state (обновляем на каждом refreshAll)
+  const [introData, setIntroData] = useState(() => loadIntroState());
+  const intro = introData.intro;
+  const orderNumber = introData.orderNumber || "—";
+
   const [order, setOrder] = useState<OrderDraft>(() => loadOrderDraft());
 
   // Поля редактирования (редактируем «на месте»)
@@ -275,31 +280,83 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
   const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
 
-  // Live-обновления из драфта
-  useEffect(() => {
-    const onUpd = () => setOrder(loadOrderDraft());
-    window.addEventListener("storage", onUpd);
-    window.addEventListener("memorial:orderDraftUpdated", onUpd as any);
-    window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-    return () => {
-      window.removeEventListener("storage", onUpd);
-      window.removeEventListener("memorial:orderDraftUpdated", onUpd as any);
-      window.removeEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-    };
-  }, []);
+  // Единая синхронизация драфта/интро
+  const refreshAll = React.useCallback((opts?: { force?: boolean }) => {
+    // Загружаем актуальные данные из стора
+    const freshOrder = loadOrderDraft();
+    const freshIntroState = loadIntroState();
 
-  // Подтянуть стор при раскрытии
+    setOrder((prev) => {
+      // Обновляем state всегда, если объект изменился или принудительно
+      if (opts?.force || JSON.stringify(prev) !== JSON.stringify(freshOrder)) {
+        return freshOrder;
+      }
+      return prev;
+    });
+
+    setIntroData((prev) => {
+      if (opts?.force || JSON.stringify(prev) !== JSON.stringify(freshIntroState)) {
+        return freshIntroState;
+      }
+      return prev;
+    });
+
+    // Если не редактируем — синхронизируем локальные поля с актуальными данными
+    if (!editing) {
+      const i = freshIntroState.intro || {};
+      setName(i.customerName || "");
+      setPhone(i.customerPhone || "");
+      setContactNotes(i.customerNotes || "");
+
+      setSizeNotes(freshOrder.size?.notes || "");
+      setEpitaphsText(
+        (freshOrder.engraving?.epitaphs && freshOrder.engraving!.epitaphs!.join("\n")) ||
+          freshOrder.engraving?.epitaphText ||
+          ""
+      );
+      setOrderNotes(freshOrder.notes || "");
+      setFrontWishes((freshOrder as any)?.editor?.wishes || "");
+      setBackWishes((freshOrder as any)?.editorBack?.wishes || "");
+    }
+  }, [editing]);
+
+  // Подписки на ВСЕ ключевые сигналы: любое переключение шага/фокус/возврат ивентами
+  useEffect(() => {
+    const onAny = () => refreshAll();
+    const onVisible = () => { if (document.visibilityState === "visible") refreshAll(); };
+
+    window.addEventListener("storage", onAny);
+    window.addEventListener("memorial:orderDraftUpdated", onAny as any);
+    window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
+
+    window.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onAny);
+    window.addEventListener("pageshow", onAny as any);
+    window.addEventListener("popstate", onAny);
+    window.addEventListener("hashchange", onAny);
+
+    // Первичный принудительный рефреш (на всякий случай — после монтирования)
+    refreshAll({ force: true });
+
+    return () => {
+      window.removeEventListener("storage", onAny);
+      window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
+      window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
+
+      window.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onAny);
+      window.removeEventListener("pageshow", onAny as any);
+      window.removeEventListener("popstate", onAny);
+      window.removeEventListener("hashchange", onAny);
+    };
+  }, [refreshAll]);
+
+  // Подтянуть стор при раскрытии панели
   useEffect(() => {
     if (open) {
-      const cur = loadOrderDraft();
-      setOrder(cur);
-      setSizeNotes(cur.size?.notes || "");
-      setEpitaphsText(cur.engraving?.epitaphs?.join("\n") || cur.engraving?.epitaphText || "");
-      setOrderNotes(cur.notes || "");
-      setFrontWishes((cur as any)?.editor?.wishes || "");
-      setBackWishes((cur as any)?.editorBack?.wishes || "");
+      refreshAll({ force: true });
     }
-  }, [open]);
+  }, [open, refreshAll]);
 
   // Контакты в одну строку (отображение)
   const contactLine = useMemo(() => {
@@ -359,7 +416,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     (rearEpitaphs && rearEpitaphs.length > 0) ||
     (backWishes && backWishes.trim().length > 0);
 
-  // Сохранение: глубокий merge, с явным сохранением persons из текущего драфта (чтобы не потерять)
+  // Сохранение: глубокий merge + явная защита persons
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
     const introNext: Intro = {
@@ -375,7 +432,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       size: { ...(cur.size || {}), notes: sizeNotes?.trim() || undefined },
       engraving: {
         ...(cur.engraving || {}),
-        // гарантируем сохранение persons, если они присутствуют
         persons: (cur.engraving as any)?.persons || (order.engraving as any)?.persons,
         epitaphs: epLines.length ? epLines : undefined,
         epitaphText: epLines.length === 1 ? epLines[0] : undefined
@@ -387,6 +443,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     };
     const stored = saveOrderDraft(next);
     setOrder(stored);
+
+    // Форсируем локальный бродкаст, чтобы все шаги немедленно подтянулись
+    try {
+      window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+      window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+    } catch {}
   };
 
   const coll = useCollapse(open, 280);
@@ -430,10 +492,10 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           <span style={{ fontSize: compact ? 18 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
         </div>
 
-        {/* Справа — № + строка контактов (компактнее на телефонах) */}
+        {/* Справа — № + строка контактов */}
         <div style={{ display: "grid", gap: 3, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
           <div style={{ fontSize: compact ? 12 : 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
-          {!compact && contactLine && !editing && (
+          {!compact && (contactLine && !editing) && (
             <div
               style={{
                 fontSize: 13,
@@ -448,7 +510,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               {contactLine}
             </div>
           )}
-          {compact && contactLine && !editing && (
+          {compact && (contactLine && !editing) && (
             <div
               style={{
                 fontSize: 12,
@@ -456,7 +518,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                maxWidth: "56vw" // было 62vw — чуть ужали, чтобы точно влезало
+                maxWidth: "56vw"
               }}
               title={contactLine}
             >
@@ -490,7 +552,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </button>
           </div>
 
-          {/* Контакты — в компактном РЕДАКТИРОВАНИИ: с новой строки, ширина 100% */}
+          {/* Контакты */}
           {(editing || contactNotes.trim() || compact) && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Контакты</div>
@@ -521,7 +583,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </section>
           )}
 
-          {/* Резная работа: компакт — один столбец */}
+          {/* Резная работа */}
           <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Резная работа</div>
             <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 10, alignItems: "stretch" }}>
@@ -539,7 +601,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 </div>
               </div>
 
-              {/* Правая — характеристики (без «Ориентация») */}
+              {/* Правая — характеристики */}
               <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
                 <div style={{ fontWeight: 600 }}>Характеристики</div>
                 <div style={{ opacity: 0.95 }}>
@@ -564,7 +626,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </div>
           </section>
 
-          {/* Люди — показываем если есть на хотя бы одной стороне; компакт — один столбец */}
+          {/* Люди */}
           {(order.engraving?.persons?.length || 0) > 0 && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
@@ -612,7 +674,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
                         const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
                         const fio1 = (ppl.lastName || "").trim();
-                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+                        const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
                         const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
                         return (
                           <div key={ppl.id || `person-back-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : p.divider, display: "flex", alignItems: "center", gap: 10 }}>
@@ -636,7 +698,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </section>
           )}
 
-          {/* Элементы эскиза — показываем только если есть на хотя бы одной стороне; компакт — один столбец */}
+          {/* Элементы эскиза */}
           {(frontHasSketch || rearHasSketch) && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
@@ -767,6 +829,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 // сброс локальных полей
                 setName(""); setPhone(""); setContactNotes(""); setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
                 setFrontWishes(""); setBackWishes("");
+                // Сигнализируем всем шагам
+                try {
+                  window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+                  window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+                } catch {}
               }}
               style={linkButtonStyle(theme, "danger")}
               className="link-like"
