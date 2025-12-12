@@ -2,21 +2,20 @@
 // Редактор с нуля: точная раскладка по SketchTemplate, без мерцаний,
 // с сохранением прежнего функционала (DnD, resize, предпросмотр, пожелания).
 //
-// Дополнено:
-// - Надёжная синхронизация при переходах и внешних изменениях драфта:
-//   • Реконсиляция элементов (reconcileElements) при изменении людей/эпитафий/графики/шаблона,
-//     а также по сигналам focus/pageshow/visibilitychange/DRAFT_UPDATED_EVENT.
-//   • Удаляем «осиротевшие» рамки, добиваемся полноты состава (добавляем отсутствующие).
-//   • При смене состава (людей/эпитафий/графики/шаблона) — умное перестроение:
-//       частично: добавляем/удаляем без сдвига существующих,
-//       полностью: если структура сильно изменилась — перекладываем всё по шаблону.
-// - После реконсиляции сразу сохраняем в драфт и регенерируем превью.
+// Доработки по синхронизации:
+// - Полный рефреш драфта при любом переходе/фокусе/возврате: слушаем DRAFT_UPDATED_EVENT, storage,
+//   visibilitychange, focus, pageshow, popstate, hashchange и выполняем refreshFromDraft().
+// - Устраняем «пустые рамки»: при изменении состава данных (люди/эпитафии/графика) удаляем осиротевшие элементы.
+// - При структурных изменениях (добавили/удалили людей/эпитафии/графику/кресты или сменился шаблон) —
+//   пересобираем компоновку по шаблону с нуля, сохраняя пользовательские флаги (uppercase/italic/bw/flipH/staircase).
+// - При внешнем обновлении элементов в драфте — подхватываем и подчищаем, если есть осиротевшие.
+//
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
-// Шаблоны из компонента (с фолбэком на lib)
+// Шаблоны из компонента (если нет экспорта TEMPLATES — фолбэк на lib)
 import * as SketchComponent from "../components/SketchTemplate";
 import { SketchTemplates as LibTemplates } from "../lib/sketchTemplates";
 
@@ -58,7 +57,7 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number;
+  x: number; y: number; w: number; h: number; // проценты
   z: number;
   title?: string;
   locked?: boolean;
@@ -113,7 +112,7 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Measure helpers ===== */
+/* ===== Measuring helpers ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -131,8 +130,7 @@ function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: bool
 function fitStairRLMFontPx({
   lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
 }: {
-  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string;
-  padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
+  lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
 }): number {
   const ctx = getMeasureCtx();
   const usableW = Math.max(8, boxW - padX * 2);
@@ -241,6 +239,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
+  // Навигационные/сигнатурные рефы для детекции изменений
+  const lastDataSigRef = useRef<string>("");
+  const lastTemplateIdRef = useRef<string | null>(null);
+
+  // RAF DnD
   const rafMoveScheduled = useRef(false);
   const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
 
@@ -284,7 +287,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
   const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  // Шаблон: из компонента (фолбэк на lib)
+  // Шаблон из компонента (или lib)
   const TEMPLATE_POOL: SketchTemplate[] = useMemo(() => {
     const maybe = (SketchComponent as any).TEMPLATES as SketchTemplate[] | undefined;
     return maybe && Array.isArray(maybe) && maybe.length > 0 ? maybe : (LibTemplates as unknown as SketchTemplate[]);
@@ -294,33 +297,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return TEMPLATE_POOL.find(t => t.id === preferred) || TEMPLATE_POOL[0] || null;
   }, [peopleBlocks.length, TEMPLATE_POOL]);
 
-  /* ===== Помощники для ID/состава ===== */
-  const expectedIds = useMemo(() => {
-    const list: string[] = [];
-    peopleBlocks.forEach((p) => {
-      list.push(`portrait-${p.id}`);
-      list.push(`metric-${p.id}`);
-    });
-    for (let i = 0; i < epitaphs.length; i++) list.push(`epitaph-${i}`);
-    for (let i = 0; i < crosses.length; i++) list.push(`cross-${i}`);
-    for (let i = 0; i < others.length; i++) list.push(`graphic-${i}`);
-    return list;
-  }, [peopleBlocks, epitaphs, crosses, others]);
-
-  function idsEqual(a: string[], b: string[]) {
-    if (a.length !== b.length) return false;
-    const as = [...a].sort(); const bs = [...b].sort();
-    for (let i = 0; i < as.length; i++) if (as[i] !== bs[i]) return false;
-    return true;
-  }
-
-  /* ===== Построение геометрии по шаблону для всех ожидаемых элементов ===== */
-  const buildTemplateGeometry = React.useCallback((): Record<string, { x: number; y: number; w: number; h: number; z: number; type: ElType; title?: string; def?: Partial<EditorEl> }> => {
-    const geo: Record<string, any> = {};
-    if (!template) return geo;
+  // ——— Компоновка по шаблону: построить массив (с сохранением флагов по id)
+  const placeAllByTemplate = React.useCallback((prev: EditorEl[]): EditorEl[] => {
+    if (!template) return prev;
+    const existById = new Map(prev.map((e) => [e.id, e]));
+    const next: EditorEl[] = [];
     let z = 10;
 
-    // photo
+    // Портреты
     const photoSlots = slotsByType(template, "photo");
     const photoRectsNorm: Norm[] =
       photoSlots.length >= peopleBlocks.length
@@ -330,179 +314,230 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const id = `portrait-${pb.id}`;
       const rn = photoRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 10 + i * (80 / Math.max(1, peopleBlocks.length)), y: 18, w: 30, h: 36 };
-      geo[id] = { ...rect, z: z++, type: "portrait", title: "Портрет", def: { bw: true } };
+      const old = existById.get(id);
+      next.push({
+        id, type: "portrait", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: z++,
+        bw: old?.bw ?? true, title: "Портрет"
+      });
     });
 
-    // metric
+    // Метрика
     const nameSlots = slotsByType(template, "personName");
     const dateSlots = slotsByType(template, "dates");
-    peopleBlocks.forEach((pb, i) => {
-      const id = `metric-${pb.id}`;
+    const metricRectsNorm: Norm[] = peopleBlocks.map((_, i) => {
       const nm = (nameSlots.find(s => (s.index ?? 0) === i) || nameSlots[i])?.rect as Norm | undefined;
       const dt = (dateSlots.find(s => (s.index ?? 0) === i) || dateSlots[i])?.rect as Norm | undefined;
-      const u = unionNorm(nm, dt);
-      const rect = u ? toPct(u) : { x: 8 + i * (84 / Math.max(1, peopleBlocks.length)), y: 56, w: 36, h: 18 };
-      geo[id] = { ...rect, z: z++, type: "metric", title: "Метрика", def: { uppercase: true, italic: false } };
+      return unionNorm(nm, dt) || nm || dt;
+    });
+    peopleBlocks.forEach((pb, i) => {
+      const id = `metric-${pb.id}`;
+      const rn = metricRectsNorm[i];
+      const rect = rn ? toPct(rn) : { x: 8 + i * (84 / Math.max(1, peopleBlocks.length)), y: 56, w: 36, h: 18 };
+      const old = existById.get(id);
+      next.push({
+        id, type: "metric", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: z++,
+        uppercase: old?.uppercase ?? true, italic: old?.italic ?? false, title: "Метрика"
+      });
     });
 
-    // epitaph
+    // Эпитафии
     const epSlots = slotsByType(template, "epitaph");
-    const E = epitaphs.length;
-    let epRects: Norm[] = [];
-    if (E > 0) {
-      if (epSlots.length >= E) epRects = epSlots.slice(0, E).map(s => s.rect as Norm);
-      else if (epSlots.length === 1) epRects = partitionSlot(epSlots[0].rect as Norm, E, "v");
+    let epRectsNorm: Norm[] = [];
+    if (epitaphs.length > 0) {
+      if (epSlots.length >= epitaphs.length) epRectsNorm = epSlots.slice(0, epitaphs.length).map(s => s.rect as Norm);
+      else if (epSlots.length === 1) epRectsNorm = partitionSlot(epSlots[0].rect as Norm, epitaphs.length, "v");
     }
-    for (let i = 0; i < E; i++) {
+    epitaphs.forEach((txt, i) => {
       const id = `epitaph-${i}`;
-      const rn = epRects[i];
+      const rn = epRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 10, y: 78 + i * 10, w: 80, h: 12 };
-      const txt = epitaphs[i] || "";
-      geo[id] = { ...rect, z: 100 + i, type: "epitaph", title: "Эпитафия", def: { staircase: isRememberLoveMourn(txt) } };
-    }
+      const old = existById.get(id);
+      next.push({
+        id, type: "epitaph", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 100 + i,
+        uppercase: old?.uppercase ?? false, italic: old?.italic ?? false, staircase: old?.staircase ?? isRememberLoveMourn(txt),
+        title: "Эпитафия"
+      });
+    });
 
-    // cross
+    // Кресты
     const crossSlots = slotsByType(template, "cross");
     let crossRectsNorm: Norm[] = [];
     if (crosses.length > 0) {
       if (crossSlots.length >= crosses.length) crossRectsNorm = crossSlots.slice(0, crosses.length).map(s => s.rect as Norm);
       else if (crossSlots.length === 1) crossRectsNorm = partitionSlot(crossSlots[0].rect as Norm, crosses.length, "h");
     }
-    crosses.forEach((_, i) => {
+    for (let i = 0; i < crosses.length; i++) {
       const id = `cross-${i}`;
       const rn = crossRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 6 + i * 18, y: 5, w: 14, h: 14 };
-      geo[id] = { ...rect, z: 200 + i, type: "cross", title: "Крест" };
-    });
+      next.push({ id, type: "cross", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 200 + i, title: "Крест" });
+    }
 
-    // graphics
-    const decorRects = template.slots.filter(s => s.type === "decor" || s.type === "flower").map(s => s.rect as Norm);
-    let gfxRectsNorm: Norm[] = [];
-    if (decorRects.length >= others.length) gfxRectsNorm = decorRects.slice(0, others.length);
-    else if (decorRects.length === 1) gfxRectsNorm = partitionSlot(decorRects[0], others.length, "h");
-    others.forEach((_, i) => {
+    // Прочая графика (decor/flower → graphic)
+    const decorSlots = template.slots.filter(s => s.type === "decor" || s.type === "flower").map(s => s.rect as Norm);
+    const decorRectsNorm: Norm[] =
+      decorSlots.length >= others.length ? decorSlots.slice(0, others.length)
+        : (decorSlots.length === 1 ? partitionSlot(decorSlots[0], others.length, "h") : []);
+    for (let i = 0; i < others.length; i++) {
       const id = `graphic-${i}`;
-      const rn = gfxRectsNorm[i];
+      const rn = decorRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 12 + i * 22, y: 86, w: 20, h: 12 };
-      geo[id] = { ...rect, z: 300 + i, type: "graphic", title: "Графика" };
-    });
+      const old = existById.get(id);
+      next.push({
+        id, type: "graphic", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 300 + i,
+        flipH: old?.flipH ?? false, title: "Графика"
+      });
+    }
 
-    return geo;
+    return next;
   }, [template, peopleBlocks, epitaphs, crosses, others]);
 
-  /* ===== Реконсиляция элементов при изменениях / переходах ===== */
-  const reconcileElements = React.useCallback((reason: string = "auto") => {
-    if (!template) return;
+  // ——— Проверка и удаление «осиротевших» элементов (без данных)
+  const pruneOrphans = React.useCallback((els: EditorEl[]): EditorEl[] => {
+    const personIds = new Set(peopleBlocks.map(p => p.id));
+    const validEpitaphIdx = epitaphs.map((_, i) => i);
+    const validCrossIdx = crosses.map((_, i) => i);
+    const validGraphicIdx = others.map((_, i) => i);
 
-    const geo = buildTemplateGeometry();
-    const wantIds = Object.keys(geo);
-    const haveIds = elements.map(e => e.id);
-
-    // Наличие «сильного» изменения состава (люди/эпитафии/графика/шаблон)
-    const strongChange =
-      !idsEqual(wantIds, haveIds) ||
-      (draft as any)?.editor?.autoPlacedByTemplate !== template.id;
-
-    setElements((prev) => {
-      let next: EditorEl[] = [];
-
-      if (strongChange) {
-        // Полное перестроение: убираем осиротевшие, создаём недостающие, существующие не переносим (чистая раскладка).
-        next = wantIds.map((id) => {
-          const g = geo[id];
-          const def: Partial<EditorEl> = g.def || {};
-          return {
-            id,
-            type: g.type,
-            x: g.x, y: g.y, w: g.w, h: g.h, z: g.z,
-            title: g.title,
-            uppercase: def.uppercase as any,
-            italic: def.italic as any,
-            flipH: def.flipH as any,
-            bw: def.bw as any,
-            staircase: def.staircase as any
-          } as EditorEl;
-        });
-      } else {
-        // Частичная: оставляем существующие ожидаемые, удаляем осиротевшие, добавляем отсутствующие по шаблону
-        const keepMap = new Map(prev.filter(e => wantIds.includes(e.id)).map(e => [e.id, e]));
-        // Добавим недостающие
-        wantIds.forEach((id) => {
-          if (!keepMap.has(id)) {
-            const g = geo[id];
-            const def: Partial<EditorEl> = g.def || {};
-            keepMap.set(id, {
-              id,
-              type: g.type,
-              x: g.x, y: g.y, w: g.w, h: g.h,
-              z: g.z,
-              title: g.title,
-              uppercase: def.uppercase as any,
-              italic: def.italic as any,
-              flipH: def.flipH as any,
-              bw: def.bw as any,
-              staircase: def.staircase as any
-            } as EditorEl);
-          }
-        });
-        next = Array.from(keepMap.values()).sort((a, b) => a.z - b.z);
+    const isValid = (e: EditorEl): boolean => {
+      if (e.type === "portrait") {
+        const pid = e.id.replace(/^portrait-/, "");
+        return personIds.has(pid);
       }
-
-      // Если состав реально изменился — сохраняем и регенерируем превью
-      const norm = (arr: EditorEl[]) =>
-        arr.map(({ id, type, x, y, w, h, z, uppercase, italic, flipH, bw, staircase }) => ({
-          id, type, x, y, w, h, z, uppercase: !!uppercase, italic: !!italic, flipH: !!flipH, bw: !!bw, staircase: !!staircase
-        })).sort((a, b) => a.id.localeCompare(b.id));
-
-      const changed = JSON.stringify(norm(next)) !== JSON.stringify(norm(prev));
-      if (changed) {
-        const cur = loadOrderDraft();
-        saveOrderDraft({
-          ...cur,
-          editor: { ...(cur as any).editor, elements: next, wishes, autoPlacedByTemplate: template.id, updatedAt: Date.now() }
-        });
-        queuePreviewGeneration();
+      if (e.type === "metric") {
+        const pid = e.id.replace(/^metric-/, "");
+        return personIds.has(pid);
       }
-      return next;
-    });
+      if (e.type === "epitaph") {
+        const idx = Number(e.id.replace(/^epitaph-/, ""));
+        return Number.isFinite(idx) && validEpitaphIdx.includes(idx);
+      }
+      if (e.type === "cross") {
+        const idx = Number(e.id.replace(/^cross-/, ""));
+        return Number.isFinite(idx) && validCrossIdx.includes(idx);
+      }
+      if (e.type === "graphic") {
+        const idx = Number(e.id.replace(/^graphic-/, ""));
+        return Number.isFinite(idx) && validGraphicIdx.includes(idx);
+      }
+      return true;
+    };
+
+    return els.filter(isValid);
+  }, [peopleBlocks, epitaphs, crosses, others]);
+
+  // ——— Сигнатура текущего «состава данных» (для решения: пересобирать ли)
+  const dataSignature = useMemo(() => {
+    const tp = template?.id || "none";
+    const ppl = peopleBlocks.map(p => p.id).join(",");
+    const ep = epitaphs.join("||");
+    const cr = String(crosses.length);
+    const ot = String(others.length);
+    return [tp, ppl, ep, cr, ot].join("::");
+  }, [template?.id, peopleBlocks, epitaphs, crosses.length, others.length]);
+
+  // ——— Применение шаблона (создание/удаление/актуализация) при любых внешних изменениях
+  const refreshFromDraft = React.useCallback((opts?: { force?: boolean }) => {
+    const fresh = loadOrderDraft();
+    setDraft(fresh);
+
+    const currentEls = elements;
+    const incomingEls: EditorEl[] = ((fresh as any)?.editor?.elements || []) as EditorEl[];
+    const incomingWishes: string = ((fresh as any)?.editor?.wishes || "") as string;
+
+    const templateIdChanged = (template?.id || null) !== lastTemplateIdRef.current;
+    const dataChanged = dataSignature !== lastDataSigRef.current;
+
+    // 1) Если кто-то извне изменил элементы — подхватываем
+    let baseEls = opts?.force ? incomingEls : (JSON.stringify(incomingEls) !== JSON.stringify(currentEls) ? incomingEls : currentEls);
+
+    // 2) Подчищаем осиротевшие элементы (устраняем пустые рамки)
+    const pruned = pruneOrphans(baseEls);
+
+    // 3) Если структура данных изменилась (люди/эпитафии/графика/кресты) или шаблон сменился —
+    //    пересобираем по шаблону полностью.
+    let finalEls = pruned;
+    if (opts?.force || templateIdChanged || dataChanged) {
+      finalEls = placeAllByTemplate(pruned);
+    }
+
+    // 4) Если результат отличается — сохраняем в стор и в state
+    const changed = JSON.stringify(finalEls) !== JSON.stringify(currentEls) || wishes !== incomingWishes;
+    if (changed) {
+      setElements(finalEls);
+      if (wishes !== incomingWishes) {
+        // подхватим пожелания, если они изменились извне
+        // (оставляем приоритет пользователю, поэтому не форсим, если отличаются только локально)
+        // Но при force — обновим
+        if (opts?.force || JSON.stringify(incomingEls) !== JSON.stringify(currentEls)) {
+          setWishes(incomingWishes || "");
+        }
+      }
+      const cur = loadOrderDraft();
+      saveOrderDraft({
+        ...cur,
+        editor: { ...(cur as any).editor, elements: finalEls, wishes: incomingWishes || wishes, autoPlacedByTemplate: template?.id, updatedAt: Date.now() }
+      });
+    }
+
+    // обновим «последние» маркеры
+    lastTemplateIdRef.current = template?.id || null;
+    lastDataSigRef.current = dataSignature;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [template, buildTemplateGeometry, elements, draft, wishes]);
+  }, [elements, wishes, template?.id, dataSignature, pruneOrphans, placeAllByTemplate]);
 
-  /* Первичное размещение/реконсиляция */
-  useEffect(() => {
-    // При первом рендере и на каждое изменение состава — реконсилируем
-    reconcileElements("mount/compose-change");
-  }, [reconcileElements, peopleBlocks, epitaphs, crosses, others, template?.id]);
+  // ——— Пересборка по шаблону по месту (когда нужно явно)
+  const applyTemplateStrict = React.useCallback(() => {
+    const built = placeAllByTemplate(elements);
+    const changed = JSON.stringify(built) !== JSON.stringify(elements);
+    if (changed) {
+      setElements(built);
+      const cur = loadOrderDraft();
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: built, wishes, autoPlacedByTemplate: template?.id, updatedAt: Date.now() } });
+    }
+    lastTemplateIdRef.current = template?.id || null;
+    lastDataSigRef.current = dataSignature;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements, wishes, template?.id, dataSignature, placeAllByTemplate]);
 
-  /* Рефреш при переходах/возврате в вкладку/из истории */
+  // Первичный запуск: если пусто или шаблон/структура изменились
   useEffect(() => {
-    const onFocus = () => { setDraft(loadOrderDraft()); reconcileElements("focus/pageshow"); };
-    const onVisible = () => { if (document.visibilityState === "visible") { setDraft(loadOrderDraft()); reconcileElements("visible"); } }
-    const onPop = () => { setDraft(loadOrderDraft()); reconcileElements("popstate/hashchange"); };
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("pageshow", onFocus as any);
+    const needTemplate = !elements?.length || (template?.id || null) !== lastTemplateIdRef.current || dataSignature !== lastDataSigRef.current;
+    if (template && needTemplate) {
+      applyTemplateStrict();
+    }
+  }, [template, dataSignature, elements?.length, applyTemplateStrict]);
+
+  // Глобальные события навигации/фокуса/внешних обновлений — всегда рефрешим из стора
+  useEffect(() => {
+    const onAny = () => refreshFromDraft();
+    const onVisible = () => { if (document.visibilityState === "visible") refreshFromDraft(); };
+
+    window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
+    window.addEventListener("storage", onAny);
+    window.addEventListener("memorial:orderDraftUpdated", onAny as any);
+
     window.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("popstate", onPop);
-    window.addEventListener("hashchange", onPop);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("pageshow", onFocus as any);
-      window.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("popstate", onPop);
-      window.removeEventListener("hashchange", onPop);
-    };
-  }, [reconcileElements]);
+    window.addEventListener("focus", onAny);
+    window.addEventListener("pageshow", onAny as any);
+    window.addEventListener("popstate", onAny);
+    window.addEventListener("hashchange", onAny);
 
-  /* Подписка на внешние обновления драфта */
-  useEffect(() => {
-    const onUpd = () => { setDraft(loadOrderDraft()); reconcileElements("DRAFT_UPDATED_EVENT"); };
-    window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-    window.addEventListener("storage", onUpd);
+    // первичный форс-рефреш (чтобы убрать возможные пустые рамки сразу)
+    refreshFromDraft({ force: true });
+
     return () => {
-      window.removeEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-      window.removeEventListener("storage", onUpd);
+      window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
+      window.removeEventListener("storage", onAny);
+      window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
+
+      window.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onAny);
+      window.removeEventListener("pageshow", onAny as any);
+      window.removeEventListener("popstate", onAny);
+      window.removeEventListener("hashchange", onAny);
     };
-  }, [reconcileElements]);
+  }, [refreshFromDraft]);
 
   /* ===== DnD / Resize с RAF-троттлингом ===== */
   const dragRef = useRef<{
@@ -574,12 +609,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const latest = elements;
       saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() } });
       queuePreviewGeneration();
+      // сигнализируем другим шагам
+      try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
     }
     dragRef.current = null;
   };
 
   /* ===== Превью в драфт ===== */
-  const previewTimerRef = useRef<number | null>(null);
   const queuePreviewGeneration = () => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -727,6 +763,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     saveTimerRef.current = window.setTimeout(() => {
       const cur = loadOrderDraft();
       saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+      try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
     }, 200) as unknown as number;
     queuePreviewGeneration();
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -742,9 +779,303 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     im.src = item.url;
   }, [item?.url]);
 
+  // Внешние обновления драфта (минимально — полное обновление по сигналу)
+  useEffect(() => {
+    const onUpd = () => refreshFromDraft();
+    window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
+    window.addEventListener("storage", onUpd);
+    return () => {
+      window.removeEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
+      window.removeEventListener("storage", onUpd);
+    };
+  }, [refreshFromDraft]);
+
+  /* ===== Мини‑панель инструментов ===== */
+  const MiniToolbar = ({ el }: { el: EditorEl }) => {
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
+    const stop = (e: React.PointerEvent | React.MouseEvent) => { e.stopPropagation(); };
+
+    const isMetric = el.type === "metric";
+    const isEpitaph = el.type === "epitaph";
+    const isGraphic = el.type === "graphic";
+    const isPortrait = el.type === "portrait";
+
+    let canStair = false;
+    if (isEpitaph) {
+      const idx = Number(el.id.split("-")[1]);
+      const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+      canStair = isRememberLoveMourn(tRaw);
+    }
+
+    return (
+      <div
+        onPointerDown={stop}
+        onMouseDown={stop}
+        style={{
+          position: "absolute", left: 0, top: -30,
+          display: "flex", gap: 6,
+          background: "rgba(0,0,0,0.6)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6, padding: "2px 6px",
+          alignItems: "center", pointerEvents: "auto", zIndex: 3000
+        }}
+      >
+        {isMetric && (
+          <button
+            type="button"
+            style={btn}
+            onPointerDown={stop} onMouseDown={stop}
+            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x))); }}
+          >
+            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+          </button>
+        )}
+        {isEpitaph && (
+          <>
+            <button
+              type="button"
+              style={btn}
+              onPointerDown={stop} onMouseDown={stop}
+              onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x))); }}
+            >
+              {el.italic ? "Обычный" : "Курсив"}
+            </button>
+            {canStair && (
+              <button
+                type="button"
+                style={btn}
+                onPointerDown={stop} onMouseDown={stop}
+                onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x))); }}
+              >
+                {el.staircase ? "В строку" : "Лесенкой"}
+              </button>
+            )}
+          </>
+        )}
+        {isGraphic && (
+          <button
+            type="button"
+            style={btn}
+            onPointerDown={stop} onMouseDown={stop}
+            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x))); }}
+          >
+            Отразить ⇄
+          </button>
+        )}
+        {isPortrait && (
+          <button
+            type="button"
+            style={btn}
+            onPointerDown={stop} onMouseDown={stop}
+            onClick={(e) => { e.stopPropagation(); setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x))); }}
+          >
+            {el.bw ? "Цвет" : "Ч/Б"}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  /* ===== Контент слой ===== */
+  const ContentLayer = () => {
+    const fam = FONT_CENTURY;
+    const wrap = editorWrapRef.current?.getBoundingClientRect();
+    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
+    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
+
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: SKETCH_PAD,
+          top: SKETCH_PAD,
+          right: SKETCH_PAD,
+          bottom: SKETCH_PAD,
+          pointerEvents: "none",
+          zIndex: 1000,
+          transform: "translateZ(0)",
+          backfaceVisibility: "hidden",
+          contain: "paint"
+        }}
+      >
+        {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
+          const key = el.id.split("-").slice(1).join("-");
+          const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
+          const wrapperStyle: React.CSSProperties = {
+            position: "absolute",
+            left: Math.round(boxPx.x),
+            top: Math.round(boxPx.y),
+            width: Math.round(boxPx.w),
+            height: Math.round(boxPx.h),
+            zIndex: el.z,
+            pointerEvents: "none",
+            willChange: "transform",
+            transform: "translateZ(0)",
+            backfaceVisibility: "hidden",
+            contain: "paint",
+            boxSizing: "border-box"
+          };
+
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || "";
+            return (
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {url ? (
+                  <img
+                    src={url}
+                    alt="Портрет"
+                    draggable={false}
+                    loading="eager"
+                    decoding="async"
+                    style={{
+                      width: "100%", height: "100%",
+                      objectFit: "cover",
+                      filter: el.bw ? "grayscale(100%)" : "none",
+                      display: "block",
+                      willChange: "transform",
+                      transform: "translateZ(0)",
+                      backfaceVisibility: "hidden"
+                    }}
+                  />
+                ) : null}
+              </div>
+            );
+          }
+
+          if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+            const padY = Math.max(2, Math.round(boxPx.h * 0.10));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: fam, padX, padY, lineHeight: 1.12, minPx: 10 });
+            return (
+              <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: fam, textAlign: "center" }}>
+                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.12, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                  <div style={{ display: "grid", gap: 2, width: "100%" }}>
+                    {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
+                    {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
+                    {lines[2] && <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          if (el.type === "epitaph") {
+            const idx = Number(key);
+            const tRaw = Number.isFinite(idx) ? (epitaphs[idx] || "") : "";
+            const isRLM = isRememberLoveMourn(tRaw);
+            const padX = Math.max(4, Math.round(boxPx.w * 0.04));
+            const padY = Math.max(2, Math.round(boxPx.h * 0.06));
+
+            if (isRLM && el.staircase) {
+              const r = splitRememberPreserve(tRaw);
+              const parts = [r.top, r.mid, r.bot];
+              const fontPx = fitStairRLMFontPx({ lines: parts, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15, minPx: 10, maxPx: 96 });
+              return (
+                <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
+                  <div style={{ position: "absolute", left: padX, top: padY, right: padX, bottom: padY, display: "grid", gridTemplateRows: "1fr 1fr 1fr" }}>
+                    <div style={{ alignSelf: "center", justifySelf: "start", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[0]}</div>
+                    <div style={{ alignSelf: "center", justifySelf: "center", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[1]}</div>
+                    <div style={{ alignSelf: "center", justifySelf: "end", fontWeight: 600, fontStyle: el.italic ? "italic" : "normal", fontSize: fontPx, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>{parts[2]}</div>
+                  </div>
+                </div>
+              );
+            } else {
+              const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
+              const { fontPx, lines } = fitMultilineFontPxGeneric({ text: textDisplay, boxW: boxPx.w, boxH: boxPx.h, italic: !!el.italic, family: FONT_CENTURY, padX, padY, lineHeight: 1.15 });
+              return (
+                <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", padding: `${padY}px ${padX}px`, boxSizing: "border-box", lineHeight: 1.15, fontStyle: el.italic ? "italic" : "normal", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                    <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
+                  </div>
+                </div>
+              );
+            }
+          }
+
+          if (el.type === "cross" || el.type === "graphic") {
+            const idx = Number(key);
+            const list = el.type === "cross" ? crosses : others;
+            const g = Number.isFinite(idx) ? list[idx] : null;
+            const tr = el.type === "graphic" && el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
+            return (
+              <div key={`content-${el.id}`} style={wrapperStyle}>
+                {g?.url ? (
+                  <img
+                    src={g.url}
+                    alt={g.name || (el.type === "cross" ? "Крест" : "Графика")}
+                    draggable={false}
+                    loading="eager"
+                    decoding="async"
+                    style={{
+                      width: "100%", height: "100%",
+                      objectFit: "contain",
+                      display: "block",
+                      transform: tr,
+                      filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                      willChange: "transform",
+                      backfaceVisibility: "hidden"
+                    }}
+                  />
+                ) : null}
+              </div>
+            );
+          }
+
+          return null;
+        })}
+      </div>
+    );
+  };
+
+  /* ===== Навигация ===== */
+  const handleBack = () => {
+    const cur = loadOrderDraft();
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
+    setOutro(true);
+    setTimeout(() => onBack?.(), 150);
+  };
+  const handleContinue = () => {
+    const cur = loadOrderDraft();
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
+    const go = onRearSide || onSendOrder || onContinue; if (!go) return;
+    setOutro(true);
+    setTimeout(() => go({ elements, wishes }), 150);
+  };
+
+  const MAX_W = 600;
+
+  // Ручки ресайза
+  const KNOB_HIT = 28;
+  const KNOB_VIS = 14;
+  const knob = (left: string, top: string, cursor: string) => ({
+    position: "absolute",
+    left,
+    top,
+    width: KNOB_HIT,
+    height: KNOB_HIT,
+    cursor,
+    pointerEvents: "auto",
+    display: "grid",
+    placeItems: "center"
+  } as React.CSSProperties);
+  const knobDot: React.CSSProperties = {
+    width: KNOB_VIS,
+    height: KNOB_VIS,
+    background: "#fff",
+    border: "1px solid #000",
+    borderRadius: 3,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
+  };
+
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 240ms ease", backgroundImage: `url(/data/bg.svg)`, backgroundSize: "cover", backgroundPosition: "center center", backgroundAttachment: "fixed" }}>
-      <div style={{ width: "100%", maxWidth: 600, margin: "0 auto" }}>
+      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
@@ -798,8 +1129,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onError={() => { if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 }); }}
             />
 
+            {/* Контент */}
             <ContentLayer />
 
+            {/* Рамки + ручки */}
             <div
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
@@ -825,14 +1158,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                     {selected && <MiniToolbar el={el} />}
                     {selected && !el.locked && (
                       <>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${28/2}px`, `-${28/2}px`, "nwse-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${28/2}px)`, `-${28/2}px`, "nesw-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${28/2}px)`, `calc(100% - ${28/2}px)`, "nwse-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${28/2}px`, `calc(100% - ${28/2}px)`, "nesw-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${28/2}px)`, `-${28/2}px`, "ns-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${28/2}px)`, `calc(50% - ${28/2}px)`, "ew-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${28/2}px)`, `calc(100% - ${28/2}px)`, "ns-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
-                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${28/2}px`, `calc(50% - ${28/2}px)`, "ew-resize")}><div style={{ width: 14, height: 14, background: "#fff", border: "1px solid #000", borderRadius: 3, boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT/2}px`, `-${KNOB_HIT/2}px`, "nwse-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "nesw-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "nwse-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT/2}px`, `calc(100% - ${KNOB_HIT/2}px)`, "nesw-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `-${KNOB_HIT/2}px`, "ns-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT/2}px)`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT/2}px)`, `calc(100% - ${KNOB_HIT/2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                        <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT/2}px`, `calc(50% - ${KNOB_HIT/2}px)`, "ew-resize")}><div style={knobDot} /></div>
                       </>
                     )}
                   </div>
@@ -842,6 +1175,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           </div>
         </section>
 
+        {/* Пожелания */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>Пожелания по эскизу</label>
           <textarea
@@ -855,8 +1189,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         </section>
 
         <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
-          <button type="button" onClick={() => { const cur = loadOrderDraft(); saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } }); setOutro(true); setTimeout(() => onBack?.(), 150); }} style={glassButtonStyle("sm")}>Назад</button>
-          <button type="button" onClick={() => { const cur = loadOrderDraft(); saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } }); const go = onRearSide || onSendOrder || onContinue; if (!go) return; setOutro(true); setTimeout(() => go({ elements, wishes }), 150); }} style={glassButtonStyle("sm")}>Продолжить</button>
+          <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
+          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
         </div>
       </div>
     </div>
