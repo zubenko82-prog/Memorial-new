@@ -1,17 +1,17 @@
 // src/screens/EditorStep.tsx
-// Лёгкий редактор без SketchTemplate и без измерения DOM.
+// Лёгкий редактор с интеграцией шаблонов SketchTemplate (первичное размещение по шаблонам).
 //
 // Что изменили:
-// - Метрика по умолчанию ПРОПИСНЫМИ (uppercase: true).
-// - «Помним, любим, скорбим…» по умолчанию ЛЕСЕНКОЙ (staircase: true для этой эпитафии).
-// - Устранено мерцание у креста/графики: принудительно включаем GPU-композитинг (translateZ(0), willChange).
-// - Первичное размещение: элементы не накладываются и не выходят за поле редактора.
-//   Если не помещаются — уменьшаем и ищем ближайшее свободное место (простая раскладка с попытками).
-// - Портрет по умолчанию Ч/Б (оставили).
+// - Добавлена интеграция SketchTemplate: первичное размещение портретов/метрики/эпитафий/крестов по слотам шаблона.
+// - Подбор шаблона по количеству усопших: classic_single (1) / double_portrait (2+).
+// - Гарантируем полную видимость: переводим нормализованные слоты (0..1) в проценты (0..100) и пропускаем через clampBox/fitAndPlace.
+// - Функционал редактора (DnD/resize/панель/превью) не изменён. Повторная автокладка не выполняется для уже существующих элементов.
+// - Если слота в шаблоне нет — используем прежние резервные правила fitAndPlace.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
+import { SketchTemplates } from "../lib/sketchTemplates";
 
 /* ===== UI ===== */
 function glassPanelStyle() {
@@ -212,6 +212,26 @@ function fitAndPlace(proposed: Rect, placed: Rect[], opts?: { minW?: number; min
   return clampBox(x, y, Math.max(minW, w), Math.max(minH, h));
 }
 
+/* ===== Нормализованные прямоугольники из шаблонов -> проценты ===== */
+type Norm = { x: number; y: number; w: number; h: number };
+const unionNorm = (a?: Norm, b?: Norm): Norm | undefined => {
+  if (!a && !b) return undefined;
+  const r1 = a || b!;
+  const r2 = b || a!;
+  const left = Math.min(r1.x, r2.x);
+  const top = Math.min(r1.y, r2.y);
+  const right = Math.max(r1.x + r1.w, r2.x + r2.w);
+  const bottom = Math.max(r1.y + r1.h, r2.y + r2.h);
+  return { x: left, y: top, w: right - left, h: bottom - top };
+};
+const toPct = (r: Norm, padPct = 0): Rect => {
+  const px = r.x * 100 + padPct;
+  const py = r.y * 100 + padPct;
+  const pw = r.w * 100 - padPct * 2;
+  const ph = r.h * 100 - padPct * 2;
+  return clampBox(px, py, Math.max(2, pw), Math.max(2, ph));
+};
+
 /* ===== Компонент ===== */
 type Props = { onBack?: () => void; onContinue?: (payload?: any) => void; onRearSide?: (payload?: any) => void; onSendOrder?: (payload?: any) => void; };
 
@@ -268,7 +288,19 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
   const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  /* ===== Построение элементов (правила + раскладка) ===== */
+  // Выбор шаблона: 1 усопший — classic_single, 2+ — double_portrait (если есть)
+  const template = useMemo(() => {
+    const id = peopleBlocks.length > 1 ? "double_portrait" : "classic_single";
+    return SketchTemplates.find(t => t.id === id) || SketchTemplates[0] || null;
+  }, [peopleBlocks.length]);
+
+  const findSlotRect = React.useCallback((type: string, index?: number): Norm | undefined => {
+    if (!template) return undefined;
+    const slot = template.slots.find(s => s.type === type && (index === undefined || s.index === index));
+    return slot?.rect as Norm | undefined;
+  }, [template]);
+
+  /* ===== Построение элементов (правила + раскладка по шаблону) ===== */
   const buildOrMergeElements = React.useCallback(() => {
     setElements((prev) => {
       const existById = new Map(prev.map((e) => [e.id, e]));
@@ -281,7 +313,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const cw = cnt > 0 ? 100 / Math.max(1, cnt) : 100;
       let z = 10;
 
-      // Люди: портрет + метрика
+      // Люди: портрет + метрика — по слотам шаблона (photo + union(personName, dates))
       peopleBlocks.forEach((pb, i) => {
         const pid = pb.id;
 
@@ -292,28 +324,27 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           next.push(el);
           pushPlaced(el);
         } else {
-          let rect = fitAndPlace(
-            { x: i * cw + cw * 0.1, y: 10, w: cw * 0.8, h: 35 },
-            placed,
-            { minW: 14, minH: 14 }
-          );
+          const rPhoto = findSlotRect("photo", i);
+          const rectByTpl = rPhoto ? toPct(rPhoto, 1) : { x: i * cw + cw * 0.1, y: 10, w: cw * 0.8, h: 35 };
+          const rect = fitAndPlace(rectByTpl, placed, { minW: 14, minH: 14 });
           const el: EditorEl = { id: pidPortrait, type: "portrait", ...rect, z: z++, bw: true, title: "Портрет" };
           next.push(el);
           pushPlaced(el);
         }
 
-        // Метрика (по умолчанию ПРОПИСНЫМИ)
+        // Метрика (по умолчанию ПРОПИСНЫМИ) — объединяем зоны имени и дат, если заданы в шаблоне
         const pidMetric = `metric-${pid}`;
         if (existById.has(pidMetric)) {
           const el = existById.get(pidMetric)!;
           next.push(el);
           pushPlaced(el);
         } else {
-          let rect = fitAndPlace(
-            { x: i * cw + cw * 0.05, y: 10 + 35 + 4, w: cw * 0.9, h: 20 },
-            placed,
-            { minW: 18, minH: 10 }
-          );
+          const rName = findSlotRect("personName", i);
+          const rDates = findSlotRect("dates", i);
+          const union = unionNorm(rName, rDates) || rName || rDates;
+          const fallback = { x: i * cw + cw * 0.05, y: 10 + 35 + 4, w: cw * 0.9, h: 20 };
+          const rectByTpl = union ? toPct(union, 1) : fallback;
+          const rect = fitAndPlace(rectByTpl, placed, { minW: 18, minH: 10 });
           const el: EditorEl = { id: pidMetric, type: "metric", ...rect, z: z++, uppercase: true, italic: false, title: "Метрика" };
           next.push(el);
           pushPlaced(el);
@@ -323,7 +354,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       // Где заканчивается верхний блок
       const topBottom = placed.reduce((m, r) => Math.max(m, r.y + r.h), 0);
 
-      // Эпитафии: ставим под верхним блоком; ПЛС — лесенкой по умолчанию
+      // Эпитафии — по слоту "epitaph". Если эпитафий несколько — делим слот по вертикали.
+      const epSlot = findSlotRect("epitaph", undefined);
       epitaphs.forEach((txt, i) => {
         const id = `epitaph-${i}`;
         if (existById.has(id)) {
@@ -331,12 +363,18 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           next.push(el);
           pushPlaced(el);
         } else {
-          const startY = topBottom ? Math.min(95, topBottom + 4) : 30;
-          let rect = fitAndPlace(
-            { x: 10, y: startY + i * 18, w: 80, h: 16 },
-            placed,
-            { minW: 20, minH: 10 }
-          );
+          let rectByTpl: Rect | null = null;
+          if (epSlot) {
+            const base = toPct(epSlot, 1);
+            const parts = epitaphs.length || 1;
+            const hPart = Math.max(6, base.h / parts);
+            rectByTpl = { x: base.x, y: base.y + i * hPart, w: base.w, h: hPart };
+          }
+          if (!rectByTpl) {
+            const startY = topBottom ? Math.min(95, topBottom + 4) : 30;
+            rectByTpl = { x: 10, y: startY + i * 18, w: 80, h: 16 };
+          }
+          const rect = fitAndPlace(rectByTpl, placed, { minW: 20, minH: 10 });
           const staircaseDefault = isRememberLoveMourn(txt);
           const el: EditorEl = { id, type: "epitaph", ...rect, z: 100 + i, uppercase: false, italic: false, staircase: staircaseDefault, title: "Эпитафия" };
           next.push(el);
@@ -344,7 +382,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         }
       });
 
-      // Кресты — стараемся не залезать на уже размещённое
+      // Кресты — слот "cross". Если крестов несколько — первый в слоте, остальным — сдвиги/резерв.
       crosses.forEach((_, i) => {
         const id = `cross-${i}`;
         if (existById.has(id)) {
@@ -352,14 +390,27 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           next.push(el);
           pushPlaced(el);
         } else {
-          let rect = fitAndPlace({ x: 4 + i * 20, y: 4, w: 18, h: 18 }, placed, { minW: 12, minH: 12 });
+          const rCross0 = findSlotRect("cross", undefined);
+          let rectByTpl: Rect | null = null;
+          if (rCross0) {
+            const base = toPct(rCross0, 0.5);
+            if (i === 0) {
+              rectByTpl = base;
+            } else {
+              // компактно раскидаем рядом, но без выхода за границы
+              const shift = i * Math.min(8, base.w * 0.5);
+              rectByTpl = clampBox(base.x + shift, base.y, base.w, base.h);
+            }
+          }
+          if (!rectByTpl) rectByTpl = { x: 4 + i * 20, y: 4, w: 18, h: 18 };
+          const rect = fitAndPlace(rectByTpl, placed, { minW: 12, minH: 12 });
           const el: EditorEl = { id, type: "cross", ...rect, z: 200 + i, title: "Крест" };
           next.push(el);
           pushPlaced(el);
         }
       });
 
-      // Прочая графика — опускаем вниз, вписываем без пересечений
+      // Прочая графика — оставляем прежнюю стратегию (вниз), т.к. в шаблонах отдельных слотов нет.
       others.forEach((_, i) => {
         const id = `graphic-${i}`;
         if (existById.has(id)) {
@@ -399,12 +450,21 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const same = JSON.stringify(norm(kept)) === JSON.stringify(norm(prev));
       if (!same) {
         const cur = loadOrderDraft();
-        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: kept, wishes, updatedAt: Date.now() } });
+        saveOrderDraft({
+          ...cur,
+          editor: {
+            ...(cur as any).editor,
+            elements: kept,
+            wishes,
+            autoPlacedByTemplate: template?.id || (cur as any).editor?.autoPlacedByTemplate || undefined,
+            updatedAt: Date.now()
+          }
+        });
       }
       return kept;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peopleBlocks, epitaphs, crosses, others, wishes]);
+  }, [peopleBlocks, epitaphs, crosses, others, wishes, template, findSlotRect]);
 
   useEffect(() => { buildOrMergeElements(); }, [buildOrMergeElements]);
 
@@ -738,7 +798,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
           const wrapperStyle: React.CSSProperties = {
             position: "absolute",
-            left: Math.round(boxPx.x), // выравниваем по пикселю — меньше мерцание
+            left: Math.round(boxPx.x),
             top: Math.round(boxPx.y),
             width: Math.round(boxPx.w),
             height: Math.round(boxPx.h),
@@ -747,7 +807,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             contain: "layout paint style",
             backfaceVisibility: "hidden",
             willChange: "transform, opacity",
-            transform: "translateZ(0)", // GPU-композитинг
+            transform: "translateZ(0)",
             boxSizing: "border-box"
           };
 
@@ -900,7 +960,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         <TopBarWithIntro title="Memorial" />
 
         <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
-          Разместите элементы условно. Укажите порядок и выравнивание. Финальный вариант сделает специалист согласно этой схеме.
+          Разместите элементы условно. Итоговую компоновку выполнит специалист по этой схеме. Укажите порядок и выравнивание.
         </section>
 
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
