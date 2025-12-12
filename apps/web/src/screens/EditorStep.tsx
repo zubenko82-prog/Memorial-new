@@ -13,7 +13,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
-import { SketchTemplates, type SketchTemplate } from "../lib/sketchTemplates";
+
+// ВАЖНО: теперь берём шаблоны из src/components/SketchTemplate.tsx
+// Предполагается экспорт TEMPLATES (массив с { id, name, slots[] })
+import { TEMPLATES as UITemplates } from "../components/SketchTemplate";
 
 /* ===== UI ===== */
 function glassPanelStyle() {
@@ -62,6 +65,13 @@ type EditorEl = {
   flipH?: boolean;     // graphic
   bw?: boolean;        // portrait
   staircase?: boolean; // «Помним, любим, скорбим…»
+};
+
+// Тип шаблона/слотов (минимально необходимый), ожидаемый от src/components/SketchTemplate.tsx
+type SketchTemplate = {
+  id: string;
+  name: string;
+  slots: { type: string; index?: number; rect: { x: number; y: number; w: number; h: number; padding?: number } }[];
 };
 
 /* ===== Helpers ===== */
@@ -171,7 +181,6 @@ function fitMetricFontsPx({
   let sW = 1;
   for (let i = 0; i < L; i++) {
     const ln = lines[i] || "";
-    if (!ln) continue;
     const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
     const maxFi = (usableW * 100) / w100;
     sW = Math.min(sW, maxFi / initial[i]);
@@ -186,7 +195,6 @@ const toPct = (r: Norm): { x: number; y: number; w: number; h: number } => {
   const py = clamp(r.y * 100, 0, 100);
   const pw = clamp(r.w * 100, 0, 100);
   const ph = clamp(r.h * 100, 0, 100);
-  // небольшая защита от схлопывания:
   const safe = clampBox(px, py, Math.max(2, pw), Math.max(2, ph));
   return safe;
 };
@@ -234,7 +242,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
-  // RAF-троттлинг для DnD (уменьшаем перерисовки -> меньше мерцаний)
+  // RAF-троттлинг для DnD
   const rafMoveScheduled = useRef(false);
   const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
 
@@ -278,17 +286,16 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
   const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  // Выбор шаблона по количеству людей
+  // Шаблон: берём из src/components/SketchTemplate.tsx (UITemplates)
   const template: SketchTemplate | null = useMemo(() => {
     const preferred = peopleBlocks.length > 1 ? "double_portrait" : "classic_single";
-    return SketchTemplates.find(t => t.id === preferred) || SketchTemplates[0] || null;
+    return (UITemplates as SketchTemplate[]).find(t => t.id === preferred) || (UITemplates as SketchTemplate[])[0] || null;
   }, [peopleBlocks.length]);
 
-  /* ===== Первичная раскладка строго по SketchTemplate ===== */
+  /* ===== Первичная раскладка строго по SketchTemplate из components/SketchTemplate.tsx ===== */
   const applyTemplateStrict = React.useCallback(() => {
     if (!template) return;
     setElements((prev) => {
-      // Если уже есть элементы — не пересобираем полностью, а только достраиваем отсутствующие по шаблону
       const existById = new Map(prev.map((e) => [e.id, e]));
       const next: EditorEl[] = [...prev];
       let z = Math.max(10, ...prev.map(e => e.z)) + 1;
@@ -379,10 +386,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
 
       // 5) Прочая графика: decor/flower -> graphic по слотам, иначе — низ
-      const decorSlots = [
-        ...slotsByType(template, "decor").map(s => s.rect as Norm),
-        ...slotsByType(template, "flower").map(s => s.rect as Norm)
-      ];
+      const decorSlots = template.slots
+        .filter(s => s.type === "decor" || s.type === "flower")
+        .map(s => s.rect as Norm);
       const decorRectsNorm: Norm[] =
         decorSlots.length >= others.length
           ? decorSlots.slice(0, others.length)
@@ -398,7 +404,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         next.push(el);
       });
 
-      // Проставим флаг шаблона и сохраним
+      // Сохраняем
       const cur = loadOrderDraft();
       saveOrderDraft({
         ...cur,
@@ -410,7 +416,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template, peopleBlocks, epitaphs, crosses, others, wishes]);
 
-  // Первичный вызов раскладки: только если пусто или изменился шаблон/состав
+  // Первичный вызов раскладки
   useEffect(() => {
     const already = (draft as any)?.editor?.autoPlacedByTemplate;
     const need = !elements?.length || already !== template?.id;
@@ -484,7 +490,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const onPointerUp = () => {
     if (dragRef.current) {
       const cur = loadOrderDraft();
-      const latest = elements; // уже включены обновления через RAF
+      const latest = elements;
       saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() } });
       queuePreviewGeneration();
     }
