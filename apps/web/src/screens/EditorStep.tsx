@@ -2,20 +2,19 @@
 // Редактор с нуля: точная раскладка по SketchTemplate, без мерцаний,
 // с сохранением прежнего функционала (DnD, resize, предпросмотр, пожелания).
 //
-// Доработки по синхронизации:
-// - Полный рефреш драфта при любом переходе/фокусе/возврате: слушаем DRAFT_UPDATED_EVENT, storage,
-//   visibilitychange, focus, pageshow, popstate, hashchange и выполняем refreshFromDraft().
-// - Устраняем «пустые рамки»: при изменении состава данных (люди/эпитафии/графика) удаляем осиротевшие элементы.
-// - При структурных изменениях (добавили/удалили людей/эпитафии/графику/кресты или сменился шаблон) —
-//   пересобираем компоновку по шаблону с нуля, сохраняя пользовательские флаги (uppercase/italic/bw/flipH/staircase).
-// - При внешнем обновлении элементов в драфте — подхватываем и подчищаем, если есть осиротевшие.
-//
+// Исправлено (циклы/«стек переполнен»):
+// - Избавились от бесконечных пингов: больше НЕ диспатчим свои события DRAFT_UPDATED_EVENT/memorial:orderDraftUpdated
+//   из EditorStep (saveOrderDraft сам шлёт обновления). Убраны лишние dispatchEvent.
+// - Аккуратная синхронизация без колец: при внешнем обновлении из стора читаем incoming elements и
+//   подхватываем их в state без дополнительного save, если это чистое чтение. Сохраняем только если
+//   реально пересобрали компоновку по шаблону (rebuilt ≠ incoming).
+// - Сигнатуры (нормализованные) для элементов/данных предотвращают ложные срабатывания и «пустые» сохранения.
+// - Удаляем «осиротевшие» элементы (портрет/метрика без человека, эпитафия вне индекса, и т.п.) и
+//   пересобираем при структурных изменениях (шаблон сменился, состав людей/эпитафий/графики изменился).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
-
-// Шаблоны из компонента (если нет экспорта TEMPLATES — фолбэк на lib)
 import * as SketchComponent from "../components/SketchTemplate";
 import { SketchTemplates as LibTemplates } from "../lib/sketchTemplates";
 
@@ -57,7 +56,7 @@ type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты
+  x: number; y: number; w: number; h: number;
   z: number;
   title?: string;
   locked?: boolean;
@@ -67,7 +66,6 @@ type EditorEl = {
   bw?: boolean;
   staircase?: boolean;
 };
-
 type SketchTemplate = {
   id: string;
   name: string;
@@ -86,30 +84,19 @@ const clampBox = (x: number, y: number, w: number, h: number) => ({
 const SNAP_STEP_DEFAULT = 1;
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
 const isCrossCategoryName = (s?: string) => (s || "").toLowerCase().includes("крест") || (s || "").toLowerCase().includes("cross");
+const shallowEq = (a: any, b: any) => Object.is(a, b);
 
-function linesFromPerson(p: any) {
-  const l1 = (p?.lastName || "").trim();
-  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
-  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
-  return [l1, l2, l3].filter(Boolean);
+/* Нормализация (для сигнатур и сравнения) */
+function normalizeElements(els: EditorEl[]) {
+  return els
+    .map(({ id, type, x, y, w, h, z, uppercase, italic, flipH, bw, staircase }) => ({
+      id, type, x: +x, y: +y, w: +w, h: +h, z: +z,
+      uppercase: !!uppercase, italic: !!italic, flipH: !!flipH, bw: !!bw, staircase: !!staircase
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
-const normRemember = (t?: string) =>
-  (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim();
-const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
-function splitRememberPreserve(text: string) {
-  const t = (text || "").trim();
-  const parts: string[] = [];
-  let buf = "";
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    buf += ch;
-    if (ch === ",") { parts.push(buf.trim()); buf = ""; }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  const top = parts[0] || "Помним,";
-  const mid = parts[1] || "любим,";
-  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим…").trim();
-  return { top, mid, bot };
+function signature(els: EditorEl[]) {
+  return JSON.stringify(normalizeElements(els));
 }
 
 /* ===== Measuring helpers ===== */
@@ -127,9 +114,7 @@ function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: bool
   setFontOnCtx(ctx, italic, sizePx, family);
   return ctx.measureText(text).width;
 }
-function fitStairRLMFontPx({
-  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
-}: {
+function fitStairRLMFontPx({ lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96 }: {
   lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
 }): number {
   const ctx = getMeasureCtx();
@@ -143,9 +128,7 @@ function fitStairRLMFontPx({
   }
   return clamp(Math.floor(Math.min(perLineH, fW, maxPx)), minPx, maxPx);
 }
-function fitMultilineFontPxGeneric({
-  text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96
-}: {
+function fitMultilineFontPxGeneric({ text, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.15, minPx = 10, maxPx = 96 }: {
   text: string; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; maxPx?: number;
 }) {
   const ctx = getMeasureCtx();
@@ -164,9 +147,7 @@ function fitMultilineFontPxGeneric({
   const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
   return { fontPx, lines: lines.length ? lines : [""] };
 }
-function fitMetricFontsPx({
-  lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26]
-}: {
+function fitMetricFontsPx({ lines, boxW, boxH, italic, family, padX = 4, padY = 2, lineHeight = 1.12, minPx = 10, weights = [0.36, 0.30, 0.26] }: {
   lines: string[]; boxW: number; boxH: number; italic: boolean; family: string; padX?: number; padY?: number; lineHeight?: number; minPx?: number; weights?: number[];
 }) {
   const ctx = getMeasureCtx();
@@ -180,6 +161,7 @@ function fitMetricFontsPx({
   let sW = 1;
   for (let i = 0; i < L; i++) {
     const ln = lines[i] || "";
+    if (!ln) continue;
     const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
     const maxFi = (usableW * 100) / w100;
     sW = Math.min(sW, maxFi / initial[i]);
@@ -187,15 +169,9 @@ function fitMetricFontsPx({
   return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
 }
 
-/* ===== Преобразование слотов SketchTemplate ===== */
+/* ===== Slots helpers ===== */
 type Norm = { x: number; y: number; w: number; h: number; padding?: number };
-const toPct = (r: Norm): { x: number; y: number; w: number; h: number } => {
-  const px = clamp(r.x * 100, 0, 100);
-  const py = clamp(r.y * 100, 0, 100);
-  const pw = clamp(r.w * 100, 0, 100);
-  const ph = clamp(r.h * 100, 0, 100);
-  return clampBox(px, py, Math.max(2, pw), Math.max(2, ph));
-};
+const toPct = (r: Norm): { x: number; y: number; w: number; h: number } => clampBox(r.x * 100, r.y * 100, Math.max(2, r.w * 100), Math.max(2, r.h * 100));
 const unionNorm = (a?: Norm, b?: Norm): Norm | undefined => {
   if (!a && !b) return undefined;
   const A = a || b!;
@@ -204,50 +180,41 @@ const unionNorm = (a?: Norm, b?: Norm): Norm | undefined => {
   const right = Math.max(A.x + A.w, B.x + B.w), bottom = Math.max(A.y + A.h, B.y + B.h);
   return { x: left, y: top, w: right - left, h: bottom - top };
 };
-
 function slotsByType(tpl: SketchTemplate, type: string) {
-  return tpl.slots
-    .filter(s => s.type === type)
-    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  return tpl.slots.filter(s => s.type === type).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
 }
 function partitionSlot(base: Norm, count: number, direction: "v" | "h" = "v"): Norm[] {
   if (count <= 1) return [base];
   const out: Norm[] = [];
   for (let i = 0; i < count; i++) {
-    if (direction === "v") {
-      out.push({ x: base.x, y: base.y + base.h * (i / count), w: base.w, h: base.h / count });
-    } else {
-      out.push({ x: base.x + base.w * (i / count), y: base.y, w: base.w / count, h: base.h });
-    }
+    if (direction === "v") out.push({ x: base.x, y: base.y + base.h * (i / count), w: base.w, h: base.h / count });
+    else out.push({ x: base.x + base.w * (i / count), y: base.y, w: base.w / count, h: base.h });
   }
   return out;
 }
 
-/* ===== Компонент ===== */
+/* ===== Component ===== */
 type Props = { onBack?: () => void; onContinue?: (payload?: any) => void; onRearSide?: (payload?: any) => void; onSendOrder?: (payload?: any) => void; };
 
 export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
   const [outro, setOutro] = useState(false);
-
   const [elements, setElements] = useState<EditorEl[]>(() => (draft as any)?.editor?.elements || []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editor?.wishes || "");
-
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
 
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
-
-  // Навигационные/сигнатурные рефы для детекции изменений
-  const lastDataSigRef = useRef<string>("");
-  const lastTemplateIdRef = useRef<string | null>(null);
-
-  // RAF DnD
   const rafMoveScheduled = useRef(false);
   const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
 
-  // aspectRatio
+  const lastTemplateIdRef = useRef<string | null>(null);
+  const lastDataSigRef = useRef<string>("");
+  const lastSavedElsSigRef = useRef<string>(""); // чтобы не сохранять одно и то же многократно
+  const lastSavedWishesRef = useRef<string>("");
+
+  // aspect
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
 
@@ -256,7 +223,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const engr: any = draft?.engraving || {};
   const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
 
-  // Блоки людей
+  // Люди
   const peopleBlocks = useMemo(() => {
     if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
       return engr.persons.map((p: any, idx: number) => {
@@ -287,7 +254,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
   const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  // Шаблон из компонента (или lib)
+  // Шаблон
   const TEMPLATE_POOL: SketchTemplate[] = useMemo(() => {
     const maybe = (SketchComponent as any).TEMPLATES as SketchTemplate[] | undefined;
     return maybe && Array.isArray(maybe) && maybe.length > 0 ? maybe : (LibTemplates as unknown as SketchTemplate[]);
@@ -297,14 +264,24 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return TEMPLATE_POOL.find(t => t.id === preferred) || TEMPLATE_POOL[0] || null;
   }, [peopleBlocks.length, TEMPLATE_POOL]);
 
-  // ——— Компоновка по шаблону: построить массив (с сохранением флагов по id)
+  // Сигнатура состава данных
+  const dataSignature = useMemo(() => {
+    const tp = template?.id || "none";
+    const ppl = peopleBlocks.map(p => p.id).join(",");
+    const ep = epitaphs.join("||");
+    const cr = String(crosses.length);
+    const ot = String(others.length);
+    return [tp, ppl, ep, cr, ot].join("::");
+  }, [template?.id, peopleBlocks, epitaphs, crosses.length, others.length]);
+
+  // Пересборка по шаблону
   const placeAllByTemplate = React.useCallback((prev: EditorEl[]): EditorEl[] => {
     if (!template) return prev;
     const existById = new Map(prev.map((e) => [e.id, e]));
     const next: EditorEl[] = [];
     let z = 10;
 
-    // Портреты
+    // фото
     const photoSlots = slotsByType(template, "photo");
     const photoRectsNorm: Norm[] =
       photoSlots.length >= peopleBlocks.length
@@ -315,13 +292,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const rn = photoRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 10 + i * (80 / Math.max(1, peopleBlocks.length)), y: 18, w: 30, h: 36 };
       const old = existById.get(id);
-      next.push({
-        id, type: "portrait", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: z++,
-        bw: old?.bw ?? true, title: "Портрет"
-      });
+      next.push({ id, type: "portrait", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: z++, bw: old?.bw ?? true, title: "Портрет" });
     });
 
-    // Метрика
+    // метрика
     const nameSlots = slotsByType(template, "personName");
     const dateSlots = slotsByType(template, "dates");
     const metricRectsNorm: Norm[] = peopleBlocks.map((_, i) => {
@@ -334,13 +308,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const rn = metricRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 8 + i * (84 / Math.max(1, peopleBlocks.length)), y: 56, w: 36, h: 18 };
       const old = existById.get(id);
-      next.push({
-        id, type: "metric", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: z++,
-        uppercase: old?.uppercase ?? true, italic: old?.italic ?? false, title: "Метрика"
-      });
+      next.push({ id, type: "metric", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: z++, uppercase: old?.uppercase ?? true, italic: old?.italic ?? false, title: "Метрика" });
     });
 
-    // Эпитафии
+    // эпитафии
     const epSlots = slotsByType(template, "epitaph");
     let epRectsNorm: Norm[] = [];
     if (epitaphs.length > 0) {
@@ -352,14 +323,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const rn = epRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 10, y: 78 + i * 10, w: 80, h: 12 };
       const old = existById.get(id);
-      next.push({
-        id, type: "epitaph", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 100 + i,
-        uppercase: old?.uppercase ?? false, italic: old?.italic ?? false, staircase: old?.staircase ?? isRememberLoveMourn(txt),
-        title: "Эпитафия"
-      });
+      next.push({ id, type: "epitaph", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 100 + i, uppercase: old?.uppercase ?? false, italic: old?.italic ?? false, staircase: old?.staircase ?? isRememberLoveMourn(txt), title: "Эпитафия" });
     });
 
-    // Кресты
+    // кресты
     const crossSlots = slotsByType(template, "cross");
     let crossRectsNorm: Norm[] = [];
     if (crosses.length > 0) {
@@ -373,7 +340,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       next.push({ id, type: "cross", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 200 + i, title: "Крест" });
     }
 
-    // Прочая графика (decor/flower → graphic)
+    // прочая графика
     const decorSlots = template.slots.filter(s => s.type === "decor" || s.type === "flower").map(s => s.rect as Norm);
     const decorRectsNorm: Norm[] =
       decorSlots.length >= others.length ? decorSlots.slice(0, others.length)
@@ -383,139 +350,112 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const rn = decorRectsNorm[i];
       const rect = rn ? toPct(rn) : { x: 12 + i * 22, y: 86, w: 20, h: 12 };
       const old = existById.get(id);
-      next.push({
-        id, type: "graphic", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 300 + i,
-        flipH: old?.flipH ?? false, title: "Графика"
-      });
+      next.push({ id, type: "graphic", ...clampBox(rect.x, rect.y, rect.w, rect.h), z: 300 + i, flipH: old?.flipH ?? false, title: "Графика" });
     }
 
     return next;
   }, [template, peopleBlocks, epitaphs, crosses, others]);
 
-  // ——— Проверка и удаление «осиротевших» элементов (без данных)
+  // Удаление «осиротевших» рамок
   const pruneOrphans = React.useCallback((els: EditorEl[]): EditorEl[] => {
     const personIds = new Set(peopleBlocks.map(p => p.id));
-    const validEpitaphIdx = epitaphs.map((_, i) => i);
-    const validCrossIdx = crosses.map((_, i) => i);
-    const validGraphicIdx = others.map((_, i) => i);
-
-    const isValid = (e: EditorEl): boolean => {
-      if (e.type === "portrait") {
-        const pid = e.id.replace(/^portrait-/, "");
-        return personIds.has(pid);
-      }
-      if (e.type === "metric") {
-        const pid = e.id.replace(/^metric-/, "");
-        return personIds.has(pid);
-      }
+    const isOk = (e: EditorEl) => {
+      if (e.type === "portrait") return personIds.has(e.id.replace(/^portrait-/, ""));
+      if (e.type === "metric") return personIds.has(e.id.replace(/^metric-/, ""));
       if (e.type === "epitaph") {
         const idx = Number(e.id.replace(/^epitaph-/, ""));
-        return Number.isFinite(idx) && validEpitaphIdx.includes(idx);
+        return Number.isFinite(idx) && idx >= 0 && idx < epitaphs.length;
       }
       if (e.type === "cross") {
         const idx = Number(e.id.replace(/^cross-/, ""));
-        return Number.isFinite(idx) && validCrossIdx.includes(idx);
+        return Number.isFinite(idx) && idx >= 0 && idx < crosses.length;
       }
       if (e.type === "graphic") {
         const idx = Number(e.id.replace(/^graphic-/, ""));
-        return Number.isFinite(idx) && validGraphicIdx.includes(idx);
+        return Number.isFinite(idx) && idx >= 0 && idx < others.length;
       }
       return true;
     };
-
-    return els.filter(isValid);
+    return els.filter(isOk);
   }, [peopleBlocks, epitaphs, crosses, others]);
 
-  // ——— Сигнатура текущего «состава данных» (для решения: пересобирать ли)
-  const dataSignature = useMemo(() => {
-    const tp = template?.id || "none";
-    const ppl = peopleBlocks.map(p => p.id).join(",");
-    const ep = epitaphs.join("||");
-    const cr = String(crosses.length);
-    const ot = String(others.length);
-    return [tp, ppl, ep, cr, ot].join("::");
-  }, [template?.id, peopleBlocks, epitaphs, crosses.length, others.length]);
-
-  // ——— Применение шаблона (создание/удаление/актуализация) при любых внешних изменениях
+  // Синхронизация из стора (без петель)
   const refreshFromDraft = React.useCallback((opts?: { force?: boolean }) => {
     const fresh = loadOrderDraft();
     setDraft(fresh);
 
-    const currentEls = elements;
     const incomingEls: EditorEl[] = ((fresh as any)?.editor?.elements || []) as EditorEl[];
     const incomingWishes: string = ((fresh as any)?.editor?.wishes || "") as string;
 
-    const templateIdChanged = (template?.id || null) !== lastTemplateIdRef.current;
+    const templateChanged = (template?.id || null) !== lastTemplateIdRef.current;
     const dataChanged = dataSignature !== lastDataSigRef.current;
 
-    // 1) Если кто-то извне изменил элементы — подхватываем
-    let baseEls = opts?.force ? incomingEls : (JSON.stringify(incomingEls) !== JSON.stringify(currentEls) ? incomingEls : currentEls);
+    // базовый массив = либо входящий, либо текущий (при force/внешнем изменении)
+    const useIncoming = opts?.force || (signature(incomingEls) !== signature(elements)) || templateChanged || dataChanged;
+    const baseEls = useIncoming ? incomingEls : elements;
 
-    // 2) Подчищаем осиротевшие элементы (устраняем пустые рамки)
+    // чистим осиротевшее
     const pruned = pruneOrphans(baseEls);
+    const prunedSig = signature(pruned);
 
-    // 3) Если структура данных изменилась (люди/эпитафии/графика/кресты) или шаблон сменился —
-    //    пересобираем по шаблону полностью.
-    let finalEls = pruned;
-    if (opts?.force || templateIdChanged || dataChanged) {
-      finalEls = placeAllByTemplate(pruned);
+    // пересобираем по шаблону при структурном изменении
+    let rebuilt = pruned;
+    if (opts?.force || templateChanged || dataChanged || prunedSig !== signature(elements)) {
+      rebuilt = placeAllByTemplate(pruned);
     }
 
-    // 4) Если результат отличается — сохраняем в стор и в state
-    const changed = JSON.stringify(finalEls) !== JSON.stringify(currentEls) || wishes !== incomingWishes;
-    if (changed) {
-      setElements(finalEls);
-      if (wishes !== incomingWishes) {
-        // подхватим пожелания, если они изменились извне
-        // (оставляем приоритет пользователю, поэтому не форсим, если отличаются только локально)
-        // Но при force — обновим
-        if (opts?.force || JSON.stringify(incomingEls) !== JSON.stringify(currentEls)) {
-          setWishes(incomingWishes || "");
-        }
-      }
+    const rebuiltSig = signature(rebuilt);
+    const currentSig = signature(elements);
+    const incomingSig = signature(incomingEls);
+
+    // Если rebuilt отличается от текущего state — обновим state
+    if (rebuiltSig !== currentSig) {
+      setElements(rebuilt);
+    }
+
+    // Сохраняем в стор только если rebuilt реально отличается от входящих данных стора
+    // (иначе это просто подхват → не сохраняем, чтобы избежать петель)
+    if (rebuiltSig !== incomingSig || incomingWishes !== wishes) {
       const cur = loadOrderDraft();
       saveOrderDraft({
         ...cur,
-        editor: { ...(cur as any).editor, elements: finalEls, wishes: incomingWishes || wishes, autoPlacedByTemplate: template?.id, updatedAt: Date.now() }
+        editor: { ...(cur as any).editor, elements: rebuilt, wishes: incomingWishes, autoPlacedByTemplate: template?.id, updatedAt: Date.now() }
       });
+      lastSavedElsSigRef.current = rebuiltSig;
+      lastSavedWishesRef.current = incomingWishes;
     }
 
-    // обновим «последние» маркеры
+    // Обновим маркеры
     lastTemplateIdRef.current = template?.id || null;
     lastDataSigRef.current = dataSignature;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elements, wishes, template?.id, dataSignature, pruneOrphans, placeAllByTemplate]);
 
-  // ——— Пересборка по шаблону по месту (когда нужно явно)
-  const applyTemplateStrict = React.useCallback(() => {
-    const built = placeAllByTemplate(elements);
-    const changed = JSON.stringify(built) !== JSON.stringify(elements);
-    if (changed) {
-      setElements(built);
-      const cur = loadOrderDraft();
-      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: built, wishes, autoPlacedByTemplate: template?.id, updatedAt: Date.now() } });
-    }
-    lastTemplateIdRef.current = template?.id || null;
-    lastDataSigRef.current = dataSignature;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements, wishes, template?.id, dataSignature, placeAllByTemplate]);
-
-  // Первичный запуск: если пусто или шаблон/структура изменились
+  // Первичный запуск / смена шаблона/данных
   useEffect(() => {
-    const needTemplate = !elements?.length || (template?.id || null) !== lastTemplateIdRef.current || dataSignature !== lastDataSigRef.current;
-    if (template && needTemplate) {
-      applyTemplateStrict();
+    const need = !elements?.length || (template?.id || null) !== lastTemplateIdRef.current || dataSignature !== lastDataSigRef.current;
+    if (template && need) {
+      // пересобираем и сохраняем только если есть изменения
+      const rebuilt = placeAllByTemplate(elements);
+      if (signature(rebuilt) !== signature(elements)) {
+        setElements(rebuilt);
+        const cur = loadOrderDraft();
+        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: rebuilt, wishes, autoPlacedByTemplate: template?.id, updatedAt: Date.now() } });
+        lastSavedElsSigRef.current = signature(rebuilt);
+        lastSavedWishesRef.current = wishes;
+      }
+      lastTemplateIdRef.current = template?.id || null;
+      lastDataSigRef.current = dataSignature;
     }
-  }, [template, dataSignature, elements?.length, applyTemplateStrict]);
+  }, [template, dataSignature, elements?.length, placeAllByTemplate, wishes]);
 
-  // Глобальные события навигации/фокуса/внешних обновлений — всегда рефрешим из стора
+  // Глобальные события: рефреш из стора (без сохранения, если нет надобности)
   useEffect(() => {
     const onAny = () => refreshFromDraft();
     const onVisible = () => { if (document.visibilityState === "visible") refreshFromDraft(); };
 
     window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
     window.addEventListener("storage", onAny);
-    window.addEventListener("memorial:orderDraftUpdated", onAny as any);
 
     window.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onAny);
@@ -523,14 +463,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     window.addEventListener("popstate", onAny);
     window.addEventListener("hashchange", onAny);
 
-    // первичный форс-рефреш (чтобы убрать возможные пустые рамки сразу)
     refreshFromDraft({ force: true });
 
     return () => {
       window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
       window.removeEventListener("storage", onAny);
-      window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
-
       window.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onAny);
       window.removeEventListener("pageshow", onAny as any);
@@ -539,7 +476,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, [refreshFromDraft]);
 
-  /* ===== DnD / Resize с RAF-троттлингом ===== */
+  /* ===== DnD / Resize (RAF) ===== */
   const dragRef = useRef<{
     id: string; mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
     startX: number; startY: number; start: EditorEl;
@@ -598,7 +535,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
     const clamped = clampBox(nx, ny, nw, nh);
     const nextEl: EditorEl = { ...base, ...clamped };
-
     rafMovePayload.current = { id: d.id, next: nextEl };
     scheduleMoveCommit();
   };
@@ -607,15 +543,19 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (dragRef.current) {
       const cur = loadOrderDraft();
       const latest = elements;
-      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() } });
+      const sig = signature(latest);
+      // Сохраняем только если не совпадает с последним сохранённым
+      if (sig !== lastSavedElsSigRef.current || wishes !== lastSavedWishesRef.current) {
+        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() } });
+        lastSavedElsSigRef.current = sig;
+        lastSavedWishesRef.current = wishes;
+      }
       queuePreviewGeneration();
-      // сигнализируем другим шагам
-      try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
     }
     dragRef.current = null;
   };
 
-  /* ===== Превью в драфт ===== */
+  /* ===== Превью ===== */
   const queuePreviewGeneration = () => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -629,13 +569,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         canvas.height = Math.max(1, Math.floor(H));
         const ctx = canvas.getContext("2d"); if (!ctx) return null;
 
-        // фон
         const grad = ctx.createLinearGradient(0, 0, 0, H);
         grad.addColorStop(0, "#6e6e6e"); grad.addColorStop(0.2, "#464545");
         grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
         ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
 
-        // изделие
         const base = await new Promise<HTMLImageElement | null>((resolve) => {
           const url = item?.url || ""; if (!url) return resolve(null);
           const i = new Image(); i.crossOrigin = "anonymous"; i.loading = "eager"; (i as any).fetchpriority = "high"; i.decoding = "sync";
@@ -757,13 +695,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     }, 300) as unknown as number;
   };
 
-  // Автосохранение и превью при изменениях
+  // Автосохранение (без диспатча событий и без петель)
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
-      const cur = loadOrderDraft();
-      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-      try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
+      const sig = signature(elements);
+      if (sig !== lastSavedElsSigRef.current || wishes !== lastSavedWishesRef.current) {
+        const cur = loadOrderDraft();
+        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+        lastSavedElsSigRef.current = sig;
+        lastSavedWishesRef.current = wishes;
+      }
     }, 200) as unknown as number;
     queuePreviewGeneration();
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -779,9 +721,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     im.src = item.url;
   }, [item?.url]);
 
-  // Внешние обновления драфта (минимально — полное обновление по сигналу)
+  // Внешние обновления драфта (минимально)
   useEffect(() => {
-    const onUpd = () => refreshFromDraft();
+    const onUpd = () => {
+      setDraft(loadOrderDraft());
+      refreshFromDraft();
+    };
     window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
     window.addEventListener("storage", onUpd);
     return () => {
@@ -876,7 +821,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Контент слой ===== */
+  /* ===== Рендер контента ===== */
   const ContentLayer = () => {
     const fam = FONT_CENTURY;
     const wrap = editorWrapRef.current?.getBoundingClientRect();
@@ -884,20 +829,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
 
     return (
-      <div
-        style={{
-          position: "absolute",
-          left: SKETCH_PAD,
-          top: SKETCH_PAD,
-          right: SKETCH_PAD,
-          bottom: SKETCH_PAD,
-          pointerEvents: "none",
-          zIndex: 1000,
-          transform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-          contain: "paint"
-        }}
-      >
+      <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, pointerEvents: "none", zIndex: 1000, transform: "translateZ(0)", backfaceVisibility: "hidden", contain: "paint" }}>
         {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
           const key = el.id.split("-").slice(1).join("-");
           const boxPx = { x: (el.x / 100) * contentW, y: (el.y / 100) * contentH, w: (el.w / 100) * contentW, h: (el.h / 100) * contentH };
@@ -921,24 +853,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const url = p?.photo || "";
             return (
               <div key={`content-${el.id}`} style={wrapperStyle}>
-                {url ? (
-                  <img
-                    src={url}
-                    alt="Портрет"
-                    draggable={false}
-                    loading="eager"
-                    decoding="async"
-                    style={{
-                      width: "100%", height: "100%",
-                      objectFit: "cover",
-                      filter: el.bw ? "grayscale(100%)" : "none",
-                      display: "block",
-                      willChange: "transform",
-                      transform: "translateZ(0)",
-                      backfaceVisibility: "hidden"
-                    }}
-                  />
-                ) : null}
+                {url ? <img src={url} alt="Портрет" draggable={false} loading="eager" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", filter: el.bw ? "grayscale(100%)" : "none", display: "block", willChange: "transform", transform: "translateZ(0)", backfaceVisibility: "hidden" }} /> : null}
               </div>
             );
           }
@@ -969,7 +884,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const isRLM = isRememberLoveMourn(tRaw);
             const padX = Math.max(4, Math.round(boxPx.w * 0.04));
             const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-
             if (isRLM && el.staircase) {
               const r = splitRememberPreserve(tRaw);
               const parts = [r.top, r.mid, r.bot];
@@ -1003,24 +917,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const tr = el.type === "graphic" && el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
             return (
               <div key={`content-${el.id}`} style={wrapperStyle}>
-                {g?.url ? (
-                  <img
-                    src={g.url}
-                    alt={g.name || (el.type === "cross" ? "Крест" : "Графика")}
-                    draggable={false}
-                    loading="eager"
-                    decoding="async"
-                    style={{
-                      width: "100%", height: "100%",
-                      objectFit: "contain",
-                      display: "block",
-                      transform: tr,
-                      filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                      willChange: "transform",
-                      backfaceVisibility: "hidden"
-                    }}
-                  />
-                ) : null}
+                {g?.url ? <img src={g.url} alt={g.name || (el.type === "cross" ? "Крест" : "Графика")} draggable={false} loading="eager" decoding="async" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))", willChange: "transform", backfaceVisibility: "hidden" }} /> : null}
               </div>
             );
           }
@@ -1034,23 +931,29 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   /* ===== Навигация ===== */
   const handleBack = () => {
     const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-    try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
+    const sig = signature(elements);
+    if (sig !== lastSavedElsSigRef.current || wishes !== lastSavedWishesRef.current) {
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+      lastSavedElsSigRef.current = sig;
+      lastSavedWishesRef.current = wishes;
+    }
     setOutro(true);
     setTimeout(() => onBack?.(), 150);
   };
   const handleContinue = () => {
     const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
-    try { window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT)); window.dispatchEvent(new Event("memorial:orderDraftUpdated")); } catch {}
+    const sig = signature(elements);
+    if (sig !== lastSavedElsSigRef.current || wishes !== lastSavedWishesRef.current) {
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+      lastSavedElsSigRef.current = sig;
+      lastSavedWishesRef.current = wishes;
+    }
     const go = onRearSide || onSendOrder || onContinue; if (!go) return;
     setOutro(true);
     setTimeout(() => go({ elements, wishes }), 150);
   };
 
   const MAX_W = 600;
-
-  // Ручки ресайза
   const KNOB_HIT = 28;
   const KNOB_VIS = 14;
   const knob = (left: string, top: string, cursor: string) => ({
@@ -1129,10 +1032,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onError={() => { if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 }); }}
             />
 
-            {/* Контент */}
             <ContentLayer />
 
-            {/* Рамки + ручки */}
             <div
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
@@ -1175,7 +1076,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           </div>
         </section>
 
-        {/* Пожелания */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>Пожелания по эскизу</label>
           <textarea
