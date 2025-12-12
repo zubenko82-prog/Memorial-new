@@ -14,9 +14,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
-// ВАЖНО: теперь берём шаблоны из src/components/SketchTemplate.tsx
-// Предполагается экспорт TEMPLATES (массив с { id, name, slots[] })
-import { TEMPLATES as UITemplates } from "../components/SketchTemplate";
+// ВАЖНО: шаблоны берём из src/components/SketchTemplate.tsx, но с безопасным фолбэком
+// на src/lib/sketchTemplates (если в компоненте нет экспорта TEMPLATES).
+import * as SketchComponent from "../components/SketchTemplate";
+import { SketchTemplates as LibTemplates } from "../lib/sketchTemplates";
 
 /* ===== UI ===== */
 function glassPanelStyle() {
@@ -67,7 +68,6 @@ type EditorEl = {
   staircase?: boolean; // «Помним, любим, скорбим…»
 };
 
-// Тип шаблона/слотов (минимально необходимый), ожидаемый от src/components/SketchTemplate.tsx
 type SketchTemplate = {
   id: string;
   name: string;
@@ -75,7 +75,7 @@ type SketchTemplate = {
 };
 
 /* ===== Helpers ===== */
-const SKETCH_PAD = 8; // внешняя рамка вокруг рабочего поля
+const SKETCH_PAD = 8;
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -112,7 +112,7 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Измерение текста (подбор размеров шрифта) ===== */
+/* ===== Measuring helpers ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -286,13 +286,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const crosses = useMemo(() => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)), [graphics]);
   const others = useMemo(() => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)), [graphics]);
 
-  // Шаблон: берём из src/components/SketchTemplate.tsx (UITemplates)
+  // Шаблон: берём из компонента, но с фолбэком на lib, чтобы сборка не падала, если TEMPLATES не экспортирован
+  const TEMPLATE_POOL: SketchTemplate[] = useMemo(() => {
+    const maybe = (SketchComponent as any).TEMPLATES as SketchTemplate[] | undefined;
+    return maybe && Array.isArray(maybe) && maybe.length > 0 ? maybe : (LibTemplates as unknown as SketchTemplate[]);
+  }, []);
   const template: SketchTemplate | null = useMemo(() => {
     const preferred = peopleBlocks.length > 1 ? "double_portrait" : "classic_single";
-    return (UITemplates as SketchTemplate[]).find(t => t.id === preferred) || (UITemplates as SketchTemplate[])[0] || null;
-  }, [peopleBlocks.length]);
+    return TEMPLATE_POOL.find(t => t.id === preferred) || TEMPLATE_POOL[0] || null;
+  }, [peopleBlocks.length, TEMPLATE_POOL]);
 
-  /* ===== Первичная раскладка строго по SketchTemplate из components/SketchTemplate.tsx ===== */
+  /* ===== Первичная раскладка строго по SketchTemplate ===== */
   const applyTemplateStrict = React.useCallback(() => {
     if (!template) return;
     setElements((prev) => {
@@ -318,7 +322,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         next.push(el);
       });
 
-      // 2) Метрика (personName + dates -> metric), ПРОПИСНЫЕ по умолчанию
+      // 2) Метрика (personName + dates -> metric)
       const nameSlots = slotsByType(template, "personName");
       const dateSlots = slotsByType(template, "dates");
       const metricRectsNorm: Norm[] = peopleBlocks.map((_, i) => {
@@ -337,7 +341,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         next.push(el);
       });
 
-      // 3) Эпитафии (epitaph): если их несколько — делим слот вертикально
+      // 3) Эпитафии
       const epSlots = slotsByType(template, "epitaph");
       let epRectsNorm: Norm[] = [];
       if (epitaphs.length > 0) {
@@ -365,7 +369,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         next.push(el);
       });
 
-      // 4) Крест (cross): если один слот — все кресты равномерно в нём по горизонтали
+      // 4) Кресты
       const crossSlots = slotsByType(template, "cross");
       if (crosses.length > 0) {
         let crossRectsNorm: Norm[] = [];
@@ -385,7 +389,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         });
       }
 
-      // 5) Прочая графика: decor/flower -> graphic по слотам, иначе — низ
+      // 5) Декор/цветы как graphic
       const decorSlots = template.slots
         .filter(s => s.type === "decor" || s.type === "flower")
         .map(s => s.rect as Norm);
@@ -404,7 +408,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         next.push(el);
       });
 
-      // Сохраняем
       const cur = loadOrderDraft();
       saveOrderDraft({
         ...cur,
@@ -497,7 +500,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  /* ===== Превью в драфт (мини/большое) ===== */
+  /* ===== Превью в драфт ===== */
   const queuePreviewGeneration = () => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
