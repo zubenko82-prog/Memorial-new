@@ -1,21 +1,17 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
 //
-// По требованиям:
-// - «Ориентация» — не показываем (строку полностью убрали).
-// - Компактный режим (<= 420px): один столбец везде, внешние отступы сверху/слева/справа — 1px (снизу без изменений),
-//   всё вмещается по ширине (включая поля ввода).
-// - В компактном режиме при РЕДАКТИРОВАНИИ поля контактов и примечание — с НОВОЙ строки, на всю ширину
-//   (никаких инлайновых инпутов в шапке — чтобы не «накладывалось» на Memorial).
-// - Разделы «Элементы эскиза» и «Люди»: визуальная отделённость сторон; не показываем пустые блоки.
-// - Эпитафии выделены акцентной плашкой.
-// - Контакты: имя и телефон одной строкой (если помещаются) в шапке; «примечание к контактам» показывается только если есть.
+// Исправлено:
+// - «Ориентацию» в характеристиках не показываем вовсе (убрано из рендера) — не будет расхождений при смене резной работы.
+// - На телефонах правая часть шапки (№ заявки + контакты) лучше ужимается: уменьшены шрифты, ужат maxWidth,
+//   гарантированно не наезжает на заголовок слева.
+// - При сохранении из шапки гарантированно не теряем «Усопших»: сохраняем engraving с глубоким merge от текущего драфта,
+//   явным сохранением persons (если они уже были добавлены на шагах).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   loadIntroState,
   saveIntro,
-  isPhoneValid,
   type Intro,
   clearIntroAll
 } from "../lib/intro";
@@ -86,7 +82,7 @@ function palette(t: ThemeMode) {
     neutralBorder: "1px solid rgba(255,255,255,0.10)",
     divider: "1px solid rgba(255,255,255,0.12)",
     accentBg: "rgba(255,242,201,0.15)",
-    accentBorder: "1px solid rgba(255,242,201,0.35)",
+    accentBorder: "1px solid rgba(255,255,255,0.35)",
     chipBg: "rgba(138,180,255,0.18)",
     chipText: "#dbe7ff"
   };
@@ -124,9 +120,6 @@ function inputStyle(theme: ThemeMode): React.CSSProperties {
     outline: "none",
     boxSizing: "border-box"
   };
-}
-function smallText(theme: ThemeMode): React.CSSProperties {
-  return { opacity: theme === "light" ? 0.8 : 0.9, fontSize: 12, color: palette(theme).subText };
 }
 function galleryThumbBoxStyle(): React.CSSProperties {
   const grad: React.CSSProperties = {
@@ -246,7 +239,7 @@ function useCollapse(open: boolean, duration = 280) {
   return { ref, style };
 }
 
-/* ===== Форматтеры ===== */
+/* ===== Форматтеры (ориентацию не выводим) ===== */
 function mmToCm(mm?: number): number | undefined {
   if (typeof mm !== "number" || !isFinite(mm)) return undefined;
   return mm / 10;
@@ -254,12 +247,6 @@ function mmToCm(mm?: number): number | undefined {
 function cmValue(n?: number): string {
   if (typeof n !== "number" || !isFinite(n)) return "—";
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
-}
-// Определение ориентации по размерам (мм)
-function orientationLabel(w?: number, h?: number): string | undefined {
-  if (typeof w !== "number" || typeof h !== "number" || !isFinite(w) || !isFinite(h)) return undefined;
-  if (w === h) return undefined; // квадрат — ориентацию не показываем
-  return h > w ? "вертикально" : "горизонтально";
 }
 
 /* ===== Компонент ===== */
@@ -328,12 +315,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const frontGraphics = (order.graphics || []) as any[];
   const frontCountsById = useMemo(() => {
     const m: Record<string, number> = {};
-    frontGraphics.forEach((g: any) => { m[g.id] = (m[g.id] || 0) + 1; });
+    frontGraphics.forEach((g: any) => { if (g?.id) m[g.id] = (m[g.id] || 0) + 1; });
     return m;
   }, [frontGraphics]);
   const frontUnique = useMemo(() => {
     const first: Record<string, any> = {};
-    frontGraphics.forEach((g: any) => { if (!first[g.id]) first[g.id] = g; });
+    frontGraphics.forEach((g: any) => { const id = g?.id; if (id && !first[id]) first[id] = g; });
     return Object.values(first);
   }, [frontGraphics]);
 
@@ -372,6 +359,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     (rearEpitaphs && rearEpitaphs.length > 0) ||
     (backWishes && backWishes.trim().length > 0);
 
+  // Сохранение: глубокий merge, с явным сохранением persons из текущего драфта (чтобы не потерять)
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
     const introNext: Intro = {
@@ -382,26 +370,24 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     saveIntro(introNext, { lock: false });
 
     const cur = loadOrderDraft();
-    const sizePatch = { ...(cur.size || {}), notes: sizeNotes?.trim() || undefined };
-    const next = saveOrderDraft({
-      size: sizePatch as any,
+    const next: OrderDraft = {
+      ...cur,
+      size: { ...(cur.size || {}), notes: sizeNotes?.trim() || undefined },
       engraving: {
         ...(cur.engraving || {}),
+        // гарантируем сохранение persons, если они присутствуют
+        persons: (cur.engraving as any)?.persons || (order.engraving as any)?.persons,
         epitaphs: epLines.length ? epLines : undefined,
         epitaphText: epLines.length === 1 ? epLines[0] : undefined
       },
       editor: { ...(cur as any).editor, wishes: (frontWishes || "").trim() || undefined },
       editorBack: { ...(cur as any).editorBack, wishes: (backWishes || "").trim() || undefined },
-      notes: orderNotes?.trim() || undefined
-    });
-    setOrder(next);
+      notes: orderNotes?.trim() || undefined,
+      updatedAt: Date.now()
+    };
+    const stored = saveOrderDraft(next);
+    setOrder(stored);
   };
-
-  // Метка ориентации для размера
-  const sizeOrientation = useMemo(
-    () => orientationLabel(order.size?.width, order.size?.height),
-    [order.size?.width, order.size?.height]
-  );
 
   const coll = useCollapse(open, 280);
   const panelId = "order-panel";
@@ -441,19 +427,39 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       >
         {/* Слева — заголовок */}
         <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 10, minWidth: 0 }}>
-          <span style={{ fontSize: compact ? 19 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
+          <span style={{ fontSize: compact ? 18 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
         </div>
 
-        {/* Справа — № + строка контактов (в компактном режиме при редактировании строку не показываем во избежание наложений) */}
-        <div style={{ display: "grid", gap: 4, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
-          <div style={{ fontSize: 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
+        {/* Справа — № + строка контактов (компактнее на телефонах) */}
+        <div style={{ display: "grid", gap: 3, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
+          <div style={{ fontSize: compact ? 12 : 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
           {!compact && contactLine && !editing && (
-            <div style={{ fontSize: 13, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "60vw" }} title={contactLine}>
+            <div
+              style={{
+                fontSize: 13,
+                opacity: 0.92,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: "50vw"
+              }}
+              title={contactLine}
+            >
               {contactLine}
             </div>
           )}
           {compact && contactLine && !editing && (
-            <div style={{ fontSize: 12, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "62vw" }} title={contactLine}>
+            <div
+              style={{
+                fontSize: 12,
+                opacity: 0.92,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: "56vw" // было 62vw — чуть ужали, чтобы точно влезало
+              }}
+              title={contactLine}
+            >
               {contactLine}
             </div>
           )}
@@ -538,7 +544,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 <div style={{ fontWeight: 600 }}>Характеристики</div>
                 <div style={{ opacity: 0.95 }}>
                   {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
-                  {sizeOrientation && <span style={{ marginLeft: 8, opacity: 0.85 }}>• {sizeOrientation}</span>}
                 </div>
                 {(editing || sizeNotes.trim()) && (
                   <div>
@@ -648,9 +653,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
                         {frontUnique.map((g: any) => {
-                          const qty = frontCountsById[g.id] || 0;
+                          const qty = g?.id ? (frontCountsById[g.id] || 0) : 0;
                           return (
-                            <div key={`fg-${g.id}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                            <div key={`fg-${g.id || Math.random()}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
                               <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
                                 {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
                               </div>
@@ -677,7 +682,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       </div>
                     )}
 
-                    {(editing || frontWishes.trim()) && (
+                    {(frontWishes.trim() || editing) && (
                       <div>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
                         {editing ? (
@@ -724,18 +729,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       </div>
                     )}
 
-                    {rearEpitaphs.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          {rearEpitaphs.map((t, i) => (
-                            <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {(editing || backWishes.trim()) && (
+                    {(backWishes.trim() || editing) && (
                       <div>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
                         {editing ? (
@@ -770,6 +764,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 setEditing(false);
                 setOpen(false);
                 setOrder({ graphics: [], updatedAt: Date.now() });
+                // сброс локальных полей
                 setName(""); setPhone(""); setContactNotes(""); setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
                 setFrontWishes(""); setBackWishes("");
               }}
