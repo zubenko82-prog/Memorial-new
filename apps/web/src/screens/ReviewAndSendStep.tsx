@@ -1,17 +1,17 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Реализовано:
-// - Подсказка сверху (точный текст).
-// - Редактируемые «Контакты» и «Резная работа/размеры (с ориентацией)».
-// - Данные сгруппированы по сторонам (Лицевая/Тыльная): Усопшие → Графика → Эпитафии → Пожелания.
-//   Пустые секции не показываем. Миниатюры изображений «вписываются» (object-fit: contain).
-// - Эскизы показываем один раз, в 2 столбца.
-// - Силуэт резной работы заливается сплошным цветом rgba(25,25,25,0.9) и расположен
-//   ПОД превью, НО ПЕРЕД градиентом фона (т.е. между фоном и превью).
-//   Для PNG используем mask-image; для JPG/WebP — fallback (подкрашенная картинка).
-//   Для тыльной стороны силуэт зеркалим по X.
-// - Все добавленные элементы (превью, списки и т.д.) выше силуэта (над силуэтом).
+// Исправлено/добавлено:
+// - Тумба по умолчанию отмечена (extraBase: true, если ранее не задано).
+// - Для эпитафии на плите: быстрый выбор + разворачиваемый список (как на шаге эпитафии).
+// - Лицевая карточка превью: СИЛУЭТ НЕ показываем (исчез «неотзеркаленный контур» под изображением в Telegram).
+// - Тыльная карточка превью: силуэт оставлен и зеркалится по X, как задумано.
+// - Для превью используем previewHiUrl, если есть, иначе previewUrl.
+// - Если превью нет — выводим «Нет» (вместо «Превью отсутствует»).
+// - Порядок слоёв: фон-градиент (низ) → силуэт (только на тыльной) → превью (верх).
+//
+// Прочее:
+// - Миниатюры и списки без изменений, пустые секции скрываются.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -108,13 +108,116 @@ function orientationLabelShort(o?: string) {
   return "";
 }
 
+/* ===== Эпитафии: быстрый выбор и пресеты ===== */
+const QUICK_EPITAPHS: string[] = [
+  "Помним, любим, скорбим…",
+  "Светлая память",
+  "Вечная память",
+  "В наших сердцах навсегда",
+  "С любовью и благодарностью",
+  "Покойся с миром"
+];
+const EPITAPH_PRESETS: Array<{ title: string; items: string[] }> = [
+  {
+    title: "Классические",
+    items: [
+      "Память о тебе будет жить в наших сердцах",
+      "Ты навсегда с нами",
+      "Светлая память о тебе не угаснет"
+    ]
+  },
+  {
+    title: "Короткие",
+    items: [
+      "Любим. Помним. Скорбим.",
+      "Светлая память",
+      "Навсегда в наших сердцах"
+    ]
+  },
+  {
+    title: "Духовные",
+    items: [
+      "Царствие Небесное",
+      "Со святыми упокой",
+      "Да будет земля тебе пухом"
+    ]
+  }
+];
+
+function TagButton({ text, onClick }: { text: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...glassButtonStyle("nano"),
+        padding: "4px 8px",
+        fontSize: 12,
+        lineHeight: 1.2
+      }}
+    >
+      {text}
+    </button>
+  );
+}
+
+function EpitaphQuickPicker({
+  value,
+  setValue
+}: {
+  value: string;
+  setValue: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const handlePick = (t: string) => {
+    const cur = (value || "").trim();
+    if (!cur) setValue(t);
+    else if (!cur.includes(t)) setValue((cur + "\n" + t).trim());
+  };
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {QUICK_EPITAPHS.map((t) => (
+          <TagButton key={t} text={t} onClick={() => handlePick(t)} />
+        ))}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          style={{ ...glassButtonStyle("nano") }}
+        >
+          {open ? "Скрыть список" : "Готовые эпитафии"}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ ...sectionBox }}>
+          <div style={{ display: "grid", gap: 10 }}>
+            {EPITAPH_PRESETS.map((cat, i) => (
+              <div key={`ep-cat-${i}`} style={{ display: "grid", gap: 6 }}>
+                <div style={{ fontWeight: 600 }}>{cat.title}</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {cat.items.map((t) => (
+                    <TagButton key={t} text={t} onClick={() => handlePick(t)} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ===== Underlay (градиент + СИЛУЭТ под превью) ===== */
 function Underlay({
   itemUrl,
-  mirror = false
+  mirror = false,
+  showSilhouette = true
 }: {
   itemUrl?: string;
   mirror?: boolean;
+  showSilhouette?: boolean;
 }) {
   const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
 
@@ -131,9 +234,9 @@ function Underlay({
     />
   );
 
-  // Силуэт через маску для PNG
+  // Силуэт только если разрешён
   const maskSilhouette =
-    itemUrl && isPng ? (
+    itemUrl && isPng && showSilhouette ? (
       <div
         style={{
           position: "absolute",
@@ -155,9 +258,8 @@ function Underlay({
       />
     ) : null;
 
-  // Fallback для JPEG/WebP — «подкрашенная» картинка (будет под превью)
   const tintSilhouette =
-    itemUrl && !isPng ? (
+    itemUrl && !isPng && showSilhouette ? (
       <img
         src={itemUrl}
         alt=""
@@ -201,13 +303,15 @@ function SidePreview({
   miniUrl,
   itemUrl,
   mirror = false,
-  aspect
+  aspect,
+  showSilhouette = true
 }: {
   title: string;
   miniUrl?: string;
   itemUrl?: string;
   mirror?: boolean;
   aspect?: string;
+  showSilhouette?: boolean;
 }) {
   return (
     <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
@@ -222,7 +326,7 @@ function SidePreview({
         }}
       >
         {/* Фон + Силуэт (силуэт под превью, над фоном) */}
-        <Underlay itemUrl={itemUrl} mirror={mirror} />
+        <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette={showSilhouette} />
 
         {/* Превью (все элементы — сверху) */}
         {miniUrl ? (
@@ -251,7 +355,7 @@ function SidePreview({
               opacity: 0.9
             }}
           >
-            Превью отсутствует
+            Нет
           </div>
         )}
       </div>
@@ -477,8 +581,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  const frontMini = (draft as any)?.editor?.previewUrl as string | undefined;
-  const backMini = (draft as any)?.editorBack?.previewUrl as string | undefined;
+  // Используем Hi-Res превью, если есть; иначе обычное.
+  const frontMini = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined);
+  const backMini = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined);
 
   /* ——— Лицевая сторона ——— */
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
@@ -538,7 +643,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   /* ——— Дополнительно ——— */
   const initialExtras = (draft as any)?.extras || {};
-  const [extraBase, setExtraBase] = useState<boolean>(!!initialExtras.base);
+  // ТУМБА ПО УМОЛЧАНИЮ: если не задано — true
+  const [extraBase, setExtraBase] = useState<boolean>((initialExtras.base ?? true) as boolean);
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
   const [extraPlate, setExtraPlate] = useState<boolean>(!!initialExtras.headstonePlate);
 
@@ -618,6 +724,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setPlateEpitaph("");
   };
 
+  // Сохраняем extras на любые изменения (включая дефолт тумбы)
   useEffect(() => {
     const prev = loadOrderDraft();
     const extras: any = {
@@ -831,8 +938,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Эскизы — один раз (2 столбца) */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} />
-          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} />
+          {/* Лицевая — БЕЗ силуэта */}
+          <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} showSilhouette={false} />
+          {/* Тыльная — с силуэтом, ОТЗЕРКАЛЕННАЯ */}
+          <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} showSilhouette />
         </div>
       </section>
 
@@ -992,15 +1101,16 @@ function PlateBlock(props: {
             </div>
           </div>
 
-          {/* Эпитафия плиты */}
+          {/* Эпитафия плиты: быстрый выбор + список */}
           <div>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафия</div>
+            <EpitaphQuickPicker value={plateEpitaph} setValue={setPlateEpitaph} />
             <textarea
               value={plateEpitaph}
               onChange={(e) => setPlateEpitaph(e.target.value)}
               rows={3}
               placeholder="Текст эпитафии на плите…"
-              style={{ ...inputStyle(), resize: "vertical" }}
+              style={{ ...inputStyle(), resize: "vertical", marginTop: 8 }}
             />
           </div>
 
