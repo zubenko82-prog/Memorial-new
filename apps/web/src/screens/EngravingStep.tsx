@@ -513,14 +513,23 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
                           </Field>
                           {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
                         </div>
-                        <PhotoField
-                          label="Фотография"
-                          value={{
-                            url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
-                            dataUrl: p.photoDataUrl ?? undefined
-                          }}
-                          onChange={(pv) => setPersonPhotoById(p.id, pv)}
-                        />
+                         <PhotoField
+    label="Фотография"
+    value={{ url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
+    onChange={(pv) => setPersonPhotoById(p.id, pv)}
+  />
+  {!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl) && (
+    <div
+      style={{
+        marginTop: 6,
+        fontSize: 12,
+        lineHeight: 1.35,
+        opacity: 0.92
+      }}
+    >
+      Фотография не загружена. При отсутствии цифрового файла можно сфотографировать на телефон. Чем выше качество, тем лучше будет изображение на памятнике.
+    </div>
+  )}
                       </div>
                     </div>
                   )}
