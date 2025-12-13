@@ -2,9 +2,9 @@
 // Редактор по шаблонам из SketchTemplate: без мерцаний, с DnD/resize,
 // предпросмотром и пожеланиями. Исправлено зацикливание обновлений:
 // - refreshFromDraft не пишет в стор (только читает и синхронизирует state);
+// - центральная подписка на события — стабильная (effect без deps + ref);
 // - убраны ручные dispatch событий после сохранений;
-// - оставлена одна централизованная подписка на события и фокус/видимость;
-// - сохранения выполняются авто-сейвом и по действиям пользователя.
+// - запись в стор выполняется авто‑сейвом и по действиям пользователя.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -358,10 +358,10 @@ export default function EditorStep({
   const lastDataSigRef = useRef<string>("");
   const lastTemplateIdRef = useRef<string | null>(null);
   const isRefreshingRef = useRef(false);
+  const lastStoreSigRef = useRef<string>("");
 
-  // RAF DnD
-  const rafMoveScheduled = useRef(false);
-  const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
+  // Стабильная ссылка на refresh для обработчиков (effect без deps)
+  const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
 
   // aspectRatio
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -662,7 +662,7 @@ export default function EditorStep({
     [peopleBlocks, epitaphs, crosses, others]
   );
 
-  // ——— Сигнатура состава данных
+  // ——— Сигнатура состава данных (для принятия решения о пересборке)
   const dataSignature = useMemo(() => {
     const tp = template?.id || "none";
     const ppl = peopleBlocks.map((p) => p.id).join(",");
@@ -679,7 +679,18 @@ export default function EditorStep({
       isRefreshingRef.current = true;
       try {
         const fresh = loadOrderDraft();
-        setDraft(fresh);
+
+        // сравним значимые части стора, чтобы не дергать setDraft без нужды
+        const storePick = {
+          item: fresh?.item || null,
+          engraving: fresh?.engraving || null,
+          graphics: fresh?.graphics || null
+        };
+        const newSig = JSON.stringify(storePick);
+        if (newSig !== lastStoreSigRef.current) {
+          setDraft(fresh);
+          lastStoreSigRef.current = newSig;
+        }
 
         const currentEls = elements;
         const incomingEls: EditorEl[] =
@@ -691,40 +702,32 @@ export default function EditorStep({
           (template?.id || null) !== lastTemplateIdRef.current;
         const dataChanged = dataSignature !== lastDataSigRef.current;
 
-        // 1) Подхват внешних изменений
+        // 1) Подхват внешних изменений (только в state)
         let baseEls = opts?.force
           ? incomingEls
           : JSON.stringify(incomingEls) !== JSON.stringify(currentEls)
           ? incomingEls
           : currentEls;
 
-        // 2) Чистка осиротевших без записи в стор
+        // 2) Чистка осиротевших
         const pruned = pruneOrphans(baseEls);
 
-        // 3) Пересборка по шаблону при изменении структуры/шаблона
+        // 3) Пересборка по шаблону при изменениях структуры/шаблона
         let finalEls = pruned;
         if (opts?.force || templateIdChanged || dataChanged) {
           finalEls = placeAllByTemplate(pruned);
         }
 
-        // 4) Применить к state, но НЕ сохранять здесь (автосейв сделает это единоразово)
-        const changed =
-          JSON.stringify(finalEls) !== JSON.stringify(currentEls) ||
-          (wishes !== incomingWishes &&
-            (opts?.force ||
-              JSON.stringify(incomingEls) !== JSON.stringify(currentEls)));
-        if (changed) {
-          if (JSON.stringify(finalEls) !== JSON.stringify(currentEls)) {
-            setElements(finalEls);
-          }
-          if (
-            wishes !== incomingWishes &&
-            (opts?.force ||
-              JSON.stringify(incomingEls) !== JSON.stringify(currentEls))
-          ) {
-            setWishes(incomingWishes || "");
-          }
-        }
+        // 4) Применить к state, но НЕ сохранять здесь (автосейв сделает это сам)
+        const shouldSetEls =
+          JSON.stringify(finalEls) !== JSON.stringify(currentEls);
+        const shouldSetWishes =
+          wishes !== incomingWishes &&
+          (opts?.force ||
+            JSON.stringify(incomingEls) !== JSON.stringify(currentEls));
+
+        if (shouldSetEls) setElements(finalEls);
+        if (shouldSetWishes) setWishes(incomingWishes || "");
 
         // обновим маркеры
         lastTemplateIdRef.current = template?.id || null;
@@ -735,6 +738,11 @@ export default function EditorStep({
     },
     [elements, wishes, template?.id, dataSignature, pruneOrphans, placeAllByTemplate]
   );
+
+  // ——— Стабилизируем ссылку на refresh, чтобы подписка была с пустыми deps
+  useEffect(() => {
+    refreshRef.current = refreshFromDraft;
+  }, [refreshFromDraft]);
 
   // ——— Принудительная пересборка по шаблону (только state, без записи)
   const applyTemplateStrict = React.useCallback(() => {
@@ -758,11 +766,11 @@ export default function EditorStep({
     }
   }, [template, dataSignature, elements?.length, applyTemplateStrict]);
 
-  // Централизованная подписка: любые события → refreshFromDraft (без записи)
+  // Централизованная подписка (один раз): любые события → refreshFromDraft (без записи)
   useEffect(() => {
-    const onAny = () => refreshFromDraft();
+    const onAny = () => refreshRef.current();
     const onVisible = () => {
-      if (document.visibilityState === "visible") refreshFromDraft();
+      if (document.visibilityState === "visible") refreshRef.current();
     };
 
     window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
@@ -776,7 +784,7 @@ export default function EditorStep({
     window.addEventListener("hashchange", onAny);
 
     // первичный форс-рефреш — привести state в консистентный вид
-    refreshFromDraft({ force: true });
+    refreshRef.current({ force: true });
 
     return () => {
       window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
@@ -789,7 +797,7 @@ export default function EditorStep({
       window.removeEventListener("popstate", onAny);
       window.removeEventListener("hashchange", onAny);
     };
-  }, [refreshFromDraft]);
+  }, []);
 
   /* ===== DnD / Resize с RAF‑троттлингом ===== */
   const dragRef = useRef<{
@@ -808,6 +816,9 @@ export default function EditorStep({
     startY: number;
     start: EditorEl;
   } | null>(null);
+
+  const rafMoveScheduled = useRef(false);
+  const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
 
   const scheduleMoveCommit = () => {
     if (rafMoveScheduled.current) return;
