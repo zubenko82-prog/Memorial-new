@@ -561,8 +561,7 @@ export default function EngravingStep({
                 }}
                 style={linkLikeStyle()}
                 title="Компактный вид"
-              >
-                ☰
+              >                
               </a>
             )}
 
