@@ -13,8 +13,8 @@
 // - validateDates/parseFlexibleDate на месте.
 // - Подключён общий SketchTemplate (общий предпросмотр с гориз./верт. шаблонами) из ../components/SketchTemplate.
 // - Прозрачность резной работы настраивается через carvingOpacity (передаётся в SketchTemplate).
-// - ДОБАВЛЕНО: передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
-// - ДОБАВЛЕНО: если фотография не загружена — показываем поясняющее сообщение под PhotoField.
+// - Передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
+// - ПОДСКАЗКА: при отсутствии фото выводим подсказку НАД кнопкой «Прикрепить фото».
 
 import React, {
   useCallback,
@@ -101,9 +101,7 @@ function normalizePersonsForSave(persons: Person[]): NormalizedPerson[] {
     photoPreview: p.photoDataUrl ?? p.photoUrl ?? null
   }));
 }
-function draftPersonsToLocal(
-  list?: NormalizedPerson[] | null
-): Person[] {
+function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
   if (!Array.isArray(list)) return [];
   return list.map((d, i) => ({
     id: d.id || `p-${i}`,
@@ -440,7 +438,6 @@ export default function EngravingStep({
       updatedAt: Date.now()
     });
     onSaveDraft?.({ persons: norm });
-    // Обновляем снапшот, чтобы предпросмотр оставался консистентным
     draftSnapRef.current = stored;
   }, [persons, item, onSaveDraft]);
 
@@ -455,7 +452,6 @@ export default function EngravingStep({
     if (!canContinue) return;
     flushSaveNow();
     setIsRendering(true);
-    // тут могла бы быть генерация эскиза
     setIsRendering(false);
     setOutro(true);
     setTimeout(() => onDone?.({ persons, sketchDataUrl: null }), 200);
@@ -591,6 +587,7 @@ export default function EngravingStep({
           <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>
             Информация об усопших
           </h2>
+          <div>Для изменения порядка нажмите (▲/▼) напротив имени. Компактный вид ☰</div>
 
           <div style={{ display: "grid", gap: 10 }}>
             {persons.map((p, idx) => {
@@ -790,8 +787,20 @@ export default function EngravingStep({
                           )}
                         </div>
 
-                        {/* Фото + пояснение при отсутствии фото */}
+                        {/* Фото + подсказка над кнопкой «Прикрепить фото» при отсутствии фото */}
                         <div>
+                          {!hasPhoto && (
+                            <div
+                              style={{
+                                marginBottom: 6,
+                                fontSize: 12,
+                                lineHeight: 1.35,
+                                opacity: 0.92
+                              }}
+                            >
+                              Фотография не загружена. При отсутствии цифрового файла можно сфотографировать на телефон. Чем выше качество, тем лучше будет изображение на памятнике.
+                            </div>
+                          )}
                           <PhotoField
                             label="Фотография"
                             value={{
@@ -803,18 +812,6 @@ export default function EngravingStep({
                             }}
                             onChange={(pv) => setPersonPhotoById(p.id, pv)}
                           />
-                          {!hasPhoto && (
-                            <div
-                              style={{
-                                marginTop: 6,
-                                fontSize: 12,
-                                lineHeight: 1.35,
-                                opacity: 0.92
-                              }}
-                            >
-                              Фотография не загружена. При отсутствии цифрового файла можно сфотографировать на телефон. Чем выше качество, тем лучше будет изображение на памятнике.
-                            </div>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -831,7 +828,7 @@ export default function EngravingStep({
           </div>
         </section>
 
-        {/* Эскиз — общий шаблон SketchTemplate (ДОБАВЛЕНЫ ЭПИТАФИИ) */}
+        {/* Эскиз — общий шаблон SketchTemplate (с эпитафиями) */}
         <section
           ref={previewRef as any}
           style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}
