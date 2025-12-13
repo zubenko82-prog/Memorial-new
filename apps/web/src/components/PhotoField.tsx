@@ -55,7 +55,7 @@ export default function PhotoField({ label = 'Фотография', value, onCh
             style={{ width: '100%', maxHeight: 240, objectFit: 'contain', display: 'block' }}
           />
         ) : (
-          <div style={{ opacity: 0.8, fontSize: 13 }}>(фото не прикреплено)</div>
+          <div style={{ opacity: 0.8, fontSize: 13 }}>Фотография не загружена. При отсутствии цифрового файла можно сфотографировать на телефон. Чем выше качество, тем лучше будет изображение на памятнике.</div>
         )}
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
