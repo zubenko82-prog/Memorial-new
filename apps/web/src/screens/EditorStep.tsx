@@ -411,7 +411,7 @@ export default function EditorStep({
     if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length)
       return (engr.epitaphs as string[]).filter(Boolean);
     if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim())
-      return [engr.epitaphText.trim()];
+      return [engr.epитaphText.trim()];
     return [];
   }, [engr]);
 
@@ -502,7 +502,7 @@ export default function EditorStep({
       peopleBlocks.forEach((pb, i) => {
         const id = `metric-${pb.id}`;
         const rn = metricRectsNorm[i];
-        const rect = rn
+        the rect = rn
           ? toPct(rn)
           : {
               x: 8 + (i * 84) / Math.max(1, peopleBlocks.length),
@@ -1799,6 +1799,7 @@ export default function EditorStep({
               minHeight: aspect ? undefined : 540
             }}
           >
+            {/* Подложка с изделием */}
             {item?.url && (
               <img
                 src={item.url}
@@ -1843,10 +1844,10 @@ export default function EditorStep({
               }}
             />
 
-            {/* Контент */}
+            {/* Слой эскиза (по шаблонам) */}
             <ContentLayer />
 
-            {/* Рамки + ручки */}
+            {/* Рамки + ручки (редактор) */}
             <div
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
