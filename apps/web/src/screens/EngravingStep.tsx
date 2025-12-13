@@ -7,7 +7,9 @@
 // - Перемещение по порядку (▲/▼) — оставлено.
 //
 // Навигация:
-// - Кнопка «Список» (или ☰ при дефиците места) — сворачивает все аккордеоны.
+// - Внутренняя навигация — липкая (sticky).
+// - «Компактный вид ☰» — ссылка; при нажатии сворачивает все аккордеоны с усопшими.
+//   Показываем «Компактный вид ☰» только если усопших больше одного.
 //
 // Исправлено/упрощено:
 // - validateDates/parseFlexibleDate на месте.
@@ -75,6 +77,14 @@ function glassPanelStyle() {
     color: "#fff",
     boxSizing: "border-box"
   } as React.CSSProperties;
+}
+function linkLikeStyle(): React.CSSProperties {
+  return {
+    color: "#8ab4ff",
+    textDecoration: "underline",
+    cursor: "pointer",
+    background: "transparent"
+  };
 }
 
 /* ===== Helpers ===== */
@@ -376,23 +386,15 @@ export default function EngravingStep({
   const navRef = useRef<HTMLDivElement | null>(null);
   const navRowRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState(56);
-  const [navCompact, setNavCompact] = useState(false);
 
   useLayoutEffect(() => {
     const measure = () => {
       const h = navRef.current?.getBoundingClientRect().height || 0;
       setNavH(h);
-      const inner = navRowRef.current;
-      const outer = navRef.current;
-      if (inner && outer) {
-        const compact = inner.scrollWidth > outer.clientWidth - 8;
-        setNavCompact(compact);
-      }
     };
     measure();
     const ro = new ResizeObserver(measure);
     if (navRef.current) ro.observe(navRef.current);
-    if (navRowRef.current) ro.observe(navRowRef.current);
     window.addEventListener("resize", measure);
     return () => {
       ro.disconnect();
@@ -421,7 +423,7 @@ export default function EngravingStep({
     });
   };
 
-  // Кнопка «Список» — свернуть все
+  // Сворачивание всех аккордеонов
   const collapseAll = useCallback(() => {
     setOpenMap(Object.fromEntries(persons.map((p) => [p.id, false])));
     if (persons.length > 0) scrollToForm(persons[0].id);
@@ -496,7 +498,7 @@ export default function EngravingStep({
     }
     if (Array.isArray(initial?.epitaphs)) return (initial!.epitaphs as string[]).filter(Boolean);
     if (typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()) {
-      return initial!.epitaphText!
+      return initial!.епитaphText!
         .split(/\r?\n/)
         .map((s: string) => s.trim())
         .filter(Boolean);
@@ -542,22 +544,27 @@ export default function EngravingStep({
             ref={navRowRef}
             style={{
               display: "flex",
-              gap: 6,
+              gap: 8,
               padding: 12,
               flexWrap: "wrap",
               alignItems: "center",
               justifyContent: "flex-start"
             }}
           >
-            <button
-              type="button"
-              onClick={collapseAll}
-              style={glassButtonStyle("nano")}
-              title="Список"
-              aria-label="Список"
-            >
-              {navCompact ? "☰" : "Список"}
-            </button>
+            {/* Ссылка «Компактный вид ☰» — только если больше одного усопшего */}
+            {persons.length > 1 && (
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  collapseAll();
+                }}
+                style={linkLikeStyle()}
+                title="Компактный вид"
+              >
+                ☰
+              </a>
+            )}
 
             {persons.map((p) => {
               const name =
@@ -587,7 +594,24 @@ export default function EngravingStep({
           <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>
             Информация об усопших
           </h2>
-          <div style={{ margin: "0 0 8px 0", textAlign: "left" }}> Для изменения порядка нажмите (▲/▼) напротив имени. Компактный вид ☰</div>
+
+          {/* Подсказка — только если больше одного усопшего. «Компактный вид ☰» — ссылка */}
+          {persons.length > 1 && (
+            <div style={{ margin: "0 0 8px 0", textAlign: "left" }}>
+              Для изменения порядка нажмите (▲/▼) напротив имени.{" "}
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  collapseAll();
+                }}
+                style={linkLikeStyle()}
+                title="Свернуть все — компактный вид"
+              >
+                Компактный вид ☰
+              </a>
+            </div>
+          )}
 
           <div style={{ display: "grid", gap: 10 }}>
             {persons.map((p, idx) => {
