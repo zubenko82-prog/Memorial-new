@@ -469,7 +469,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
         {/* Список персон */}
         <section>
           <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
-          <p>Изменить порядок (▲/▼), нажмите ☰ чтобы свернуть список</p>
+          <div><p>Изменить порядок (▲/▼), нажмите ☰ чтобы свернуть список</p></div>
           <div style={{ display: "grid", gap: 10 }}>
             {persons.map((p, idx) => {
               const id = p.id;
