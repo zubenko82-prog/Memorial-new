@@ -502,7 +502,7 @@ export default function EditorStep({
       peopleBlocks.forEach((pb, i) => {
         const id = `metric-${pb.id}`;
         const rn = metricRectsNorm[i];
-        the rect = rn
+        const rect = rn
           ? toPct(rn)
           : {
               x: 8 + (i * 84) / Math.max(1, peopleBlocks.length),
