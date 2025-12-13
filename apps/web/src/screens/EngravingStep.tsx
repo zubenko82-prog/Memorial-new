@@ -587,7 +587,7 @@ export default function EngravingStep({
           <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>
             Информация об усопших
           </h2>
-          <div>Для изменения порядка нажмите (▲/▼) напротив имени. Компактный вид ☰</div>
+          <div style={{ margin: "0 0 8px 0", textAlign: "left" }}> Для изменения порядка нажмите (▲/▼) напротив имени. Компактный вид ☰</div>
 
           <div style={{ display: "grid", gap: 10 }}>
             {persons.map((p, idx) => {
