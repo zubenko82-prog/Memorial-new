@@ -808,7 +808,22 @@ export default function EngravingStep({
                               {err}
                             </div>
                           )}
-                        </div>                        
+                        </div>
+
+                        {/* Фото + подсказка над кнопкой «Прикрепить фото» при отсутствии фото */}
+                        <div>
+                          {!hasPhoto && (
+                            <div
+                              style={{
+                                marginBottom: 6,
+                                fontSize: 12,
+                                lineHeight: 1.35,
+                                opacity: 0.92
+                              }}
+                            >
+                              
+                            </div>
+                          )}
                           <PhotoField
                             label="Фотография"
                             value={{
