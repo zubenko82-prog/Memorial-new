@@ -469,6 +469,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
         {/* Список персон */}
         <section>
           <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
+          <p>Изменить порядок (▲/▼), нажмите ☰ чтобы свернуть список</p>
           <div style={{ display: "grid", gap: 10 }}>
             {persons.map((p, idx) => {
               const id = p.id;
@@ -514,22 +515,13 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
                           {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
                         </div>
                         <PhotoField
-    label="Фотография"
-    value={{ url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
-    onChange={(pv) => setPersonPhotoById(p.id, pv)}
-  />
-  {!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl) && (
-    <div
-      style={{
-        marginTop: 6,
-        fontSize: 12,
-        lineHeight: 1.35,
-        opacity: 0.92
-      }}
-    >
-      Фотография не загружена. При отсутствии цифрового файла можно сфотографировать на телефон. Чем выше качество, тем лучше будет изображение на памятнике.
-    </div>
-  )}
+                          label="Фотография"
+                          value={{
+                            url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
+                            dataUrl: p.photoDataUrl ?? undefined
+                          }}
+                          onChange={(pv) => setPersonPhotoById(p.id, pv)}
+                        />
                       </div>
                     </div>
                   )}
