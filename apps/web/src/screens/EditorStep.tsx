@@ -5,6 +5,7 @@
 // - центральная подписка на события — стабильная (effect без deps + ref);
 // - убраны ручные dispatch событий после сохранений;
 // - запись в стор выполняется авто‑сейвом и по действиям пользователя.
+// Визуальный слой эскиза строится компонентом SketchTemplate, сверху накладывается редактор (рамки/ручки).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -15,7 +16,8 @@ import {
   DRAFT_UPDATED_EVENT
 } from "../lib/order";
 
-// Шаблоны из компонента (если нет экспорта TEMPLATES — фолбэк на lib)
+// Визуальный эскиз + пул шаблонов
+import SketchTemplate from "../components/SketchTemplate";
 import * as SketchComponent from "../components/SketchTemplate";
 import { SketchTemplates as LibTemplates } from "../lib/sketchTemplates";
 
@@ -71,7 +73,7 @@ type EditorEl = {
   staircase?: boolean;
 };
 
-type SketchTemplate = {
+type SketchTemplateType = {
   id: string;
   name: string;
   slots: {
@@ -136,7 +138,7 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Measuring helpers ===== */
+/* ===== Measuring helpers (для отрисовки превью) ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -296,7 +298,7 @@ const unionNorm = (a?: Norm, b?: Norm): Norm | undefined => {
   return { x: left, y: top, w: right - left, h: bottom - top };
 };
 
-function slotsByType(tpl: SketchTemplate, type: string) {
+function slotsByType(tpl: SketchTemplateType, type: string) {
   return tpl.slots
     .filter((s) => s.type === type)
     .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
@@ -406,14 +408,17 @@ export default function EditorStep({
       : [];
   }, [engr]);
 
-  // Эпитафии
+  // Эпитафии — безопасно нормализуем массив и одиночную строку
   const epitaphs = useMemo(() => {
-    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length)
-      return (engr.epitaphs as string[]).filter(Boolean);
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim())
-      return [engr.epитaphText.trim()];
-    return [];
-  }, [engr]);
+    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) {
+      return (engr.epitaphs as unknown[])
+        .map((t) => (typeof t === "string" ? t.trim() : ""))
+        .filter(Boolean) as string[];
+    }
+    const single =
+      typeof engr?.epitaphText === "string" ? (engr.epitaphText as string).trim() : "";
+    return single ? [single] : [];
+  }, [engr?.epitaphs, engr?.epitaphText]);
 
   // Графика
   const crosses = useMemo(
@@ -432,16 +437,16 @@ export default function EditorStep({
     [graphics]
   );
 
-  // Шаблон из компонента (или lib)
-  const TEMPLATE_POOL: SketchTemplate[] = useMemo(() => {
+  // Пул шаблонов для автоматической раскладки
+  const TEMPLATE_POOL: SketchTemplateType[] = useMemo(() => {
     const maybe = (SketchComponent as any).TEMPLATES as
-      | SketchTemplate[]
+      | SketchTemplateType[]
       | undefined;
     return maybe && Array.isArray(maybe) && maybe.length > 0
       ? maybe
-      : ((LibTemplates as unknown as SketchTemplate[]) || []);
+      : ((LibTemplates as unknown as SketchTemplateType[]) || []);
   }, []);
-  const template: SketchTemplate | null = useMemo(() => {
+  const template: SketchTemplateType | null = useMemo(() => {
     const preferred =
       peopleBlocks.length > 1 ? "double_portrait" : "classic_single";
     return (
@@ -1103,14 +1108,14 @@ export default function EditorStep({
                 boxW: rbox.w,
                 boxH: rbox.h,
                 italic: !!el.italic,
-                family: fam,
+                family: FONT_CENTURY,
                 padX: padX2,
                 padY: padY2,
                 lineHeight: 1.15,
                 minPx: 10,
                 maxPx: 96
               });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               const slotH = (rbox.h - padY2 * 2) / 3;
               ctx.textAlign = "left";
               ctx.fillText(
@@ -1136,12 +1141,12 @@ export default function EditorStep({
                 boxW: rbox.w,
                 boxH: rbox.h,
                 italic: !!el.italic,
-                family: fam,
+                family: FONT_CENTURY,
                 padX: padX2,
                 padY: padY2,
                 lineHeight: 1.15
               });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               ctx.textAlign = "center";
               ctx.fillText(
                 el.uppercase ? tRaw.toUpperCase() : tRaw,
@@ -1388,348 +1393,6 @@ export default function EditorStep({
     );
   };
 
-  /* ===== Контент слой ===== */
-  const ContentLayer = () => {
-    const fam = FONT_CENTURY;
-    const wrap = editorWrapRef.current?.getBoundingClientRect();
-    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
-    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
-
-    return (
-      <div
-        style={{
-          position: "absolute",
-          left: SKETCH_PAD,
-          top: SKETCH_PAD,
-          right: SKETCH_PAD,
-          bottom: SKETCH_PAD,
-          pointerEvents: "none",
-          zIndex: 1000,
-          transform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-          contain: "paint"
-        }}
-      >
-        {elements
-          .slice()
-          .sort((a, b) => a.z - b.z)
-          .map((el) => {
-            const key = el.id.split("-").slice(1).join("-");
-            const boxPx = {
-              x: (el.x / 100) * contentW,
-              y: (el.y / 100) * contentH,
-              w: (el.w / 100) * contentW,
-              h: (el.h / 100) * contentH
-            };
-            const wrapperStyle: React.CSSProperties = {
-              position: "absolute",
-              left: Math.round(boxPx.x),
-              top: Math.round(boxPx.y),
-              width: Math.round(boxPx.w),
-              height: Math.round(boxPx.h),
-              zIndex: el.z,
-              pointerEvents: "none",
-              willChange: "transform",
-              transform: "translateZ(0)",
-              backfaceVisibility: "hidden",
-              contain: "paint",
-              boxSizing: "border-box"
-            };
-
-            if (el.type === "portrait") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const url = p?.photo || "";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {url ? (
-                    <img
-                      src={url}
-                      alt="Портрет"
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        filter: el.bw ? "grayscale(100%)" : "none",
-                        display: "block",
-                        willChange: "transform",
-                        transform: "translateZ(0)",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            if (el.type === "metric") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-              const tf = el.uppercase
-                ? (s: string) => s.toUpperCase()
-                : (s: string) => s;
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.1));
-              const fitted = fitMetricFontsPx({
-                lines: lines.map(tf),
-                boxW: boxPx.w,
-                boxH: boxPx.h,
-                italic: !!el.italic,
-                family: fam,
-                padX,
-                padY,
-                lineHeight: 1.12,
-                minPx: 10
-              });
-              return (
-                <div
-                  key={`content-${el.id}`}
-                  style={{
-                    ...wrapperStyle,
-                    color: "#fff",
-                    fontFamily: fam,
-                    textAlign: "center"
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "grid",
-                      placeItems: "center",
-                      padding: `${padY}px ${padX}px`,
-                      boxSizing: "border-box",
-                      lineHeight: 1.12,
-                      fontStyle: el.italic ? "italic" : "normal",
-                      textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                    }}
-                  >
-                    <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                      {lines[0] && (
-                        <div
-                          style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}
-                        >
-                          {tf(lines[0])}
-                        </div>
-                      )}
-                      {lines[1] && (
-                        <div
-                          style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}
-                        >
-                          {tf(lines[1])}
-                        </div>
-                      )}
-                      {lines[2] && (
-                        <div
-                          style={{
-                            fontWeight: 400,
-                            fontSize: fitted[2] || 10,
-                            opacity: 0.95
-                          }}
-                        >
-                          {tf(lines[2])}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            if (el.type === "epitaph") {
-              const idx = Number(key);
-              const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
-              const isRLM = isRememberLoveMourn(tRaw);
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-
-              if (isRLM && el.staircase) {
-                const r = splitRememberPreserve(tRaw);
-                const parts = [r.top, r.mid, r.bot];
-                const fontPx = fitStairRLMFontPx({
-                  lines: parts,
-                  boxW: boxPx.w,
-                  boxH: boxPx.h,
-                  italic: !!el.italic,
-                  family: FONT_CENTURY,
-                  padX,
-                  padY,
-                  lineHeight: 1.15,
-                  minPx: 10,
-                  maxPx: 96
-                });
-                return (
-                  <div
-                    key={`content-${el.id}`}
-                    style={{
-                      ...wrapperStyle,
-                      color: "#fff",
-                      fontFamily: FONT_CENTURY
-                    }}
-                  >
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: padX,
-                        top: padY,
-                        right: padX,
-                        bottom: padY,
-                        display: "grid",
-                        gridTemplateRows: "1fr 1fr 1fr"
-                      }}
-                    >
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "start",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[0]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "center",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[1]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "end",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[2]}
-                      </div>
-                    </div>
-                  </div>
-                );
-              } else {
-                const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
-                const { fontPx, lines } = fitMultilineFontPxGeneric({
-                  text: textDisplay,
-                  boxW: boxPx.w,
-                  boxH: boxPx.h,
-                  italic: !!el.italic,
-                  family: FONT_CENTURY,
-                  padX,
-                  padY,
-                  lineHeight: 1.15
-                });
-                return (
-                  <div
-                    key={`content-${el.id}`}
-                    style={{
-                      ...wrapperStyle,
-                      color: "#fff",
-                      fontFamily: FONT_CENTURY,
-                      textAlign: "center"
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        display: "grid",
-                        placeItems: "center",
-                        padding: `${padY}px ${padX}px`,
-                        boxSizing: "border-box",
-                        lineHeight: 1.15,
-                        fontStyle: el.italic ? "italic" : "normal",
-                        textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          fontSize: fontPx,
-                          whiteSpace: "pre-wrap"
-                        }}
-                      >
-                        {lines.join("\n")}
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-            }
-
-            if (el.type === "cross" || el.type === "graphic") {
-              const idx = Number(key);
-              const list = el.type === "cross" ? crosses : others;
-              const g = Number.isFinite(idx) ? list[idx] : null;
-              const tr =
-                el.type === "graphic" && el.flipH
-                  ? "scaleX(-1) translateZ(0)"
-                  : "translateZ(0)";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {g?.url ? (
-                    <img
-                      src={g.url}
-                      alt={g.name || (el.type === "cross" ? "Крест" : "Графика")}
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        display: "block",
-                        transform: tr,
-                        filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                        willChange: "transform",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            return null;
-          })}
-      </div>
-    );
-  };
-
-  /* ===== Навигация кнопками ===== */
-  const handleBack = () => {
-    const cur = loadOrderDraft();
-    saveOrderDraft({
-      ...cur,
-      editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() }
-    });
-    setOutro(true);
-    setTimeout(() => onBack?.(), 150);
-  };
-  const handleContinue = () => {
-    const cur = loadOrderDraft();
-    saveOrderDraft({
-      ...cur,
-      editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() }
-    });
-    const go = onRearSide || onSendOrder || onContinue;
-    if (!go) return;
-    setOutro(true);
-    setTimeout(() => go({ elements, wishes }), 150);
-  };
-
   const MAX_W = 600;
 
   // Ручки ресайза
@@ -1799,28 +1462,26 @@ export default function EditorStep({
               minHeight: aspect ? undefined : 540
             }}
           >
-            {/* Подложка с изделием */}
-            {item?.url && (
-              <img
-                src={item.url}
-                alt=""
-                decoding="sync"
-                loading="eager"
-                style={{
-                  position: "absolute",
-                  left: SKETCH_PAD,
-                  top: SKETCH_PAD,
-                  width: `calc(100% - ${SKETCH_PAD * 2}px)`,
-                  height: `calc(100% - ${SKETCH_PAD * 2}px)`,
-                  objectFit: "contain",
-                  opacity: 0.35,
-                  pointerEvents: "none",
-                  backfaceVisibility: "hidden",
-                  transform: "translateZ(0)"
-                }}
-                draggable={false}
+            {/* Визуальный слой эскиза (по шаблонам) */}
+            <div
+              style={{
+                position: "absolute",
+                left: SKETCH_PAD,
+                top: SKETCH_PAD,
+                width: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                height: `calc(100% - ${SKETCH_PAD * 2}px)`,
+                pointerEvents: "none"
+              }}
+            >
+              <SketchTemplate
+                item={item}
+                peopleBlocks={peopleBlocks}
+                crosses={crosses}
+                others={others}
+                epitaphs={epitaphs}
+                carvingOpacity={0.35}
               />
-            )}
+            </div>
 
             {/* невидимая картинка для измерения пропорций */}
             <img
@@ -1843,9 +1504,6 @@ export default function EditorStep({
                 if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
               }}
             />
-
-            {/* Слой эскиза (по шаблонам) */}
-            <ContentLayer />
 
             {/* Рамки + ручки (редактор) */}
             <div
