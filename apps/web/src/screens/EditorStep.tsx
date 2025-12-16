@@ -1,11 +1,10 @@
 // src/screens/EditorStep.tsx
 // Редактор: изначально на эскизе только резная работа.
-// Сверху — единая палитра миниатюр, без подписей и разделов, в несколько столбцов.
-// У миниатюр нет рамки/фона, изображение вписано и ограничено 120×120 по большей стороне.
-// Клик/DnD добавляет элемент по центру и убирает из палитры. На рамке есть мини‑панель, включая корзину 🗑.
-// Исправлено:
-// - Текст в миниатюрах «Метрика» и «Эпитафия» — белым цветом (color: "#fff").
-// - Удаление/добавление сохраняются в стор сразу, чтобы не было «отката» из подписки.
+// Сверху — единая палитра миниатюр (без подписей), несколько столбцов, прозрачный фон.
+// Картинки и текст в миниатюрах — вписаны, не больше 120×120 по большей стороне.
+// Текст миниатюр «Метрика» и «Эпитафия» — белый.
+// Клик/DnD добавляет элемент по центру. На рамке — мини‑панель с корзиной.
+// Исправлено «откат» состояния: применяем данные из стора только если они новее локального (по editor.updatedAt).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -232,6 +231,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
+  // Версионирование/время последнего применённого снапшота — блокируем «откат»
+  const lastAppliedTsRef = useRef<number>(
+    (draft as any)?.editor?.updatedAt ? Number((draft as any).editor.updatedAt) : 0
+  );
+
   // aspectRatio
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
@@ -300,7 +304,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [elements]
   );
 
-  // Единая палитра миниатюр (без подписей/разделов)
+  // Единая палитра миниатюр
   type TrayItem = { type: ElType; key: string | number; node: React.ReactNode };
   const trayItems: TrayItem[] = useMemo(() => {
     const items: TrayItem[] = [];
@@ -324,7 +328,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Метрика (белым)
+    // Метрика — белым
     for (const p of peopleBlocks) {
       if (!placedMetricIds.has(p.id)) {
         const ln = (p.lines || []) as string[];
@@ -346,7 +350,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                color: "#fff" // белый текст
+                color: "#fff"
               }}
             >
               <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{ln[0] || "—"}</div>
@@ -358,7 +362,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Эпитафии (белым)
+    // Эпитафии — белым
     epitaphs.forEach((t, i) => {
       if (!placedEpitaphIdx.has(i)) {
         items.push({
@@ -379,7 +383,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                color: "#fff" // белый текст
+                color: "#fff"
               }}
               title={t}
             >
@@ -431,7 +435,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return items;
   }, [peopleBlocks, placedPortraitIds, placedMetricIds, epitaphs, placedEpitaphIdx, crosses, placedCrossIdx, others, placedGraphicIdx]);
 
-  // Добавление по центру (сразу сохраняем драфт для избежания отката)
+  // Добавление по центру (сразу сохраняем и помечаем ts)
   const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
   const addCentered = (type: ElType, key: string | number) => {
     let newEl: EditorEl | null = null;
@@ -462,10 +466,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const nextEls = [...elements, newEl];
       setElements(nextEls);
       setSelectedId(newEl.id);
+      const ts = Date.now();
+      lastAppliedTsRef.current = ts;
       const cur = loadOrderDraft();
       saveOrderDraft({
         ...cur,
-        editor: { ...(cur as any).editor, elements: nextEls, wishes, updatedAt: Date.now() }
+        editor: { ...(cur as any).editor, elements: nextEls, wishes, updatedAt: ts }
       });
       queuePreviewGeneration();
     }
@@ -495,7 +501,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     } catch {}
   };
 
-  // Синхронизация со стором (чтение)
+  // Синхронизация: применяем стор только если он «свежее»
   const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
   const isRefreshingRef = useRef(false);
   const lastStoreSigRef = useRef<string>("");
@@ -506,23 +512,43 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       isRefreshingRef.current = true;
       try {
         const fresh = loadOrderDraft();
-        const pick = { item: fresh?.item || null, engraving: fresh?.engraving || null, graphics: fresh?.graphics || null };
+
+        // Сигнатура частей стора (кроме editor.elements)
+        const pick = {
+          item: fresh?.item || null,
+          engraving: fresh?.engraving || null,
+          graphics: fresh?.graphics || null
+        };
         const sig = JSON.stringify(pick);
         if (sig !== lastStoreSigRef.current) {
           setDraft(fresh);
           lastStoreSigRef.current = sig;
         }
-        const incomingEls: EditorEl[] = (((fresh as any)?.editor?.elements || []) as EditorEl[]) || [];
-        const incomingWishes: string = (((fresh as any)?.editor?.wishes || "") as string) || "";
-        const shouldSetEls = opts?.force || JSON.stringify(incomingEls) !== JSON.stringify(elements);
-        const shouldSetWishes = opts?.force || incomingWishes !== wishes;
-        if (shouldSetEls) setElements(incomingEls);
-        if (shouldSetWishes) setWishes(incomingWishes);
+
+        const incoming = ((fresh as any)?.editor || {}) as any;
+        const incomingEls: EditorEl[] = Array.isArray(incoming.elements) ? (incoming.elements as EditorEl[]) : [];
+        const incomingWishes: string = typeof incoming.wishes === "string" ? incoming.wishes : "";
+        const incomingTs: number = Number(incoming.updatedAt || 0);
+
+        const localTs = lastAppliedTsRef.current;
+
+        // Разрешаем обновление из стора только если:
+        //  - force и локально пусто, или
+        //  - incomingTs > localTs (стор свежее)
+        const allowEls =
+          (opts?.force && elements.length === 0 && incomingEls.length > 0) ||
+          incomingTs > localTs;
+
+        if (allowEls) {
+          setElements(incomingEls);
+          setWishes(incomingWishes);
+          lastAppliedTsRef.current = incomingTs;
+        }
       } finally {
         isRefreshingRef.current = false;
       }
     },
-    [elements, wishes]
+    [elements.length]
   );
 
   useEffect(() => {
@@ -543,6 +569,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     window.addEventListener("popstate", onAny);
     window.addEventListener("hashchange", onAny);
 
+    // Начальная подгрузка, если локально пусто
     refreshRef.current({ force: true });
 
     return () => {
@@ -574,6 +601,21 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       canStair = isRememberLoveMourn(tRaw);
     }
 
+    const commit = (mut: (prev: EditorEl[]) => EditorEl[]) => {
+      setElements((prev) => {
+        const next = mut(prev);
+        const ts = Date.now();
+        lastAppliedTsRef.current = ts;
+        const cur = loadOrderDraft();
+        saveOrderDraft({
+          ...cur,
+          editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: ts }
+        });
+        return next;
+      });
+      queuePreviewGeneration();
+    };
+
     return (
       <div
         onPointerDown={stop}
@@ -598,16 +640,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             type="button"
             style={btn}
             title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
-            onClick={(e) => {
-              e.stopPropagation();
-              setElements((prev) => {
-                const next = prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x));
-                const cur = loadOrderDraft();
-                saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
-                return next;
-              });
-              queuePreviewGeneration();
-            }}
+            onClick={() =>
+              commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)))
+            }
           >
             {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
           </button>
@@ -618,16 +653,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               type="button"
               style={btn}
               title={el.italic ? "Обычный" : "Курсив"}
-              onClick={(e) => {
-                e.stopPropagation();
-                setElements((prev) => {
-                  const next = prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x));
-                  const cur = loadOrderDraft();
-                  saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
-                  return next;
-                });
-                queuePreviewGeneration();
-              }}
+              onClick={() =>
+                commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)))
+              }
             >
               {el.italic ? "Обычный" : "Курсив"}
             </button>
@@ -636,16 +664,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 type="button"
                 style={btn}
                 title={el.staircase ? "В строку" : "Лесенкой"}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setElements((prev) => {
-                    const next = prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x));
-                    const cur = loadOrderDraft();
-                    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
-                    return next;
-                  });
-                  queuePreviewGeneration();
-                }}
+                onClick={() =>
+                  commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)))
+                }
               >
                 {el.staircase ? "В строку" : "Лесенкой"}
               </button>
@@ -657,16 +678,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             type="button"
             style={btn}
             title="Отразить по горизонтали"
-            onClick={(e) => {
-              e.stopPropagation();
-              setElements((prev) => {
-                const next = prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x));
-                const cur = loadOrderDraft();
-                saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
-                return next;
-              });
-              queuePreviewGeneration();
-            }}
+            onClick={() =>
+              commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)))
+            }
           >
             ⇄
           </button>
@@ -676,36 +690,19 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             type="button"
             style={btn}
             title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
-            onClick={(e) => {
-              e.stopPropagation();
-              setElements((prev) => {
-                const next = prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x));
-                const cur = loadOrderDraft();
-                saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
-                return next;
-              });
-              queuePreviewGeneration();
-            }}
+            onClick={() =>
+              commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)))
+            }
           >
             {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
-        {/* Корзина — вернуть в палитру (и не «возвращаться» обратно на холст) */}
+        {/* Корзина — удалить с холста (вернётся в палитру и НЕ появится снова на холсте) */}
         <button
           type="button"
           style={{ ...btn, padding: "2px 8px" }}
-          title="Удалить с эскиза (вернётся в палитру)"
-          onClick={(e) => {
-            e.stopPropagation();
-            setElements((prev) => {
-              const next = prev.filter((x) => x.id !== el.id);
-              const cur = loadOrderDraft();
-              saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
-              return next;
-            });
-            setSelectedId(null);
-            queuePreviewGeneration();
-          }}
+          title="Удалить с эскиза"
+          onClick={() => commit((prev) => prev.filter((x) => x.id !== el.id)))}
         >
           🗑
         </button>
@@ -732,7 +729,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       rafMoveScheduled.current = false;
       const payload = rafMovePayload.current;
       if (!payload) return;
-      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
+      setElements((prev) => {
+        const next = prev.map((el) => (el.id === payload.id ? payload.next : el));
+        return next;
+      });
       rafMovePayload.current = null;
     });
   };
@@ -809,11 +809,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   const onPointerUp = () => {
     if (dragRef.current) {
+      const ts = Date.now();
+      lastAppliedTsRef.current = ts;
       const cur = loadOrderDraft();
       const latest = elements;
       saveOrderDraft({
         ...cur,
-        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() }
+        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: ts }
       });
       queuePreviewGeneration();
     }
@@ -1077,7 +1079,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     }, 300) as unknown as number;
   }
 
-  /* ===== Слой содержимого (определён до return) ===== */
+  /* ===== Слой содержимого ===== */
   const ContentLayer: React.FC = () => {
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
@@ -1344,16 +1346,20 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Навигация кнопками ===== */
+  /* ===== Навигация ===== */
   const handleBack = () => {
+    const ts = Date.now();
+    lastAppliedTsRef.current = ts;
     const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: ts } });
     setOutro(true);
     setTimeout(() => onBack?.(), 150);
   };
   const handleContinue = () => {
+    const ts = Date.now();
+    lastAppliedTsRef.current = ts;
     const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: ts } });
     const go = onRearSide || onSendOrder || onContinue;
     if (!go) return;
     setOutro(true);
@@ -1405,7 +1411,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
-        {/* Подсказка */}
         <section
           style={{
             ...glassPanelStyle(),
@@ -1418,7 +1423,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и изменяйте размер. Чтобы убрать элемент, нажмите 🗑 на его рамке.
         </section>
 
-        {/* Единая палитра миниатюр (без подписей) */}
+        {/* Палитра миниатюр */}
         <section style={{ ...glassPanelStyle(), padding: 10, margin: "12px 0" }}>
           {trayItems.length > 0 ? (
             <div
@@ -1444,7 +1449,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           )}
         </section>
 
-        {/* Область редактора */}
+        {/* Эскиз */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={editorWrapRef}
@@ -1463,7 +1468,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               minHeight: aspect ? undefined : 540
             }}
           >
-            {/* Подложка с изделием */}
+            {/* Подложка изделия */}
             {item?.url && (
               <img
                 src={item.url}
@@ -1486,7 +1491,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               />
             )}
 
-            {/* невидимая картинка для измерения пропорций */}
+            {/* Для aspectRatio */}
             <img
               src={item?.url || ""}
               alt=""
@@ -1500,7 +1505,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               }}
             />
 
-            {/* Слой эскиза */}
+            {/* Содержимое */}
             <ContentLayer />
 
             {/* Рамки + ручки */}
@@ -1571,8 +1576,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT / 2}px`, `calc(100% - ${KNOB_HIT / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                         </>
                       )}
                     </div>
