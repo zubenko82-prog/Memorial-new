@@ -264,12 +264,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
-  // Эпитафии
-  const epitaphs = useMemo(() => {
-    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epитaphText.trim()];
-    return [];
-  }, [engr]);
+  // Эпитафии (строго epitaphText, без кириллицы в имени!)
+const epitaphs = useMemo(() => {
+  const e: any = engr || {};
+  if (Array.isArray(e.epitaphs) && e.epitaphs.length) {
+    return (e.epitaphs as string[]).filter(Boolean);
+  }
+  const raw = typeof e.epitaphText === "string" ? e.epitaphText : "";
+  const one = raw.trim();
+  return one ? [one] : [];
+}, [engr]);
+
 
   // Графика
   const crosses = useMemo(
