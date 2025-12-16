@@ -1,10 +1,9 @@
 // src/screens/EditorStep.tsx
 // Редактор: изначально на эскизе только резная работа.
-// Выбранные элементы (портреты, метрика, эпитафии, кресты, графика) показываем
-// вверху в виде миниатюр-«палитры» как в галерее (CSS Grid).
-// Клик по миниатюре или DnD на эскиз — добавляет элемент по центру и убирает его из палитры.
-// На рамке элемента доступна мини-панель инструментов, включая «корзину» (🗑) — удаляет с эскиза,
-// возвращая элемент обратно в палитру. DnD/resize и прочие функции сохранены.
+// Сверху — единая палитра миниатюр, без подписей и разделителей, в несколько столбцов.
+// У миниатюр нет рамки и фона (прозрачные), изображение вписано и ограничено 120×120 по большей стороне.
+// Клик по миниатюре или перетаскивание на эскиз — добавляет элемент по центру (и убирает его из палитры).
+// На рамке элемента доступна мини‑панель инструментов (включая корзину 🗑).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -70,8 +69,7 @@ type EditorEl = {
 /* ===== Helpers ===== */
 const DND_MIME = "application/x-memorial-editor-el";
 const SKETCH_PAD = 8;
-const clamp = (v: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, v));
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
   y: clamp(y, 0, 100 - h),
@@ -81,8 +79,7 @@ const clampBox = (x: number, y: number, w: number, h: number) => ({
 const SNAP_STEP_DEFAULT = 1;
 const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
 const isCrossCategoryName = (s?: string) =>
-  (s || "").toLowerCase().includes("крест") ||
-  (s || "").toLowerCase().includes("cross");
+  (s || "").toLowerCase().includes("крест") || (s || "").toLowerCase().includes("cross");
 
 function linesFromPerson(p: any) {
   const l1 = (p?.lastName || "").trim();
@@ -96,8 +93,7 @@ const normRemember = (t?: string) =>
     .replace(/[.,…!?:;]+/g, "")
     .replace(/\s+/g, " ")
     .trim();
-const isRememberLoveMourn = (t?: string) =>
-  normRemember(t) === "помним любим скорбим";
+const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
 function splitRememberPreserve(text: string) {
   const t = (text || "").trim();
   const parts: string[] = [];
@@ -283,7 +279,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [graphics]
   );
 
-  // ---------- Миниатюры (палитра) -> всё, что ещё НЕ на эскизе ----------
+  // Что уже размещено на эскизе
   const placedPortraitIds = useMemo(
     () => new Set(elements.filter((e) => e.type === "portrait").map((e) => e.id.replace(/^portrait-/, ""))),
     [elements]
@@ -305,19 +301,146 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [elements]
   );
 
-  const trayPortraits = peopleBlocks.filter((p) => !placedPortraitIds.has(p.id));
-  const trayMetrics = peopleBlocks.filter((p) => !placedMetricIds.has(p.id));
-  const trayEpitaphs = epitaphs
-    .map((t, i) => ({ i, t }))
-    .filter(({ i }) => !placedEpitaphIdx.has(i));
-  const trayCrosses = crosses
-    .map((g, i) => ({ i, g }))
-    .filter(({ i }) => !placedCrossIdx.has(i));
-  const trayGraphics = others
-    .map((g, i) => ({ i, g }))
-    .filter(({ i }) => !placedGraphicIdx.has(i));
+  // Единая палитра (без подписей и разделов)
+  type TrayItem = { type: ElType; key: string | number; node: React.ReactNode };
+  const trayItems: TrayItem[] = useMemo(() => {
+    const items: TrayItem[] = [];
 
-  // ---------- Добавление элемента по центру ----------
+    // Портреты
+    for (const p of peopleBlocks) {
+      if (!placedPortraitIds.has(p.id)) {
+        items.push({
+          type: "portrait",
+          key: p.id,
+          node: p.photo ? (
+            <img
+              src={p.photo}
+              alt=""
+              style={{
+                maxWidth: 120,
+                maxHeight: 120,
+                width: "auto",
+                height: "auto",
+                objectFit: "contain",
+                display: "block"
+              }}
+            />
+          ) : (
+            <div style={{ width: 120, height: 120, display: "grid", placeItems: "center", opacity: 0.9, fontSize: 12 }}>
+              —
+            </div>
+          )
+        });
+      }
+    }
+
+    // Метрика (текст как миниатюра, без подписей)
+    for (const p of peopleBlocks) {
+      if (!placedMetricIds.has(p.id)) {
+        const ln = (p.lines || []) as string[];
+        items.push({
+          type: "metric",
+          key: p.id,
+          node: (
+            <div
+              style={{
+                maxWidth: 120,
+                maxHeight: 120,
+                padding: 6,
+                boxSizing: "border-box",
+                display: "grid",
+                placeItems: "center",
+                textAlign: "center",
+                lineHeight: 1.15,
+                fontSize: 12
+              }}
+            >
+              <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[0] || "—"}</div>
+              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[1] || ""}</div>
+              <div style={{ opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[2] || ""}</div>
+            </div>
+          )
+        });
+      }
+    }
+
+    // Эпитафии (текст)
+    epitaphs.forEach((t, i) => {
+      if (!placedEpitaphIdx.has(i)) {
+        items.push({
+          type: "epitaph",
+          key: i,
+          node: (
+            <div
+              style={{
+                maxWidth: 120,
+                maxHeight: 120,
+                padding: 6,
+                boxSizing: "border-box",
+                display: "grid",
+                placeItems: "center",
+                textAlign: "center",
+                lineHeight: 1.15,
+                fontSize: 12,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+              }}
+              title={t}
+            >
+              {t}
+            </div>
+          )
+        });
+      }
+    });
+
+    // Кресты
+    crosses.forEach((g, i) => {
+      if (!placedCrossIdx.has(i)) {
+        items.push({
+          type: "cross",
+          key: i,
+          node: g.url ? (
+            <img
+              src={g.url}
+              alt=""
+              style={{ maxWidth: 120, maxHeight: 120, width: "auto", height: "auto", objectFit: "contain", display: "block" }}
+            />
+          ) : (
+            <div style={{ width: 120, height: 120, display: "grid", placeItems: "center", opacity: 0.9, fontSize: 12 }}>
+              —
+            </div>
+          )
+        });
+      }
+    });
+
+    // Графика
+    others.forEach((g, i) => {
+      if (!placedGraphicIdx.has(i)) {
+        items.push({
+          type: "graphic",
+          key: i,
+          node: g.url ? (
+            <img
+              src={g.url}
+              alt=""
+              style={{ maxWidth: 120, maxHeight: 120, width: "auto", height: "auto", objectFit: "contain", display: "block" }}
+            />
+          ) : (
+            <div style={{ width: 120, height: 120, display: "grid", placeItems: "center", opacity: 0.9, fontSize: 12 }}>
+              —
+            </div>
+          )
+        });
+      }
+    });
+
+    return items;
+  }, [peopleBlocks, placedPortraitIds, placedMetricIds, epitaphs, placedEpitaphIdx, crosses, placedCrossIdx, others, placedGraphicIdx]);
+
+  // Добавление по центру
   const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
   const addCentered = (type: ElType, key: string | number) => {
     let newEl: EditorEl | null = null;
@@ -337,16 +460,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       if (elements.some((e) => e.type === "epitaph" && e.id === `epitaph-${key}`)) return;
       const rect = baseCenter(72, 16);
       const txt = epitaphs[key] || "";
-      newEl = {
-        id: `epitaph-${key}`,
-        type,
-        ...rect,
-        z: nextZ(),
-        uppercase: false,
-        italic: false,
-        staircase: isRememberLoveMourn(txt),
-        title: "Эпитафия"
-      };
+      newEl = { id: `epitaph-${key}`, type, ...rect, z: nextZ(), uppercase: false, italic: false, staircase: isRememberLoveMourn(txt), title: "Эпитафия" };
     } else if (type === "cross" && typeof key === "number") {
       if (elements.some((e) => e.type === "cross" && e.id === `cross-${key}`)) return;
       const rect = baseCenter(16, 16);
@@ -362,7 +476,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     }
   };
 
-  // ---------- DnD из палитры в эскиз ----------
+  // DnD из палитры в эскиз
   const onTrayDragStart = (e: React.DragEvent, payload: { type: ElType; key: string | number }) => {
     try {
       e.dataTransfer?.setData(DND_MIME, JSON.stringify(payload));
@@ -386,7 +500,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     } catch {}
   };
 
-  // ---------- Синхронизация со стором (только чтение) ----------
+  // Синхронизация со стором (чтение)
   const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
   const isRefreshingRef = useRef(false);
   const lastStoreSigRef = useRef<string>("");
@@ -397,17 +511,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       isRefreshingRef.current = true;
       try {
         const fresh = loadOrderDraft();
-        const pick = {
-          item: fresh?.item || null,
-          engraving: fresh?.engraving || null,
-          graphics: fresh?.graphics || null
-        };
+        const pick = { item: fresh?.item || null, engraving: fresh?.engraving || null, graphics: fresh?.graphics || null };
         const sig = JSON.stringify(pick);
         if (sig !== lastStoreSigRef.current) {
           setDraft(fresh);
           lastStoreSigRef.current = sig;
         }
-        // принять editor.{elements,wishes}, если отличаются
         const incomingEls: EditorEl[] = (((fresh as any)?.editor?.elements || []) as EditorEl[]) || [];
         const incomingWishes: string = (((fresh as any)?.editor?.wishes || "") as string) || "";
         const shouldSetEls = opts?.force || JSON.stringify(incomingEls) !== JSON.stringify(elements);
@@ -453,7 +562,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  /* ===== DnD / Resize на эскизе ===== */
+  /* ===== DnD/Resize на эскизе ===== */
   const dragRef = useRef<{
     id: string;
     mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -514,8 +623,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const ratio = (base.w || 1) / (base.h || 1);
       if (d.mode.includes("e")) nw = snap(base.w + dxPct);
       if (d.mode.includes("s")) nh = snap(base.h + dyPct);
-      if (d.mode.includes("w")) { nx = snap(base.x + dxPct); nw = snap(base.w - dxPct); }
-      if (d.mode.includes("n")) { ny = snap(base.y + dyPct); nh = snap(base.h - dyPct); }
+      if (d.mode.includes("w")) {
+        nx = snap(base.x + dxPct);
+        nw = snap(base.w - dxPct);
+      }
+      if (d.mode.includes("n")) {
+        ny = snap(base.y + dyPct);
+        nh = snap(base.h - dyPct);
+      }
       if (keepRatio) {
         if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
         if (["n", "s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
@@ -534,12 +649,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const latest = elements;
       saveOrderDraft({
         ...cur,
-        editor: {
-          ...(cur as any).editor,
-          elements: latest,
-          wishes,
-          updatedAt: Date.now()
-        }
+        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() }
       });
       queuePreviewGeneration();
     }
@@ -621,7 +731,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             if (!im) continue;
             const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             ctx.save();
-            ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
+            ctx.beginPath();
+            ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h);
+            ctx.clip();
             if (el.bw) ctx.filter = "grayscale(100%)";
             if (sr2 > dr2) {
               const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
@@ -641,7 +753,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.1));
-            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: FONT_CENTURY, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
+            const fitted = fitMetricFontsPx({
+              lines: lines.map(tf),
+              boxW: rbox.w,
+              boxH: rbox.h,
+              italic: !!el.italic,
+              family: FONT_CENTURY,
+              padX: padX2,
+              padY: padY2,
+              lineHeight: 1.12,
+              minPx: 10
+            });
             const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
             let y = rbox.y + (rbox.h - totalH) / 2 + ((fitted[0] || 10) * 1.12) / 2;
             for (let i = 0; i < fitted.length; i++) {
@@ -666,7 +788,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
               const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
               const maxW = Math.max(w1, w2, w3);
-              const fByW = (rbox.w - padX2 * 2) * 100 / Math.max(1, maxW);
+              const fByW = ((rbox.w - padX2 * 2) * 100) / Math.max(1, maxW);
               const fByH = (rbox.h - padY2 * 2) / (3 * 1.15);
               const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
               setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
@@ -690,8 +812,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               });
               setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               ctx.textAlign = "center";
-              // простая отрисовка одной строки (для краткости)
-              ctx.fillText(lines.join(" "), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
+              ctx.fillText(lines.join("\n"), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
             }
             ctx.restore();
           } else if (el.type === "graphic" || el.type === "cross") {
@@ -732,7 +853,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
 
       const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
-      const maxSide = 1600, ratio = r.width / Math.max(1, r.height);
+      const maxSide = 1600,
+        ratio = r.width / Math.max(1, r.height);
       const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
       const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
       const big = await drawPreview(bigW, bigH);
@@ -897,306 +1019,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Слой отрисовки содержимого ===== */
-  const ContentLayer = () => {
-    const wrap = editorWrapRef.current?.getBoundingClientRect();
-    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
-    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
-
-    return (
-      <div
-        style={{
-          position: "absolute",
-          left: SKETCH_PAD,
-          top: SKETCH_PAD,
-          right: SKETCH_PAD,
-          bottom: SKETCH_PAD,
-          pointerEvents: "none",
-          zIndex: 1000,
-          transform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-          contain: "paint"
-        }}
-      >
-        {elements
-          .slice()
-          .sort((a, b) => a.z - b.z)
-          .map((el) => {
-            const key = el.id.split("-").slice(1).join("-");
-            const boxPx = {
-              x: (el.x / 100) * contentW,
-              y: (el.y / 100) * contentH,
-              w: (el.w / 100) * contentW,
-              h: (el.h / 100) * contentH
-            };
-            const wrapperStyle: React.CSSProperties = {
-              position: "absolute",
-              left: Math.round(boxPx.x),
-              top: Math.round(boxPx.y),
-              width: Math.round(boxPx.w),
-              height: Math.round(boxPx.h),
-              zIndex: el.z,
-              pointerEvents: "none",
-              willChange: "transform",
-              transform: "translateZ(0)",
-              backfaceVisibility: "hidden",
-              contain: "paint",
-              boxSizing: "border-box"
-            };
-
-            if (el.type === "portrait") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const url = p?.photo || "";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {url ? (
-                    <img
-                      src={url}
-                      alt="Портрет"
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        filter: el.bw ? "grayscale(100%)" : "none",
-                        display: "block",
-                        willChange: "transform",
-                        transform: "translateZ(0)",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            if (el.type === "metric") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.1));
-              const fitted = fitMetricFontsPx({
-                lines: lines.map(tf),
-                boxW: boxPx.w,
-                boxH: boxPx.h,
-                italic: !!el.italic,
-                family: FONT_CENTURY,
-                padX,
-                padY,
-                lineHeight: 1.12,
-                minPx: 10
-              });
-              return (
-                <div
-                  key={`content-${el.id}`}
-                  style={{
-                    ...wrapperStyle,
-                    color: "#fff",
-                    fontFamily: FONT_CENTURY,
-                    textAlign: "center"
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "grid",
-                      placeItems: "center",
-                      padding: `${padY}px ${padX}px`,
-                      boxSizing: "border-box",
-                      lineHeight: 1.12,
-                      fontStyle: el.italic ? "italic" : "normal",
-                      textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                    }}
-                  >
-                    <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                      {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
-                      {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
-                      {lines[2] && (
-                        <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            if (el.type === "epitaph") {
-              const idx = Number(key);
-              const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
-              const isRLM = isRememberLoveMourn(tRaw);
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-
-              if (isRLM && el.staircase) {
-                const r = splitRememberPreserve(tRaw);
-                const parts = [r.top, r.mid, r.bot];
-                // приблизительная подгонка
-                const ctxm = getMeasureCtx();
-                const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
-                const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
-                const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
-                const maxW = Math.max(w1, w2, w3);
-                const fByW = (boxPx.w - padX * 2) * 100 / Math.max(1, maxW);
-                const fByH = (boxPx.h - padY * 2) / (3 * 1.15);
-                const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: padX,
-                        top: padY,
-                        right: padX,
-                        bottom: padY,
-                        display: "grid",
-                        gridTemplateRows: "1fr 1fr 1fr"
-                      }}
-                    >
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "start",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[0]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "center",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[1]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "end",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[2]}
-                      </div>
-                    </div>
-                  </div>
-                );
-              } else {
-                const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
-                const { fontPx, lines } = fitMultilineFontPxGeneric({
-                  text: textDisplay,
-                  boxW: boxPx.w,
-                  boxH: boxPx.h,
-                  italic: !!el.italic,
-                  family: FONT_CENTURY,
-                  padX,
-                  padY,
-                  lineHeight: 1.15
-                });
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                    <div
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        display: "grid",
-                        placeItems: "center",
-                        padding: `${padY}px ${padX}px`,
-                        boxSizing: "border-box",
-                        lineHeight: 1.15,
-                        fontStyle: el.italic ? "italic" : "normal",
-                        textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
-                    </div>
-                  </div>
-                );
-              }
-            }
-
-            if (el.type === "cross" || el.type === "graphic") {
-              const idx = Number(key);
-              const list = el.type === "cross" ? crosses : others;
-              const g = Number.isFinite(idx) ? list[idx] : null;
-              const tr = el.type === "graphic" && el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {g?.url ? (
-                    <img
-                      src={g.url}
-                      alt={g.name || (el.type === "cross" ? "Крест" : "Графика")}
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        display: "block",
-                        transform: tr,
-                        filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                        willChange: "transform",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            return null;
-          })}
-      </div>
-    );
-  };
-
-  /* ===== Палитра: карточка миниатюры (галерея) ===== */
-  const TrayCard: React.FC<{
-    title: string;
-    onClick: () => void;
-    onDragStart: (e: React.DragEvent) => void;
-    children: React.ReactNode;
-  }> = ({ title, onClick, onDragStart, children }) => (
-    <button
-      type="button"
-      draggable
-      onDragStart={onDragStart}
-      onClick={onClick}
-      title={title}
-      style={{
-        display: "grid",
-        placeItems: "center",
-        width: "100%",
-        aspectRatio: "1 / 1",
-        borderRadius: 10,
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "rgba(255,255,255,0.06)",
-        overflow: "hidden",
-        cursor: "grab",
-        userSelect: "none",
-        padding: 6,
-        boxSizing: "border-box"
-      }}
-    >
-      {children}
-    </button>
-  );
-
   /* ===== Навигация кнопками ===== */
   const handleBack = () => {
     const cur = loadOrderDraft();
@@ -1239,6 +1061,33 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
   };
 
+  // Карточка миниатюры (без фона и рамки, 120×120 вписанное содержимое)
+  const TrayCard: React.FC<{
+    onClick: () => void;
+    onDragStart: (e: React.DragEvent) => void;
+    children: React.ReactNode;
+  }> = ({ onClick, onDragStart, children }) => (
+    <button
+      type="button"
+      draggable
+      onDragStart={onDragStart}
+      onClick={onClick}
+      style={{
+        width: "100%",
+        minHeight: 120,
+        display: "grid",
+        placeItems: "center",
+        background: "transparent",
+        border: "none",
+        padding: 0,
+        cursor: "grab",
+        userSelect: "none"
+      }}
+    >
+      {children}
+    </button>
+  );
+
   return (
     <div
       style={{
@@ -1265,205 +1114,33 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             lineHeight: 1.4
           }}
         >
-          Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и изменяйте размер. Чтобы убрать элемент, нажмите 🗑 на рамке.
+          Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и изменяйте размер. Чтобы убрать элемент, нажмите 🗑 на его рамке.
         </section>
 
-        {/* Палитра миниатюр (галерея) */}
+        {/* Единая палитра миниатюр (без подписей) */}
         <section style={{ ...glassPanelStyle(), padding: 10, margin: "12px 0" }}>
-          <div style={{ display: "grid", gap: 12 }}>
-            {trayPortraits.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Портреты</div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                    gap: 10,
-                    alignItems: "stretch"
-                  }}
+          {trayItems.length > 0 ? (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                gap: 10,
+                alignItems: "stretch"
+              }}
+            >
+              {trayItems.map((it, idx) => (
+                <TrayCard
+                  key={`ti-${it.type}-${it.key}-${idx}`}
+                  onClick={() => addCentered(it.type, it.key)}
+                  onDragStart={(e) => onTrayDragStart(e, { type: it.type, key: it.key })}
                 >
-                  {trayPortraits.map((p) => (
-                    <TrayCard
-                      key={`tp-${p.id}`}
-                      title="Портрет"
-                      onClick={() => addCentered("portrait", p.id)}
-                      onDragStart={(e) => onTrayDragStart(e, { type: "portrait", key: p.id })}
-                    >
-                      {p.photo ? (
-                        <img
-                          src={p.photo}
-                          alt="Портрет"
-                          style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: 11, opacity: 0.9, textAlign: "center", lineHeight: 1.2 }}>нет фото</div>
-                      )}
-                    </TrayCard>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {trayMetrics.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Метрика</div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                    gap: 10,
-                    alignItems: "stretch"
-                  }}
-                >
-                  {trayMetrics.map((p) => {
-                    const ln = (p.lines || []) as string[];
-                    return (
-                      <TrayCard
-                        key={`tm-${p.id}`}
-                        title="Метрика"
-                        onClick={() => addCentered("metric", p.id)}
-                        onDragStart={(e) => onTrayDragStart(e, { type: "metric", key: p.id })}
-                      >
-                        <div style={{ fontSize: 11, lineHeight: 1.1, textAlign: "center", width: "100%" }}>
-                          <div
-                            style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                            title={ln[0] || ""}
-                          >
-                            {ln[0] || "—"}
-                          </div>
-                          <div
-                            style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                            title={ln[1] || ""}
-                          >
-                            {ln[1] || ""}
-                          </div>
-                          <div
-                            style={{
-                              opacity: 0.9,
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis"
-                            }}
-                            title={ln[2] || ""}
-                          >
-                            {ln[2] || ""}
-                          </div>
-                        </div>
-                      </TrayCard>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {trayEpitaphs.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                    gap: 10,
-                    alignItems: "stretch"
-                  }}
-                >
-                  {trayEpitaphs.map(({ i, t }) => (
-                    <TrayCard
-                      key={`te-${i}`}
-                      title="Эпитафия"
-                      onClick={() => addCentered("epitaph", i)}
-                      onDragStart={(e) => onTrayDragStart(e, { type: "epitaph", key: i })}
-                    >
-                      <div
-                        style={{
-                          fontSize: 11,
-                          lineHeight: 1.1,
-                          textAlign: "center",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          width: "100%"
-                        }}
-                        title={t}
-                      >
-                        {t}
-                      </div>
-                    </TrayCard>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {trayCrosses.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Кресты</div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                    gap: 10,
-                    alignItems: "stretch"
-                  }}
-                >
-                  {trayCrosses.map(({ i, g }) => (
-                    <TrayCard
-                      key={`tc-${i}`}
-                      title={g.name || "Крест"}
-                      onClick={() => addCentered("cross", i)}
-                      onDragStart={(e) => onTrayDragStart(e, { type: "cross", key: i })}
-                    >
-                      {g.url ? (
-                        <img
-                          src={g.url}
-                          alt={g.name || "Крест"}
-                          style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: 11, opacity: 0.9, textAlign: "center" }}>нет</div>
-                      )}
-                    </TrayCard>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {trayGraphics.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                    gap: 10,
-                    alignItems: "stretch"
-                  }}
-                >
-                  {trayGraphics.map(({ i, g }) => (
-                    <TrayCard
-                      key={`tg-${i}`}
-                      title={g.name || "Графика"}
-                      onClick={() => addCentered("graphic", i)}
-                      onDragStart={(e) => onTrayDragStart(e, { type: "graphic", key: i })}
-                    >
-                      {g.url ? (
-                        <img
-                          src={g.url}
-                          alt={g.name || "Графика"}
-                          style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: 11, opacity: 0.9, textAlign: "center" }}>нет</div>
-                      )}
-                    </TrayCard>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {trayPortraits.length + trayMetrics.length + trayEpitaphs.length + trayCrosses.length + trayGraphics.length === 0 && (
-              <div style={{ fontSize: 13, opacity: 0.9 }}>Все выбранные элементы уже размещены на эскизе.</div>
-            )}
-          </div>
+                  {it.node}
+                </TrayCard>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, opacity: 0.9 }}>Все выбранные элементы уже размещены на эскизе.</div>
+          )}
         </section>
 
         {/* Область редактора */}
