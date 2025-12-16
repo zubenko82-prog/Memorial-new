@@ -1,10 +1,9 @@
 // src/screens/EditorStep.tsx
-// Редактор по шаблонам из SketchTemplate: без мерцаний, с DnD/resize,
-// предпросмотром и пожеланиями. Исправлено зацикливание обновлений:
-// - refreshFromDraft не пишет в стор (только читает и синхронизирует state);
-// - центральная подписка на события — стабильная (effect без deps + ref);
-// - убраны ручные dispatch событий после сохранений;
-// - запись в стор выполняется авто‑сейвом и по действиям пользователя.
+// Редактор: изначально на эскизе только резная работа.
+// Выбранные элементы (портреты, метрика, эпитафии, кресты, графика) показываем
+// сверху в виде миниатюр. Клик по миниатюре или перетаскивание на эскиз
+// добавляет элемент по центру и убирает его из миниатюр.
+// DnD/resize и остальной функционал элементов сохранён.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -15,21 +14,17 @@ import {
   DRAFT_UPDATED_EVENT
 } from "../lib/order";
 
-// Шаблоны из компонента (если нет экспорта TEMPLATES — фолбэк на lib)
-import * as SketchComponent from "../components/SketchTemplate";
-import { SketchTemplates as LibTemplates } from "../lib/sketchTemplates";
-
 /* ===== UI ===== */
-function glassPanelStyle() {
+function glassPanelStyle(): React.CSSProperties {
   return {
     background: "rgba(20,20,24,0.55)",
     border: "1px solid rgba(255,255,255,0.14)",
     borderRadius: 12,
     color: "#fff",
     boxSizing: "border-box"
-  } as React.CSSProperties;
+  };
 }
-function glassButtonStyle(size: "nano" | "sm" | "md" = "sm") {
+function glassButtonStyle(size: "nano" | "sm" | "md" = "sm"): React.CSSProperties {
   const pad = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
     padding: pad[size],
@@ -42,7 +37,7 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm") {
     whiteSpace: "nowrap",
     boxShadow:
       "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)"
-  } as React.CSSProperties;
+  };
 }
 function bottomUnderlayGradient(): React.CSSProperties {
   return {
@@ -71,17 +66,8 @@ type EditorEl = {
   staircase?: boolean;
 };
 
-type SketchTemplate = {
-  id: string;
-  name: string;
-  slots: {
-    type: string;
-    index?: number;
-    rect: { x: number; y: number; w: number; h: number; padding?: number };
-  }[];
-};
-
 /* ===== Helpers ===== */
+const DND_MIME = "application/x-memorial-editor-el";
 const SKETCH_PAD = 8;
 const clamp = (v: number, min: number, max: number) =>
   Math.max(min, Math.min(max, v));
@@ -99,14 +85,8 @@ const isCrossCategoryName = (s?: string) =>
 
 function linesFromPerson(p: any) {
   const l1 = (p?.lastName || "").trim();
-  const l2 = [p?.firstName, p?.middleName]
-    .map((x) => (x || "").trim())
-    .filter(Boolean)
-    .join(" ");
-  const l3 = [p?.birthDate, p?.deathDate]
-    .map((x) => (x || "").trim())
-    .filter(Boolean)
-    .join(" — ");
+  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
+  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
 const normRemember = (t?: string) =>
@@ -136,7 +116,7 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Measuring helpers ===== */
+/* ===== Measuring helpers for text fit ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -144,57 +124,12 @@ function getMeasureCtx(): CanvasRenderingContext2D {
   __measureCtx = c.getContext("2d");
   return __measureCtx!;
 }
-function setFontOnCtx(
-  ctx: CanvasRenderingContext2D,
-  italic: boolean,
-  px: number,
-  family: string
-) {
+function setFontOnCtx(ctx: CanvasRenderingContext2D, italic: boolean, px: number, family: string) {
   ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.round(px))}px ${family}`;
 }
-function measureTextAt(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  italic: boolean,
-  family: string,
-  sizePx: number
-) {
+function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: boolean, family: string, sizePx: number) {
   setFontOnCtx(ctx, italic, sizePx, family);
   return ctx.measureText(text).width;
-}
-function fitStairRLMFontPx({
-  lines,
-  boxW,
-  boxH,
-  italic,
-  family,
-  padX = 4,
-  padY = 2,
-  lineHeight = 1.15,
-  minPx = 10,
-  maxPx = 96
-}: {
-  lines: string[];
-  boxW: number;
-  boxH: number;
-  italic: boolean;
-  family: string;
-  padX?: number;
-  padY?: number;
-  lineHeight?: number;
-  minPx?: number;
-  maxPx?: number;
-}): number {
-  const ctx = getMeasureCtx();
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const perLineH = usableH / Math.max(1, lines.length) / lineHeight;
-  let fW = maxPx;
-  for (const ln of lines.length ? lines : [" "]) {
-    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
-    fW = Math.min(fW, (usableW * 100) / w100);
-  }
-  return clamp(Math.floor(Math.min(perLineH, fW, maxPx)), minPx, maxPx);
 }
 function fitMultilineFontPxGeneric({
   text,
@@ -276,55 +211,7 @@ function fitMetricFontsPx({
   return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
 }
 
-/* ===== Преобразование слотов SketchTemplate ===== */
-type Norm = { x: number; y: number; w: number; h: number; padding?: number };
-const toPct = (r: Norm): { x: number; y: number; w: number; h: number } => {
-  const px = clamp(r.x * 100, 0, 100);
-  const py = clamp(r.y * 100, 0, 100);
-  const pw = clamp(r.w * 100, 0, 100);
-  const ph = clamp(r.h * 100, 0, 100);
-  return clampBox(px, py, Math.max(2, pw), Math.max(2, ph));
-};
-const unionNorm = (a?: Norm, b?: Norm): Norm | undefined => {
-  if (!a && !b) return undefined;
-  const A = a || b!;
-  const B = b || a!;
-  const left = Math.min(A.x, B.x),
-    top = Math.min(A.y, B.y);
-  const right = Math.max(A.x + A.w, B.x + B.w),
-    bottom = Math.max(A.y + A.h, B.y + B.h);
-  return { x: left, y: top, w: right - left, h: bottom - top };
-};
-
-function slotsByType(tpl: SketchTemplate, type: string) {
-  return tpl.slots
-    .filter((s) => s.type === type)
-    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-}
-function partitionSlot(base: Norm, count: number, direction: "v" | "h" = "v"): Norm[] {
-  if (count <= 1) return [base];
-  const out: Norm[] = [];
-  for (let i = 0; i < count; i++) {
-    if (direction === "v") {
-      out.push({
-        x: base.x,
-        y: base.y + (base.h * i) / count,
-        w: base.w,
-        h: base.h / count
-      });
-    } else {
-      out.push({
-        x: base.x + (base.w * i) / count,
-        y: base.y,
-        w: base.w / count,
-        h: base.h
-      });
-    }
-  }
-  return out;
-}
-
-/* ===== Компонент ===== */
+/* ===== Component ===== */
 type Props = {
   onBack?: () => void;
   onContinue?: (payload?: any) => void;
@@ -332,465 +219,260 @@ type Props = {
   onSendOrder?: (payload?: any) => void;
 };
 
-export default function EditorStep({
-  onBack,
-  onContinue,
-  onRearSide,
-  onSendOrder
-}: Props) {
+export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
   const [outro, setOutro] = useState(false);
 
+  // На эскизе изначально ничего (только изделие)
   const [elements, setElements] = useState<EditorEl[]>(
     () => ((draft as any)?.editor?.elements as EditorEl[]) || []
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [wishes, setWishes] = useState<string>(
-    () => ((draft as any)?.editor?.wishes as string) || ""
-  );
+  const [wishes, setWishes] = useState<string>(() => ((draft as any)?.editor?.wishes as string) || "");
 
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
 
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
-  // Навигационные/сигнатурные рефы для детекции изменений
-  const lastDataSigRef = useRef<string>("");
-  const lastTemplateIdRef = useRef<string | null>(null);
-  const isRefreshingRef = useRef(false);
-  const lastStoreSigRef = useRef<string>("");
-
-  // Стабильная ссылка на refresh для обработчиков (effect без deps)
-  const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
-
   // aspectRatio
   const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const aspect = useMemo(
-    () => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined),
-    [imgWH]
-  );
+  const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
 
   // Источники
   const item = draft?.item || null;
   const engr: any = draft?.engraving || {};
-  const graphics: any[] = Array.isArray(draft?.graphics)
-    ? (draft.graphics as any[])
-    : [];
+  const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
 
-  // Блоки людей
+  // Блоки людей (для портретов и метрики)
   const peopleBlocks = useMemo(() => {
     if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
       return engr.persons.map((p: any, idx: number) => {
         const lines = linesFromPerson(p);
-        const photo =
-          p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null;
+        const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null;
         return { id: p.id || `person-${idx}`, lines, photo };
       });
     }
+    // Легаси
     const legacyLines: string[] = [];
     if (engr?.fullName) legacyLines.push(String(engr.fullName));
     const dates: string[] = [];
     if (engr?.birthDate) dates.push(String(engr.birthDate));
     if (engr?.deathDate) dates.push(String(engr.deathDate));
     if (dates.length) legacyLines.push(dates.join(" — "));
-    if (Array.isArray(engr?.lines))
-      legacyLines.push(...(engr.lines as string[]).filter(Boolean));
-    const photo =
-      engr?.photoPreview ||
-      engr?.photoDataUrl ||
-      engr?.photoUrl ||
-      engr?.photo ||
-      null;
-    return legacyLines.length || photo
-      ? [{ id: "legacy-0", lines: legacyLines, photo }]
-      : [];
+    if (Array.isArray(engr?.lines)) legacyLines.push(...(engr.lines as string[]).filter(Boolean));
+    const photo = engr?.photoPreview || engr?.photoDataUrl || engr?.photoUrl || engr?.photo || null;
+    return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
   // Эпитафии
   const epitaphs = useMemo(() => {
-    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length)
-      return (engr.epitaphs as string[]).filter(Boolean);
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim())
-      return [engr.epitaphText.trim()];
+    if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
+    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
     return [];
   }, [engr]);
 
   // Графика
   const crosses = useMemo(
-    () =>
-      graphics.filter(
-        (g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)
-      ),
+    () => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)),
     [graphics]
   );
   const others = useMemo(
-    () =>
-      graphics.filter(
-        (g) =>
-          !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)
-      ),
+    () => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)),
     [graphics]
   );
 
-  // Шаблон из компонента (или lib)
-  const TEMPLATE_POOL: SketchTemplate[] = useMemo(() => {
-    const maybe = (SketchComponent as any).TEMPLATES as
-      | SketchTemplate[]
-      | undefined;
-    return maybe && Array.isArray(maybe) && maybe.length > 0
-      ? maybe
-      : ((LibTemplates as unknown as SketchTemplate[]) || []);
-  }, []);
-  const template: SketchTemplate | null = useMemo(() => {
-    const preferred =
-      peopleBlocks.length > 1 ? "double_portrait" : "classic_single";
-    return (
-      TEMPLATE_POOL.find((t) => t.id === preferred) || TEMPLATE_POOL[0] || null
-    );
-  }, [peopleBlocks.length, TEMPLATE_POOL]);
-
-  // ——— Компоновка по шаблону: массив (с сохранением флагов по id)
-  const placeAllByTemplate = React.useCallback(
-    (prev: EditorEl[]): EditorEl[] => {
-      if (!template) return prev;
-      const existById = new Map(prev.map((e) => [e.id, e]));
-      const next: EditorEl[] = [];
-      let z = 10;
-
-      // Портреты
-      const photoSlots = slotsByType(template, "photo");
-      const photoRectsNorm: Norm[] =
-        photoSlots.length >= peopleBlocks.length
-          ? photoSlots.slice(0, peopleBlocks.length).map((s) => s.rect as Norm)
-          : photoSlots.length > 0
-          ? partitionSlot(photoSlots[0].rect as Norm, peopleBlocks.length, "h")
-          : [];
-      peopleBlocks.forEach((pb, i) => {
-        const id = `portrait-${pb.id}`;
-        const rn = photoRectsNorm[i];
-        const rect = rn
-          ? toPct(rn)
-          : {
-              x: 10 + (i * 80) / Math.max(1, peopleBlocks.length),
-              y: 18,
-              w: 30,
-              h: 36
-            };
-        const old = existById.get(id);
-        next.push({
-          id,
-          type: "portrait",
-          ...clampBox(rect.x, rect.y, rect.w, rect.h),
-          z: z++,
-          bw: old?.bw ?? true,
-          title: "Портрет"
-        });
-      });
-
-      // Метрика
-      const nameSlots = slotsByType(template, "personName");
-      const dateSlots = slotsByType(template, "dates");
-      const metricRectsNorm: Norm[] = peopleBlocks.map((_, i) => {
-        const nm = (
-          nameSlots.find((s) => (s.index ?? 0) === i) || nameSlots[i]
-        )?.rect as Norm | undefined;
-        const dt = (
-          dateSlots.find((s) => (s.index ?? 0) === i) || dateSlots[i]
-        )?.rect as Norm | undefined;
-        return unionNorm(nm, dt) || nm || dt;
-      });
-      peopleBlocks.forEach((pb, i) => {
-        const id = `metric-${pb.id}`;
-        const rn = metricRectsNorm[i];
-        const rect = rn
-          ? toPct(rn)
-          : {
-              x: 8 + (i * 84) / Math.max(1, peopleBlocks.length),
-              y: 56,
-              w: 36,
-              h: 18
-            };
-        const old = existById.get(id);
-        next.push({
-          id,
-          type: "metric",
-          ...clampBox(rect.x, rect.y, rect.w, rect.h),
-          z: z++,
-          uppercase: old?.uppercase ?? true,
-          italic: old?.italic ?? false,
-          title: "Метрика"
-        });
-      });
-
-      // Эпитафии
-      const epSlots = slotsByType(template, "epitaph");
-      let epRectsNorm: Norm[] = [];
-      if (epitaphs.length > 0) {
-        if (epSlots.length >= epitaphs.length)
-          epRectsNorm = epSlots
-            .slice(0, epitaphs.length)
-            .map((s) => s.rect as Norm);
-        else if (epSlots.length === 1)
-          epRectsNorm = partitionSlot(epSlots[0].rect as Norm, epitaphs.length, "v");
-      }
-      epitaphs.forEach((txt, i) => {
-        const id = `epitaph-${i}`;
-        const rn = epRectsNorm[i];
-        const rect = rn
-          ? toPct(rn)
-          : {
-              x: 10,
-              y: 78 + i * 10,
-              w: 80,
-              h: 12
-            };
-        const old = existById.get(id);
-        next.push({
-          id,
-          type: "epitaph",
-          ...clampBox(rect.x, rect.y, rect.w, rect.h),
-          z: 100 + i,
-          uppercase: old?.uppercase ?? false,
-          italic: old?.italic ?? false,
-          staircase: old?.staircase ?? isRememberLoveMourn(txt),
-          title: "Эпитафия"
-        });
-      });
-
-      // Кресты
-      const crossSlots = slotsByType(template, "cross");
-      let crossRectsNorm: Norm[] = [];
-      if (crosses.length > 0) {
-        if (crossSlots.length >= crosses.length)
-          crossRectsNorm = crossSlots
-            .slice(0, crosses.length)
-            .map((s) => s.rect as Norm);
-        else if (crossSlots.length === 1)
-          crossRectsNorm = partitionSlot(crossSlots[0].rect as Norm, crosses.length, "h");
-      }
-      for (let i = 0; i < crosses.length; i++) {
-        const id = `cross-${i}`;
-        const rn = crossRectsNorm[i];
-        const rect = rn
-          ? toPct(rn)
-          : {
-              x: 6 + i * 18,
-              y: 5,
-              w: 14,
-              h: 14
-            };
-        next.push({
-          id,
-          type: "cross",
-          ...clampBox(rect.x, rect.y, rect.w, rect.h),
-          z: 200 + i,
-          title: "Крест"
-        });
-      }
-
-      // Прочая графика
-      const decorSlots = template.slots
-        .filter((s) => s.type === "decor" || s.type === "flower")
-        .map((s) => s.rect as Norm);
-      const decorRectsNorm: Norm[] =
-        decorSlots.length >= others.length
-          ? decorSlots.slice(0, others.length)
-          : decorSlots.length === 1
-          ? partitionSlot(decorSlots[0], others.length, "h")
-          : [];
-      for (let i = 0; i < others.length; i++) {
-        const id = `graphic-${i}`;
-        const rn = decorRectsNorm[i];
-        const rect = rn
-          ? toPct(rn)
-          : {
-              x: 12 + i * 22,
-              y: 86,
-              w: 20,
-              h: 12
-            };
-        const old = existById.get(id);
-        next.push({
-          id,
-          type: "graphic",
-          ...clampBox(rect.x, rect.y, rect.w, rect.h),
-          z: 300 + i,
-          flipH: old?.flipH ?? false,
-          title: "Графика"
-        });
-      }
-
-      return next;
-    },
-    [template, peopleBlocks, epitaphs, crosses, others]
+  // ---------- Миниатюры (палитра) -> всё, что ещё НЕ на эскизе ----------
+  const placedPortraitIds = useMemo(
+    () => new Set(elements.filter((e) => e.type === "portrait").map((e) => e.id.replace(/^portrait-/, ""))),
+    [elements]
+  );
+  const placedMetricIds = useMemo(
+    () => new Set(elements.filter((e) => e.type === "metric").map((e) => e.id.replace(/^metric-/, ""))),
+    [elements]
+  );
+  const placedEpitaphIdx = useMemo(
+    () => new Set(elements.filter((e) => e.type === "epitaph").map((e) => Number(e.id.replace(/^epitaph-/, "")))),
+    [elements]
+  );
+  const placedCrossIdx = useMemo(
+    () => new Set(elements.filter((e) => e.type === "cross").map((e) => Number(e.id.replace(/^cross-/, "")))),
+    [elements]
+  );
+  const placedGraphicIdx = useMemo(
+    () => new Set(elements.filter((e) => e.type === "graphic").map((e) => Number(e.id.replace(/^graphic-/, "")))),
+    [elements]
   );
 
-  // ——— Удаление «осиротевших» элементов
-  const pruneOrphans = React.useCallback(
-    (els: EditorEl[]): EditorEl[] => {
-      const personIds = new Set(peopleBlocks.map((p) => p.id));
-      const validEpitaphIdx = epitaphs.map((_, i) => i);
-      const validCrossIdx = crosses.map((_, i) => i);
-      const validGraphicIdx = others.map((_, i) => i);
+  const trayPortraits = peopleBlocks.filter((p) => !placedPortraitIds.has(p.id));
+  const trayMetrics = peopleBlocks.filter((p) => !placedMetricIds.has(p.id));
+  const trayEpitaphs = epitaphs
+    .map((t, i) => ({ i, t }))
+    .filter(({ i }) => !placedEpitaphIdx.has(i));
+  const trayCrosses = crosses
+    .map((g, i) => ({ i, g }))
+    .filter(({ i }) => !placedCrossIdx.has(i));
+  const trayGraphics = others
+    .map((g, i) => ({ i, g }))
+    .filter(({ i }) => !placedGraphicIdx.has(i));
 
-      const isValid = (e: EditorEl): boolean => {
-        if (e.type === "portrait") {
-          const pid = e.id.replace(/^portrait-/, "");
-          return personIds.has(pid);
-        }
-        if (e.type === "metric") {
-          const pid = e.id.replace(/^metric-/, "");
-          return personIds.has(pid);
-        }
-        if (e.type === "epitaph") {
-          const idx = Number(e.id.replace(/^epitaph-/, ""));
-          return Number.isFinite(idx) && validEpitaphIdx.includes(idx);
-        }
-        if (e.type === "cross") {
-          const idx = Number(e.id.replace(/^cross-/, ""));
-          return Number.isFinite(idx) && validCrossIdx.includes(idx);
-        }
-        if (e.type === "graphic") {
-          const idx = Number(e.id.replace(/^graphic-/, ""));
-          return Number.isFinite(idx) && validGraphicIdx.includes(idx);
-        }
-        return true;
+  // ---------- Добавление элемента по центру ----------
+  const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
+  const addCentered = (type: ElType, key: string | number) => {
+    let newEl: EditorEl | null = null;
+    const baseCenter = (w: number, h: number) => {
+      const { x, y, w: cw, h: ch } = clampBox((100 - w) / 2, (100 - h) / 2, w, h);
+      return { x, y, w: cw, h: ch };
+    };
+    if (type === "portrait" && typeof key === "string") {
+      // Уже есть — пропускаем
+      if (elements.some((e) => e.type === "portrait" && e.id === `portrait-${key}`)) return;
+      const rect = baseCenter(28, 34);
+      newEl = {
+        id: `portrait-${key}`,
+        type,
+        ...rect,
+        z: nextZ(),
+        bw: true,
+        title: "Портрет"
       };
+    } else if (type === "metric" && typeof key === "string") {
+      if (elements.some((e) => e.type === "metric" && e.id === `metric-${key}`)) return;
+      const rect = baseCenter(44, 20);
+      newEl = {
+        id: `metric-${key}`,
+        type,
+        ...rect,
+        z: nextZ(),
+        uppercase: true,
+        italic: false,
+        title: "Метрика"
+      };
+    } else if (type === "epitaph" && typeof key === "number") {
+      if (elements.some((e) => e.type === "epitaph" && e.id === `epitaph-${key}`)) return;
+      const rect = baseCenter(72, 16);
+      const txt = epitaphs[key] || "";
+      newEl = {
+        id: `epitaph-${key}`,
+        type,
+        ...rect,
+        z: nextZ(),
+        uppercase: false,
+        italic: false,
+        staircase: isRememberLoveMourn(txt),
+        title: "Эпитафия"
+      };
+    } else if (type === "cross" && typeof key === "number") {
+      if (elements.some((e) => e.type === "cross" && e.id === `cross-${key}`)) return;
+      const rect = baseCenter(16, 16);
+      newEl = {
+        id: `cross-${key}`,
+        type,
+        ...rect,
+        z: nextZ(),
+        title: "Крест"
+      };
+    } else if (type === "graphic" && typeof key === "number") {
+      if (elements.some((e) => e.type === "graphic" && e.id === `graphic-${key}`)) return;
+      const rect = baseCenter(24, 16);
+      newEl = {
+        id: `graphic-${key}`,
+        type,
+        ...rect,
+        z: nextZ(),
+        flipH: false,
+        title: "Графика"
+      };
+    }
+    if (newEl) {
+      setElements((prev) => prev.concat([newEl!]));
+      setSelectedId(newEl.id);
+    }
+  };
 
-      return els.filter(isValid);
-    },
-    [peopleBlocks, epitaphs, crosses, others]
-  );
+  // ---------- DnD из палитры в эскиз ----------
+  const onTrayDragStart = (e: React.DragEvent, payload: { type: ElType; key: string | number }) => {
+    try {
+      e.dataTransfer?.setData(DND_MIME, JSON.stringify(payload));
+      e.dataTransfer!.effectAllowed = "copyMove";
+    } catch {}
+  };
+  const onEditorDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes(DND_MIME)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  };
+  const onEditorDrop = (e: React.DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt || !dt.types.includes(DND_MIME)) return;
+    e.preventDefault();
+    try {
+      const raw = dt.getData(DND_MIME);
+      const obj = JSON.parse(raw) as { type: ElType; key: string | number };
+      addCentered(obj.type, obj.key);
+    } catch {}
+  };
 
-  // ——— Сигнатура состава данных (для принятия решения о пересборке)
-  const dataSignature = useMemo(() => {
-    const tp = template?.id || "none";
-    const ppl = peopleBlocks.map((p) => p.id).join(",");
-    const ep = epitaphs.join("||");
-    const cr = String(crosses.length);
-    const ot = String(others.length);
-    return [tp, ppl, ep, cr, ot].join("::");
-  }, [template?.id, peopleBlocks, epitaphs, crosses.length, others.length]);
+  // ---------- Синхронизация со стором (только чтение) ----------
+  const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
+  const isRefreshingRef = useRef(false);
+  const lastStoreSigRef = useRef<string>("");
 
-  // ——— Рефреш из стора (без записи в стор!) — только синхронизация state
   const refreshFromDraft = React.useCallback(
     (opts?: { force?: boolean }) => {
       if (isRefreshingRef.current) return;
       isRefreshingRef.current = true;
       try {
         const fresh = loadOrderDraft();
-
-        // сравним значимые части стора, чтобы не дергать setDraft без нужды
-        const storePick = {
+        const pick = {
           item: fresh?.item || null,
           engraving: fresh?.engraving || null,
           graphics: fresh?.graphics || null
         };
-        const newSig = JSON.stringify(storePick);
-        if (newSig !== lastStoreSigRef.current) {
+        const sig = JSON.stringify(pick);
+        if (sig !== lastStoreSigRef.current) {
           setDraft(fresh);
-          lastStoreSigRef.current = newSig;
+          lastStoreSigRef.current = sig;
         }
-
-        const currentEls = elements;
-        const incomingEls: EditorEl[] =
-          (((fresh as any)?.editor?.elements || []) as EditorEl[]) || [];
-        const incomingWishes: string =
-          (((fresh as any)?.editor?.wishes || "") as string) || "";
-
-        const templateIdChanged =
-          (template?.id || null) !== lastTemplateIdRef.current;
-        const dataChanged = dataSignature !== lastDataSigRef.current;
-
-        // 1) Подхват внешних изменений (только в state)
-        let baseEls = opts?.force
-          ? incomingEls
-          : JSON.stringify(incomingEls) !== JSON.stringify(currentEls)
-          ? incomingEls
-          : currentEls;
-
-        // 2) Чистка осиротевших
-        const pruned = pruneOrphans(baseEls);
-
-        // 3) Пересборка по шаблону при изменениях структуры/шаблона
-        let finalEls = pruned;
-        if (opts?.force || templateIdChanged || dataChanged) {
-          finalEls = placeAllByTemplate(pruned);
-        }
-
-        // 4) Применить к state, но НЕ сохранять здесь (автосейв сделает это сам)
-        const shouldSetEls =
-          JSON.stringify(finalEls) !== JSON.stringify(currentEls);
-        const shouldSetWishes =
-          wishes !== incomingWishes &&
-          (opts?.force ||
-            JSON.stringify(incomingEls) !== JSON.stringify(currentEls));
-
-        if (shouldSetEls) setElements(finalEls);
-        if (shouldSetWishes) setWishes(incomingWishes || "");
-
-        // обновим маркеры
-        lastTemplateIdRef.current = template?.id || null;
-        lastDataSigRef.current = dataSignature;
+        // Принять внешние изменения editor.{elements,wishes}, если они отличаются
+        const incomingEls: EditorEl[] = (((fresh as any)?.editor?.elements || []) as EditorEl[]) || [];
+        const incomingWishes: string = (((fresh as any)?.editor?.wishes || "") as string) || "";
+        const shouldSetEls = opts?.force || JSON.stringify(incomingEls) !== JSON.stringify(elements);
+        const shouldSetWishes = opts?.force || incomingWishes !== wishes;
+        if (shouldSetEls) setElements(incomingEls);
+        if (shouldSetWishes) setWishes(incomingWishes);
       } finally {
         isRefreshingRef.current = false;
       }
     },
-    [elements, wishes, template?.id, dataSignature, pruneOrphans, placeAllByTemplate]
+    [elements, wishes]
   );
 
-  // ——— Стабилизируем ссылку на refresh, чтобы подписка была с пустыми deps
   useEffect(() => {
     refreshRef.current = refreshFromDraft;
   }, [refreshFromDraft]);
 
-  // ——— Принудительная пересборка по шаблону (только state, без записи)
-  const applyTemplateStrict = React.useCallback(() => {
-    const built = placeAllByTemplate(elements);
-    const changed = JSON.stringify(built) !== JSON.stringify(elements);
-    if (changed) {
-      setElements(built);
-    }
-    lastTemplateIdRef.current = template?.id || null;
-    lastDataSigRef.current = dataSignature;
-  }, [elements, template?.id, dataSignature, placeAllByTemplate]);
-
-  // Первичный запуск/смена шаблона/структуры — пересборка
-  useEffect(() => {
-    const needTemplate =
-      !elements?.length ||
-      (template?.id || null) !== lastTemplateIdRef.current ||
-      dataSignature !== lastDataSigRef.current;
-    if (template && needTemplate) {
-      applyTemplateStrict();
-    }
-  }, [template, dataSignature, elements?.length, applyTemplateStrict]);
-
-  // Централизованная подписка (один раз): любые события → refreshFromDraft (без записи)
   useEffect(() => {
     const onAny = () => refreshRef.current();
     const onVisible = () => {
       if (document.visibilityState === "visible") refreshRef.current();
     };
-
     window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
     window.addEventListener("storage", onAny);
     window.addEventListener("memorial:orderDraftUpdated", onAny as any);
-
     window.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onAny);
     window.addEventListener("pageshow", onAny as any);
     window.addEventListener("popstate", onAny);
     window.addEventListener("hashchange", onAny);
 
-    // первичный форс-рефреш — привести state в консистентный вид
     refreshRef.current({ force: true });
 
     return () => {
       window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
       window.removeEventListener("storage", onAny);
       window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
-
       window.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onAny);
       window.removeEventListener("pageshow", onAny as any);
@@ -799,19 +481,10 @@ export default function EditorStep({
     };
   }, []);
 
-  /* ===== DnD / Resize с RAF‑троттлингом ===== */
+  /* ===== DnD / Resize на эскизе ===== */
   const dragRef = useRef<{
     id: string;
-    mode:
-      | "move"
-      | "nw"
-      | "n"
-      | "ne"
-      | "e"
-      | "se"
-      | "s"
-      | "sw"
-      | "w";
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
     startX: number;
     startY: number;
     start: EditorEl;
@@ -827,27 +500,12 @@ export default function EditorStep({
       rafMoveScheduled.current = false;
       const payload = rafMovePayload.current;
       if (!payload) return;
-      setElements((prev) =>
-        prev.map((el) => (el.id === payload.id ? payload.next : el))
-      );
+      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
       rafMovePayload.current = null;
     });
   };
 
-  const onPointerDownBox = (
-    e: React.PointerEvent,
-    id: string,
-    mode:
-      | "move"
-      | "nw"
-      | "n"
-      | "ne"
-      | "e"
-      | "se"
-      | "s"
-      | "sw"
-      | "w" = "move"
-  ) => {
+  const onPointerDownBox = (e: React.PointerEvent, id: string, mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move") => {
     e.stopPropagation();
     const el = elements.find((x) => x.id === id);
     if (!el || el.locked) return;
@@ -855,13 +513,7 @@ export default function EditorStep({
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {}
-    dragRef.current = {
-      id,
-      mode,
-      startX: e.clientX,
-      startY: e.clientY,
-      start: { ...el }
-    };
+    dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, start: { ...el } };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -878,14 +530,10 @@ export default function EditorStep({
     const dyPct = ((e.clientY - d.startY) / contentH) * 100;
 
     const keepRatio = e.shiftKey;
-    const snap = (v: number, step = SNAP_STEP_DEFAULT) =>
-      Math.round(v / step) * step;
+    const snap = (v: number, step = SNAP_STEP_DEFAULT) => Math.round(v / step) * step;
 
     const base = d.start;
-    let nx = base.x,
-      ny = base.y,
-      nw = base.w,
-      nh = base.h;
+    let nx = base.x, ny = base.y, nw = base.w, nh = base.h;
 
     if (d.mode === "move") {
       nx = snap(base.x + dxPct);
@@ -894,14 +542,8 @@ export default function EditorStep({
       const ratio = (base.w || 1) / (base.h || 1);
       if (d.mode.includes("e")) nw = snap(base.w + dxPct);
       if (d.mode.includes("s")) nh = snap(base.h + dyPct);
-      if (d.mode.includes("w")) {
-        nx = snap(base.x + dxPct);
-        nw = snap(base.w - dxPct);
-      }
-      if (d.mode.includes("n")) {
-        ny = snap(base.y + dyPct);
-        nh = snap(base.h - dyPct);
-      }
+      if (d.mode.includes("w")) { nx = snap(base.x + dxPct); nw = snap(base.w - dxPct); }
+      if (d.mode.includes("n")) { ny = snap(base.y + dyPct); nh = snap(base.h - dyPct); }
       if (keepRatio) {
         if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
         if (["n", "s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
@@ -910,7 +552,6 @@ export default function EditorStep({
 
     const clamped = clampBox(nx, ny, nw, nh);
     const nextEl: EditorEl = { ...base, ...clamped };
-
     rafMovePayload.current = { id: d.id, next: nextEl };
     scheduleMoveCommit();
   };
@@ -942,10 +583,7 @@ export default function EditorStep({
       const r = wrap.getBoundingClientRect();
       const pad = SKETCH_PAD;
 
-      async function drawPreview(
-        W: number,
-        H: number
-      ): Promise<string | null> {
+      async function drawPreview(W: number, H: number): Promise<string | null> {
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.floor(W));
         canvas.height = Math.max(1, Math.floor(H));
@@ -976,44 +614,23 @@ export default function EditorStep({
           i.src = url;
         });
 
-        const CX = pad,
-          CY = pad,
-          PW = W - pad * 2,
-          PH = H - pad * 2;
+        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
         if (base) {
-          const sr = base.width / base.height,
-            dr = PW / PH;
+          const sr = base.width / base.height, dr = PW / PH;
           ctx.globalAlpha = 0.35;
           if (sr > dr) {
-            const rw = PW,
-              rh = Math.round(PW / sr),
-              rx = CX,
-              ry = CY + Math.round((PH - rh) / 2);
+            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
             ctx.drawImage(base, rx, ry, rw, rh);
           } else {
-            const rh = PH,
-              rw = Math.round(PH * sr),
-              ry = CY,
-              rx = CX + Math.round((PW - rw) / 2);
+            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
             ctx.drawImage(base, rx, ry, rw, rh);
           }
           ctx.globalAlpha = 1;
         }
 
-        const fam = FONT_CENTURY;
-        const safeIndex = (raw: string, max: number) => {
-          const n = parseInt(raw, 10);
-          if (!Number.isFinite(n) || n < 0) return 0;
-          return Math.min(n, Math.max(0, max - 1));
-        };
-
+        // элементы
         for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
-          const rbox = {
-            x: CX + (el.x / 100) * PW,
-            y: CY + (el.y / 100) * PH,
-            w: (el.w / 100) * PW,
-            h: (el.h / 100) * PH
-          };
+          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
           const key = el.id.split("-").slice(1).join("-");
           if (el.type === "portrait") {
             const p = peopleBlocks.find((pp) => pp.id === key);
@@ -1030,24 +647,15 @@ export default function EditorStep({
               i.src = url;
             });
             if (!im) continue;
-            const sr2 = im.width / im.height,
-              dr2 = rbox.w / rbox.h;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             ctx.save();
-            ctx.beginPath();
-            ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h);
-            ctx.clip();
+            ctx.beginPath(); ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h); ctx.clip();
             if (el.bw) ctx.filter = "grayscale(100%)";
             if (sr2 > dr2) {
-              const hh = rbox.h,
-                ww = Math.round(hh * sr2),
-                xx = Math.round(rbox.x + (rbox.w - ww) / 2),
-                yy = rbox.y;
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
               ctx.drawImage(im, xx, yy, ww, hh);
             } else {
-              const ww = rbox.w,
-                hh = Math.round(ww / sr2),
-                xx = rbox.x,
-                yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
               ctx.drawImage(im, xx, yy, ww, hh);
             }
             ctx.restore();
@@ -1055,99 +663,66 @@ export default function EditorStep({
           } else if (el.type === "metric") {
             const p = peopleBlocks.find((pp) => pp.id === key);
             const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-            const tf = el.uppercase
-              ? (s: string) => s.toUpperCase()
-              : (s: string) => s;
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
             ctx.save();
             ctx.fillStyle = "#fff";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)),
-              padY2 = Math.max(2, Math.round(rbox.h * 0.1));
-            const fitted = fitMetricFontsPx({
-              lines: lines.map(tf),
-              boxW: rbox.w,
-              boxH: rbox.h,
-              italic: !!el.italic,
-              family: fam,
-              padX: padX2,
-              padY: padY2,
-              lineHeight: 1.12,
-              minPx: 10
-            });
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.1));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: FONT_CENTURY, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
             const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
-            let y =
-              rbox.y +
-              (rbox.h - totalH) / 2 +
-              ((fitted[0] || 10) * 1.12) / 2;
+            let y = rbox.y + (rbox.h - totalH) / 2 + ((fitted[0] || 10) * 1.12) / 2;
             for (let i = 0; i < fitted.length; i++) {
-              setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
-              ctx.fillText(tf(lines[i]), rbox.x + rbox.w / 2, y);
+              setFontOnCtx(ctx, !!el.italic, fitted[i], FONT_CENTURY);
+              ctx.fillText(tf(lines[i] || ""), rbox.x + rbox.w / 2, y);
               y += fitted[i] * 1.12;
             }
             ctx.restore();
           } else if (el.type === "epitaph") {
-            const idx = safeIndex(key, epitaphs.length);
-            const tRaw = epitaphs[idx] || "";
+            const idx = Number(key);
+            const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
             const isRLM = isRememberLoveMourn(tRaw);
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)),
-              padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.06));
             ctx.save();
             ctx.fillStyle = "#fff";
             ctx.textBaseline = "middle";
             if (isRLM && el.staircase) {
               const r = splitRememberPreserve(tRaw);
               const parts = [r.top, r.mid, r.bot];
-              const fontPx = fitStairRLMFontPx({
-                lines: parts,
-                boxW: rbox.w,
-                boxH: rbox.h,
-                italic: !!el.italic,
-                family: fam,
-                padX: padX2,
-                padY: padY2,
-                lineHeight: 1.15,
-                minPx: 10,
-                maxPx: 96
-              });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              const fontPx = (() => {
+                const ctxm = getMeasureCtx();
+                // грубая оценка — возьмём минимальный из fit'ов
+                const w = rbox.w, h = rbox.h;
+                const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
+                const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
+                const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
+                const maxW = Math.max(w1, w2, w3);
+                const fByW = (w - padX2 * 2) * 100 / Math.max(1, maxW);
+                const fByH = (h - padY2 * 2) / (3 * 1.15);
+                return Math.max(10, Math.floor(Math.min(fByW, fByH)));
+              })();
+              setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               const slotH = (rbox.h - padY2 * 2) / 3;
               ctx.textAlign = "left";
-              ctx.fillText(
-                parts[0],
-                rbox.x + padX2,
-                rbox.y + padY2 + slotH * 0.5
-              );
+              ctx.fillText(parts[0], rbox.x + padX2, rbox.y + padY2 + slotH * 0.5);
               ctx.textAlign = "center";
-              ctx.fillText(
-                parts[1],
-                rbox.x + rbox.w / 2,
-                rbox.y + padY2 + slotH * 1.5
-              );
+              ctx.fillText(parts[1], rbox.x + rbox.w / 2, rbox.y + padY2 + slotH * 1.5);
               ctx.textAlign = "right";
-              ctx.fillText(
-                parts[2],
-                rbox.x + rbox.w - padX2,
-                rbox.y + padY2 + slotH * 2.5
-              );
+              ctx.fillText(parts[2], rbox.x + rbox.w - padX2, rbox.y + padY2 + slotH * 2.5);
             } else {
-              const { fontPx } = fitMultilineFontPxGeneric({
-                text: tRaw,
+              const { fontPx, lines } = fitMultilineFontPxGeneric({
+                text: el.uppercase ? tRaw.toUpperCase() : tRaw,
                 boxW: rbox.w,
                 boxH: rbox.h,
                 italic: !!el.italic,
-                family: fam,
+                family: FONT_CENTURY,
                 padX: padX2,
                 padY: padY2,
                 lineHeight: 1.15
               });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               ctx.textAlign = "center";
-              ctx.fillText(
-                el.uppercase ? tRaw.toUpperCase() : tRaw,
-                rbox.x + rbox.w / 2,
-                rbox.y + rbox.h / 2
-              );
+              ctx.fillText(lines.join("\n"), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
             }
             ctx.restore();
           } else if (el.type === "graphic" || el.type === "cross") {
@@ -1170,38 +745,25 @@ export default function EditorStep({
             if (el.type === "graphic" && el.flipH) {
               ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
               ctx.scale(-1, 1);
-              ctx.translate(
-                -(rbox.x + rbox.w / 2),
-                -(rbox.y + rbox.h / 2)
-              );
+              ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2));
             }
-            const sr2 = im.width / im.height,
-              dr2 = rbox.w / rbox.h;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             if (sr2 > dr2) {
-              const ww = rbox.w,
-                hh = Math.round(ww / sr2),
-                xx = rbox.x,
-                yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
               ctx.drawImage(im, xx, yy, ww, hh);
             } else {
-              const hh = rbox.h,
-                ww = Math.round(hh * sr2),
-                xx = rbox.x + Math.round((rbox.w - ww) / 2),
-                yy = rbox.y;
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
               ctx.drawImage(im, xx, yy, ww, hh);
             }
             ctx.restore();
           }
         }
+
         return canvas.toDataURL("image/jpeg", 0.9);
       }
 
-      const mini = await drawPreview(
-        Math.max(320, Math.floor(r.width)),
-        Math.max(320, Math.floor(r.height))
-      );
-      const maxSide = 1600,
-        ratio = r.width / Math.max(1, r.height);
+      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
+      const maxSide = 1600, ratio = r.width / Math.max(1, r.height);
       const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
       const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
       const big = await drawPreview(bigW, bigH);
@@ -1221,15 +783,12 @@ export default function EditorStep({
     }, 300) as unknown as number;
   };
 
-  // Автосохранение и превью при изменениях (без ручных dispatch)
+  // Автосохранение
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       const cur = loadOrderDraft();
-      saveOrderDraft({
-        ...cur,
-        editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() }
-      });
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
     }, 200) as unknown as number;
     queuePreviewGeneration();
     return () => {
@@ -1241,8 +800,7 @@ export default function EditorStep({
   useEffect(() => {
     if (!item?.url) return;
     const im = new Image();
-    im.onload = () =>
-      setImgWH({ w: im.naturalWidth || 4, h: im.naturalHeight || 3 });
+    im.onload = () => setImgWH({ w: im.naturalWidth || 4, h: im.naturalHeight || 3 });
     im.onerror = () => setImgWH({ w: 4, h: 3 });
     im.loading = "eager";
     (im as any).fetchpriority = "high";
@@ -1250,16 +808,10 @@ export default function EditorStep({
     im.src = item.url;
   }, [item?.url]);
 
-  /* ===== Мини‑панель инструментов ===== */
+  /* ===== Мини‑панель инструментов (на рамке) ===== */
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
-    const btn: React.CSSProperties = {
-      ...glassButtonStyle("nano"),
-      padding: "2px 6px",
-      fontSize: 11
-    };
-    const stop = (e: React.PointerEvent | React.MouseEvent) => {
-      e.stopPropagation();
-    };
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
+    const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
 
     const isMetric = el.type === "metric";
     const isEpitaph = el.type === "epitaph";
@@ -1296,15 +848,9 @@ export default function EditorStep({
           <button
             type="button"
             style={btn}
-            onPointerDown={stop}
-            onMouseDown={stop}
             onClick={(e) => {
               e.stopPropagation();
-              setElements((prev) =>
-                prev.map((x) =>
-                  x.id === el.id ? { ...x, uppercase: !x.uppercase } : x
-                )
-              );
+              setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)));
             }}
           >
             {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
@@ -1315,15 +861,9 @@ export default function EditorStep({
             <button
               type="button"
               style={btn}
-              onPointerDown={stop}
-              onMouseDown={stop}
               onClick={(e) => {
                 e.stopPropagation();
-                setElements((prev) =>
-                  prev.map((x) =>
-                    x.id === el.id ? { ...x, italic: !x.italic } : x
-                  )
-                );
+                setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)));
               }}
             >
               {el.italic ? "Обычный" : "Курсив"}
@@ -1332,16 +872,10 @@ export default function EditorStep({
               <button
                 type="button"
                 style={btn}
-                onPointerDown={stop}
-                onMouseDown={stop}
                 onClick={(e) => {
                   e.stopPropagation();
                   setElements((prev) =>
-                    prev.map((x) =>
-                      x.id === el.id
-                        ? { ...x, staircase: !x.staircase }
-                        : x
-                    )
+                    prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x))
                   );
                 }}
               >
@@ -1354,15 +888,9 @@ export default function EditorStep({
           <button
             type="button"
             style={btn}
-            onPointerDown={stop}
-            onMouseDown={stop}
             onClick={(e) => {
               e.stopPropagation();
-              setElements((prev) =>
-                prev.map((x) =>
-                  x.id === el.id ? { ...x, flipH: !x.flipH } : x
-                )
-              );
+              setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)));
             }}
           >
             Отразить ⇄
@@ -1372,25 +900,32 @@ export default function EditorStep({
           <button
             type="button"
             style={btn}
-            onPointerDown={stop}
-            onMouseDown={stop}
             onClick={(e) => {
               e.stopPropagation();
-              setElements((prev) =>
-                prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x))
-              );
+              setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)));
             }}
           >
             {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
+        {/* Удалить элемент (вернуть миниатюру в палитру) */}
+        <button
+          type="button"
+          style={btn}
+          onClick={(e) => {
+            e.stopPropagation();
+            setElements((prev) => prev.filter((x) => x.id !== el.id));
+            setSelectedId(null);
+          }}
+        >
+          Удалить
+        </button>
       </div>
     );
   };
 
-  /* ===== Контент слой ===== */
+  /* ===== Слой отрисовки содержимого ===== */
   const ContentLayer = () => {
-    const fam = FONT_CENTURY;
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
     const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
@@ -1467,9 +1002,7 @@ export default function EditorStep({
             if (el.type === "metric") {
               const p = peopleBlocks.find((pp) => pp.id === key);
               const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-              const tf = el.uppercase
-                ? (s: string) => s.toUpperCase()
-                : (s: string) => s;
+              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
               const padX = Math.max(4, Math.round(boxPx.w * 0.04));
               const padY = Math.max(2, Math.round(boxPx.h * 0.1));
               const fitted = fitMetricFontsPx({
@@ -1477,7 +1010,7 @@ export default function EditorStep({
                 boxW: boxPx.w,
                 boxH: boxPx.h,
                 italic: !!el.italic,
-                family: fam,
+                family: FONT_CENTURY,
                 padX,
                 padY,
                 lineHeight: 1.12,
@@ -1489,7 +1022,7 @@ export default function EditorStep({
                   style={{
                     ...wrapperStyle,
                     color: "#fff",
-                    fontFamily: fam,
+                    fontFamily: FONT_CENTURY,
                     textAlign: "center"
                   }}
                 >
@@ -1507,30 +1040,10 @@ export default function EditorStep({
                     }}
                   >
                     <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                      {lines[0] && (
-                        <div
-                          style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}
-                        >
-                          {tf(lines[0])}
-                        </div>
-                      )}
-                      {lines[1] && (
-                        <div
-                          style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}
-                        >
-                          {tf(lines[1])}
-                        </div>
-                      )}
+                      {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
+                      {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
                       {lines[2] && (
-                        <div
-                          style={{
-                            fontWeight: 400,
-                            fontSize: fitted[2] || 10,
-                            opacity: 0.95
-                          }}
-                        >
-                          {tf(lines[2])}
-                        </div>
+                        <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>
                       )}
                     </div>
                   </div>
@@ -1548,27 +1061,17 @@ export default function EditorStep({
               if (isRLM && el.staircase) {
                 const r = splitRememberPreserve(tRaw);
                 const parts = [r.top, r.mid, r.bot];
-                const fontPx = fitStairRLMFontPx({
-                  lines: parts,
-                  boxW: boxPx.w,
-                  boxH: boxPx.h,
-                  italic: !!el.italic,
-                  family: FONT_CENTURY,
-                  padX,
-                  padY,
-                  lineHeight: 1.15,
-                  minPx: 10,
-                  maxPx: 96
-                });
+                // приблизительная подгонка
+                const ctxm = getMeasureCtx();
+                const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
+                const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
+                const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
+                const maxW = Math.max(w1, w2, w3);
+                const fByW = (boxPx.w - padX * 2) * 100 / Math.max(1, maxW);
+                const fByH = (boxPx.h - padY * 2) / (3 * 1.15);
+                const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
                 return (
-                  <div
-                    key={`content-${el.id}`}
-                    style={{
-                      ...wrapperStyle,
-                      color: "#fff",
-                      fontFamily: FONT_CENTURY
-                    }}
-                  >
+                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
                     <div
                       style={{
                         position: "absolute",
@@ -1632,15 +1135,7 @@ export default function EditorStep({
                   lineHeight: 1.15
                 });
                 return (
-                  <div
-                    key={`content-${el.id}`}
-                    style={{
-                      ...wrapperStyle,
-                      color: "#fff",
-                      fontFamily: FONT_CENTURY,
-                      textAlign: "center"
-                    }}
-                  >
+                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
                     <div
                       style={{
                         width: "100%",
@@ -1654,15 +1149,7 @@ export default function EditorStep({
                         textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                       }}
                     >
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          fontSize: fontPx,
-                          whiteSpace: "pre-wrap"
-                        }}
-                      >
-                        {lines.join("\n")}
-                      </div>
+                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
                     </div>
                   </div>
                 );
@@ -1673,10 +1160,7 @@ export default function EditorStep({
               const idx = Number(key);
               const list = el.type === "cross" ? crosses : others;
               const g = Number.isFinite(idx) ? list[idx] : null;
-              const tr =
-                el.type === "graphic" && el.flipH
-                  ? "scaleX(-1) translateZ(0)"
-                  : "translateZ(0)";
+              const tr = el.type === "graphic" && el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
               return (
                 <div key={`content-${el.id}`} style={wrapperStyle}>
                   {g?.url ? (
@@ -1711,19 +1195,13 @@ export default function EditorStep({
   /* ===== Навигация кнопками ===== */
   const handleBack = () => {
     const cur = loadOrderDraft();
-    saveOrderDraft({
-      ...cur,
-      editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() }
-    });
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
     setOutro(true);
     setTimeout(() => onBack?.(), 150);
   };
   const handleContinue = () => {
     const cur = loadOrderDraft();
-    saveOrderDraft({
-      ...cur,
-      editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() }
-    });
+    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: Date.now() } });
     const go = onRearSide || onSendOrder || onContinue;
     if (!go) return;
     setOutro(true);
@@ -1756,6 +1234,35 @@ export default function EditorStep({
     boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
   };
 
+  // Миниатюра (палитра) — карточка
+  const TrayCard: React.FC<{
+    title: string;
+    onClick: () => void;
+    onDragStart: (e: React.DragEvent) => void;
+    children: React.ReactNode;
+  }> = ({ title, onClick, onDragStart, children }) => (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onClick={onClick}
+      title={title}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: 80,
+        height: 64,
+        borderRadius: 8,
+        border: "1px solid rgba(255,255,255,0.18)",
+        background: "rgba(255,255,255,0.06)",
+        overflow: "hidden",
+        cursor: "grab",
+        userSelect: "none"
+      }}
+    >
+      {children}
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -1772,6 +1279,7 @@ export default function EditorStep({
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
+        {/* Панель подсказки */}
         <section
           style={{
             ...glassPanelStyle(),
@@ -1781,13 +1289,148 @@ export default function EditorStep({
             lineHeight: 1.4
           }}
         >
-          Схематично разместите элементы по шаблону. Финальную раскладку выполнит
-          специалист. Укажите порядок и выравнивание (верх/низ, лево/право).
+          Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и меняйте размер.
         </section>
 
+        {/* Палитра миниатюр */}
+        <section style={{ ...glassPanelStyle(), padding: 10, margin: "12px 0" }}>
+          <div style={{ display: "grid", gap: 10 }}>
+            {/* Портреты */}
+            {trayPortraits.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Портреты</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {trayPortraits.map((p) => (
+                    <TrayCard
+                      key={`tp-${p.id}`}
+                      title="Портрет"
+                      onClick={() => addCentered("portrait", p.id)}
+                      onDragStart={(e) => onTrayDragStart(e, { type: "portrait", key: p.id })}
+                    >
+                      {p.photo ? (
+                        <img
+                          src={p.photo}
+                          alt="Портрет"
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 11, opacity: 0.9, padding: 6, textAlign: "center" }}>нет фото</div>
+                      )}
+                    </TrayCard>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Метрика */}
+            {trayMetrics.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Метрика</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {trayMetrics.map((p) => {
+                    const ln = (p.lines || []) as string[];
+                    const fio = [ln[0], ln[1]].filter(Boolean).join(" · ");
+                    return (
+                      <TrayCard
+                        key={`tm-${p.id}`}
+                        title="Метрика"
+                        onClick={() => addCentered("metric", p.id)}
+                        onDragStart={(e) => onTrayDragStart(e, { type: "metric", key: p.id })}
+                      >
+                        <div style={{ fontSize: 11, lineHeight: 1.1, padding: 4, textAlign: "center" }}>
+                          <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {ln[0] || "—"}
+                          </div>
+                          <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[1] || ""}</div>
+                          <div style={{ opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[2] || ""}</div>
+                        </div>
+                      </TrayCard>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Эпитафии */}
+            {trayEpitaphs.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {trayEpitaphs.map(({ i, t }) => (
+                    <TrayCard
+                      key={`te-${i}`}
+                      title="Эпитафия"
+                      onClick={() => addCentered("epitaph", i)}
+                      onDragStart={(e) => onTrayDragStart(e, { type: "epitaph", key: i })}
+                    >
+                      <div style={{ fontSize: 11, lineHeight: 1.1, padding: 6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {t}
+                      </div>
+                    </TrayCard>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Кресты */}
+            {trayCrosses.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Кресты</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {trayCrosses.map(({ i, g }) => (
+                    <TrayCard
+                      key={`tc-${i}`}
+                      title={g.name || "Крест"}
+                      onClick={() => addCentered("cross", i)}
+                      onDragStart={(e) => onTrayDragStart(e, { type: "cross", key: i })}
+                    >
+                      {g.url ? (
+                        <img src={g.url} alt={g.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                      ) : (
+                        <div style={{ fontSize: 11, opacity: 0.9, padding: 6 }}>нет</div>
+                      )}
+                    </TrayCard>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Графика */}
+            {trayGraphics.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {trayGraphics.map(({ i, g }) => (
+                    <TrayCard
+                      key={`tg-${i}`}
+                      title={g.name || "Графика"}
+                      onClick={() => addCentered("graphic", i)}
+                      onDragStart={(e) => onTrayDragStart(e, { type: "graphic", key: i })}
+                    >
+                      {g.url ? (
+                        <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                      ) : (
+                        <div style={{ fontSize: 11, opacity: 0.9, padding: 6 }}>нет</div>
+                      )}
+                    </TrayCard>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Если палитра пуста */}
+            {trayPortraits.length + trayMetrics.length + trayEpitaphs.length + trayCrosses.length + trayGraphics.length === 0 && (
+              <div style={{ fontSize: 13, opacity: 0.9 }}>Все выбранные элементы уже размещены на эскизе.</div>
+            )}
+          </div>
+        </section>
+
+        {/* Область редактора */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <div
             ref={editorWrapRef}
+            onDragOver={onEditorDragOver}
+            onDrop={onEditorDrop}
             style={{
               position: "relative",
               width: "100%",
@@ -1826,25 +1469,17 @@ export default function EditorStep({
             <img
               src={item?.url || ""}
               alt=""
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: 1,
-                height: 1,
-                opacity: 0,
-                pointerEvents: "none"
-              }}
+              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
               onLoad={(e) => {
-                const im = e.currentTarget;
-                if (im.naturalWidth && im.naturalHeight)
-                  setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
+                const im = e.currentTarget as HTMLImageElement;
+                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
               }}
               onError={() => {
                 if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
               }}
             />
 
-            {/* Слой эскиза (по шаблонам) */}
+            {/* Слой эскиза */}
             <ContentLayer />
 
             {/* Рамки + ручки (редактор) */}
@@ -1875,9 +1510,7 @@ export default function EditorStep({
                     top: `${el.y}%`,
                     width: `${el.w}%`,
                     height: `${el.h}%`,
-                    border: selected
-                      ? "2px solid #8ab4ff"
-                      : "1px dashed rgba(255,255,255,0.85)",
+                    border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
                     borderRadius: 4,
                     boxSizing: "border-box",
                     background: "transparent",
@@ -1886,105 +1519,32 @@ export default function EditorStep({
                     touchAction: "none"
                   };
                   return (
-                    <div
-                      key={el.id}
-                      onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")}
-                      style={frameStyle}
-                      title={el.title || el.id}
-                    >
+                    <div key={el.id} onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")} style={frameStyle} title={el.title || el.id}>
                       {selected && <MiniToolbar el={el} />}
                       {selected && !el.locked && (
                         <>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "nw")
-                            }
-                            style={knob(`-${KNOB_HIT / 2}px`, `-${KNOB_HIT / 2}px`, "nwse-resize")}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT / 2}px`, `-${KNOB_HIT / 2}px`, "nwse-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "ne")
-                            }
-                            style={knob(
-                              `calc(100% - ${KNOB_HIT / 2}px)`,
-                              `-${KNOB_HIT / 2}px`,
-                              "nesw-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "nesw-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "se")
-                            }
-                            style={knob(
-                              `calc(100% - ${KNOB_HIT / 2}px)`,
-                              `calc(100% - ${KNOB_HIT / 2}px)`,
-                              "nwse-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "nwse-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "sw")
-                            }
-                            style={knob(
-                              `-${KNOB_HIT / 2}px`,
-                              `calc(100% - ${KNOB_HIT / 2}px)`,
-                              "nesw-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT / 2}px`, `calc(100% - ${KNOB_HIT / 2}px)`, "nesw-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "n")
-                            }
-                            style={knob(
-                              `calc(50% - ${KNOB_HIT / 2}px)`,
-                              `-${KNOB_HIT / 2}px`,
-                              "ns-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "e")
-                            }
-                            style={knob(
-                              `calc(100% - ${KNOB_HIT / 2}px)`,
-                              `calc(50% - ${KNOB_HIT / 2}px)`,
-                              "ew-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "s")
-                            }
-                            style={knob(
-                              `calc(50% - ${KNOB_HIT / 2}px)`,
-                              `calc(100% - ${KNOB_HIT / 2}px)`,
-                              "ns-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "ns-resize")}>
                             <div style={knobDot} />
                           </div>
-                          <div
-                            onPointerDown={(ev) =>
-                              onPointerDownBox(ev as any, el.id, "w")
-                            }
-                            style={knob(
-                              `-${KNOB_HIT / 2}px`,
-                              `calc(50% - ${KNOB_HIT / 2}px)`,
-                              "ew-resize"
-                            )}
-                          >
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}>
                             <div style={knobDot} />
                           </div>
                         </>
@@ -1998,10 +1558,7 @@ export default function EditorStep({
 
         {/* Пожелания */}
         <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-          <label
-            htmlFor="wishes"
-            style={{ display: "block", marginBottom: 6, opacity: 0.9 }}
-          >
+          <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>
             Пожелания по эскизу
           </label>
           <textarea
@@ -2024,23 +1581,11 @@ export default function EditorStep({
           />
         </section>
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: 8,
-            margin: "10px 0",
-            flexWrap: "wrap"
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
           <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
-          <button
-            type="button"
-            onClick={handleContinue}
-            style={glassButtonStyle("sm")}
-          >
+          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
             Продолжить
           </button>
         </div>
