@@ -718,10 +718,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     if (!d) return;
     e.preventDefault();
     const rect = editorWrapRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const contentW = rect.width - SKETCH_PAD * 2;
-    the const contentH = rect.height - SKETCH_PAD * 2;
-    if (contentW <= 0 || contentH <= 0) return;
+if (!rect) return;
+const contentW = rect.width - SKETCH_PAD * 2;
+const contentH = rect.height - SKETCH_PAD * 2;
+if (contentW <= 0 || contentH <= 0) return;
+
 
     const dxPct = ((e.clientX - d.startX) / contentW) * 100;
     const dyPct = ((e.clientY - d.startY) / contentH) * 100;
