@@ -3,6 +3,9 @@
 // Сверху — единая палитра миниатюр, без подписей и разделов, в несколько столбцов.
 // У миниатюр нет рамки/фона, изображение вписано и ограничено 120×120 по большей стороне.
 // Клик/DnD добавляет элемент по центру и убирает из палитры. На рамке есть мини‑панель, включая корзину 🗑.
+// Исправлено:
+// - Текст в миниатюрах «Метрика» и «Эпитафия» — белым цветом (color: "#fff").
+// - Удаление/добавление сохраняются в стор сразу, чтобы не было «отката» из подписки.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -297,7 +300,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [elements]
   );
 
-  // Единая палитра (без подписей/разделов)
+  // Единая палитра миниатюр (без подписей/разделов)
   type TrayItem = { type: ElType; key: string | number; node: React.ReactNode };
   const trayItems: TrayItem[] = useMemo(() => {
     const items: TrayItem[] = [];
@@ -321,7 +324,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Метрика
+    // Метрика (белым)
     for (const p of peopleBlocks) {
       if (!placedMetricIds.has(p.id)) {
         const ln = (p.lines || []) as string[];
@@ -342,7 +345,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 fontSize: 12,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
-                textOverflow: "ellipsis"
+                textOverflow: "ellipsis",
+                color: "#fff" // белый текст
               }}
             >
               <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{ln[0] || "—"}</div>
@@ -354,7 +358,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Эпитафии
+    // Эпитафии (белым)
     epitaphs.forEach((t, i) => {
       if (!placedEpitaphIdx.has(i)) {
         items.push({
@@ -374,7 +378,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 fontSize: 12,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
-                textOverflow: "ellipsis"
+                textOverflow: "ellipsis",
+                color: "#fff" // белый текст
               }}
               title={t}
             >
@@ -426,7 +431,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return items;
   }, [peopleBlocks, placedPortraitIds, placedMetricIds, epitaphs, placedEpitaphIdx, crosses, placedCrossIdx, others, placedGraphicIdx]);
 
-  // Добавление по центру
+  // Добавление по центру (сразу сохраняем драфт для избежания отката)
   const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
   const addCentered = (type: ElType, key: string | number) => {
     let newEl: EditorEl | null = null;
@@ -454,8 +459,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       newEl = { id: `graphic-${key}`, type, ...r, z: nextZ(), flipH: false, title: "Графика" };
     }
     if (newEl) {
-      setElements((prev) => prev.concat([newEl!]));
+      const nextEls = [...elements, newEl];
+      setElements(nextEls);
       setSelectedId(newEl.id);
+      const cur = loadOrderDraft();
+      saveOrderDraft({
+        ...cur,
+        editor: { ...(cur as any).editor, elements: nextEls, wishes, updatedAt: Date.now() }
+      });
       queuePreviewGeneration();
     }
   };
@@ -546,7 +557,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  /* ===== Мини‑панель инструментов (на рамке) ===== */
+  /* ===== Мини‑панель инструментов ===== */
   const MiniToolbar = ({ el }: { el: EditorEl }) => {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
     const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
@@ -589,7 +600,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
             onClick={(e) => {
               e.stopPropagation();
-              setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)));
+              setElements((prev) => {
+                const next = prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x));
+                const cur = loadOrderDraft();
+                saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
+                return next;
+              });
               queuePreviewGeneration();
             }}
           >
@@ -604,7 +620,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               title={el.italic ? "Обычный" : "Курсив"}
               onClick={(e) => {
                 e.stopPropagation();
-                setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)));
+                setElements((prev) => {
+                  const next = prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x));
+                  const cur = loadOrderDraft();
+                  saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
+                  return next;
+                });
                 queuePreviewGeneration();
               }}
             >
@@ -617,7 +638,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 title={el.staircase ? "В строку" : "Лесенкой"}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)));
+                  setElements((prev) => {
+                    const next = prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x));
+                    const cur = loadOrderDraft();
+                    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
+                    return next;
+                  });
                   queuePreviewGeneration();
                 }}
               >
@@ -633,7 +659,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             title="Отразить по горизонтали"
             onClick={(e) => {
               e.stopPropagation();
-              setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)));
+              setElements((prev) => {
+                const next = prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x));
+                const cur = loadOrderDraft();
+                saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
+                return next;
+              });
               queuePreviewGeneration();
             }}
           >
@@ -647,21 +678,31 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
             onClick={(e) => {
               e.stopPropagation();
-              setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)));
+              setElements((prev) => {
+                const next = prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x));
+                const cur = loadOrderDraft();
+                saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
+                return next;
+              });
               queuePreviewGeneration();
             }}
           >
             {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
-        {/* Корзина — вернуть в палитру */}
+        {/* Корзина — вернуть в палитру (и не «возвращаться» обратно на холст) */}
         <button
           type="button"
           style={{ ...btn, padding: "2px 8px" }}
           title="Удалить с эскиза (вернётся в палитру)"
           onClick={(e) => {
             e.stopPropagation();
-            setElements((prev) => prev.filter((x) => x.id !== el.id));
+            setElements((prev) => {
+              const next = prev.filter((x) => x.id !== el.id);
+              const cur = loadOrderDraft();
+              saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: Date.now() } });
+              return next;
+            });
             setSelectedId(null);
             queuePreviewGeneration();
           }}
@@ -779,7 +820,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  /* ===== Генерация превью: определяем как function (hoisted) ===== */
+  /* ===== Генерация превью ===== */
   function queuePreviewGeneration() {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -1036,7 +1077,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     }, 300) as unknown as number;
   }
 
-  /* ===== Content layer (должен быть объявлен до return) ===== */
+  /* ===== Слой содержимого (определён до return) ===== */
   const ContentLayer: React.FC = () => {
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
@@ -1321,7 +1362,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   const MAX_W = 600;
 
-  // Карточка миниатюры (прозрачная, без рамки; содержимое вписано до 120×120)
+  // Карточка миниатюры
   const TrayCard: React.FC<{
     onClick: () => void;
     onDragStart: (e: React.DragEvent) => void;
