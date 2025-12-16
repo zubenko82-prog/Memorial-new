@@ -1,9 +1,10 @@
 // src/screens/EditorStep.tsx
 // Редактор: изначально на эскизе только резная работа.
 // Выбранные элементы (портреты, метрика, эпитафии, кресты, графика) показываем
-// сверху в виде миниатюр. Клик по миниатюре или перетаскивание на эскиз
-// добавляет элемент по центру и убирает его из миниатюр.
-// DnD/resize и остальной функционал элементов сохранён.
+// вверху в виде миниатюр-«палитры» как в галерее (CSS Grid).
+// Клик по миниатюре или DnD на эскиз — добавляет элемент по центру и убирает его из палитры.
+// На рамке элемента доступна мини-панель инструментов, включая «корзину» (🗑) — удаляет с эскиза,
+// возвращая элемент обратно в палитру. DnD/resize и прочие функции сохранены.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -116,7 +117,7 @@ function splitRememberPreserve(text: string) {
   return { top, mid, bot };
 }
 
-/* ===== Measuring helpers for text fit ===== */
+/* ===== Measuring helpers ===== */
 let __measureCtx: CanvasRenderingContext2D | null = null;
 function getMeasureCtx(): CanvasRenderingContext2D {
   if (__measureCtx) return __measureCtx;
@@ -325,29 +326,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       return { x, y, w: cw, h: ch };
     };
     if (type === "portrait" && typeof key === "string") {
-      // Уже есть — пропускаем
       if (elements.some((e) => e.type === "portrait" && e.id === `portrait-${key}`)) return;
       const rect = baseCenter(28, 34);
-      newEl = {
-        id: `portrait-${key}`,
-        type,
-        ...rect,
-        z: nextZ(),
-        bw: true,
-        title: "Портрет"
-      };
+      newEl = { id: `portrait-${key}`, type, ...rect, z: nextZ(), bw: true, title: "Портрет" };
     } else if (type === "metric" && typeof key === "string") {
       if (elements.some((e) => e.type === "metric" && e.id === `metric-${key}`)) return;
       const rect = baseCenter(44, 20);
-      newEl = {
-        id: `metric-${key}`,
-        type,
-        ...rect,
-        z: nextZ(),
-        uppercase: true,
-        italic: false,
-        title: "Метрика"
-      };
+      newEl = { id: `metric-${key}`, type, ...rect, z: nextZ(), uppercase: true, italic: false, title: "Метрика" };
     } else if (type === "epitaph" && typeof key === "number") {
       if (elements.some((e) => e.type === "epitaph" && e.id === `epitaph-${key}`)) return;
       const rect = baseCenter(72, 16);
@@ -365,24 +350,11 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     } else if (type === "cross" && typeof key === "number") {
       if (elements.some((e) => e.type === "cross" && e.id === `cross-${key}`)) return;
       const rect = baseCenter(16, 16);
-      newEl = {
-        id: `cross-${key}`,
-        type,
-        ...rect,
-        z: nextZ(),
-        title: "Крест"
-      };
+      newEl = { id: `cross-${key}`, type, ...rect, z: nextZ(), title: "Крест" };
     } else if (type === "graphic" && typeof key === "number") {
       if (elements.some((e) => e.type === "graphic" && e.id === `graphic-${key}`)) return;
       const rect = baseCenter(24, 16);
-      newEl = {
-        id: `graphic-${key}`,
-        type,
-        ...rect,
-        z: nextZ(),
-        flipH: false,
-        title: "Графика"
-      };
+      newEl = { id: `graphic-${key}`, type, ...rect, z: nextZ(), flipH: false, title: "Графика" };
     }
     if (newEl) {
       setElements((prev) => prev.concat([newEl!]));
@@ -435,7 +407,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           setDraft(fresh);
           lastStoreSigRef.current = sig;
         }
-        // Принять внешние изменения editor.{elements,wishes}, если они отличаются
+        // принять editor.{elements,wishes}, если отличаются
         const incomingEls: EditorEl[] = (((fresh as any)?.editor?.elements || []) as EditorEl[]) || [];
         const incomingWishes: string = (((fresh as any)?.editor?.wishes || "") as string) || "";
         const shouldSetEls = opts?.force || JSON.stringify(incomingEls) !== JSON.stringify(elements);
@@ -689,18 +661,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             if (isRLM && el.staircase) {
               const r = splitRememberPreserve(tRaw);
               const parts = [r.top, r.mid, r.bot];
-              const fontPx = (() => {
-                const ctxm = getMeasureCtx();
-                // грубая оценка — возьмём минимальный из fit'ов
-                const w = rbox.w, h = rbox.h;
-                const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
-                const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
-                const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
-                const maxW = Math.max(w1, w2, w3);
-                const fByW = (w - padX2 * 2) * 100 / Math.max(1, maxW);
-                const fByH = (h - padY2 * 2) / (3 * 1.15);
-                return Math.max(10, Math.floor(Math.min(fByW, fByH)));
-              })();
+              const ctxm = getMeasureCtx();
+              const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
+              const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
+              const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
+              const maxW = Math.max(w1, w2, w3);
+              const fByW = (rbox.w - padX2 * 2) * 100 / Math.max(1, maxW);
+              const fByH = (rbox.h - padY2 * 2) / (3 * 1.15);
+              const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
               setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               const slotH = (rbox.h - padY2 * 2) / 3;
               ctx.textAlign = "left";
@@ -722,7 +690,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               });
               setFontOnCtx(ctx, !!el.italic, fontPx, FONT_CENTURY);
               ctx.textAlign = "center";
-              ctx.fillText(lines.join("\n"), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
+              // простая отрисовка одной строки (для краткости)
+              ctx.fillText(lines.join(" "), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
             }
             ctx.restore();
           } else if (el.type === "graphic" || el.type === "cross") {
@@ -848,6 +817,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           <button
             type="button"
             style={btn}
+            title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
             onClick={(e) => {
               e.stopPropagation();
               setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)));
@@ -861,6 +831,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             <button
               type="button"
               style={btn}
+              title={el.italic ? "Обычный" : "Курсив"}
               onClick={(e) => {
                 e.stopPropagation();
                 setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)));
@@ -872,11 +843,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               <button
                 type="button"
                 style={btn}
+                title={el.staircase ? "В строку" : "Лесенкой"}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setElements((prev) =>
-                    prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x))
-                  );
+                  setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)));
                 }}
               >
                 {el.staircase ? "В строку" : "Лесенкой"}
@@ -888,18 +858,20 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           <button
             type="button"
             style={btn}
+            title="Отразить по горизонтали"
             onClick={(e) => {
               e.stopPropagation();
               setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)));
             }}
           >
-            Отразить ⇄
+            ⇄
           </button>
         )}
         {isPortrait && (
           <button
             type="button"
             style={btn}
+            title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
             onClick={(e) => {
               e.stopPropagation();
               setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)));
@@ -908,17 +880,18 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
-        {/* Удалить элемент (вернуть миниатюру в палитру) */}
+        {/* Корзина — вернуть в палитру */}
         <button
           type="button"
-          style={btn}
+          style={{ ...btn, padding: "2px 8px" }}
+          title="Удалить с эскиза (вернётся в палитру)"
           onClick={(e) => {
             e.stopPropagation();
             setElements((prev) => prev.filter((x) => x.id !== el.id));
             setSelectedId(null);
           }}
         >
-          Удалить
+          🗑
         </button>
       </div>
     );
@@ -1192,6 +1165,38 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
+  /* ===== Палитра: карточка миниатюры (галерея) ===== */
+  const TrayCard: React.FC<{
+    title: string;
+    onClick: () => void;
+    onDragStart: (e: React.DragEvent) => void;
+    children: React.ReactNode;
+  }> = ({ title, onClick, onDragStart, children }) => (
+    <button
+      type="button"
+      draggable
+      onDragStart={onDragStart}
+      onClick={onClick}
+      title={title}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: "100%",
+        aspectRatio: "1 / 1",
+        borderRadius: 10,
+        border: "1px solid rgba(255,255,255,0.18)",
+        background: "rgba(255,255,255,0.06)",
+        overflow: "hidden",
+        cursor: "grab",
+        userSelect: "none",
+        padding: 6,
+        boxSizing: "border-box"
+      }}
+    >
+      {children}
+    </button>
+  );
+
   /* ===== Навигация кнопками ===== */
   const handleBack = () => {
     const cur = loadOrderDraft();
@@ -1234,35 +1239,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
   };
 
-  // Миниатюра (палитра) — карточка
-  const TrayCard: React.FC<{
-    title: string;
-    onClick: () => void;
-    onDragStart: (e: React.DragEvent) => void;
-    children: React.ReactNode;
-  }> = ({ title, onClick, onDragStart, children }) => (
-    <div
-      draggable
-      onDragStart={onDragStart}
-      onClick={onClick}
-      title={title}
-      style={{
-        display: "grid",
-        placeItems: "center",
-        width: 80,
-        height: 64,
-        borderRadius: 8,
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "rgba(255,255,255,0.06)",
-        overflow: "hidden",
-        cursor: "grab",
-        userSelect: "none"
-      }}
-    >
-      {children}
-    </div>
-  );
-
   return (
     <div
       style={{
@@ -1279,7 +1255,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
-        {/* Панель подсказки */}
+        {/* Подсказка */}
         <section
           style={{
             ...glassPanelStyle(),
@@ -1289,17 +1265,23 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             lineHeight: 1.4
           }}
         >
-          Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и меняйте размер.
+          Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и изменяйте размер. Чтобы убрать элемент, нажмите 🗑 на рамке.
         </section>
 
-        {/* Палитра миниатюр */}
+        {/* Палитра миниатюр (галерея) */}
         <section style={{ ...glassPanelStyle(), padding: 10, margin: "12px 0" }}>
-          <div style={{ display: "grid", gap: 10 }}>
-            {/* Портреты */}
+          <div style={{ display: "grid", gap: 12 }}>
             {trayPortraits.length > 0 && (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Портреты</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                    gap: 10,
+                    alignItems: "stretch"
+                  }}
+                >
                   {trayPortraits.map((p) => (
                     <TrayCard
                       key={`tp-${p.id}`}
@@ -1311,10 +1293,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                         <img
                           src={p.photo}
                           alt="Портрет"
-                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                          style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
                         />
                       ) : (
-                        <div style={{ fontSize: 11, opacity: 0.9, padding: 6, textAlign: "center" }}>нет фото</div>
+                        <div style={{ fontSize: 11, opacity: 0.9, textAlign: "center", lineHeight: 1.2 }}>нет фото</div>
                       )}
                     </TrayCard>
                   ))}
@@ -1322,14 +1304,19 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               </div>
             )}
 
-            {/* Метрика */}
             {trayMetrics.length > 0 && (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Метрика</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                    gap: 10,
+                    alignItems: "stretch"
+                  }}
+                >
                   {trayMetrics.map((p) => {
                     const ln = (p.lines || []) as string[];
-                    const fio = [ln[0], ln[1]].filter(Boolean).join(" · ");
                     return (
                       <TrayCard
                         key={`tm-${p.id}`}
@@ -1337,12 +1324,30 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                         onClick={() => addCentered("metric", p.id)}
                         onDragStart={(e) => onTrayDragStart(e, { type: "metric", key: p.id })}
                       >
-                        <div style={{ fontSize: 11, lineHeight: 1.1, padding: 4, textAlign: "center" }}>
-                          <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <div style={{ fontSize: 11, lineHeight: 1.1, textAlign: "center", width: "100%" }}>
+                          <div
+                            style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                            title={ln[0] || ""}
+                          >
                             {ln[0] || "—"}
                           </div>
-                          <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[1] || ""}</div>
-                          <div style={{ opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ln[2] || ""}</div>
+                          <div
+                            style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                            title={ln[1] || ""}
+                          >
+                            {ln[1] || ""}
+                          </div>
+                          <div
+                            style={{
+                              opacity: 0.9,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis"
+                            }}
+                            title={ln[2] || ""}
+                          >
+                            {ln[2] || ""}
+                          </div>
                         </div>
                       </TrayCard>
                     );
@@ -1351,11 +1356,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               </div>
             )}
 
-            {/* Эпитафии */}
             {trayEpitaphs.length > 0 && (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                    gap: 10,
+                    alignItems: "stretch"
+                  }}
+                >
                   {trayEpitaphs.map(({ i, t }) => (
                     <TrayCard
                       key={`te-${i}`}
@@ -1363,7 +1374,18 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       onClick={() => addCentered("epitaph", i)}
                       onDragStart={(e) => onTrayDragStart(e, { type: "epitaph", key: i })}
                     >
-                      <div style={{ fontSize: 11, lineHeight: 1.1, padding: 6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          lineHeight: 1.1,
+                          textAlign: "center",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          width: "100%"
+                        }}
+                        title={t}
+                      >
                         {t}
                       </div>
                     </TrayCard>
@@ -1372,11 +1394,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               </div>
             )}
 
-            {/* Кресты */}
             {trayCrosses.length > 0 && (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Кресты</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                    gap: 10,
+                    alignItems: "stretch"
+                  }}
+                >
                   {trayCrosses.map(({ i, g }) => (
                     <TrayCard
                       key={`tc-${i}`}
@@ -1385,9 +1413,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       onDragStart={(e) => onTrayDragStart(e, { type: "cross", key: i })}
                     >
                       {g.url ? (
-                        <img src={g.url} alt={g.name || "Крест"} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        <img
+                          src={g.url}
+                          alt={g.name || "Крест"}
+                          style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                        />
                       ) : (
-                        <div style={{ fontSize: 11, opacity: 0.9, padding: 6 }}>нет</div>
+                        <div style={{ fontSize: 11, opacity: 0.9, textAlign: "center" }}>нет</div>
                       )}
                     </TrayCard>
                   ))}
@@ -1395,11 +1427,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               </div>
             )}
 
-            {/* Графика */}
             {trayGraphics.length > 0 && (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+                    gap: 10,
+                    alignItems: "stretch"
+                  }}
+                >
                   {trayGraphics.map(({ i, g }) => (
                     <TrayCard
                       key={`tg-${i}`}
@@ -1408,9 +1446,13 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       onDragStart={(e) => onTrayDragStart(e, { type: "graphic", key: i })}
                     >
                       {g.url ? (
-                        <img src={g.url} alt={g.name || "Графика"} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        <img
+                          src={g.url}
+                          alt={g.name || "Графика"}
+                          style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                        />
                       ) : (
-                        <div style={{ fontSize: 11, opacity: 0.9, padding: 6 }}>нет</div>
+                        <div style={{ fontSize: 11, opacity: 0.9, textAlign: "center" }}>нет</div>
                       )}
                     </TrayCard>
                   ))}
@@ -1418,7 +1460,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               </div>
             )}
 
-            {/* Если палитра пуста */}
             {trayPortraits.length + trayMetrics.length + trayEpitaphs.length + trayCrosses.length + trayGraphics.length === 0 && (
               <div style={{ fontSize: 13, opacity: 0.9 }}>Все выбранные элементы уже размещены на эскизе.</div>
             )}
