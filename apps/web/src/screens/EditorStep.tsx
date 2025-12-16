@@ -226,7 +226,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const [wishes, setWishes] = useState<string>(() => ((draft as any)?.editor?.wishes as string) || "");
 
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
-
   const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
@@ -259,7 +258,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
-  // Эпитафии (исправлено имя поля на engraving.epitaphs)
+  // Эпитафии
   const epitaphs = useMemo(() => {
     if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
     if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
@@ -591,6 +590,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             onClick={(e) => {
               e.stopPropagation();
               setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)));
+              queuePreviewGeneration();
             }}
           >
             {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
@@ -605,6 +605,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               onClick={(e) => {
                 e.stopPropagation();
                 setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)));
+                queuePreviewGeneration();
               }}
             >
               {el.italic ? "Обычный" : "Курсив"}
@@ -617,6 +618,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 onClick={(e) => {
                   e.stopPropagation();
                   setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)));
+                  queuePreviewGeneration();
                 }}
               >
                 {el.staircase ? "В строку" : "Лесенкой"}
@@ -632,6 +634,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             onClick={(e) => {
               e.stopPropagation();
               setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)));
+              queuePreviewGeneration();
             }}
           >
             ⇄
@@ -645,6 +648,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             onClick={(e) => {
               e.stopPropagation();
               setElements((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)));
+              queuePreviewGeneration();
             }}
           >
             {el.bw ? "Цвет" : "Ч/Б"}
@@ -775,7 +779,264 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     dragRef.current = null;
   };
 
-  /* ===== Слой отрисовки содержимого (ОБЯЗАТЕЛЬНО определён до return) ===== */
+  /* ===== Генерация превью: определяем как function (hoisted) ===== */
+  function queuePreviewGeneration() {
+    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = window.setTimeout(async () => {
+      const wrap = editorWrapRef.current;
+      if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const pad = SKETCH_PAD;
+
+      async function drawPreview(W: number, H: number): Promise<string | null> {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.floor(W));
+        canvas.height = Math.max(1, Math.floor(H));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+
+        // фон
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#6e6e6e");
+        grad.addColorStop(0.2, "#464545");
+        grad.addColorStop(0.4, "#424242");
+        grad.addColorStop(0.7, "#888888");
+        grad.addColorStop(1.0, "#ffffff");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        // изделие
+        const base = await new Promise<HTMLImageElement | null>((resolve) => {
+          const url = item?.url || "";
+          if (!url) return resolve(null);
+          const i = new Image();
+          i.crossOrigin = "anonymous";
+          i.loading = "eager";
+          (i as any).fetchpriority = "high";
+          i.decoding = "sync";
+          i.onload = () => resolve(i);
+          i.onerror = () => resolve(null);
+          i.src = url;
+        });
+
+        const CX = pad,
+          CY = pad,
+          PW = W - pad * 2,
+          PH = H - pad * 2;
+        if (base) {
+          const sr = base.width / base.height,
+            dr = PW / PH;
+          ctx.globalAlpha = 0.35;
+          if (sr > dr) {
+            const rw = PW,
+              rh = Math.round(PW / sr),
+              rx = CX,
+              ry = CY + Math.round((PH - rh) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          } else {
+            const rh = PH,
+              rw = Math.round(PH * sr),
+              ry = CY,
+              rx = CX + Math.round((PW - rw) / 2);
+            ctx.drawImage(base, rx, ry, rw, rh);
+          }
+          ctx.globalAlpha = 1;
+        }
+
+        // элементы
+        const fam = FONT_CENTURY;
+        const safeIndex = (raw: string, max: number) => {
+          const n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 0) return 0;
+          return Math.min(n, Math.max(0, max - 1));
+        };
+
+        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
+          const rbox = {
+            x: CX + (el.x / 100) * PW,
+            y: CY + (el.y / 100) * PH,
+            w: (el.w / 100) * PW,
+            h: (el.h / 100) * PH
+          };
+          const key = el.id.split("-").slice(1).join("-");
+          if (el.type === "portrait") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const url = p?.photo || "";
+            if (!url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image();
+              i.crossOrigin = "anonymous";
+              i.loading = "eager";
+              (i as any).fetchpriority = "low";
+              i.decoding = "async";
+              i.onload = () => resolve(i);
+              i.onerror = () => resolve(null);
+              i.src = url;
+            });
+            if (!im) continue;
+            const sr2 = im.width / im.height,
+              dr2 = rbox.w / rbox.h;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h);
+            ctx.clip();
+            if (el.bw) ctx.filter = "grayscale(100%)";
+            if (sr2 > dr2) {
+              const hh = rbox.h,
+                ww = Math.round(hh * sr2),
+                xx = Math.round(rbox.x + (rbox.w - ww) / 2),
+                yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const ww = rbox.w,
+                hh = Math.round(ww / sr2),
+                xx = rbox.x,
+                yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore();
+            ctx.filter = "none";
+          } else if (el.type === "metric") {
+            const p = peopleBlocks.find((pp) => pp.id === key);
+            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
+            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
+            ctx.save();
+            ctx.fillStyle = "#fff";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)),
+              padY2 = Math.max(2, Math.round(rbox.h * 0.1));
+            const fitted = fitMetricFontsPx({
+              lines: lines.map(tf),
+              boxW: rbox.w,
+              boxH: rbox.h,
+              italic: !!el.italic,
+              family: fam,
+              padX: padX2,
+              padY: padY2,
+              lineHeight: 1.12,
+              minPx: 10
+            });
+            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
+            let y =
+              rbox.y + (rbox.h - totalH) / 2 + ((fitted[0] || 10) * 1.12) / 2;
+            for (let i = 0; i < fitted.length; i++) {
+              setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
+              ctx.fillText(tf(lines[i] || ""), rbox.x + rbox.w / 2, y);
+              y += fitted[i] * 1.12;
+            }
+            ctx.restore();
+          } else if (el.type === "epitaph") {
+            const idx = safeIndex(key, epitaphs.length);
+            const tRaw = epitaphs[idx] || "";
+            const isRLM = isRememberLoveMourn(tRaw);
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)),
+              padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            ctx.save();
+            ctx.fillStyle = "#fff";
+            ctx.textBaseline = "middle";
+            if (isRLM && el.staircase) {
+              const r = splitRememberPreserve(tRaw);
+              const parts = [r.top, r.mid, r.bot];
+              const ctxm = getMeasureCtx();
+              const w1 = measureTextAt(ctxm, parts[0], !!el.italic, fam, 100);
+              const w2 = measureTextAt(ctxm, parts[1], !!el.italic, fam, 100);
+              const w3 = measureTextAt(ctxm, parts[2], !!el.italic, fam, 100);
+              const maxW = Math.max(w1, w2, w3);
+              const fByW = ((rbox.w - padX2 * 2) * 100) / Math.max(1, maxW);
+              const fByH = (rbox.h - padY2 * 2) / (3 * 1.15);
+              const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
+              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              const slotH = (rbox.h - padY2 * 2) / 3;
+              ctx.textAlign = "left";
+              ctx.fillText(parts[0], rbox.x + padX2, rbox.y + padY2 + slotH * 0.5);
+              ctx.textAlign = "center";
+              ctx.fillText(parts[1], rbox.x + rbox.w / 2, rbox.y + padY2 + slotH * 1.5);
+              ctx.textAlign = "right";
+              ctx.fillText(parts[2], rbox.x + rbox.w - padX2, rbox.y + padY2 + slotH * 2.5);
+            } else {
+              const { fontPx, lines } = fitMultilineFontPxGeneric({
+                text: el.uppercase ? tRaw.toUpperCase() : tRaw,
+                boxW: rbox.w,
+                boxH: rbox.h,
+                italic: !!el.italic,
+                family: fam,
+                padX: padX2,
+                padY: padY2,
+                lineHeight: 1.15
+              });
+              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
+              ctx.textAlign = "center";
+              ctx.fillText(lines.join(" "), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
+            }
+            ctx.restore();
+          } else if (el.type === "graphic" || el.type === "cross") {
+            const idx = Number(key);
+            const list = el.type === "cross" ? crosses : others;
+            const g = Number.isFinite(idx) ? list[idx] : null;
+            if (!g?.url) continue;
+            const im = await new Promise<HTMLImageElement | null>((resolve) => {
+              const i = new Image();
+              i.crossOrigin = "anonymous";
+              i.loading = "eager";
+              (i as any).fetchpriority = "low";
+              i.decoding = "async";
+              i.onload = () => resolve(i);
+              i.onerror = () => resolve(null);
+              i.src = g.url;
+            });
+            if (!im) continue;
+            ctx.save();
+            if (el.type === "graphic" && el.flipH) {
+              ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
+              ctx.scale(-1, 1);
+              ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2));
+            }
+            const sr2 = im.width / im.height,
+              dr2 = rbox.w / rbox.h;
+            if (sr2 > dr2) {
+              const ww = rbox.w,
+                hh = Math.round(ww / sr2),
+                xx = rbox.x,
+                yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              ctx.drawImage(im, xx, yy, ww, hh);
+            } else {
+              const hh = rbox.h,
+                ww = Math.round(hh * sr2),
+                xx = rbox.x + Math.round((rbox.w - ww) / 2),
+                yy = rbox.y;
+              ctx.drawImage(im, xx, yy, ww, hh);
+            }
+            ctx.restore();
+          }
+        }
+
+        return canvas.toDataURL("image/jpeg", 0.9);
+      }
+
+      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
+      const maxSide = 1600,
+        ratio = r.width / Math.max(1, r.height);
+      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
+      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
+      const big = await drawPreview(bigW, bigH);
+
+      const cur = loadOrderDraft();
+      saveOrderDraft({
+        ...cur,
+        editor: {
+          ...(cur as any).editor,
+          previewUrl: mini || (cur as any).editor?.previewUrl || null,
+          previewHiUrl: big || (cur as any).editor?.previewHiUrl || null,
+          previewUpdatedAt: Date.now(),
+          elements,
+          wishes
+        }
+      });
+    }, 300) as unknown as number;
+  }
+
+  /* ===== Content layer (должен быть объявлен до return) ===== */
   const ContentLayer: React.FC = () => {
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
@@ -1201,7 +1462,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             {/* Слой эскиза */}
             <ContentLayer />
 
-            {/* Рамки + ручки (down ловим внутри; move/up — на контейнере выше) */}
+            {/* Рамки + ручки */}
             <div
               onPointerDown={(e) => {
                 if (e.target === e.currentTarget) setSelectedId(null);
