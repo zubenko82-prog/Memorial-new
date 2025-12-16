@@ -322,7 +322,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Метрика (текст как миниатюра)
+    // Метрика
     for (const p of peopleBlocks) {
       if (!placedMetricIds.has(p.id)) {
         const ln = (p.lines || []) as string[];
@@ -666,7 +666,114 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  /* ===== Слой отрисовки содержимого (ВАЖНО: определён до использования) ===== */
+  /* ===== Обработчики DnD/Resize НАД return (чтобы не было ReferenceError) ===== */
+  const dragRef = useRef<{
+    id: string;
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+    startX: number;
+    startY: number;
+    start: EditorEl;
+  } | null>(null);
+
+  const rafMoveScheduled = useRef(false);
+  const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
+
+  const scheduleMoveCommit = () => {
+    if (rafMoveScheduled.current) return;
+    rafMoveScheduled.current = true;
+    requestAnimationFrame(() => {
+      rafMoveScheduled.current = false;
+      const payload = rafMovePayload.current;
+      if (!payload) return;
+      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
+      rafMovePayload.current = null;
+    });
+  };
+
+  const onPointerDownBox = (
+    e: React.PointerEvent,
+    id: string,
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
+  ) => {
+    e.stopPropagation();
+    const el = elements.find((x) => x.id === id);
+    if (!el || el.locked) return;
+    setSelectedId(id);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    dragRef.current = {
+      id,
+      mode,
+      startX: e.clientX,
+      startY: e.clientY,
+      start: { ...el }
+    };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    e.preventDefault();
+    const rect = editorWrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const contentW = rect.width - SKETCH_PAD * 2;
+    const contentH = rect.height - SKETCH_PAD * 2;
+    if (contentW <= 0 || contentH <= 0) return;
+
+    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
+    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
+
+    const keepRatio = e.shiftKey;
+    const snap = (v: number, step = SNAP_STEP_DEFAULT) => Math.round(v / step) * step;
+
+    const base = d.start;
+    let nx = base.x,
+      ny = base.y,
+      nw = base.w,
+      nh = base.h;
+
+    if (d.mode === "move") {
+      nx = snap(base.x + dxPct);
+      ny = snap(base.y + dyPct);
+    } else {
+      const ratio = (base.w || 1) / (base.h || 1);
+      if (d.mode.includes("e")) nw = snap(base.w + dxPct);
+      if (d.mode.includes("s")) nh = snap(base.h + dyPct);
+      if (d.mode.includes("w")) {
+        nx = snap(base.x + dxPct);
+        nw = snap(base.w - dxPct);
+      }
+      if (d.mode.includes("n")) {
+        ny = snap(base.y + dyPct);
+        nh = snap(base.h - dyPct);
+      }
+      if (keepRatio) {
+        if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
+        if (["n", "s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
+      }
+    }
+
+    const clamped = clampBox(nx, ny, nw, nh);
+    const nextEl: EditorEl = { ...base, ...clamped };
+    rafMovePayload.current = { id: d.id, next: nextEl };
+    scheduleMoveCommit();
+  };
+
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      const cur = loadOrderDraft();
+      const latest = elements;
+      saveOrderDraft({
+        ...cur,
+        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: Date.now() }
+      });
+      queuePreviewGeneration();
+    }
+    dragRef.current = null;
+  };
+
+  /* ===== Слой отрисовки содержимого (определён ДО return) ===== */
   const ContentLayer: React.FC = () => {
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
@@ -951,30 +1058,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
   const MAX_W = 600;
 
-  // Ручки ресайза
-  const KNOB_HIT = 28;
-  const KNOB_VIS = 14;
-  const knob = (left: string, top: string, cursor: string) =>
-    ({
-      position: "absolute",
-      left,
-      top,
-      width: KNOB_HIT,
-      height: KNOB_HIT,
-      cursor,
-      pointerEvents: "auto",
-      display: "grid",
-      placeItems: "center"
-    } as React.CSSProperties);
-  const knobDot: React.CSSProperties = {
-    width: KNOB_VIS,
-    height: KNOB_VIS,
-    background: "#fff",
-    border: "1px solid #000",
-    borderRadius: 3,
-    boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
-  };
-
   // Карточка миниатюры (прозрачная, без рамки; содержимое вписано до 120×120)
   const TrayCard: React.FC<{
     onClick: () => void;
@@ -1063,6 +1146,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             ref={editorWrapRef}
             onDragOver={onEditorDragOver}
             onDrop={onEditorDrop}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
             style={{
               position: "relative",
               width: "100%",
@@ -1116,8 +1201,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
             {/* Рамки + ручки (редактор) */}
             <div
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
               onPointerDown={(e) => {
                 if (e.target === e.currentTarget) setSelectedId(null);
               }}
