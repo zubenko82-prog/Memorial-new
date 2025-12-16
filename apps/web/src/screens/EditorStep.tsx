@@ -1,10 +1,12 @@
 // src/screens/EditorStep.tsx
 // Редактор: изначально на эскизе только резная работа.
 // Сверху — единая палитра миниатюр (без подписей), несколько столбцов, прозрачный фон.
-// Картинки и текст в миниатюрах — вписаны, не больше 120×120 по большей стороне.
-// Текст миниатюр «Метрика» и «Эпитафия» — белый.
-// Клик/DnD добавляет элемент по центру. На рамке — мини‑панель с корзиной.
-// Исправлено «откат» состояния: применяем данные из стора только если они новее локального (по editor.updatedAt).
+// Картинки и текст в миниатюрах вписаны и ограничены 120×120 по большей стороне.
+// Текст миниатюр «Метрика» и «Эпитафия» — белым.
+// Клик/DnD добавляет элемент по центру. На рамке — мини‑панель (ПРОПИСНЫЕ/строчные, Курсив,
+// Лесенкой/В строку, Отразить, Ч/Б, Корзина).
+// Исправление «отката»: локальные изменения сохраняются вместе с editor.updatedAt,
+// подписка применяет стор только если он новее локального (incoming.updatedAt > lastAppliedTsRef).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -228,10 +230,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   const [wishes, setWishes] = useState<string>(() => ((draft as any)?.editor?.wishes as string) || "");
 
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
   const previewTimerRef = useRef<number | null>(null);
 
-  // Версионирование/время последнего применённого снапшота — блокируем «откат»
+  // ts последнего локального применения — защита от «отката»
   const lastAppliedTsRef = useRef<number>(
     (draft as any)?.editor?.updatedAt ? Number((draft as any).editor.updatedAt) : 0
   );
@@ -304,7 +305,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [elements]
   );
 
-  // Единая палитра миниатюр
+  // Палитра миниатюр
   type TrayItem = { type: ElType; key: string | number; node: React.ReactNode };
   const trayItems: TrayItem[] = useMemo(() => {
     const items: TrayItem[] = [];
@@ -435,7 +436,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return items;
   }, [peopleBlocks, placedPortraitIds, placedMetricIds, epitaphs, placedEpitaphIdx, crosses, placedCrossIdx, others, placedGraphicIdx]);
 
-  // Добавление по центру (сразу сохраняем и помечаем ts)
+  // Добавление по центру (сразу в стор, с updatedAt)
   const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
   const addCentered = (type: ElType, key: string | number) => {
     let newEl: EditorEl | null = null;
@@ -469,15 +470,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const ts = Date.now();
       lastAppliedTsRef.current = ts;
       const cur = loadOrderDraft();
-      saveOrderDraft({
-        ...cur,
-        editor: { ...(cur as any).editor, elements: nextEls, wishes, updatedAt: ts }
-      });
+      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: nextEls, wishes, updatedAt: ts } });
       queuePreviewGeneration();
     }
   };
 
-  // DnD из палитры в эскиз
+  // DnD из палитры
   const onTrayDragStart = (e: React.DragEvent, payload: { type: ElType; key: string | number }) => {
     try {
       e.dataTransfer?.setData(DND_MIME, JSON.stringify(payload));
@@ -501,7 +499,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     } catch {}
   };
 
-  // Синхронизация: применяем стор только если он «свежее»
+  // Подписка: применяем стор только если он новее локального
   const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
   const isRefreshingRef = useRef(false);
   const lastStoreSigRef = useRef<string>("");
@@ -513,12 +511,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       try {
         const fresh = loadOrderDraft();
 
-        // Сигнатура частей стора (кроме editor.elements)
-        const pick = {
-          item: fresh?.item || null,
-          engraving: fresh?.engraving || null,
-          graphics: fresh?.graphics || null
-        };
+        const pick = { item: fresh?.item || null, engraving: fresh?.engraving || null, graphics: fresh?.graphics || null };
         const sig = JSON.stringify(pick);
         if (sig !== lastStoreSigRef.current) {
           setDraft(fresh);
@@ -529,15 +522,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const incomingEls: EditorEl[] = Array.isArray(incoming.elements) ? (incoming.elements as EditorEl[]) : [];
         const incomingWishes: string = typeof incoming.wishes === "string" ? incoming.wishes : "";
         const incomingTs: number = Number(incoming.updatedAt || 0);
-
         const localTs = lastAppliedTsRef.current;
 
-        // Разрешаем обновление из стора только если:
-        //  - force и локально пусто, или
-        //  - incomingTs > localTs (стор свежее)
         const allowEls =
-          (opts?.force && elements.length === 0 && incomingEls.length > 0) ||
-          incomingTs > localTs;
+          (opts?.force && elements.length === 0 && incomingEls.length > 0) || incomingTs > localTs;
 
         if (allowEls) {
           setElements(incomingEls);
@@ -569,7 +557,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     window.addEventListener("popstate", onAny);
     window.addEventListener("hashchange", onAny);
 
-    // Начальная подгрузка, если локально пусто
     refreshRef.current({ force: true });
 
     return () => {
@@ -607,10 +594,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         const ts = Date.now();
         lastAppliedTsRef.current = ts;
         const cur = loadOrderDraft();
-        saveOrderDraft({
-          ...cur,
-          editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: ts }
-        });
+        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: ts } });
         return next;
       });
       queuePreviewGeneration();
@@ -640,9 +624,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             type="button"
             style={btn}
             title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
-            onClick={() =>
-              commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)))
-            }
+            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)))}
           >
             {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
           </button>
@@ -653,9 +635,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               type="button"
               style={btn}
               title={el.italic ? "Обычный" : "Курсив"}
-              onClick={() =>
-                commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)))
-              }
+              onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)))}
             >
               {el.italic ? "Обычный" : "Курсив"}
             </button>
@@ -678,9 +658,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             type="button"
             style={btn}
             title="Отразить по горизонтали"
-            onClick={() =>
-              commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)))
-            }
+            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)))}
           >
             ⇄
           </button>
@@ -690,19 +668,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             type="button"
             style={btn}
             title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
-            onClick={() =>
-              commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)))
-            }
+            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)))}
           >
             {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
-        {/* Корзина — удалить с холста (вернётся в палитру и НЕ появится снова на холсте) */}
+        {/* Корзина — удалить с холста (возврат в палитру, без «скачка» обратно на холст) */}
         <button
           type="button"
           style={{ ...btn, padding: "2px 8px" }}
           title="Удалить с эскиза"
-          onClick={() => commit((prev) => prev.filter((x) => x.id !== el.id)))}
+          onClick={() => commit((prev) => prev.filter((x) => x.id !== el.id))}
         >
           🗑
         </button>
@@ -729,10 +705,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       rafMoveScheduled.current = false;
       const payload = rafMovePayload.current;
       if (!payload) return;
-      setElements((prev) => {
-        const next = prev.map((el) => (el.id === payload.id ? payload.next : el));
-        return next;
-      });
+      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
       rafMovePayload.current = null;
     });
   };
@@ -793,7 +766,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
       if (d.mode.includes("n")) {
         ny = snap(base.y + dyPct);
-        nh = snap(base.h - dyPct);
+        nh = snap(base.h - dxPct);
       }
       if (keepRatio) {
         if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
@@ -1247,7 +1220,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                         }}
                       >
-                        {parts[0]}
+                        {r.top}
                       </div>
                       <div
                         style={{
@@ -1259,7 +1232,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                         }}
                       >
-                        {parts[1]}
+                        {r.mid}
                       </div>
                       <div
                         style={{
@@ -1271,7 +1244,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                         }}
                       >
-                        {parts[2]}
+                        {r.bot}
                       </div>
                     </div>
                   </div>
@@ -1577,7 +1550,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                         </>
                       )}
                     </div>
