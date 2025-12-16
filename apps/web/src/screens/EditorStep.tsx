@@ -2,11 +2,7 @@
 // Редактор: изначально на эскизе только резная работа.
 // Сверху — единая палитра миниатюр (без подписей), несколько столбцов, прозрачный фон.
 // Картинки и текст в миниатюрах вписаны и ограничены 120×120 по большей стороне.
-// Текст миниатюр «Метрика» и «Эпитафия» — белым.
-// Клик/DnD добавляет элемент по центру. На рамке — мини‑панель (ПРОПИСНЫЕ/строчные, Курсив,
-// Лесенкой/В строку, Отразить, Ч/Б, Корзина).
-// Исправление «отката»: локальные изменения сохраняются вместе с editor.updatedAt,
-// подписка применяет стор только если он новее локального (incoming.updatedAt > lastAppliedTsRef).
+// Клик/DnD добавляет элемент по центру (исчезает из палитры). На рамке — мини‑панель с корзиной 🗑 и инструментами.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -72,6 +68,8 @@ type EditorEl = {
 /* ===== Helpers ===== */
 const DND_MIME = "application/x-memorial-editor-el";
 const SKETCH_PAD = 8;
+const KNOB_HIT = 28; // зона захвата, px (ASCII!)
+const KNOB_VIS = 14; // видимая точка, px (ASCII!)
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -305,7 +303,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     [elements]
   );
 
-  // Палитра миниатюр
+  // Палитра миниатюр (единая, без подписей)
   type TrayItem = { type: ElType; key: string | number; node: React.ReactNode };
   const trayItems: TrayItem[] = useMemo(() => {
     const items: TrayItem[] = [];
@@ -329,7 +327,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Метрика — белым
+    // Метрика (текст)
     for (const p of peopleBlocks) {
       if (!placedMetricIds.has(p.id)) {
         const ln = (p.lines || []) as string[];
@@ -363,7 +361,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       }
     }
 
-    // Эпитафии — белым
+    // Эпитафии (текст)
     epitaphs.forEach((t, i) => {
       if (!placedEpitaphIdx.has(i)) {
         items.push({
@@ -436,11 +434,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return items;
   }, [peopleBlocks, placedPortraitIds, placedMetricIds, epitaphs, placedEpitaphIdx, crosses, placedCrossIdx, others, placedGraphicIdx]);
 
-  // Добавление по центру (сразу в стор, с updatedAt)
+  // Добавление по центру (сразу в стор, updatedAt)
   const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
   const addCentered = (type: ElType, key: string | number) => {
     let newEl: EditorEl | null = null;
     const baseCenter = (w: number, h: number) => clampBox((100 - w) / 2, (100 - h) / 2, w, h);
+
     if (type === "portrait" && typeof key === "string") {
       if (elements.some((e) => e.type === "portrait" && e.id === `portrait-${key}`)) return;
       const r = baseCenter(28, 34);
@@ -463,6 +462,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       const r = baseCenter(24, 16);
       newEl = { id: `graphic-${key}`, type, ...r, z: nextZ(), flipH: false, title: "Графика" };
     }
+
     if (newEl) {
       const nextEls = [...elements, newEl];
       setElements(nextEls);
@@ -644,9 +644,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                 type="button"
                 style={btn}
                 title={el.staircase ? "В строку" : "Лесенкой"}
-                onClick={() =>
-                  commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)))
-                }
+                onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)))}
               >
                 {el.staircase ? "В строку" : "Лесенкой"}
               </button>
@@ -673,7 +671,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             {el.bw ? "Цвет" : "Ч/Б"}
           </button>
         )}
-        {/* Корзина — удалить с холста (возврат в палитру, без «скачка» обратно на холст) */}
+        {/* Корзина — удалить с холста (вернётся в палитру) */}
         <button
           type="button"
           style={{ ...btn, padding: "2px 8px" }}
@@ -684,115 +682,6 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         </button>
       </div>
     );
-  };
-
-  /* ===== DnD/Resize state и обработчики ===== */
-  const dragRef = useRef<{
-    id: string;
-    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-    startX: number;
-    startY: number;
-    start: EditorEl;
-  } | null>(null);
-
-  const rafMoveScheduled = useRef(false);
-  const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
-
-  const scheduleMoveCommit = () => {
-    if (rafMoveScheduled.current) return;
-    rafMoveScheduled.current = true;
-    requestAnimationFrame(() => {
-      rafMoveScheduled.current = false;
-      const payload = rafMovePayload.current;
-      if (!payload) return;
-      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
-      rafMovePayload.current = null;
-    });
-  };
-
-  const onPointerDownBox = (
-    e: React.PointerEvent,
-    id: string,
-    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
-  ) => {
-    e.stopPropagation();
-    const el = elements.find((x) => x.id === id);
-    if (!el || el.locked) return;
-    setSelectedId(id);
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
-    dragRef.current = {
-      id,
-      mode,
-      startX: e.clientX,
-      startY: e.clientY,
-      start: { ...el }
-    };
-  };
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    e.preventDefault();
-    const rect = editorWrapRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const contentW = rect.width - SKETCH_PAD * 2;
-    const contentH = rect.height - SKETCH_PAD * 2;
-    if (contentW <= 0 || contentH <= 0) return;
-
-    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
-    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
-
-    const keepRatio = e.shiftKey;
-    const snap = (v: number, step = SNAP_STEP_DEFAULT) => Math.round(v / step) * step;
-
-    const base = d.start;
-    let nx = base.x,
-      ny = base.y,
-      nw = base.w,
-      nh = base.h;
-
-    if (d.mode === "move") {
-      nx = snap(base.x + dxPct);
-      ny = snap(base.y + dyPct);
-    } else {
-      const ratio = (base.w || 1) / (base.h || 1);
-      if (d.mode.includes("e")) nw = snap(base.w + dxPct);
-      if (d.mode.includes("s")) nh = snap(base.h + dyPct);
-      if (d.mode.includes("w")) {
-        nx = snap(base.x + dxPct);
-        nw = snap(base.w - dxPct);
-      }
-      if (d.mode.includes("n")) {
-        ny = snap(base.y + dyPct);
-        nh = snap(base.h - dxPct);
-      }
-      if (keepRatio) {
-        if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
-        if (["n", "s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
-      }
-    }
-
-    const clamped = clampBox(nx, ny, nw, nh);
-    const nextEl: EditorEl = { ...base, ...clamped };
-    rafMovePayload.current = { id: d.id, next: nextEl };
-    scheduleMoveCommit();
-  };
-
-  const onPointerUp = () => {
-    if (dragRef.current) {
-      const ts = Date.now();
-      lastAppliedTsRef.current = ts;
-      const cur = loadOrderDraft();
-      const latest = elements;
-      saveOrderDraft({
-        ...cur,
-        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: ts }
-      });
-      queuePreviewGeneration();
-    }
-    dragRef.current = null;
   };
 
   /* ===== Генерация превью ===== */
@@ -835,25 +724,15 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           i.src = url;
         });
 
-        const CX = pad,
-          CY = pad,
-          PW = W - pad * 2,
-          PH = H - pad * 2;
+        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
         if (base) {
-          const sr = base.width / base.height,
-            dr = PW / PH;
+          const sr = base.width / base.height, dr = PW / PH;
           ctx.globalAlpha = 0.35;
           if (sr > dr) {
-            const rw = PW,
-              rh = Math.round(PW / sr),
-              rx = CX,
-              ry = CY + Math.round((PH - rh) / 2);
+            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
             ctx.drawImage(base, rx, ry, rw, rh);
           } else {
-            const rh = PH,
-              rw = Math.round(PH * sr),
-              ry = CY,
-              rx = CX + Math.round((PW - rw) / 2);
+            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
             ctx.drawImage(base, rx, ry, rw, rh);
           }
           ctx.globalAlpha = 1;
@@ -868,12 +747,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
         };
 
         for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
-          const rbox = {
-            x: CX + (el.x / 100) * PW,
-            y: CY + (el.y / 100) * PH,
-            w: (el.w / 100) * PW,
-            h: (el.h / 100) * PH
-          };
+          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
           const key = el.id.split("-").slice(1).join("-");
           if (el.type === "portrait") {
             const p = peopleBlocks.find((pp) => pp.id === key);
@@ -890,24 +764,17 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               i.src = url;
             });
             if (!im) continue;
-            const sr2 = im.width / im.height,
-              dr2 = rbox.w / rbox.h;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             ctx.save();
             ctx.beginPath();
             ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h);
             ctx.clip();
             if (el.bw) ctx.filter = "grayscale(100%)";
             if (sr2 > dr2) {
-              const hh = rbox.h,
-                ww = Math.round(hh * sr2),
-                xx = Math.round(rbox.x + (rbox.w - ww) / 2),
-                yy = rbox.y;
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
               ctx.drawImage(im, xx, yy, ww, hh);
             } else {
-              const ww = rbox.w,
-                hh = Math.round(ww / sr2),
-                xx = rbox.x,
-                yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
               ctx.drawImage(im, xx, yy, ww, hh);
             }
             ctx.restore();
@@ -920,22 +787,10 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             ctx.fillStyle = "#fff";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)),
-              padY2 = Math.max(2, Math.round(rbox.h * 0.1));
-            const fitted = fitMetricFontsPx({
-              lines: lines.map(tf),
-              boxW: rbox.w,
-              boxH: rbox.h,
-              italic: !!el.italic,
-              family: fam,
-              padX: padX2,
-              padY: padY2,
-              lineHeight: 1.12,
-              minPx: 10
-            });
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.1));
+            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
             const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
-            let y =
-              rbox.y + (rbox.h - totalH) / 2 + ((fitted[0] || 10) * 1.12) / 2;
+            let y = rbox.y + (rbox.h - totalH) / 2 + ((fitted[0] || 10) * 1.12) / 2;
             for (let i = 0; i < fitted.length; i++) {
               setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
               ctx.fillText(tf(lines[i] || ""), rbox.x + rbox.w / 2, y);
@@ -946,8 +801,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
             const idx = safeIndex(key, epitaphs.length);
             const tRaw = epitaphs[idx] || "";
             const isRLM = isRememberLoveMourn(tRaw);
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)),
-              padY2 = Math.max(2, Math.round(rbox.h * 0.06));
+            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.06));
             ctx.save();
             ctx.fillStyle = "#fff";
             ctx.textBaseline = "middle";
@@ -1008,19 +862,12 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
               ctx.scale(-1, 1);
               ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2));
             }
-            const sr2 = im.width / im.height,
-              dr2 = rbox.w / rbox.h;
+            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
             if (sr2 > dr2) {
-              const ww = rbox.w,
-                hh = Math.round(ww / sr2),
-                xx = rbox.x,
-                yy = Math.round(rbox.y + (rbox.h - hh) / 2);
+              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
               ctx.drawImage(im, xx, yy, ww, hh);
             } else {
-              const hh = rbox.h,
-                ww = Math.round(hh * sr2),
-                xx = rbox.x + Math.round((rbox.w - ww) / 2),
-                yy = rbox.y;
+              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
               ctx.drawImage(im, xx, yy, ww, hh);
             }
             ctx.restore();
@@ -1220,7 +1067,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                         }}
                       >
-                        {r.top}
+                        {parts[0]}
                       </div>
                       <div
                         style={{
@@ -1232,7 +1079,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                         }}
                       >
-                        {r.mid}
+                        {parts[1]}
                       </div>
                       <div
                         style={{
@@ -1244,7 +1091,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           textShadow: "0 1px 2px rgba(0,0,0,0.6)"
                         }}
                       >
-                        {r.bot}
+                        {parts[2]}
                       </div>
                     </div>
                   </div>
@@ -1339,9 +1186,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     setTimeout(() => go({ elements, wishes }), 150);
   };
 
-  const MAX_W = 600;
-
-  // Карточка миниатюры
+  // Карточка миниатюры (без фона и рамки, 120×120 — содержимое)
   const TrayCard: React.FC<{
     onClick: () => void;
     onDragStart: (e: React.DragEvent) => void;
@@ -1368,6 +1213,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     </button>
   );
 
+  const MAX_W = 600;
+
   return (
     <div
       style={{
@@ -1384,6 +1231,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
+        {/* Подсказка */}
         <section
           style={{
             ...glassPanelStyle(),
@@ -1396,7 +1244,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           Перетащите миниатюру на эскиз или нажмите на неё — элемент добавится по центру. Затем перемещайте и изменяйте размер. Чтобы убрать элемент, нажмите 🗑 на его рамке.
         </section>
 
-        {/* Палитра миниатюр */}
+        {/* Единая палитра миниатюр (без подписей) */}
         <section style={{ ...glassPanelStyle(), padding: 10, margin: "12px 0" }}>
           {trayItems.length > 0 ? (
             <div
@@ -1515,8 +1363,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                     cursor: el.locked ? "not-allowed" : "move",
                     touchAction: "none"
                   };
-                  const KNOB_HIT = 28;
-                  const KNOB_VIS = 14;
+
                   const knob = (left: string, top: string, cursor: string) =>
                     ({
                       position: "absolute",
@@ -1529,6 +1376,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       display: "grid",
                       placeItems: "center"
                     } as React.CSSProperties);
+
                   const knobDot: React.CSSProperties = {
                     width: KNOB_VIS,
                     height: KNOB_VIS,
@@ -1549,8 +1397,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT / 2}px`, `calc(100% - ${KNOB_HIT / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                         </>
                       )}
                     </div>
