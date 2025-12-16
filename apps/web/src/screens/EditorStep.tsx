@@ -267,7 +267,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
   // Эпитафии
   const epitaphs = useMemo(() => {
     if (Array.isArray(engr?.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
-    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epitaphText.trim()];
+    if (typeof engr?.epitaphText === "string" && engr.epitaphText.trim()) return [engr.epитaphText.trim()];
     return [];
   }, [engr]);
 
@@ -571,117 +571,104 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     };
   }, []);
 
-  /* ===== Мини‑панель инструментов ===== */
-  const MiniToolbar = ({ el }: { el: EditorEl }) => {
-    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
-    const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
+  /* ===== DnD/Resize на эскизе (handlers) ===== */
+  const dragRef = useRef<{
+    id: string;
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+    startX: number;
+    startY: number;
+    start: EditorEl;
+  } | null>(null);
 
-    const isMetric = el.type === "metric";
-    const isEpitaph = el.type === "epitaph";
-    const isGraphic = el.type === "graphic";
-    const isPortrait = el.type === "portrait";
+  const rafMoveScheduled = useRef(false);
+  const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
 
-    let canStair = false;
-    if (isEpitaph) {
-      const idx = Number(el.id.split("-")[1]);
-      const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
-      canStair = isRememberLoveMourn(tRaw);
+  const scheduleMoveCommit = () => {
+    if (rafMoveScheduled.current) return;
+    rafMoveScheduled.current = true;
+    requestAnimationFrame(() => {
+      rafMoveScheduled.current = false;
+      const payload = rafMovePayload.current;
+      if (!payload) return;
+      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
+      rafMovePayload.current = null;
+    });
+  };
+
+  const onPointerDownBox = (
+    e: React.PointerEvent,
+    id: string,
+    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
+  ) => {
+    e.stopPropagation();
+    const el = elements.find((x) => x.id === id);
+    if (!el || el.locked) return;
+    setSelectedId(id);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    dragRef.current = {
+      id,
+      mode,
+      startX: e.clientX,
+      startY: e.clientY,
+      start: { ...el }
+    };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    e.preventDefault();
+    const rect = editorWrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const contentW = rect.width - SKETCH_PAD * 2;
+    const contentH = rect.height - SKETCH_PAD * 2;
+    if (contentW <= 0 || contentH <= 0) return;
+
+    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
+    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
+
+    const keepRatio = e.shiftKey;
+    const snap = (v: number, step = SNAP_STEP_DEFAULT) => Math.round(v / step) * step;
+
+    const base = d.start;
+    let nx = base.x, ny = base.y, nw = base.w, nh = base.h;
+
+    if (d.mode === "move") {
+      nx = snap(base.x + dxPct);
+      ny = snap(base.y + dyPct);
+    } else {
+      const ratio = (base.w || 1) / (base.h || 1);
+      if (d.mode.includes("e")) nw = snap(base.w + dxPct);
+      if (d.mode.includes("s")) nh = snap(base.h + dyPct);
+      if (d.mode.includes("w")) { nx = snap(base.x + dxPct); nw = snap(base.w - dxPct); }
+      if (d.mode.includes("n")) { ny = snap(base.y + dyPct); nh = snap(base.h - dyPct); }
+      if (keepRatio) {
+        if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
+        if (["n", "s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
+      }
     }
 
-    const commit = (mut: (prev: EditorEl[]) => EditorEl[]) => {
-      setElements((prev) => {
-        const next = mut(prev);
-        const ts = Date.now();
-        lastAppliedTsRef.current = ts;
-        const cur = loadOrderDraft();
-        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: ts } });
-        return next;
+    const clamped = clampBox(nx, ny, nw, nh);
+    const nextEl: EditorEl = { ...base, ...clamped };
+    rafMovePayload.current = { id: d.id, next: nextEl };
+    scheduleMoveCommit();
+  };
+
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      const ts = Date.now();
+      lastAppliedTsRef.current = ts;
+      const cur = loadOrderDraft();
+      const latest = elements;
+      saveOrderDraft({
+        ...cur,
+        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: ts }
       });
       queuePreviewGeneration();
-    };
-
-    return (
-      <div
-        onPointerDown={stop}
-        onMouseDown={stop}
-        style={{
-          position: "absolute",
-          left: 0,
-          top: -30,
-          display: "flex",
-          gap: 6,
-          background: "rgba(0,0,0,0.6)",
-          border: "1px solid rgba(255,255,255,0.25)",
-          borderRadius: 6,
-          padding: "2px 6px",
-          alignItems: "center",
-          pointerEvents: "auto",
-          zIndex: 3000
-        }}
-      >
-        {isMetric && (
-          <button
-            type="button"
-            style={btn}
-            title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
-            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)))}
-          >
-            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
-          </button>
-        )}
-        {isEpitaph && (
-          <>
-            <button
-              type="button"
-              style={btn}
-              title={el.italic ? "Обычный" : "Курсив"}
-              onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)))}
-            >
-              {el.italic ? "Обычный" : "Курсив"}
-            </button>
-            {canStair && (
-              <button
-                type="button"
-                style={btn}
-                title={el.staircase ? "В строку" : "Лесенкой"}
-                onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)))}
-              >
-                {el.staircase ? "В строку" : "Лесенкой"}
-              </button>
-            )}
-          </>
-        )}
-        {isGraphic && (
-          <button
-            type="button"
-            style={btn}
-            title="Отразить по горизонтали"
-            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)))}
-          >
-            ⇄
-          </button>
-        )}
-        {isPortrait && (
-          <button
-            type="button"
-            style={btn}
-            title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
-            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)))}
-          >
-            {el.bw ? "Цвет" : "Ч/Б"}
-          </button>
-        )}
-        {/* Корзина — удалить с холста (вернётся в палитру) */}
-        <button
-          type="button"
-          style={{ ...btn, padding: "2px 8px" }}
-          title="Удалить с эскиза"
-          onClick={() => commit((prev) => prev.filter((x) => x.id !== el.id))}
-        >
-          🗑
-        </button>
-      </div>
-    );
+    }
+    dragRef.current = null;
   };
 
   /* ===== Генерация превью ===== */
@@ -1028,7 +1015,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
             if (el.type === "epitaph") {
               const idx = Number(key);
-              const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
+              const tRaw = epitaphs[idx] || "";
               const isRLM = isRememberLoveMourn(tRaw);
               const padX = Math.max(4, Math.round(boxPx.w * 0.04));
               const padY = Math.max(2, Math.round(boxPx.h * 0.06));
@@ -1397,8 +1384,8 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT / 2}px`, `calc(100% - ${KNOB_HIT / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                         </>
                       )}
                     </div>
