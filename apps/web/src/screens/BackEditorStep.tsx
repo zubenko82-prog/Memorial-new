@@ -1718,7 +1718,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       <section style={{ ...glassPanelStyle(), padding: "10px 12px", margin: "8px 0", fontSize: 13, lineHeight: 1.4 }}>
         Если оформление тыльной стороны не нужно — оставьте пустым и нажмите{" "}
         <button type="button" onClick={handleContinue} style={linkLikeButton()}>
-          Продолжить
+          "Продолжить"
         </button>.
       </section>
 
