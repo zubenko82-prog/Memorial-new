@@ -68,8 +68,8 @@ type EditorEl = {
 /* ===== Helpers ===== */
 const DND_MIME = "application/x-memorial-editor-el";
 const SKETCH_PAD = 8;
-const KNOB_HIT = 28; // зона захвата, px (ASCII!)
-const KNOB_VIS = 14; // видимая точка, px (ASCII!)
+const KNOB_HIT = 28; // зона захвата, px
+const KNOB_VIS = 14; // видимая точка, px
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -264,17 +264,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
-  // Эпитафии (строго epitaphText, без кириллицы в имени!)
-const epitaphs = useMemo(() => {
-  const e: any = engr || {};
-  if (Array.isArray(e.epitaphs) && e.epitaphs.length) {
-    return (e.epitaphs as string[]).filter(Boolean);
-  }
-  const raw = typeof e.epitaphText === "string" ? e.epitaphText : "";
-  const one = raw.trim();
-  return one ? [one] : [];
-}, [engr]);
-
+  // Эпитафии (строго epitaphText, без кириллицы)
+  const epitaphs = useMemo(() => {
+    const e: any = engr || {};
+    if (Array.isArray(e.epitaphs) && e.epitaphs.length) return (e.epitaphs as string[]).filter(Boolean);
+    const raw = typeof e.epitaphText === "string" ? e.epitaphText : "";
+    const one = raw.trim();
+    return one ? [one] : [];
+  }, [engr]);
 
   // Графика
   const crosses = useMemo(
@@ -859,7 +856,7 @@ const epitaphs = useMemo(() => {
               const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
               ctx.drawImage(im, xx, yy, ww, hh);
             } else {
-              const hh = rbox.h, ww = Math.round(hh * sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
+              const hh = rbox.h, ww = Math.round(hh / sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
               ctx.drawImage(im, xx, yy, ww, hh);
             }
             ctx.restore();
@@ -891,291 +888,114 @@ const epitaphs = useMemo(() => {
     }, 300) as unknown as number;
   }
 
-  /* ===== Слой содержимого ===== */
-  const ContentLayer: React.FC = () => {
-    const wrap = editorWrapRef.current?.getBoundingClientRect();
-    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
-    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
+  /* ===== Мини‑панель инструментов (ОБЯЗАТЕЛЬНО определена до использования) ===== */
+  const MiniToolbar: React.FC<{ el: EditorEl }> = ({ el }) => {
+    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
+    const isMetric = el.type === "metric";
+    const isEpitaph = el.type === "epitaph";
+    const isGraphic = el.type === "graphic";
+    const isPortrait = el.type === "portrait";
+
+    let canStair = false;
+    if (isEpitaph) {
+      const idx = Number(el.id.split("-")[1]);
+      const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
+      canStair = isRememberLoveMourn(tRaw);
+    }
+
+    const commit = (mut: (prev: EditorEl[]) => EditorEl[]) => {
+      setElements((prev) => {
+        const next = mut(prev);
+        const ts = Date.now();
+        lastAppliedTsRef.current = ts;
+        const cur = loadOrderDraft();
+        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: ts } });
+        return next;
+      });
+      queuePreviewGeneration();
+    };
 
     return (
       <div
         style={{
           position: "absolute",
-          left: SKETCH_PAD,
-          top: SKETCH_PAD,
-          right: SKETCH_PAD,
-          bottom: SKETCH_PAD,
-          pointerEvents: "none",
-          zIndex: 1000,
-          transform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-          contain: "paint"
+          left: 0,
+          top: -30,
+          display: "flex",
+          gap: 6,
+          background: "rgba(0,0,0,0.6)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6,
+          padding: "2px 6px",
+          alignItems: "center",
+          pointerEvents: "auto",
+          zIndex: 3000
         }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       >
-        {elements
-          .slice()
-          .sort((a, b) => a.z - b.z)
-          .map((el) => {
-            const key = el.id.split("-").slice(1).join("-");
-            const boxPx = {
-              x: (el.x / 100) * contentW,
-              y: (el.y / 100) * contentH,
-              w: (el.w / 100) * contentW,
-              h: (el.h / 100) * contentH
-            };
-            const wrapperStyle: React.CSSProperties = {
-              position: "absolute",
-              left: Math.round(boxPx.x),
-              top: Math.round(boxPx.y),
-              width: Math.round(boxPx.w),
-              height: Math.round(boxPx.h),
-              zIndex: el.z,
-              pointerEvents: "none",
-              willChange: "transform",
-              transform: "translateZ(0)",
-              backfaceVisibility: "hidden",
-              contain: "paint",
-              boxSizing: "border-box"
-            };
-
-            if (el.type === "portrait") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const url = p?.photo || "";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {url ? (
-                    <img
-                      src={url}
-                      alt=""
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        filter: el.bw ? "grayscale(100%)" : "none",
-                        display: "block",
-                        willChange: "transform",
-                        transform: "translateZ(0)",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            if (el.type === "metric") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.1));
-              const fitted = fitMetricFontsPx({
-                lines: lines.map(tf),
-                boxW: boxPx.w,
-                boxH: boxPx.h,
-                italic: !!el.italic,
-                family: FONT_CENTURY,
-                padX,
-                padY,
-                lineHeight: 1.12,
-                minPx: 10
-              });
-              return (
-                <div
-                  key={`content-${el.id}`}
-                  style={{
-                    ...wrapperStyle,
-                    color: "#fff",
-                    fontFamily: FONT_CENTURY,
-                    textAlign: "center"
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "grid",
-                      placeItems: "center",
-                      padding: `${padY}px ${padX}px`,
-                      boxSizing: "border-box",
-                      lineHeight: 1.12,
-                      fontStyle: el.italic ? "italic" : "normal",
-                      textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                    }}
-                  >
-                    <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                      {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
-                      {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
-                      {lines[2] && (
-                        <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            if (el.type === "epitaph") {
-              const idx = Number(key);
-              const tRaw = epitaphs[idx] || "";
-              const isRLM = isRememberLoveMourn(tRaw);
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-
-              if (isRLM && el.staircase) {
-                const r = splitRememberPreserve(tRaw);
-                const parts = [r.top, r.mid, r.bot];
-                const ctxm = getMeasureCtx();
-                const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
-                const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
-                const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
-                const maxW = Math.max(w1, w2, w3);
-                const fByW = ((boxPx.w - padX * 2) * 100) / Math.max(1, maxW);
-                const fByH = (boxPx.h - padY * 2) / (3 * 1.15);
-                const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: padX,
-                        top: padY,
-                        right: padX,
-                        bottom: padY,
-                        display: "grid",
-                        gridTemplateRows: "1fr 1fr 1fr"
-                      }}
-                    >
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "start",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[0]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "center",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[1]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "end",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[2]}
-                      </div>
-                    </div>
-                  </div>
-                );
-              } else {
-                const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
-                const { fontPx, lines } = fitMultilineFontPxGeneric({
-                  text: textDisplay,
-                  boxW: boxPx.w,
-                  boxH: boxPx.h,
-                  italic: !!el.italic,
-                  family: FONT_CENTURY,
-                  padX,
-                  padY,
-                  lineHeight: 1.15
-                });
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                    <div
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        display: "grid",
-                        placeItems: "center",
-                        padding: `${padY}px ${padX}px`,
-                        boxSizing: "border-box",
-                        lineHeight: 1.15,
-                        fontStyle: el.italic ? "italic" : "normal",
-                        textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
-                    </div>
-                  </div>
-                );
-              }
-            }
-
-            if (el.type === "cross" || el.type === "graphic") {
-              const idx = Number(key);
-              const list = el.type === "cross" ? crosses : others;
-              const g = Number.isFinite(idx) ? list[idx] : null;
-              const tr = el.type === "graphic" && el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {g?.url ? (
-                    <img
-                      src={g.url}
-                      alt=""
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        display: "block",
-                        transform: tr,
-                        filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                        willChange: "transform",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            return null;
-          })}
+        {isMetric && (
+          <button
+            type="button"
+            style={btn}
+            title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
+            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)))}
+          >
+            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
+          </button>
+        )}
+        {isEpitaph && (
+          <>
+            <button
+              type="button"
+              style={btn}
+              title={el.italic ? "Обычный" : "Курсив"}
+              onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)))}
+            >
+              {el.italic ? "Обычный" : "Курсив"}
+            </button>
+            {canStair && (
+              <button
+                type="button"
+                style={btn}
+                title={el.staircase ? "В строку" : "Лесенкой"}
+                onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)))}
+              >
+                {el.staircase ? "В строку" : "Лесенкой"}
+              </button>
+            )}
+          </>
+        )}
+        {isGraphic && (
+          <button
+            type="button"
+            style={btn}
+            title="Отразить по горизонтали"
+            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)))}
+          >
+            ⇄
+          </button>
+        )}
+        {isPortrait && (
+          <button
+            type="button"
+            style={btn}
+            title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
+            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)))}
+          >
+            {el.bw ? "Цвет" : "Ч/Б"}
+          </button>
+        )}
+        <button
+          type="button"
+          style={{ ...btn, padding: "2px 8px" }}
+          title="Удалить с эскиза"
+          onClick={() => commit((prev) => prev.filter((x) => x.id !== el.id))}
+        >
+          🗑
+        </button>
       </div>
     );
-  };
-
-  /* ===== Навигация ===== */
-  const handleBack = () => {
-    const ts = Date.now();
-    lastAppliedTsRef.current = ts;
-    const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: ts } });
-    setOutro(true);
-    setTimeout(() => onBack?.(), 150);
-  };
-  const handleContinue = () => {
-    const ts = Date.now();
-    lastAppliedTsRef.current = ts;
-    const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: ts } });
-    const go = onRearSide || onSendOrder || onContinue;
-    if (!go) return;
-    setOutro(true);
-    setTimeout(() => go({ elements, wishes }), 150);
   };
 
   // Карточка миниатюры (без фона и рамки, 120×120 — содержимое)
@@ -1389,8 +1209,8 @@ const epitaphs = useMemo(() => {
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT / 2}px`, `calc(100% - ${KNOB_HIT / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}><div style={knobDot} /></div>
                           <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                         </>
                       )}
                     </div>
