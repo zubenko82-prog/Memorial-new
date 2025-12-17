@@ -1,14 +1,14 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Требования:
-// - Если эскиз редактора ПУСТОЙ — в лицевой карточке превью показываем «мини‑эскиз»,
-//   сгенерированный по шаблону из SketchTemplate.tsx (данные из шага эпитафии).
-// - В блоке «Надгробная плита», после выбора размеров — ДВА аккордеона:
-//   1) «Эпитафия на надгробной плите» (как на шаге эпитафии: быстрый выбор + разворачиваемый список, добавление своего текста).
-//   2) «Графика на надгробной плите» (без изменений).
-// - Блок «Выбрано для плиты» перенесён ПОД эскизы, в секцию «Дополнительно». В этом блоке можно удалять элементы.
-// - Добавлена липкая кнопка «Вверх» в правом нижнем углу.
+// Изменения по запросу:
+// - Компактнее: из блока «Резная работа» убран локальный «Примечание». Добавлено ОБЩЕЕ примечание над кнопками «Назад / Оформить заказ».
+// - Если тыльная часть ПУСТАЯ (нет людей, графики, эпитафий, пожеланий) — полностью скрываем её блок и ПРАВЫЙ эскиз.
+// - Контур резной работы (силуэт) теперь всегда виден: Underlay рендерится под превью и для fallback тоже.
+// - Блок «Лицевая» выделен цветом (акцентная обводка / фон заголовка).
+// - Убрана плавающая кнопка «Вверх».
+// - Добавлена ЛИПКАЯ навигация вверху (кнопки скроллят к разделам; справа кнопка «↑» для прокрутки к началу).
+// - В «Выбрано для плиты» можно удалять элементы.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -69,9 +69,20 @@ const dividerLine: React.CSSProperties = {
   borderTop: "1px solid rgba(255,255,255,0.12)",
   margin: "10px 0"
 };
-function chip(txt: string) {
+function chip(txt: string, accent = false) {
   return (
-    <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 999, fontSize: 12, background: "rgba(138,180,255,0.18)", color: "#dbe7ff", whiteSpace: "nowrap" }}>
+    <span
+      style={{
+        display: "inline-block",
+        padding: "4px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        background: accent ? "rgba(138,180,255,0.28)" : "rgba(138,180,255,0.18)",
+        border: accent ? "1px solid rgba(138,180,255,0.65)" : "1px solid rgba(138,180,255,0.35)",
+        color: "#dbe7ff",
+        whiteSpace: "nowrap"
+      }}
+    >
       {txt}
     </span>
   );
@@ -99,12 +110,78 @@ const personLines = (p: any): string[] => {
   const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
+};
+
+/* ===== Навигация (липкая) ===== */
+function StickyNav({
+  showRear,
+  onGoFront,
+  onGoRear,
+  onGoPreviews,
+  onGoExtras
+}: {
+  showRear: boolean;
+  onGoFront: () => void;
+  onGoRear: () => void;
+  onGoPreviews: () => void;
+  onGoExtras: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+        background: "rgba(0,0,0,0.92)",
+        backdropFilter: "saturate(120%) blur(8px)",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: 12,
+        padding: "8px 10px",
+        margin: "10px 0"
+      }}
+    >
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button type="button" onClick={onGoFront} style={glassButtonStyle("nano")}>
+          Лицевая
+        </button>
+        {showRear && (
+          <button type="button" onClick={onGoRear} style={glassButtonStyle("nano")}>
+            Тыльная
+          </button>
+        )}
+        <button type="button" onClick={onGoPreviews} style={glassButtonStyle("nano")}>
+          Эскизы
+        </button>
+        <button type="button" onClick={onGoExtras} style={glassButtonStyle("nano")}>
+          Дополнительно
+        </button>
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          style={glassButtonStyle("nano")}
+          title="Вверх"
+          aria-label="Вверх"
+        >
+          ↑
+        </button>
+      </div>
+    </div>
+  );
 }
 
-/* ===== Аккордеон (до PlateBlock) ===== */
+/* ===== Аккордеон (выразительный) — до PlateBlock ===== */
 function LoudAccordion({
-  title, open, onToggle, children
-}: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
+  title,
+  open,
+  onToggle,
+  children
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
   useEffect(() => {
@@ -120,10 +197,12 @@ function LoudAccordion({
         type="button"
         onClick={onToggle}
         style={{
-          width: "100%", textAlign: "left", padding: "14px 16px",
+          width: "100%",
+          textAlign: "left",
+          padding: "12px 14px",
           background: open ? "linear-gradient(180deg, rgba(138,180,255,0.25) 0%, rgba(138,180,255,0.12) 100%)" : "rgba(255,255,255,0.06)",
           border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between",
-          fontSize: 16, fontWeight: 700, letterSpacing: 0.2
+          fontSize: 15, fontWeight: 700
         }}
       >
         <span>{title}</span>
@@ -136,7 +215,7 @@ function LoudAccordion({
   );
 }
 
-/* ===== Подложка для превью ===== */
+/* ===== Подложка для превью: силуэт ВСЕГДА рисуем (исправлено) ===== */
 function supportsMask(): boolean {
   try {
     // @ts-ignore
@@ -147,26 +226,68 @@ function supportsMask(): boolean {
   } catch {}
   return false;
 }
-function Underlay({ itemUrl, mirror = false, showSilhouette = true }: { itemUrl?: string; mirror?: boolean; showSilhouette?: boolean; }) {
+function Underlay({
+  itemUrl,
+  mirror = false,
+  showSilhouette = true
+}: {
+  itemUrl?: string;
+  mirror?: boolean;
+  showSilhouette?: boolean;
+}) {
   const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
   const canMask = supportsMask();
   return (
     <div aria-hidden style={{ position: "absolute", inset: 0, borderRadius: 10, overflow: "hidden" }}>
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)", zIndex: 0 }} />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+          zIndex: 0
+        }}
+      />
       {showSilhouette && itemUrl && (isPng && canMask ? (
-        <div style={{
-          position: "absolute", inset: 0, background: "rgba(25,25,25,0.9)",
-          WebkitMaskImage: `url(${itemUrl})`, WebkitMaskRepeat: "no-repeat", WebkitMaskPosition: "center", WebkitMaskSize: "contain",
-          maskImage: `url(${itemUrl})`, maskRepeat: "no-repeat", maskPosition: "center", maskSize: "contain",
-          transform: mirror ? "scaleX(-1)" : "none", transformOrigin: "center", zIndex: 1, pointerEvents: "none"
-        }} />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(25,25,25,0.9)",
+            WebkitMaskImage: `url(${itemUrl})`,
+            WebkitMaskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            WebkitMaskSize: "contain",
+            maskImage: `url(${itemUrl})`,
+            maskRepeat: "no-repeat",
+            maskPosition: "center",
+            maskSize: "contain",
+            transform: mirror ? "scaleX(-1)" : "none",
+            transformOrigin: "center",
+            zIndex: 1,
+            pointerEvents: "none"
+          }}
+        />
       ) : (
         itemUrl && (
-          <img src={itemUrl} alt="" style={{
-            position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain",
-            filter: "grayscale(1) brightness(0) opacity(0.9)", mixBlendMode: "multiply",
-            transform: mirror ? "scaleX(-1)" : "none", transformOrigin: "center", zIndex: 1, pointerEvents: "none"
-          }} draggable={false} />
+          <img
+            src={itemUrl}
+            alt=""
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              filter: "grayscale(1) brightness(0) opacity(0.9)",
+              mixBlendMode: "multiply",
+              transform: mirror ? "scaleX(-1)" : "none",
+              transformOrigin: "center",
+              zIndex: 1,
+              pointerEvents: "none"
+            }}
+            draggable={false}
+          />
         )
       ))}
     </div>
@@ -175,15 +296,33 @@ function Underlay({ itemUrl, mirror = false, showSilhouette = true }: { itemUrl?
 
 /* ===== Thumb ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
-  <div style={{
-    width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.04)",
-    display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box"
-  }}>
-    {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ ...smallText() }}>нет</div>}
+  <div
+    style={{
+      width: size,
+      height: size,
+      borderRadius: 10,
+      border: "1px solid rgba(255,255,255,0.18)",
+      background: "rgba(255,255,255,0.04)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+      boxSizing: "border-box"
+    }}
+  >
+    {url ? (
+      <img
+        src={url}
+        alt={alt}
+        style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }}
+      />
+    ) : (
+      <div style={{ ...smallText() }}>нет</div>
+    )}
   </div>
 );
 
-/* ===== SidePreview с fallback SketchTemplate (лицевая) ===== */
+/* ===== SidePreview с fallback SketchTemplate (для лицевой) — силуэт РИСУЕМ ВСЕГДА ===== */
 type TemplateFallback = {
   item: any;
   peopleBlocks: { id: string; lines: string[]; photo?: string | null }[];
@@ -193,9 +332,18 @@ type TemplateFallback = {
   carvingOpacity?: number;
 };
 function SidePreview({
-  title, miniUrl, itemUrl, mirror = false, aspect, showSilhouette = true, fallbackTemplate
+  title,
+  miniUrl,
+  itemUrl,
+  mirror = false,
+  aspect,
+  fallbackTemplate
 }: {
-  title: string; miniUrl?: string | null; itemUrl?: string; mirror?: boolean; aspect?: string; showSilhouette?: boolean;
+  title: string;
+  miniUrl?: string | null;
+  itemUrl?: string;
+  mirror?: boolean;
+  aspect?: string;
   fallbackTemplate?: TemplateFallback;
 }) {
   const hasPreview = typeof miniUrl === "string" && miniUrl.length > 0;
@@ -203,10 +351,25 @@ function SidePreview({
   return (
     <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
       <div style={{ fontWeight: 700 }}>{title}</div>
-      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || undefined, minHeight: aspect ? undefined : 240 }}>
-        {!useFallback && <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette={showSilhouette} />}
+      <div
+        style={{
+          position: "relative",
+          borderRadius: 10,
+          overflow: "hidden",
+          aspectRatio: aspect || undefined,
+          minHeight: aspect ? undefined : 240
+        }}
+      >
+        {/* Силуэт ВСЕГДА под превью */}
+        <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette />
+
         {hasPreview ? (
-          <img src={miniUrl!} alt="" style={{ position: "relative", width: "100%", height: "100%", objectFit: "contain", zIndex: 2, display: "block" }} draggable={false} />
+          <img
+            src={miniUrl!}
+            alt=""
+            style={{ position: "relative", width: "100%", height: "100%", objectFit: "contain", zIndex: 2, display: "block" }}
+            draggable={false}
+          />
         ) : useFallback ? (
           <div style={{ position: "relative", zIndex: 2 }}>
             <SketchTemplate
@@ -219,18 +382,36 @@ function SidePreview({
             />
           </div>
         ) : (
-          <div style={{ position: "relative", zIndex: 2, width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.9 }}>Нет</div>
+          <div
+            style={{
+              position: "relative",
+              zIndex: 2,
+              width: "100%",
+              height: "100%",
+              display: "grid",
+              placeItems: "center",
+              opacity: 0.9
+            }}
+          >
+            Нет
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-/* ===== Grid для каталога графики плиты (до PlateBlock) ===== */
+/* ===== Grid каталога плиты (до PlateBlock) ===== */
 function CatGrid({
-  items, plateIds, addGraphic, removeGraphic
+  items,
+  plateIds,
+  addGraphic,
+  removeGraphic
 }: {
-  items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void;
+  items: any[];
+  plateIds: string[];
+  addGraphic: (g: any) => void;
+  removeGraphic: (gid: string) => void;
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
@@ -246,24 +427,48 @@ function CatGrid({
               title={name}
               onClick={() => addGraphic(g)}
               style={{
-                borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,0.04)",
-                aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center",
-                border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer"
+                borderRadius: 10,
+                overflow: "hidden",
+                background: "rgba(255,255,255,0.04)",
+                aspectRatio: "1/1",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid rgba(255,255,255,0.12)",
+                cursor: "pointer"
               }}
             >
               {thumbUrl ? (
-                <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
+                <img
+                  src={thumbUrl}
+                  alt={name}
+                  style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
+                />
               ) : (
                 <div style={{ ...smallText() }}>нет</div>
               )}
             </div>
-            <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
+            <div
+              title={name}
+              style={{
+                marginTop: 6,
+                fontSize: 12,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                opacity: 0.95
+              }}
+            >
               {name}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>−</button>
+              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
+                −
+              </button>
               <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>+</button>
+              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
+                +
+              </button>
             </div>
           </div>
         );
@@ -272,14 +477,13 @@ function CatGrid({
   );
 }
 
-/* ===== Editable summary ===== */
+/* ===== Editable summary (без локального примечания) ===== */
 function EditableOrderSummary() {
   const [draft, setDraft] = useState(() => loadOrderDraft());
   const introState = loadIntroState();
   const [name, setName] = useState<string>(introState.intro?.customerName || "");
   const [phone, setPhone] = useState<string>(introState.intro?.customerPhone || "");
   const [contactNotes, setContactNotes] = useState<string>(introState.intro?.customerNotes || "");
-  const [sizeNotes, setSizeNotes] = useState<string>(draft?.size?.notes || "");
 
   useEffect(() => {
     const onUpd = () => setDraft(loadOrderDraft());
@@ -301,13 +505,6 @@ function EditableOrderSummary() {
         customerNotes: (contactNotes || "").trim() || undefined
       };
       saveIntro(nextIntro, { lock: false });
-      const cur = loadOrderDraft();
-      const next = saveOrderDraft({
-        ...cur,
-        size: { ...(cur.size || {}), notes: (sizeNotes || "").trim() || undefined },
-        updatedAt: Date.now()
-      });
-      setDraft(next);
     }, 250) as unknown as number;
   };
   useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
@@ -319,45 +516,59 @@ function EditableOrderSummary() {
   const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
 
   return (
-    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      <div style={{ fontWeight: 700 }}>Данные заказа</div>
-
-      <div style={{ ...sectionBox, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 600, opacity: 0.95 }}>Контакты</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
-          <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+    <section style={{ ...glassPanelStyle(), padding: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 12, alignItems: "center" }}>
+        <div
+          style={{
+            borderRadius: 10,
+            border: "1px solid rgba(255,255,255,0.14)",
+            background: "rgba(255,255,255,0.04)",
+            width: 96,
+            height: 96,
+            overflow: "hidden",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxSizing: "border-box"
+          }}
+        >
+          {draft?.item?.url ? (
+            <img
+              src={draft.item.url}
+              alt=""
+              style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }}
+              draggable={false}
+            />
+          ) : null}
         </div>
-        <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание (удобное время, мессенджер…)" style={inputStyle()} />
-      </div>
-
-      <div style={{ ...sectionBox, display: "grid", gap: 10 }}>
-        <div style={{ fontWeight: 600, opacity: 0.95 }}>Резная работа</div>
-        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
-          <div style={{
-            borderRadius: 10, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.04)",
-            width: 96, height: 96, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box"
-          }}>
-            {draft?.item?.url ? (<img src={draft.item.url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} draggable={false} />) : null}
+        <div style={{ minWidth: 0, display: "grid", gap: 6 }}>
+          <div style={{ fontWeight: 700 }}>Данные заказа</div>
+          {(draft?.item?.name || draft?.item?.url) && (
+            <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}
+            </div>
+          )}
+          <div style={{ opacity: 0.9 }}>Размеры: {dims} {orient ? ` · ${orient}` : ""}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <input
+              value={name}
+              onChange={(e) => { setName(e.target.value); scheduleSave(); }}
+              placeholder="Имя"
+              style={inputStyle()}
+            />
+            <input
+              value={phone}
+              onChange={(e) => { setPhone(e.target.value); scheduleSave(); }}
+              placeholder="+7..."
+              inputMode="tel"
+              style={inputStyle()}
+            />
           </div>
-          <div style={{ minWidth: 0, display: "grid", gap: 4 }}>
-            {(draft?.item?.name || draft?.item?.url) && (
-              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}
-              </div>
-            )}
-            <div style={{ opacity: 0.9 }}>Размеры: {dims} {orient ? ` · ${orient}` : ""}</div>
-          </div>
-        </div>
-
-        <div>
-          <div style={{ fontSize: 13, opacity: 0.9, marginBottom: 4 }}>Примечание</div>
-          <textarea
-            value={sizeNotes}
-            onChange={(e) => { setSizeNotes(e.target.value); scheduleSave(); }}
-            rows={3}
-            placeholder="Примечание по размерам…"
-            style={{ ...inputStyle(), resize: "vertical" }}
+          <input
+            value={contactNotes}
+            onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }}
+            placeholder="Примечание для связи (удобное время, мессенджер…)"
+            style={inputStyle()}
           />
         </div>
       </div>
@@ -381,6 +592,19 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     };
   }, []);
 
+  // ID секций для навигации
+  const frontId = "section-front";
+  const rearId = "section-rear";
+  const previewsId = "section-previews";
+  const extrasId = "section-extras";
+
+  const goTo = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + window.scrollY - 8;
+    window.scrollTo({ top, behavior: "smooth" });
+  };
+
   const itemUrl = (draft as any)?.item?.url as string | undefined;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -394,8 +618,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  const frontMini = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
-  const backMini = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
+  const frontMini =
+    ((draft as any)?.editor?.previewHiUrl as string | undefined) ||
+    ((draft as any)?.editor?.previewUrl as string | undefined) ||
+    null;
+  const backMini =
+    ((draft as any)?.editorBack?.previewHiUrl as string | undefined) ||
+    ((draft as any)?.editorBack?.previewUrl as string | undefined) ||
+    null;
 
   /* ——— Лицевая сторона ——— */
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
@@ -403,18 +633,26 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   const frontUnique = useMemo(() => {
     const first: Record<string, any> = {};
-    frontGraphicsRaw.forEach((g) => { const id = g?.id || g?.url || g?.name; if (id && !first[id]) first[id] = g; });
+    frontGraphicsRaw.forEach((g) => {
+      const id = g?.id || g?.url || g?.name;
+      if (id && !first[id]) first[id] = g;
+    });
     return Object.values(first);
   }, [frontGraphicsRaw]);
 
   const frontCounts: Record<string, number> = useMemo(() => {
     const m: Record<string, number> = {};
-    frontGraphicsRaw.forEach((g) => { const id = g?.id || g?.url || g?.name || ""; if (id) m[id] = (m[id] || 0) + 1; });
+    frontGraphicsRaw.forEach((g) => {
+      const id = g?.id || g?.url || g?.name || "";
+      if (id) m[id] = (m[id] || 0) + 1;
+    });
     return m;
   }, [frontGraphicsRaw]);
 
   const frontEpitaphs: string[] = useMemo(() => {
-    const arr = Array.isArray(draft.engraving?.epitaphs) ? draft.engraving!.epitaphs!.filter(Boolean) : [];
+    const arr = Array.isArray(draft.engraving?.epitaphs)
+      ? draft.engraving!.epitaphs!.filter(Boolean)
+      : [];
     if (arr.length) return arr;
     const single = (draft.engraving?.epitaphText || "").trim();
     return single ? [single] : [];
@@ -424,11 +662,12 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   // Данные для fallback SketchTemplate (лицевая)
   const frontPeopleBlocks = useMemo(
-    () => frontPersons.map((p: any, idx: number) => ({
-      id: p.id || `person-${idx}`,
-      lines: personLines(p),
-      photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
-    })),
+    () =>
+      frontPersons.map((p: any, idx: number) => ({
+        id: p.id || `person-${idx}`,
+        lines: personLines(p),
+        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
+      })),
     [frontPersons]
   );
   const frontCrosses = useMemo(
@@ -440,20 +679,44 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     [frontUnique]
   );
 
+  // Флаг наличия содержимого на лицевой (для акцента)
+  const frontHasContent =
+    frontPersons.length > 0 ||
+    frontUnique.length > 0 ||
+    frontEpitaphs.length > 0 ||
+    !!frontWishes;
+
   /* ——— Тыльная сторона ——— */
   const rearPeople = ((((draft as any)?.editorBack?.people as any[]) || []).filter(Boolean)) as Array<{
-    id?: string; lastName?: string; firstName?: string; middleName?: string; birthDate?: string; deathDate?: string; photoPreview?: string | null;
+    id?: string;
+    lastName?: string;
+    firstName?: string;
+    middleName?: string;
+    birthDate?: string;
+    deathDate?: string;
+    photoPreview?: string | null;
   }>;
   const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCounts: Record<string, number> = useMemo(() => {
-    const m: Record<string, number> = {}; (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1)); return m;
+    const m: Record<string, number> = {};
+    (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
+    return m;
   }, [rearIds]);
   const rearUnique = useMemo(() => {
-    const ids = Array.from(new Set(rearIds || [])); return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+    const ids = Array.from(new Set(rearIds || []));
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
   }, [rearIds, rearMeta]);
-  const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
+  const rearEpitaphs: string[] = useMemo(
+    () => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)),
+    [draft]
+  );
   const backWishes = (((draft as any)?.editorBack?.wishes || "").trim());
+  const rearHasContent =
+    rearPeople.length > 0 ||
+    rearUnique.length > 0 ||
+    rearEpitaphs.length > 0 ||
+    !!backWishes;
 
   /* ——— Дополнительно ——— */
   const initialExtras = (draft as any)?.extras || {};
@@ -462,17 +725,22 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
   const [extraPlate, setExtraPlate] = useState<boolean>(!!initialExtras.headstonePlate);
 
-  const defaultPlateOrientation = ((draft?.size?.orientation || (draft as any)?.orientation || "vertical").toLowerCase().startsWith("h")) ? "horizontal" : "vertical";
+  const defaultPlateOrientation = ((draft?.size?.orientation || (draft as any)?.orientation || "vertical")
+    .toLowerCase()
+    .startsWith("h"))
+    ? "horizontal"
+    : "vertical";
+
   const sizeOptions = ["100×50 см", "120×60 см", "140×70 см"];
   const thicknessOptions = ["5 см", "8 см", "10 см"];
   const [plateSize, setPlateSize] = useState<string>((initialExtras as any)?.plateSize && sizeOptions.includes((initialExtras as any)?.plateSize) ? (initialExtras as any)?.plateSize : sizeOptions[0]);
   const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && thicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : thicknessOptions[0]);
   const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
 
-  // Эпитафия для плиты (строка; внутренняя работа через аккордеон)
+  // Эпитафия на плите: строка (в аккордеоне можно собирать через список -> join)
   const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
 
-  // Выбранные графики на плите
+  // Графики плиты
   const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
 
@@ -484,7 +752,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      setCatsLoading(true); setCatsError("");
+      setCatsLoading(true);
+      setCatsError("");
       try {
         const data = await fetchCatalog("graphics");
         const root = (data as any)?.categories || data;
@@ -496,7 +765,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         if (alive) setCatsLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
   useEffect(() => {
     if (!cats.length) return;
@@ -524,19 +795,21 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const removePlateGraphic = (gid: string) => {
     const idx = plateIds.findIndex((x) => x === gid);
     if (idx === -1) return;
-    const next = plateIds.slice(); next.splice(idx, 1);
+    const next = plateIds.slice();
+    next.splice(idx, 1);
     setPlateIds(next);
   };
 
-  // Список выбранных для вывода (под эскизами)
+  // Список выбранных график для отображения под эскизами
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
-      const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
-        const id = String(it.id || it.relPath || it.url || it.name || "");
-        if (!id) return;
-        if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
-      });
+      const collect = (arr: any[]) =>
+        (arr || []).forEach((it: any) => {
+          const id = String(it.id || it.relPath || it.url || it.name || "");
+          if (!id) return;
+          if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
+        });
       collect(cat.items || []);
       (cat.children || []).forEach((sub: any) => collect(sub.items || []));
     });
@@ -547,18 +820,38 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
   }, [plateIds, plateMeta, cats]);
 
-  // Сохранение extras в драфт
+  // Общие примечания к заказу (над кнопками)
+  const [orderNotes, setOrderNotes] = useState<string>((initialExtras as any)?.orderNotes || "");
+  const orderNotesTimerRef = useRef<number | null>(null);
+  const scheduleSaveOrderNotes = () => {
+    if (orderNotesTimerRef.current) window.clearTimeout(orderNotesTimerRef.current);
+    orderNotesTimerRef.current = window.setTimeout(() => {
+      const prev = loadOrderDraft();
+      const extras: any = {
+        ...(prev as any).extras,
+        orderNotes: (orderNotes || "").trim() || undefined
+      };
+      saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+      setDraft(loadOrderDraft());
+    }, 300) as unknown as number;
+  };
+  useEffect(() => () => { if (orderNotesTimerRef.current) window.clearTimeout(orderNotesTimerRef.current); }, []);
+
+  // Сохранение extras (без orderNotes — он отдельно)
   useEffect(() => {
     const prev = loadOrderDraft();
     const extras: any = {
       ...(prev as any).extras,
-      base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate,
+      base: extraBase,
+      flowerbed: extraFlowerbed,
+      headstonePlate: extraPlate,
       plateSize: extraPlate ? plateSize : undefined,
       plateThickness: extraPlate ? plateThickness : undefined,
       plateOrientation: extraPlate ? plateOrientation : undefined,
       plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
       plateGraphicsIds: extraPlate ? plateIds : undefined,
-      plateGraphicsMeta: extraPlate ? plateMeta : undefined
+      plateGraphicsMeta: extraPlate ? plateMeta : undefined,
+      orderNotes: (prev as any).extras?.orderNotes // не затрагиваем здесь
     };
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
     setDraft(loadOrderDraft());
@@ -570,32 +863,41 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const handleSend = async () => {
     setBusy(true);
     setErr("");
-    const name = (intro.intro?.customerName || "").trim();
 
     const attachments: any = {
       frontPreview: (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null,
-      backPreview: (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null,
+      backPreview: rearHasContent ? ((draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null) : null,
       itemUrl: itemUrl || null,
       plateGraphics: chosenPlateList
     };
 
     const extras: Extras & {
-      base?: boolean; flowerbed?: boolean; headstonePlate?: boolean; plateSize?: string;
-      plateThickness?: string; plateOrientation?: string; plateEpitaph?: string;
-      plateGraphicsIds?: string[]; attachments?: any;
+      base?: boolean;
+      flowerbed?: boolean;
+      headstonePlate?: boolean;
+      plateSize?: string;
+      plateThickness?: string;
+      plateOrientation?: string;
+      plateEpitaph?: string;
+      plateGraphicsIds?: string[];
+      orderNotes?: string;
+      attachments?: any;
     } = {
-      base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate,
+      base: extraBase,
+      flowerbed: extraFlowerbed,
+      headstonePlate: extraPlate,
       plateSize: extraPlate ? plateSize : undefined,
       plateThickness: extraPlate ? plateThickness : undefined,
       plateOrientation: extraPlate ? plateOrientation : undefined,
       plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
       plateGraphicsIds: extraPlate ? plateIds : undefined,
+      orderNotes: (orderNotes || "").trim() || undefined,
       attachments
     };
 
     try {
       await sendOrderEmailAndNotifyTg(extras);
-      const nm = name || "Заказчик";
+      const nm = (intro.intro?.customerName || "").trim() || "Заказчик";
       window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами по указанному номеру для уточнения деталей и подтверждения заказа.`);
       onSend?.({ extras });
     } catch (e: any) {
@@ -605,32 +907,26 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   };
 
-  // Липкая кнопка «Вверх»
-  const [showUp, setShowUp] = useState(false);
-  useEffect(() => {
-    const onScroll = () => setShowUp(window.scrollY > 240);
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
   return (
     <>
-      {/* Подсказка */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <p style={{ margin: 0, opacity: 0.95, lineHeight: 1.45 }}>
-          Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
-          гравировки перейдите на соответствующий шаг (используйте навигацию вверху). Когда всё верно — нажмите «Отправить заказ».
-        </p>
-      </section>
+      {/* Липкая навигация */}
+      <StickyNav
+        showRear={rearHasContent}
+        onGoFront={() => goTo(frontId)}
+        onGoRear={() => goTo(rearId)}
+        onGoPreviews={() => goTo(previewsId)}
+        onGoExtras={() => goTo(extrasId)}
+      />
 
       {/* Контакты + Резная работа */}
       <EditableOrderSummary />
 
-      {/* Подробности лицевой стороны */}
-      {frontPersons.length || frontUnique.length || frontEpitaphs.length || frontWishes ? (
-        <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая")}</div>
+      {/* Лицевая — выделяем цветом */}
+      {frontHasContent && (
+        <section id={frontId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10, borderColor: "rgba(138,180,255,0.55)" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+            {chip("Лицевая", true)}
+          </div>
 
           {/* Усопшие */}
           {frontPersons.length > 0 && (
@@ -683,13 +979,15 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
               <div style={{ display: "grid", gap: 6 }}>
                 {frontEpitaphs.map((t, i) => (
-                  <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                  <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>
+                    {t}
+                  </div>
                 ))}
               </div>
             </AccentBox>
           )}
 
-          {/* Пожелания */}
+          {/* Пожелания к эскизу */}
           {frontWishes && (
             <div style={{ ...sectionBox }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
@@ -697,11 +995,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           )}
         </section>
-      ) : null}
+      )}
 
-      {/* Подробности тыльной стороны */}
-      {rearPeople.length || rearUnique.length || rearEpitaphs.length || backWishes ? (
-        <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
+      {/* Тыльная — скрываем, если пустая */}
+      {rearHasContent && (
+        <section id={rearId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
 
           {rearPeople.length > 0 && (
@@ -767,18 +1065,24 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           )}
         </section>
-      ) : null}
+      )}
 
-      {/* Эскизы — один раз (2 столбца) */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
+      {/* Эскизы — скрываем правый, если тыльная пустая */}
+      <section id={previewsId} style={{ ...glassPanelStyle(), padding: 12 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: rearHasContent ? "1fr 1fr" : "1fr",
+            gap: 12,
+            alignItems: "stretch"
+          }}
+        >
           <SidePreview
             title="Лицевая"
             miniUrl={frontMini}
             itemUrl={itemUrl}
             mirror={false}
             aspect={aspect}
-            showSilhouette={false}
             fallbackTemplate={{
               item: (draft as any)?.item || null,
               peopleBlocks: frontPeopleBlocks,
@@ -788,22 +1092,23 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               carvingOpacity: 0.4
             }}
           />
-          <SidePreview
-            title="Тыльная"
-            miniUrl={backMini}
-            itemUrl={itemUrl}
-            mirror
-            aspect={aspect}
-            showSilhouette
-          />
+          {rearHasContent && (
+            <SidePreview
+              title="Тыльная"
+              miniUrl={backMini}
+              itemUrl={itemUrl}
+              mirror
+              aspect={aspect}
+            />
+          )}
         </div>
       </section>
 
-      {/* Дополнительно — тумба/цветник/плита + ВЫБРАНО ДЛЯ ПЛИТЫ (перенесено под эскизы) */}
-      <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+      {/* Дополнительно + выбранное для плиты под эскизами */}
+      <section id={extrasId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700 }}>Дополнительно</div>
 
-        {/* Выбрано для плиты — теперь под эскизами, в этом разделе (с возможностью удаления) */}
+        {/* Выбрано для плиты — удаление элементов доступно */}
         {(chosenPlateList.length > 0 || (plateEpitaph || "").trim()) && (
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
@@ -853,7 +1158,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           </div>
         </div>
 
-        {/* ПЛИТА: размеры + 2 аккордеона (Эпитафия / Графика) */}
+        {/* Блок плиты: размеры + 2 аккордеона (Эпитафия / Графика) */}
         <PlateBlock
           extraPlate={extraPlate}
           setExtraPlate={setExtraPlate}
@@ -876,33 +1181,32 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         />
       </section>
 
+      {/* Общее примечание — под разделами, перед кнопками */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>
+          Примечание к заказу
+        </label>
+        <textarea
+          id="order-notes"
+          rows={3}
+          value={orderNotes}
+          onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }}
+          placeholder="Любые замечания к заказу (изменения по эскизу, пожелания и т. п.)"
+          style={{ ...inputStyle(), resize: "vertical" }}
+        />
+      </section>
+
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
 
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-        <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>Назад</button>
+      {/* Кнопки оформления */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
+        <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>
+          Назад
+        </button>
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>
-          {busy ? "Отправляем…" : "Отправить заказ"}
+          {busy ? "Отправляем…" : "Оформить заказ"}
         </button>
       </div>
-
-      {/* Липкая кнопка «Вверх» */}
-      {showUp && (
-        <button
-          type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          style={{
-            ...glassButtonStyle("md"),
-            position: "fixed",
-            right: "calc(16px + env(safe-area-inset-right))",
-            bottom: "calc(16px + env(safe-area-inset-bottom))",
-            zIndex: 1000
-          }}
-          aria-label="Прокрутить вверх"
-          title="Прокрутить вверх"
-        >
-          ↑
-        </button>
-      )}
     </>
   );
 }
@@ -929,22 +1233,31 @@ function PlateBlock(props: {
   plateIds: string[];
 }) {
   const {
-    extraPlate, setExtraPlate,
-    plateSize, setPlateSize,
-    plateThickness, setPlateThickness,
-    plateOrientation, setPlateOrientation,
-    plateEpitaph, setPlateEpitaph,
-    catsLoading, catsError, cats, catOpen, setCatOpen,
-    addPlateGraphic, removePlateGraphic,
+    extraPlate,
+    setExtraPlate,
+    plateSize,
+    setPlateSize,
+    plateThickness,
+    setPlateThickness,
+    plateOrientation,
+    setPlateOrientation,
+    plateEpitaph,
+    setPlateEpitaph,
+    catsLoading,
+    catsError,
+    cats,
+    catOpen,
+    setCatOpen,
+    addPlateGraphic,
+    removePlateGraphic,
     plateIds
   } = props;
 
-  // Локальное состояние аккордеонов
   const [epitaphOpen, setEpitaphOpen] = useState(true);
   const [graphicsOpen, setGraphicsOpen] = useState(false);
   const [showMoreEpitaphs, setShowMoreEpitaphs] = useState(false);
 
-  // Выбранные эпитафии на плите (внутреннее представление — список; наружу собираем строкой \n\n)
+  // Внутренний список эпитафий (join -> plateEpitaph)
   const [plateEpitaphs, setPlateEpitaphs] = useState<string[]>(
     (plateEpitaph || "").trim() ? (plateEpitaph as string).split(/\n{2,}/g) : []
   );
@@ -1021,7 +1334,7 @@ function PlateBlock(props: {
           {/* Разделитель */}
           <div style={dividerLine} />
 
-          {/* Аккордеон: Эпитафия на надгробной плите (как на шаге эпитафии) */}
+          {/* Аккордеон: Эпитафия на надгробной плите */}
           <LoudAccordion title="Эпитафия на надгробной плите" open={epitaphOpen} onToggle={() => setEpitaphOpen(!epitaphOpen)}>
             <div style={{ display: "grid", gap: 10 }}>
               <div>
@@ -1034,7 +1347,7 @@ function PlateBlock(props: {
                         key={t}
                         type="button"
                         onClick={() => toggleEpitaph(t)}
-                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(55,55,55,55)" }}
+                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
                         title={t}
                       >
                         {t}
@@ -1101,7 +1414,7 @@ function PlateBlock(props: {
             </div>
           </LoudAccordion>
 
-          {/* Аккордеон: Графика на плите — без изменений */}
+          {/* Аккордеон: Графика на плите (без изменений) */}
           <LoudAccordion title="Графика на надгробной плите" open={graphicsOpen} onToggle={() => setGraphicsOpen(!graphicsOpen)}>
             {catsLoading && <div>Загрузка каталога…</div>}
             {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
