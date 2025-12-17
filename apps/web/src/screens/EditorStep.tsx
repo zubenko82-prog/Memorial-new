@@ -68,8 +68,12 @@ type EditorEl = {
 /* ===== Helpers ===== */
 const DND_MIME = "application/x-memorial-editor-el";
 const SKETCH_PAD = 8;
-const KNOB_HIT = 28; // зона захвата, px
-const KNOB_VIS = 14; // видимая точка, px
+const KNOB_HIT = 28; // зона захвата, px (ASCII)
+const KNOB_VIS = 14; // видимая точка, px (ASCII)
+// Защита от случайных кириллических имён, оставшихся в коде/бандле:
+const KNOB_HИТ = KNOB_HIT; // ИТ — кириллица
+const KNOB_ВИС = KNOB_VIS; // ВИС — кириллица
+
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const clampBox = (x: number, y: number, w: number, h: number) => ({
   x: clamp(x, 0, 100 - w),
@@ -264,7 +268,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
   }, [engr]);
 
-  // Эпитафии
+  // Эпитафии (строго epitaphText)
   const epitaphs = useMemo(() => {
     const e: any = engr || {};
     if (Array.isArray(e.epitaphs) && e.epitaphs.length) return (e.epitaphs as string[]).filter(Boolean);
@@ -998,7 +1002,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  // Слой содержимого холста — ОБЯЗАТЕЛЬНО определён до return (чтобы не было ReferenceError)
+  // Слой содержимого холста
   const ContentLayer: React.FC = () => {
     const wrap = editorWrapRef.current?.getBoundingClientRect();
     const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
@@ -1127,7 +1131,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
 
             if (el.type === "epitaph") {
               const idx = Number(key);
-              const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
+              const tRaw = epitaphs[idx] || "";
               const isRLM = isRememberLoveMourn(tRaw);
               const padX = Math.max(4, Math.round(boxPx.w * 0.04));
               const padY = Math.max(2, Math.round(boxPx.h * 0.06));
@@ -1265,7 +1269,7 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
     );
   };
 
-  // Карточка миниатюры (без фона и рамки, 120×120 — содержимое)
+  // Карточка миниатюры
   const TrayCard: React.FC<{
     onClick: () => void;
     onDragStart: (e: React.DragEvent) => void;
@@ -1489,14 +1493,14 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
                       {selected && <MiniToolbar el={el} />}
                       {selected && !el.locked && (
                         <>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT / 2}px`, `-${KNOB_HIT / 2}px`, "nwse-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "nesw-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "nwse-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HIT / 2}px`, `calc(100% - ${KNOB_HIT / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `-${KNOB_HIT / 2}px`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `calc(50% - ${KNOB_HIT / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HIT / 2}px)`, `calc(100% - ${KNOB_HIT / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HIT / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT / 2}px`, `-${KNOB_HИТ / 2}px`, "nwse-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `-${KNOB_HИТ / 2}px`, "nesw-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HИТ / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "nwse-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(100% - ${KNOB_HИТ / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HИТ / 2}px)`, `-${KNOB_HИТ / 2}px`, "ns-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HИТ / 2}px)`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HИТ / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
+                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
                         </>
                       )}
                     </div>
