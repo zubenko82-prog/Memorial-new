@@ -1,9 +1,9 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Добавлено:
-// - Если мини‑эскиз редактора ПУСТОЙ (нет editor.previewUrl/previewHiUrl), на лицевой стороне
-//   показываем «мини‑эскиз» из шага эпитафии, сгенерированный по шаблону из SketchTemplate.tsx.
+// Требование: если эскиз редактора ПУСТОЙ — в мини‑эскизе (лицевая сторона)
+// показываем «мини‑эскиз» с шага эпитафии, сгенерированный по шаблону из SketchTemplate.tsx.
+// Для этого рендерим SketchTemplate в карточке превью как fallback.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -280,70 +280,6 @@ function Underlay({
   );
 }
 
-/* ===== Выразительный аккордеон (без пиктограмм) ===== */
-function LoudAccordion({
-  title,
-  open,
-  onToggle,
-  children
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [h, setH] = useState(0);
-  useEffect(() => {
-    const m = () => setH(ref.current?.scrollHeight || 0);
-    m();
-    const ro = new ResizeObserver(m);
-    if (ref.current) ro.observe(ref.current);
-    return () => ro.disconnect();
-  }, [children]);
-  return (
-    <div
-      style={{
-        ...glassPanelStyle(),
-        padding: 0,
-        borderWidth: 2,
-        borderColor: "rgba(138,180,255,0.35)",
-        boxShadow: open ? "0 6px 24px rgba(0,0,0,0.35)" : "none"
-      }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          width: "100%",
-          textAlign: "left",
-          padding: "14px 16px",
-          background: open
-            ? "linear-gradient(180deg, rgba(138,180,255,0.25) 0%, rgba(138,180,255,0.12) 100%)"
-            : "rgba(255,255,255,0.06)",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          fontSize: 16,
-          fontWeight: 700,
-          letterSpacing: 0.2
-        }}
-      >
-        <span>{title}</span>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
-      </button>
-      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
-        <div ref={ref} style={{ padding: 12 }}>
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ===== Универсальная миниатюра (без обрезаний, под центр) ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
   <div
@@ -372,7 +308,7 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== SidePreview с fallback на SketchTemplate (для лицевой стороны) ===== */
+/* ===== SidePreview с fallback на SketchTemplate (лицевая сторона) ===== */
 type TemplateFallback = {
   item: any;
   peopleBlocks: { id: string; lines: string[]; photo?: string | null }[];
@@ -412,9 +348,7 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Для fallback на SketchTemplate фоновую подложку не рисуем (компонент сам отрисует изделие) */}
         {!useFallback && <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette={showSilhouette} />}
-
         {hasPreview ? (
           <img
             src={miniUrl!}
@@ -449,6 +383,87 @@ function SidePreview({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ===== Grid (категории/подкатегории плиты) — ВАЖНО: определить до PlateBlock ===== */
+function CatGrid({
+  items,
+  plateIds,
+  addGraphic,
+  removeGraphic
+}: {
+  items: any[];
+  plateIds: string[];
+  addGraphic: (g: any) => void;
+  removeGraphic: (gid: string) => void;
+}) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
+      {items.map((g: any, idx: number) => {
+        const gid = String(g.id || g.relPath || g.url || g.name || idx);
+        const qty = plateIds.filter((x) => x === gid).length;
+        const thumbUrl = g.preview || g.url || "";
+        const name = g.name || gid;
+        return (
+          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 12 }}>
+            <div
+              role="button"
+              title={name}
+              onClick={() => addGraphic(g)}
+              style={{
+                borderRadius: 10,
+                overflow: "hidden",
+                background: "rgba(255,255,255,0.04)",
+                aspectRatio: "1/1",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid rgba(255,255,255,0.12)",
+                cursor: "pointer"
+              }}
+            >
+              {thumbUrl ? (
+                <img
+                  src={thumbUrl}
+                  alt={name}
+                  style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
+                />
+              ) : (
+                <div style={{ ...smallText() }}>нет</div>
+              )}
+            </div>
+            <div
+              title={name}
+              style={{
+                marginTop: 6,
+                fontSize: 12,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                opacity: 0.95
+              }}
+            >
+              {name}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => removeGraphic(gid)}
+                disabled={qty === 0}
+                style={glassButtonStyle("nano", qty === 0)}
+              >
+                −
+              </button>
+              <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
+              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
+                +
+              </button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -669,7 +684,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   const frontWishes = ((draft as any)?.editor?.wishes || "").trim();
 
-  // Fallback данные для SketchTemplate (эскиз шага «Эпитафии»)
+  // Fallback данные для SketchTemplate (эскиз с шага «Эпитафии»)
   const frontPeopleBlocks = useMemo(
     () =>
       frontPersons.map((p: any, idx: number) => ({
@@ -1098,7 +1113,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             }}
           />
 
-          {/* Тыльная — оставляем как есть (силуэт), без шаблонного fallback */}
+          {/* Тыльная — обычная логика, без шаблонного fallback */}
           <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} showSilhouette />
         </div>
       </section>
@@ -1160,7 +1175,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   );
 }
 
-/* ===== Блок плиты (вынесен) ===== */
+/* ===== Блок плиты ===== */
 function PlateBlock(props: {
   extraPlate: boolean;
   setExtraPlate: (v: boolean) => void;
@@ -1248,12 +1263,7 @@ function PlateBlock(props: {
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {["5 см", "8 см", "10 см"].map((v) => (
                 <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input
-                    type="radio"
-                    name="plate-thickness"
-                    checked={plateThickness === v}
-                    onChange={() => setPlateThickness(v)}
-                  />
+                  <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
                   <span>{v}</span>
                 </label>
               ))}
@@ -1297,8 +1307,7 @@ function PlateBlock(props: {
                 {cats.map((cat: any, idx: number) => {
                   const catKey = String(cat._id || cat.name || idx);
                   const open = !!catOpen[catKey];
-                  const showSubs =
-                    isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
+                  const showSubs = isFlowersCat(cat?.name) && Array.isArray(cat?.children) && cat.children.length > 0;
 
                   return (
                     <LoudAccordion
