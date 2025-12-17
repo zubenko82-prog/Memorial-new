@@ -1344,9 +1344,9 @@ export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder
           }}
         >
          Сделайте набросок: кликните по миниатюре, затем настройте позицию и масштаб. Не уверены или нет конкретных пожеланий? Оставьте эскиз пустым, на усмотрение специалиста — нажмите 
-         <button type="button" onClick={handleContinue} style={linkLikeButton()}>
-          "Продолжить"
-        </button>.
+         <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
+            «Продолжить»
+          </button>.
         </section>
 
         {/* Единая палитра миниатюр (без подписей) */}
