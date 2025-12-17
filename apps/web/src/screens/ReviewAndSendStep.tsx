@@ -10,6 +10,7 @@
 // - В блоке «Надгробная плита»: отделили размеры/толщину/ориентацию горизонтальной линией от эпитафий.
 // - «Все эпитафии» импортируются из src/data/epitaphs.js (быстрый выбор + разворачиваемый список).
 // - Лайв‑обновление драфта (превью больше не «Нет», если отрендерились позже).
+// - Новое: если эскиз редактора ПУСТОЙ — в мини‑эскизе используем эскиз с шага эпитафии (генерируемый по текстам эпитафии).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -680,8 +681,141 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  const frontMini = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
+  // Превью из редактора
+  const frontMiniRaw = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
   const backMini = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
+
+  // Пуст ли редактор (лицевая)
+  const isFrontEditorEmpty = !Array.isArray((draft as any)?.editor?.elements) || ((draft as any)?.editor?.elements || []).length === 0;
+
+  // Эпитафии для лицевой
+  const frontEpitaphs: string[] = useMemo(() => {
+    const arr = Array.isArray(draft.engraving?.epitaphs)
+      ? draft.engraving!.epitaphs!.filter(Boolean)
+      : [];
+    if (arr.length) return arr;
+    const single = (draft.engraving?.epitaphText || "").trim();
+    return single ? [single] : [];
+  }, [draft.engraving]);
+
+  // Fallback: если эскиз редактора пустой — генерируем мини‑эскиз по эпитафии
+  const [frontMiniFallback, setFrontMiniFallback] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isFrontEditorEmpty) {
+      setFrontMiniFallback(null);
+      return;
+    }
+    let cancelled = false;
+
+    const parseAspect = (s?: string) => {
+      try {
+        if (!s) return 0;
+        const parts = s.split("/").map((x) => parseFloat(x));
+        if (parts.length === 2 && isFinite(parts[0]) && isFinite(parts[1]) && parts[0] > 0 && parts[1] > 0) {
+          return parts[0] / parts[1];
+        }
+      } catch {}
+      return 0;
+    };
+
+    const ratio = parseAspect(aspect) || 2 / 3;
+    const target = 800;
+    const W = ratio >= 1 ? target : Math.max(320, Math.round(target * ratio));
+    const H = ratio >= 1 ? Math.max(320, Math.round(target / ratio)) : target;
+
+    (async () => {
+      // нарисуем градиент + изделие (полупрозр.) + эпитафию по центру
+      const canvas = document.createElement("canvas");
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      // фон-градиент
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, "#6e6e6e");
+      grad.addColorStop(0.2, "#464545");
+      grad.addColorStop(0.4, "#424242");
+      grad.addColorStop(0.7, "#888888");
+      grad.addColorStop(1.0, "#ffffff");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // изделие
+      if (itemUrl) {
+        await new Promise<void>((resolve) => {
+          const im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = () => {
+            const CX = 0, CY = 0, PW = W, PH = H;
+            const sr = im.naturalWidth / im.naturalHeight;
+            ctx.save();
+            ctx.globalAlpha = 0.35;
+            if (sr > PW / PH) {
+              const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
+              ctx.drawImage(im, rx, ry, rw, rh);
+            } else {
+              const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
+              ctx.drawImage(im, rx, ry, rw, rh);
+            }
+            ctx.restore();
+            resolve();
+          };
+          im.onerror = () => resolve();
+          im.src = itemUrl;
+        });
+      }
+
+      // эпитафии
+      const text = (frontEpitaphs || []).join("\n").trim();
+      const lines = text ? text.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+      const padX = Math.round(W * 0.08);
+      const padY = Math.round(H * 0.08);
+      const boxW = W - padX * 2;
+      const boxH = H - padY * 2;
+
+      const fitFont = () => {
+        const count = Math.max(1, lines.length || 1);
+        const fByH = boxH / (count * 1.15);
+        const measure = (sz: number) => {
+          ctx.font = `bold ${sz}px ${FONT_CENTURY}`;
+          return Math.max(
+            ...((lines.length ? lines : [" "]).map((ln) => ctx.measureText(ln).width)),
+            1
+          );
+        };
+        let sz = Math.min(96, Math.floor(fByH));
+        while (sz > 10 && measure(sz) > boxW) sz -= 1;
+        return Math.max(10, sz);
+      };
+
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const fontPx = fitFont();
+      ctx.font = `bold ${fontPx}px ${FONT_CENTURY}`;
+      const totalH = (lines.length || 1) * fontPx * 1.15;
+      let y = padY + (boxH - totalH) / 2 + (fontPx * 1.15) / 2;
+      if (lines.length === 0) {
+        ctx.fillText("", W / 2, H / 2);
+      } else {
+        for (const ln of lines) {
+          ctx.fillText(ln, W / 2, y);
+          y += fontPx * 1.15;
+        }
+      }
+
+      const url = canvas.toDataURL("image/jpeg", 0.9);
+      if (!cancelled) setFrontMiniFallback(url);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isFrontEditorEmpty, itemUrl, aspect, frontEpitaphs]);
+
+  // Итоговый мини‑эскиз для лицевой: если редактор пуст — используем fallback
+  const frontMini = isFrontEditorEmpty ? (frontMiniFallback || null) : frontMiniRaw;
 
   /* ——— Лицевая сторона ——— */
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
@@ -702,14 +836,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
     return m;
   }, [frontGraphicsRaw]);
-  const frontEpitaphs: string[] = useMemo(() => {
-    const arr = Array.isArray(draft.engraving?.epitaphs)
-      ? draft.engraving!.epitaphs!.filter(Boolean)
-      : [];
-    if (arr.length) return arr;
-    const single = (draft.engraving?.epitaphText || "").trim();
-    return single ? [single] : [];
-  }, [draft.engraving]);
   const frontWishes = ((draft as any)?.editor?.wishes || "").trim();
 
   /* ——— Тыльная сторона ——— */
@@ -920,7 +1046,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       <EditableOrderSummary />
 
       {/* Лицевая: Усопшие / Графика / Эпитафии / Пожелания */}
-      {(frontPersons.length || frontUnique.length || frontEpitaphs.length || frontWishes) ? (
+      {(frontPersons.length || frontUnique.length || frontEpitaphs.length || ((draft as any)?.editor?.wishes || "").trim()) ? (
         <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая")}</div>
 
@@ -978,10 +1104,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </AccentBox>
           )}
 
-          {frontWishes && (
+          {((draft as any)?.editor?.wishes || "").trim() && (
             <div style={sectionBox}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
-              <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{((draft as any)?.editor?.wishes || "").trim()}</div>
             </div>
           )}
         </section>
@@ -1059,7 +1185,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Эскизы — один раз (2 столбца) */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          {/* Лицевая — БЕЗ силуэта */}
+          {/* Лицевая — БЕЗ силуэта; если редактор пуст — miniUrl = fallback по эпитафии */}
           <SidePreview title="Лицевая" miniUrl={frontMini} itemUrl={itemUrl} mirror={false} aspect={aspect} showSilhouette={false} />
           {/* Тыльная — с силуэтом, ОТЗЕРКАЛЕННАЯ (силуэт виден) */}
           <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} showSilhouette />
