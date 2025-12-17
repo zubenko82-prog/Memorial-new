@@ -900,7 +900,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           aria-label="Прокрутить вверх"
           title="Прокрутить вверх"
         >
-          ↑ Вверх
+          ↑
         </button>
       )}
     </>
@@ -1034,7 +1034,7 @@ function PlateBlock(props: {
                         key={t}
                         type="button"
                         onClick={() => toggleEpitaph(t)}
-                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
+                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(55,55,55,55)" }}
                         title={t}
                       >
                         {t}
