@@ -1,9 +1,9 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение без TopBar.
 //
-// Дополнительно:
-// - Если мини‑эскиз редактора пустой (нет previewUrl/previewHiUrl), показываем шаблон из src/components/SketchTemplate.tsx,
-//   собранный по данным драфта (люди/эпитафии/графика). Это действует для лицевой стороны.
+// Добавлено:
+// - Если мини‑эскиз редактора ПУСТОЙ (нет editor.previewUrl/previewHiUrl), на лицевой стороне
+//   показываем «мини‑эскиз» из шага эпитафии, сгенерированный по шаблону из SketchTemplate.tsx.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -28,7 +28,8 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: map[size],
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
@@ -371,88 +372,7 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== Grid (категории/подкатегории плиты) ===== */
-function CatGrid({
-  items,
-  plateIds,
-  addGraphic,
-  removeGraphic
-}: {
-  items: any[];
-  plateIds: string[];
-  addGraphic: (g: any) => void;
-  removeGraphic: (gid: string) => void;
-}) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
-      {items.map((g: any, idx: number) => {
-        const gid = String(g.id || g.relPath || g.url || g.name || idx);
-        const qty = plateIds.filter((x) => x === gid).length;
-        const thumbUrl = g.preview || g.url || "";
-        const name = g.name || gid;
-        return (
-          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 12 }}>
-            <div
-              role="button"
-              title={name}
-              onClick={() => addGraphic(g)}
-              style={{
-                borderRadius: 10,
-                overflow: "hidden",
-                background: "rgba(255,255,255,0.04)",
-                aspectRatio: "1/1",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "1px solid rgba(255,255,255,0.12)",
-                cursor: "pointer"
-              }}
-            >
-              {thumbUrl ? (
-                <img
-                  src={thumbUrl}
-                  alt={name}
-                  style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
-                />
-              ) : (
-                <div style={{ ...smallText() }}>нет</div>
-              )}
-            </div>
-            <div
-              title={name}
-              style={{
-                marginTop: 6,
-                fontSize: 12,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                opacity: 0.95
-              }}
-            >
-              {name}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button
-                type="button"
-                onClick={() => removeGraphic(gid)}
-                disabled={qty === 0}
-                style={{ ...glassButtonStyle("nano", qty === 0) }}
-              >
-                −
-              </button>
-              <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
-                +
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ===== SidePreview с fallback на SketchTemplate ===== */
+/* ===== SidePreview с fallback на SketchTemplate (для лицевой стороны) ===== */
 type TemplateFallback = {
   item: any;
   peopleBlocks: { id: string; lines: string[]; photo?: string | null }[];
@@ -492,8 +412,7 @@ function SidePreview({
           minHeight: aspect ? undefined : 240
         }}
       >
-        {/* Underlay рендерим только для обычного мини‑превью.
-            Для SketchTemplate не нужен дополнительный фон (он сам рендерит изделие). */}
+        {/* Для fallback на SketchTemplate фоновую подложку не рисуем (компонент сам отрисует изделие) */}
         {!useFallback && <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette={showSilhouette} />}
 
         {hasPreview ? (
@@ -750,13 +669,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   const frontWishes = ((draft as any)?.editor?.wishes || "").trim();
 
-  // Fallback для SketchTemplate (лицевая)
+  // Fallback данные для SketchTemplate (эскиз шага «Эпитафии»)
   const frontPeopleBlocks = useMemo(
     () =>
       frontPersons.map((p: any, idx: number) => ({
         id: p.id || `person-${idx}`,
         lines: personLines(p),
-        photo: p.photoPreview || null
+        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
       })),
     [frontPersons]
   );
@@ -973,8 +892,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <p style={{ margin: 0, opacity: 0.95, lineHeight: 1.45 }}>
           Проверьте данные заказа и превью сторон. При необходимости отредактируйте данные. Для редактирования элементов
-          гравировки перейдите на соответствующий шаг (используйте навигацию вверху). Когда всё верно — нажмите «Отправить
-          заказ».
+          гравировки перейдите на соответствующий шаг (используйте навигацию вверху). Когда всё верно — нажмите «Отправить заказ».
         </p>
       </section>
 
@@ -1162,7 +1080,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Эскизы — один раз (2 столбца) */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
-          {/* Лицевая — если мини‑эскиз пуст, используем SketchTemplate */}
+          {/* Лицевая — если мини‑эскиз редактора пустой, используем SketchTemplate (шаг «Эпитафии») */}
           <SidePreview
             title="Лицевая"
             miniUrl={frontMini}
@@ -1180,7 +1098,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             }}
           />
 
-          {/* Тыльная — оставляем как есть (силуэт), без шаблона */}
+          {/* Тыльная — оставляем как есть (силуэт), без шаблонного fallback */}
           <SidePreview title="Тыльная" miniUrl={backMini} itemUrl={itemUrl} mirror aspect={aspect} showSilhouette />
         </div>
       </section>
@@ -1330,7 +1248,12 @@ function PlateBlock(props: {
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {["5 см", "8 см", "10 см"].map((v) => (
                 <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
+                  <input
+                    type="radio"
+                    name="plate-thickness"
+                    checked={plateThickness === v}
+                    onChange={() => setPlateThickness(v)}
+                  />
                   <span>{v}</span>
                 </label>
               ))}
