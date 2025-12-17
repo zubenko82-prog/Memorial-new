@@ -2,12 +2,13 @@
 // Обзор и подтверждение без TopBar.
 //
 // Требования:
-// - Если мини‑эскиз редактора ПУСТОЙ — в лицевой карточке превью показываем «мини‑эскиз»,
+// - Если эскиз редактора ПУСТОЙ — в лицевой карточке превью показываем «мини‑эскиз»,
 //   сгенерированный по шаблону из SketchTemplate.tsx (данные из шага эпитафии).
 // - В блоке «Надгробная плита», после выбора размеров — ДВА аккордеона:
 //   1) «Эпитафия на надгробной плите» (как на шаге эпитафии: быстрый выбор + разворачиваемый список, добавление своего текста).
 //   2) «Графика на надгробной плите» (без изменений).
-// - Блок «Выбрано для плиты» перенесён ПОД эскизы, в секцию «Дополнительно» (сразу под заголовком).
+// - Блок «Выбрано для плиты» перенесён ПОД эскизы, в секцию «Дополнительно». В этом блоке можно удалять элементы.
+// - Добавлена липкая кнопка «Вверх» в правом нижнем углу.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -33,7 +34,8 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: map[size],
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
@@ -97,20 +99,12 @@ const personLines = (p: any): string[] => {
   const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
-};
+}
 
-/* ===== Аккордеон (выразительный) — до PlateBlock ===== */
+/* ===== Аккордеон (до PlateBlock) ===== */
 function LoudAccordion({
-  title,
-  open,
-  onToggle,
-  children
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
+  title, open, onToggle, children
+}: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
   useEffect(() => {
@@ -126,9 +120,7 @@ function LoudAccordion({
         type="button"
         onClick={onToggle}
         style={{
-          width: "100%",
-          textAlign: "left",
-          padding: "14px 16px",
+          width: "100%", textAlign: "left", padding: "14px 16px",
           background: open ? "linear-gradient(180deg, rgba(138,180,255,0.25) 0%, rgba(138,180,255,0.12) 100%)" : "rgba(255,255,255,0.06)",
           border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between",
           fontSize: 16, fontWeight: 700, letterSpacing: 0.2
@@ -280,7 +272,7 @@ function CatGrid({
   );
 }
 
-/* ===== Editable summary (контакты + резная работа) ===== */
+/* ===== Editable summary ===== */
 function EditableOrderSummary() {
   const [draft, setDraft] = useState(() => loadOrderDraft());
   const introState = loadIntroState();
@@ -477,8 +469,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [plateThickness, setPlateThickness] = useState<string>((initialExtras as any)?.plateThickness && thicknessOptions.includes((initialExtras as any)?.plateThickness) ? (initialExtras as any)?.plateThickness : thicknessOptions[0]);
   const [plateOrientation, setPlateOrientation] = useState<string>((initialExtras as any)?.plateOrientation || defaultPlateOrientation);
 
-  // Эпитафия для плиты — теперь с выбором (как в EpitaphStep), храним в одном поле (join с \n\n)
+  // Эпитафия для плиты (строка; внутренняя работа через аккордеон)
   const [plateEpitaph, setPlateEpitaph] = useState<string>((initialExtras as any)?.plateEpitaph || "");
+
   // Выбранные графики на плите
   const [plateIds, setPlateIds] = useState<string[]>(((draft as any)?.extras?.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>(((draft as any)?.extras?.plateGraphicsMeta as Record<string, any>) || {});
@@ -537,7 +530,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   // Список выбранных для вывода (под эскизами)
   const chosenPlateList = useMemo(() => {
-    // Соберём индекс по cats для восстановления meta, если отсутствует
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
       const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
@@ -612,6 +604,15 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       setBusy(false);
     }
   };
+
+  // Липкая кнопка «Вверх»
+  const [showUp, setShowUp] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShowUp(window.scrollY > 240);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <>
@@ -802,18 +803,29 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700 }}>Дополнительно</div>
 
-        {/* Выбрано для плиты — теперь под эскизами, в этом разделе */}
+        {/* Выбрано для плиты — теперь под эскизами, в этом разделе (с возможностью удаления) */}
         {(chosenPlateList.length > 0 || (plateEpitaph || "").trim()) && (
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
             {chosenPlateList.length > 0 && (
               <div style={{ display: "grid", gap: 8, marginBottom: (plateEpitaph || "").trim() ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
-                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
+                  <div
+                    key={`${g.id || g.url || i}`}
+                    style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}
+                  >
                     <Thumb url={g.url} />
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.name || g.id}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => removePlateGraphic(g.id || g.url || "")}
+                      style={glassButtonStyle("nano")}
+                      title="Удалить из плиты"
+                    >
+                      Удалить
+                    </button>
                   </div>
                 ))}
               </div>
@@ -872,6 +884,25 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           {busy ? "Отправляем…" : "Отправить заказ"}
         </button>
       </div>
+
+      {/* Липкая кнопка «Вверх» */}
+      {showUp && (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          style={{
+            ...glassButtonStyle("md"),
+            position: "fixed",
+            right: "calc(16px + env(safe-area-inset-right))",
+            bottom: "calc(16px + env(safe-area-inset-bottom))",
+            zIndex: 1000
+          }}
+          aria-label="Прокрутить вверх"
+          title="Прокрутить вверх"
+        >
+          ↑ Вверх
+        </button>
+      )}
     </>
   );
 }
@@ -913,12 +944,11 @@ function PlateBlock(props: {
   const [graphicsOpen, setGraphicsOpen] = useState(false);
   const [showMoreEpitaphs, setShowMoreEpitaphs] = useState(false);
 
-  // Выбранные эпитафии на плите (внутренне — как список); наружу сохраняем объединённой строкой
+  // Выбранные эпитафии на плите (внутреннее представление — список; наружу собираем строкой \n\n)
   const [plateEpitaphs, setPlateEpitaphs] = useState<string[]>(
     (plateEpitaph || "").trim() ? (plateEpitaph as string).split(/\n{2,}/g) : []
   );
   useEffect(() => {
-    // При изменении списка — складываем одиночной строкой с двойным переносом
     const joined = plateEpitaphs.map((s) => String(s || "").trim()).filter(Boolean).join("\n\n");
     setPlateEpitaph(joined);
   }, [plateEpitaphs, setPlateEpitaph]);
