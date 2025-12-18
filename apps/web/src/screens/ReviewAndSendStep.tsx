@@ -1,16 +1,16 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Что сделано по запросу:
-// - Заголовок всего заказа: «заказ № …» (берём номер из драфта/TopBar), не редактируется.
+// Важно (изменения):
+// - Номер заказа берём из TopBar/intro: loadIntroState().orderNumber (только отображение).
+// - Заголовок заказа: «заказ № …» (некрупно).
 // - Информация о заказчике: Имя, Телефон, Примечание для связи — компактно вверху.
-// - Миниатюра резной работы 100×100, без рамки, на подложке-градиенте с силуэтом (как в эскизе).
-// - Разделы выводятся компактно, с многостолбцовыми сетками при ширине.
-// - Тыльная: блок «Усопшие» скрыт; весь раздел и его эскиз скрываем, если нет выбранных элементов.
-// - Размер и Толщина плиты: добавлен вариант «Свой вариант» с вводом пользовательского значения.
-// - «Выбрано для плиты»: можно удалять элементы.
-// - Липкая навигация с кнопкой «Упрощенный вид».
-// - Упрощенный вид (A4): миниатюры без рамок, прозрачный фон; печать выводит ТОЛЬКО этот лист (один раз).
+// - Миниатюра резной работы 100×100, без рамки, с подложкой-градиентом БЕЗ силуэта (не заливаем по контуру).
+// - Разделы компактные, в несколько столбцов при ширине.
+// - Тыльная: блок «Усопшие» скрыт; раздел и его эскиз тоже скрываем, если на тыльной нет выбрано ничего.
+// - Плита: «Свой вариант» для размера и толщины (ввод произвольного значения).
+// - «Выбрано для плиты»: можно удалять.
+// - Липкая навигация + «Упрощенный вид» (A4) — в печать уходит только этот лист, один раз.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -72,20 +72,8 @@ const personLines = (p: any): string[] => {
 
 /* ===== Липкая навигация ===== */
 function StickyNav({
-  showRear,
-  onGoFront,
-  onGoRear,
-  onGoPreviews,
-  onGoExtras,
-  onSimpleView
-}: {
-  showRear: boolean;
-  onGoFront: () => void;
-  onGoRear: () => void;
-  onGoPreviews: () => void;
-  onGoExtras: () => void;
-  onSimpleView: () => void;
-}) {
+  showRear, onGoFront, onGoRear, onGoPreviews, onGoExtras, onSimpleView
+}: { showRear: boolean; onGoFront: () => void; onGoRear: () => void; onGoPreviews: () => void; onGoExtras: () => void; onSimpleView: () => void; }) {
   return (
     <div style={{ position: "sticky", top: 0, zIndex: 50, background: "rgba(0,0,0,0.92)", backdropFilter: "saturate(120%) blur(8px)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, padding: "8px 10px", margin: "10px 0" }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -124,7 +112,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   );
 }
 
-/* ===== Подложка превью (силуэт всегда) ===== */
+/* ===== Подложка превью (силуэт можно выключать) ===== */
 function supportsMask(): boolean {
   try {
     // @ts-ignore
@@ -135,16 +123,64 @@ function supportsMask(): boolean {
   } catch {}
   return false;
 }
-function Underlay({ itemUrl, mirror = false }: { itemUrl?: string; mirror?: boolean; }) {
+function Underlay({
+  itemUrl,
+  mirror = false,
+  showSilhouette = true
+}: {
+  itemUrl?: string;
+  mirror?: boolean;
+  showSilhouette?: boolean;
+}) {
   const isPng = !!itemUrl && /\.png(\?|#|$)/i.test(itemUrl);
   const canMask = supportsMask();
   return (
     <div aria-hidden style={{ position: "absolute", inset: 0, borderRadius: 10, overflow: "hidden" }}>
+      {/* Градиент — всегда */}
       <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)", zIndex: 0 }} />
-      {itemUrl && (isPng && canMask ? (
-        <div style={{ position: "absolute", inset: 0, background: "rgba(25,25,25,0.9)", WebkitMaskImage: `url(${itemUrl})`, WebkitMaskRepeat: "no-repeat", WebkitMaskPosition: "center", WebkitMaskSize: "contain", maskImage: `url(${itemUrl})`, maskRepeat: "no-repeat", maskPosition: "center", maskSize: "contain", transform: mirror ? "scaleX(-1)" : "none", transformOrigin: "center", zIndex: 1, pointerEvents: "none" }} />
+      {/* Силуэт — опционально */}
+      {showSilhouette && itemUrl && (isPng && canMask ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(25,25,25,0.9)",
+            WebkitMaskImage: `url(${itemUrl})`,
+            WebkitMaskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            WebkitMaskSize: "contain",
+            maskImage: `url(${itemUrl})`,
+            maskRepeat: "no-repeat",
+            maskPosition: "center",
+            maskSize: "contain",
+            transform: mirror ? "scaleX(-1)" : "none",
+            transformOrigin: "center",
+            zIndex: 1,
+            pointerEvents: "none"
+          }}
+        />
       ) : (
-        <img src={itemUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", filter: "grayscale(1) brightness(0) opacity(0.9)", mixBlendMode: "multiply", transform: mirror ? "scaleX(-1)" : "none", transformOrigin: "center", zIndex: 1, pointerEvents: "none" }} draggable={false} />
+        showSilhouette &&
+        itemUrl && (
+          <img
+            src={itemUrl}
+            alt=""
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              filter: "grayscale(1) brightness(0) opacity(0.9)",
+              mixBlendMode: "multiply",
+              transform: mirror ? "scaleX(-1)" : "none",
+              transformOrigin: "center",
+              zIndex: 1,
+              pointerEvents: "none"
+            }}
+            draggable={false}
+          />
+        )
       ))}
     </div>
   );
@@ -166,7 +202,7 @@ function SidePreview({ title, miniUrl, itemUrl, mirror = false, aspect, fallback
     <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
       <div style={{ fontWeight: 700 }}>{title}</div>
       <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || undefined, minHeight: aspect ? undefined : 240 }}>
-        <Underlay itemUrl={itemUrl} mirror={mirror} />
+        <Underlay itemUrl={itemUrl} mirror={mirror} showSilhouette />
         {hasPreview ? (
           <img src={miniUrl!} alt="" style={{ position: "relative", width: "100%", height: "100%", objectFit: "contain", zIndex: 2, display: "block" }} draggable={false} />
         ) : useFallback ? (
@@ -231,12 +267,11 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
     `${(draft?.size?.height && Math.round(draft.size.height / 10)) || "—"}×` +
     `${(draft?.size?.thickness && Math.round(draft.size.thickness / 10)) || "—"} см`;
   const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
-
   const itemUrl = (draft as any)?.item?.url as string | undefined;
 
   return (
     <section style={{ ...glassPanelStyle(), padding: 12 }}>
-      {/* Заголовок всего заказа (не крупно) */}
+      {/* Заголовок заказа */}
       <div style={{ fontSize: 13, opacity: 0.95, marginBottom: 8 }}>заказ № {orderNo || "—"}</div>
 
       {/* Информация о заказчике */}
@@ -246,10 +281,10 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
       </div>
       <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={{ ...inputStyle(), marginBottom: 10 }} />
 
-      {/* Резная работа (миниатюра 100×100, с подложкой-градиентом + силуэтом) и параметры рядом */}
+      {/* Резная работа — мини 100×100, подложка-градиент без силуэта */}
       <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", width: 100, height: 100, borderRadius: 10, overflow: "hidden", background: "transparent" }}>
-          <Underlay itemUrl={itemUrl} />
+          <Underlay itemUrl={itemUrl} showSilhouette={false} />
         </div>
         <div style={{ display: "grid", gap: 4 }}>
           {(draft?.item?.name || draft?.item?.url) && (
@@ -268,19 +303,22 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
-  const intro = loadIntroState();
-
+  const [introState, setIntroState] = useState(() => loadIntroState());
   useEffect(() => {
-    const onUpd = () => setDraft(loadOrderDraft());
-    window.addEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-    window.addEventListener("storage", onUpd);
+    const refresh = () => {
+      setDraft(loadOrderDraft());
+      setIntroState(loadIntroState());
+    };
+    window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+    window.addEventListener("storage", refresh);
+    refresh();
     return () => {
-      window.removeEventListener(DRAFT_UPDATED_EVENT, onUpd as any);
-      window.removeEventListener("storage", onUpd);
+      window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+      window.removeEventListener("storage", refresh);
     };
   }, []);
 
-  const orderNo = String(((draft as any)?.extras?.orderNo || "")).trim(); // номер из драфта/TopBar (не редактируется)
+  const orderNo = String(introState.orderNumber || "").trim(); // номер из TopBar/intro
 
   // IDs секций
   const frontId = "section-front";
@@ -353,6 +391,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [extraBase, setExtraBase] = useState<boolean>(initialBase);
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!initialExtras.flowerbed);
   const [extraPlate, setExtraPlate] = useState<boolean>(!!initialExtras.headstonePlate);
+
   const defaultPlateOrientation = ((draft?.size?.orientation || (draft as any)?.orientation || "vertical").toLowerCase().startsWith("h")) ? "horizontal" : "vertical";
   const sizeOptions = ["100×50 см", "120×60 см", "140×70 см", "Свой вариант"];
   const thicknessOptions = ["5 см", "8 см", "10 см", "Свой вариант"];
@@ -375,7 +414,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const removePlateGraphic = (gid: string) => {
     const idx = plateIds.findIndex((x) => x === gid);
     if (idx === -1) return;
-    const next = plateIds.slice(); next.splice(idx, 1);
+    const next = plateIds.slice();
+    next.splice(idx, 1);
     setPlateIds(next);
   };
 
@@ -387,8 +427,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      setCatsLoading(true);
-      setCatsError("");
+      setCatsLoading(true); setCatsError("");
       try {
         const data = await fetchCatalog("graphics");
         const root = (data as any)?.categories || data;
@@ -400,9 +439,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         if (alive) setCatsLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
   useEffect(() => {
     if (!cats.length) return;
@@ -449,14 +486,12 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   };
   useEffect(() => () => { if (orderNotesTimerRef.current) window.clearTimeout(orderNotesTimerRef.current); }, []);
 
-  // Сохранение extras
+  // Сохранение extras (без introState)
   useEffect(() => {
     const prev = loadOrderDraft();
     const extras: any = {
       ...(prev as any).extras,
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
+      base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate,
       plateSize: extraPlate ? plateSize : undefined,
       plateCustomSize: extraPlate && plateSize === "Свой вариант" ? (plateCustomSize || undefined) : undefined,
       plateThickness: extraPlate ? plateThickness : undefined,
@@ -479,12 +514,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     if (hasPrintedRef.current) return;
     hasPrintedRef.current = true;
     window.print();
-    setTimeout(() => { hasPrintedRef.current = false; }, 1500); // защита от повторов
+    setTimeout(() => { hasPrintedRef.current = false; }, 1500);
   };
 
   /* ===== Отправка ===== */
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>("");
+  const intro = introState; // для удобства
   const handleSend = async () => {
     setBusy(true);
     setErr("");
@@ -616,7 +652,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       ) : null}
 
       {/* Тыльная (без «Усопшие») */}
-      {(rearHasContent) ? (
+      {rearHasContent ? (
         <section id={rearId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
 
@@ -715,10 +751,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         {/* Плита */}
         <PlateBlock
           extraPlate={extraPlate} setExtraPlate={setExtraPlate}
-          plateSize={plateSize} setPlateSize={setPlateSize}
-          plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
-          plateThickness={plateThickness} setPlateThickness={setPlateThickness}
-          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
+          plateSize={plateSize} setPlateSize={setPlateSize} plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
+          plateThickness={plateThickness} setPlateThickness={setPlateThickness} plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
           plateOrientation={plateOrientation} setPlateOrientation={setPlateOrientation}
           plateEpitaph={plateEpitaph} setPlateEpitaph={setPlateEpitaph}
           catsLoading={catsLoading} catsError={catsError} cats={cats}
@@ -742,7 +776,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Упрощенный вид */}
+      {/* Упрощенный вид (печать только его) */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -1157,7 +1191,7 @@ function PrintOverlay({
         </div>
       </div>
 
-      {/* Печать: только этот оверлей, один лист */}
+      {/* Печать только этого листа */}
       <style>{`
         @page { size: A4; margin: 12mm; }
         @media print {
