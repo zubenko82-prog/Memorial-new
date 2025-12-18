@@ -1,17 +1,16 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Новое:
-// - Информация о заказчике компактно: (Имя · Телефон · № заказа из TopBar — только отображение), ниже — резная работа.
-// - Миниатюра резной работы 120×120, без рамки, прозрачный фон.
-// - В разделах используем многостолбцовые сетки (auto-fit).
-// - Тыльная: блок «Усопшие» скрыт; сам раздел и его эскиз скрываем, если нет выбранных элементов.
-// - Силуэт изделия всегда виден в превью.
-// - Блок «Лицевая» выделен цветом.
-// - Размер надгробной плиты: добавлен «Свой вариант» (кастомный ввод). Для толщины — тоже «Свой вариант».
+// Что сделано по запросу:
+// - Заголовок всего заказа: «заказ № …» (берём номер из драфта/TopBar), не редактируется.
+// - Информация о заказчике: Имя, Телефон, Примечание для связи — компактно вверху.
+// - Миниатюра резной работы 100×100, без рамки, на подложке-градиенте с силуэтом (как в эскизе).
+// - Разделы выводятся компактно, с многостолбцовыми сетками при ширине.
+// - Тыльная: блок «Усопшие» скрыт; весь раздел и его эскиз скрываем, если нет выбранных элементов.
+// - Размер и Толщина плиты: добавлен вариант «Свой вариант» с вводом пользовательского значения.
 // - «Выбрано для плиты»: можно удалять элементы.
 // - Липкая навигация с кнопкой «Упрощенный вид».
-// - Упрощенный вид (A4): миниатюры без рамок, прозрачный фон, печать выводит ТОЛЬКО упрощенный вид.
+// - Упрощенный вид (A4): миниатюры без рамок, прозрачный фон; печать выводит ТОЛЬКО этот лист (один раз).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -44,7 +43,6 @@ function inputStyle(): React.CSSProperties {
 }
 function smallText(): React.CSSProperties { return { opacity: 0.8, fontSize: 12 }; }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
-const dividerLine: React.CSSProperties = { borderTop: "1px solid rgba(255,255,255,0.12)", margin: "10px 0" };
 function chip(txt: string, accent = false) {
   return (
     <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 999, fontSize: 12, background: accent ? "rgba(138,180,255,0.28)" : "rgba(138,180,255,0.18)", border: accent ? "1px solid rgba(138,180,255,0.65)" : "1px solid rgba(138,180,255,0.35)", color: "#dbe7ff", whiteSpace: "nowrap" }}>
@@ -74,8 +72,20 @@ const personLines = (p: any): string[] => {
 
 /* ===== Липкая навигация ===== */
 function StickyNav({
-  showRear, onGoFront, onGoRear, onGoPreviews, onGoExtras, onSimpleView
-}: { showRear: boolean; onGoFront: () => void; onGoRear: () => void; onGoPreviews: () => void; onGoExtras: () => void; onSimpleView: () => void; }) {
+  showRear,
+  onGoFront,
+  onGoRear,
+  onGoPreviews,
+  onGoExtras,
+  onSimpleView
+}: {
+  showRear: boolean;
+  onGoFront: () => void;
+  onGoRear: () => void;
+  onGoPreviews: () => void;
+  onGoExtras: () => void;
+  onSimpleView: () => void;
+}) {
   return (
     <div style={{ position: "sticky", top: 0, zIndex: 50, background: "rgba(0,0,0,0.92)", backdropFilter: "saturate(120%) blur(8px)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, padding: "8px 10px", margin: "10px 0" }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -116,8 +126,10 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
 
 /* ===== Подложка превью (силуэт всегда) ===== */
 function supportsMask(): boolean {
-  try { // @ts-ignore
-    if (typeof CSS !== "undefined" && CSS.supports) { // @ts-ignore
+  try {
+    // @ts-ignore
+    if (typeof CSS !== "undefined" && CSS.supports) {
+      // @ts-ignore
       return CSS.supports("mask-image", 'url("")') || CSS.supports("-webkit-mask-image", 'url("")');
     }
   } catch {}
@@ -138,14 +150,14 @@ function Underlay({ itemUrl, mirror = false }: { itemUrl?: string; mirror?: bool
   );
 }
 
-/* ===== Thumb (универсальная) ===== */
+/* ===== Универсальный Thumb ===== */
 const Thumb = ({ url, alt = "", size = 60, borderless = false }: { url?: string; alt?: string; size?: number; borderless?: boolean }) => (
   <div style={{ width: size, height: size, borderRadius: 10, border: borderless ? "none" : "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ ...smallText() }}>нет</div>}
   </div>
 );
 
-/* ===== SidePreview (с fallback SketchTemplate) ===== */
+/* ===== SidePreview ===== */
 type TemplateFallback = { item: any; peopleBlocks: { id: string; lines: string[]; photo?: string | null }[]; crosses: any[]; others: any[]; epitaphs: string[]; carvingOpacity?: number; };
 function SidePreview({ title, miniUrl, itemUrl, mirror = false, aspect, fallbackTemplate }: { title: string; miniUrl?: string | null; itemUrl?: string; mirror?: boolean; aspect?: string; fallbackTemplate?: TemplateFallback; }) {
   const hasPreview = typeof miniUrl === "string" && miniUrl.length > 0;
@@ -169,7 +181,7 @@ function SidePreview({ title, miniUrl, itemUrl, mirror = false, aspect, fallback
   );
 }
 
-/* ===== Grid каталога плиты ===== */
+/* ===== Каталог плиты (Grid) ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
@@ -220,25 +232,26 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
     `${(draft?.size?.thickness && Math.round(draft.size.thickness / 10)) || "—"} см`;
   const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
 
+  const itemUrl = (draft as any)?.item?.url as string | undefined;
+
   return (
     <section style={{ ...glassPanelStyle(), padding: 12 }}>
-      {/* Строка заказчика (имя · телефон · № заказа) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "center", marginBottom: 10 }}>
+      {/* Заголовок всего заказа (не крупно) */}
+      <div style={{ fontSize: 13, opacity: 0.95, marginBottom: 8 }}>заказ № {orderNo || "—"}</div>
+
+      {/* Информация о заказчике */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
         <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
-        <div style={{ ...inputStyle(), display: "flex", alignItems: "center", border: "1px dashed rgba(255,255,255,0.25)" }}>
-          № заказа: <span style={{ marginLeft: 6, fontWeight: 700 }}>{orderNo || "—"}</span>
-        </div>
       </div>
-      {/* Примечание для связи */}
-      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={inputStyle()} />
+      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={{ ...inputStyle(), marginBottom: 10 }} />
 
-      {/* Резная работа + параметры (миниатюра 120×120 без рамки, прозрачный фон) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "center", marginTop: 10 }}>
-        <div style={{ width: 120, height: 120, borderRadius: 10, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-          {draft?.item?.url ? <img src={draft.item.url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} draggable={false} /> : <div style={{ ...smallText() }}>нет изображения</div>}
+      {/* Резная работа (миниатюра 100×100, с подложкой-градиентом + силуэтом) и параметры рядом */}
+      <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 10, alignItems: "center" }}>
+        <div style={{ position: "relative", width: 100, height: 100, borderRadius: 10, overflow: "hidden", background: "transparent" }}>
+          <Underlay itemUrl={itemUrl} />
         </div>
-        <div style={{ display: "grid", gap: 6 }}>
+        <div style={{ display: "grid", gap: 4 }}>
           {(draft?.item?.name || draft?.item?.url) && (
             <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}
@@ -267,7 +280,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     };
   }, []);
 
-  const orderNo = String(((draft as any)?.extras?.orderNo || "")).trim(); // из TopBar/драфта, не редактируется здесь
+  const orderNo = String(((draft as any)?.extras?.orderNo || "")).trim(); // номер из драфта/TopBar (не редактируется)
 
   // IDs секций
   const frontId = "section-front";
@@ -321,8 +334,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const frontOthers = useMemo(() => frontUnique.filter((g: any) => !(isCrossCategoryName(g?.catName) || isCrossCategoryName(g?.catSlug))), [frontUnique]);
   const frontHasContent = frontPersons.length > 0 || frontUnique.length > 0 || frontEpitaphs.length > 0 || !!frontWishes;
 
-  /* ——— Тыльная ——— (усопших НЕ показываем) */
-  const rearPeople = ((((draft as any)?.editorBack?.people as any[]) || []).filter(Boolean)) as any[];
+  /* ——— Тыльная (усопших НЕ показываем) ——— */
   const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCounts: Record<string, number> = useMemo(() => {
@@ -375,7 +387,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      setCatsLoading(true); setCatsError("");
+      setCatsLoading(true);
+      setCatsError("");
       try {
         const data = await fetchCatalog("graphics");
         const root = (data as any)?.categories || data;
@@ -387,7 +400,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         if (alive) setCatsLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
   useEffect(() => {
     if (!cats.length) return;
@@ -404,11 +419,12 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
-      const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
-        const id = String(it.id || it.relPath || it.url || it.name || "");
-        if (!id) return;
-        if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
-      });
+      const collect = (arr: any[]) =>
+        (arr || []).forEach((it: any) => {
+          const id = String(it.id || it.relPath || it.url || it.name || "");
+          if (!id) return;
+          if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
+        });
       collect(cat.items || []);
       (cat.children || []).forEach((sub: any) => collect(sub.items || []));
     });
@@ -456,11 +472,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   /* ===== Упрощенный вид (A4) ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
-  const openSimple = () => setSimpleOpen(true);
+  const hasPrintedRef = useRef(false);
+  const openSimple = () => { setSimpleOpen(true); hasPrintedRef.current = false; };
   const closeSimple = () => setSimpleOpen(false);
   const printSimple = () => {
-    // печатаем только упрощенный вид
+    if (hasPrintedRef.current) return;
+    hasPrintedRef.current = true;
     window.print();
+    setTimeout(() => { hasPrintedRef.current = false; }, 1500); // защита от повторов
   };
 
   /* ===== Отправка ===== */
@@ -525,7 +544,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       <EditableOrderSummary orderNo={orderNo} />
 
       {/* Лицевая */}
-      {frontHasContent && (
+      {(frontPersons.length || frontUnique.length || frontEpitaphs.length || frontWishes) ? (
         <section id={frontId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10, borderColor: "rgba(138,180,255,0.55)" }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая", true)}</div>
 
@@ -594,10 +613,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           )}
         </section>
-      )}
+      ) : null}
 
-      {/* Тыльная — без «Усопшие» */}
-      {rearHasContent && (
+      {/* Тыльная (без «Усопшие») */}
+      {(rearHasContent) ? (
         <section id={rearId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
 
@@ -639,7 +658,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           )}
         </section>
-      )}
+      ) : null}
 
       {/* Эскизы */}
       <section id={previewsId} style={{ ...glassPanelStyle(), padding: 12 }}>
@@ -693,34 +712,23 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           </div>
         </div>
 
-        {/* Плита: «Свой вариант» для размера и толщины + 2 аккордеона */}
+        {/* Плита */}
         <PlateBlock
-          extraPlate={extraPlate}
-          setExtraPlate={setExtraPlate}
-          plateSize={plateSize}
-          setPlateSize={setPlateSize}
-          plateCustomSize={plateCustomSize}
-          setPlateCustomSize={setPlateCustomSize}
-          plateThickness={plateThickness}
-          setPlateThickness={setPlateThickness}
-          plateCustomThickness={plateCustomThickness}
-          setPlateCustomThickness={setPlateCustomThickness}
-          plateOrientation={plateOrientation}
-          setPlateOrientation={setPlateOrientation}
-          plateEpitaph={plateEpitaph}
-          setPlateEpitaph={setPlateEpitaph}
-          catsLoading={catsLoading}
-          catsError={catsError}
-          cats={cats}
-          catOpen={catOpen}
-          setCatOpen={setCatOpen}
-          addPlateGraphic={addPlateGraphic}
-          removePlateGraphic={removePlateGraphic}
+          extraPlate={extraPlate} setExtraPlate={setExtraPlate}
+          plateSize={plateSize} setPlateSize={setPlateSize}
+          plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
+          plateThickness={plateThickness} setPlateThickness={setPlateThickness}
+          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
+          plateOrientation={plateOrientation} setPlateOrientation={setPlateOrientation}
+          plateEpitaph={plateEpitaph} setPlateEpitaph={setPlateEpitaph}
+          catsLoading={catsLoading} catsError={catsError} cats={cats}
+          catOpen={catOpen} setCatOpen={setCatOpen}
+          addPlateGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic}
           plateIds={plateIds}
         />
       </section>
 
-      {/* Примечание к заказу (общее) */}
+      {/* Примечание к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
         <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
@@ -734,7 +742,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Упрощенный вид (печать только его) */}
+      {/* Упрощенный вид */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -803,8 +811,6 @@ function PlateBlock(props: {
 
   const [graphicsOpen, setGraphicsOpen] = useState(false);
   const [showMoreEpitaphs, setShowMoreEpitaphs] = useState(false);
-
-  // Внутренний список эпитафий (join -> строка)
   const [plateEpitaphs, setPlateEpitaphs] = useState<string[]>((plateEpitaph || "").trim() ? (plateEpitaph as string).split(/\n{2,}/g) : []);
   useEffect(() => { setPlateEpitaph(plateEpitaphs.map((s) => String(s || "").trim()).filter(Boolean).join("\n\n")); }, [plateEpitaphs, setPlateEpitaph]);
 
@@ -827,7 +833,7 @@ function PlateBlock(props: {
 
       {extraPlate && (
         <>
-          {/* Размер (со «Свой вариант») */}
+          {/* Размер */}
           <div style={{ display: "grid", gap: 8 }}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Размер</div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -843,7 +849,7 @@ function PlateBlock(props: {
             )}
           </div>
 
-          {/* Толщина (со «Свой вариант») */}
+          {/* Толщина */}
           <div style={{ display: "grid", gap: 8 }}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Толщина</div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -872,7 +878,7 @@ function PlateBlock(props: {
             </div>
           </div>
 
-          {/* Эпитафия (как в шаге Эпитафии) */}
+          {/* Эпитафия */}
           <LoudAccordion title="Эпитафия на надгробной плите" open={true} onToggle={() => null}>
             <div style={{ display: "grid", gap: 10 }}>
               <div>
@@ -923,7 +929,7 @@ function PlateBlock(props: {
             </div>
           </LoudAccordion>
 
-          {/* Графика на плите */}
+          {/* Графика */}
           <LoudAccordion title="Графика на надгробной плите" open={graphicsOpen} onToggle={() => setGraphicsOpen((v) => !v)}>
             {catsLoading && <div>Загрузка каталога…</div>}
             {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
@@ -967,7 +973,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Упрощенный вид (A4) — печать ТОЛЬКО его ===== */
+/* ===== Упрощенный вид (A4) — печать только этого листа ===== */
 function PrintOverlay({
   onClose, onPrint, orderNo, name, phone, itemName, dimsText, front, rear, extras, plate, notes, previews
 }: {
@@ -979,25 +985,31 @@ function PrintOverlay({
   plate: { size?: string; thickness?: string; orientation?: string; graphics: { name: string; url: string }[]; epitaph?: string };
   notes?: string; previews: { front?: string; back?: string };
 }) {
+  const [printing, setPrinting] = useState(false);
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
       <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "12mm" }}>
         {/* Управление (скрывается при печати) */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
           <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
-          <button type="button" onClick={onPrint} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Печать</button>
+          <button type="button" onClick={() => { if (!printing) { setPrinting(true); onPrint(); setTimeout(() => setPrinting(false), 1500); } }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }} disabled={printing}>
+            {printing ? "Печать…" : "Печать"}
+          </button>
         </div>
 
         {/* A4 контент */}
         <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 12, lineHeight: 1.25 }}>
-          {/* Шапка */}
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>
-            {name || "—"} · {phone || "—"} · № {orderNo || "—"}
-          </div>
+          {/* Заголовок всего заказа */}
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
           <hr />
-          {/* Резная работа + параметры */}
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 8, alignItems: "center", marginBottom: 6 }}>
-            <div style={{ width: 120, height: 120, background: "transparent", border: "none", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+
+          {/* Шапка: заказчик */}
+          <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
+          <hr />
+
+          {/* Резная работа + параметры (миниатюра — без рамок, прозрачный фон; берём фронт превью как мини) */}
+          <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 8, alignItems: "center", marginBottom: 6 }}>
+            <div style={{ width: 100, height: 100, background: "transparent", border: "none", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
               {previews.front ? <img src={previews.front} alt="" style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto" }} /> : <div style={{ fontSize: 12, color: "#555" }}>нет</div>}
             </div>
             <div>
@@ -1006,19 +1018,16 @@ function PrintOverlay({
             </div>
           </div>
           <hr />
+
           {/* Лицевая */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
-            {/* Усопшие (миниатюры, если есть фото) */}
+
             {front.persons.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 6 }}>
                 {front.persons.map((p, i) => (
                   <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "32px 1fr" : "1fr", gap: 6, alignItems: "center" }}>
-                    {p.photo && (
-                      <div style={{ width: 32, height: 32, background: "transparent", borderRadius: 6, overflow: "hidden" }}>
-                        <img src={p.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      </div>
-                    )}
+                    {p.photo && <img src={p.photo} alt="" style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 6 }} />}
                     <div>
                       {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
                       {p.fio2 && <div>{p.fio2}</div>}
@@ -1028,7 +1037,7 @@ function PrintOverlay({
                 ))}
               </div>
             )}
-            {/* Графика */}
+
             {front.graphics.length > 0 && (
               <div style={{ marginTop: 4 }}>
                 <div style={{ fontWeight: 600 }}>Графика:</div>
@@ -1042,13 +1051,14 @@ function PrintOverlay({
                 </div>
               </div>
             )}
-            {/* Эпитафии */}
+
             {front.epitaphs.length > 0 && (
               <div style={{ marginTop: 4 }}>
                 <div style={{ fontWeight: 600 }}>Эпитафии:</div>
                 {front.epitaphs.map((t, i) => (<div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>))}
               </div>
             )}
+
             {front.wishes && (
               <div style={{ marginTop: 4 }}>
                 <div style={{ fontWeight: 600 }}>Пожелания:</div>
@@ -1057,12 +1067,13 @@ function PrintOverlay({
             )}
           </div>
           <hr />
-          {/* Тыльная */}
+
+          {/* Тыльная (если есть) */}
           {rear && (
             <>
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
-                {/* Графика */}
+
                 {rear.graphics.length > 0 && (
                   <div>
                     <div style={{ fontWeight: 600 }}>Графика:</div>
@@ -1076,13 +1087,14 @@ function PrintOverlay({
                     </div>
                   </div>
                 )}
-                {/* Эпитафии */}
+
                 {rear.epitaphs.length > 0 && (
                   <div style={{ marginTop: 4 }}>
                     <div style={{ fontWeight: 600 }}>Эпитафии:</div>
                     {rear.epitaphs.map((t, i) => (<div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>))}
                   </div>
                 )}
+
                 {rear.wishes && (
                   <div style={{ marginTop: 4 }}>
                     <div style={{ fontWeight: 600 }}>Пожелания:</div>
@@ -1093,12 +1105,14 @@ function PrintOverlay({
               <hr />
             </>
           )}
+
           {/* Дополнительно */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
             <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
           </div>
           <hr />
+
           {/* Плита */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
@@ -1124,13 +1138,15 @@ function PrintOverlay({
             )}
           </div>
           <hr />
+
           {/* Примечания */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
             <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
           </div>
           <hr />
-          {/* Эскизы (низ) — миниатюры без рамок */}
+
+          {/* Эскизы (низ) */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: previews.back ? "1fr 1fr" : "1fr", gap: 8 }}>
@@ -1141,12 +1157,13 @@ function PrintOverlay({
         </div>
       </div>
 
-      {/* Печать: только этот оверлей */}
+      {/* Печать: только этот оверлей, один лист */}
       <style>{`
+        @page { size: A4; margin: 12mm; }
         @media print {
           body * { visibility: hidden !important; }
           #print-root, #print-root * { visibility: visible !important; }
-          #print-root { position: fixed; inset: 0; width: 210mm; height: auto; max-height: none; padding: 12mm; }
+          #print-root { position: fixed; inset: 0; width: 210mm; height: auto; max-height: none; padding: 12mm; box-shadow: none !important; }
           [role="dialog"] { background: transparent !important; }
           button { display: none !important; }
         }
