@@ -5,14 +5,14 @@
 // - Номер заказа берём из TopBar/intro: loadIntroState().orderNumber — только отображение (заголовок «заказ № …»).
 // - Информация о заказчике (Имя, Телефон, Примечание для связи) — компактно вверху.
 // - Миниатюра резной работы как обычная Thumb (без спец‑подложки).
-// - Основные разделы «Лицевая/Тыльная» сверстаны, как в упрощённом виде: 3 колонки (1. Усопшие, 2. Графика, 3. Эпитафии). В обычном виде — с миниатюрами.
+// - Основные разделы «Лицевая/Тыльная»: 3 колонки (1. Усопшие, 2. Графика, 3. Эпитафии). В обычном виде — с миниатюрами.
 // - Тыльная: «Усопшие» скрыты (колонка = «—»). Если тыльная пуста — скрываем раздел и её эскиз.
-// - Эскиз тыльной: отражён по горизонтали; непрозрачные области залиты #282828, контур подсвечен.
+// - Эскиз тыльной: отражён по горизонтали; непрозрачные области залиты #282828, контур подсвечен (силуэт виден).
 // - Плита: поддержка «Свой вариант» для размера и толщины.
 // - «Выбрано для плиты»: возможность удалять элементы.
-// - Над кнопками добавлено пояснение: «Если не нашли нужного…».
-// - Упрощённый вид (A4): без миниатюр (кроме фото усопших), 3 колонки; внизу — ЭСКИЗЫ (показываем), при печати масштабируем, чтобы влезло на один лист.
-// - В печать уходит только упрощённый вид.
+// - Над кнопками — пояснение: «Если не нашли нужного…».
+// - Упрощённый вид (A4): без миниатюр графики (кроме фото усопших), 3 колонки; внизу — ЭСКИЗЫ, при печати масштабируем, чтобы влезло на 1 лист.
+// - Печать: только упрощённый вид, поля 5 мм со всех сторон, пытаемся убрать хедеры/футеры браузера через @page (на практике отключаются в диалоге печати).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -840,12 +840,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     try {
       const el = document.getElementById("print-root");
       if (el) {
-        const a4HeightPx = 1122; // ~297мм при 96dpi
-        const marginPx = Math.round(12 * 3.78); // 12мм
+        // Расчёт по A4 при ~96dpi
+        const a4HeightPx = 1122; // 297мм
+        const marginPx = Math.round(5 * 3.78); // 5мм
         const available = a4HeightPx - marginPx * 2;
         const h = el.scrollHeight;
         if (h > available) {
-          const scale = Math.max(0.6, Math.min(1, available / h));
+          const scale = Math.max(0.5, Math.min(1, available / h));
           (el as HTMLElement).style.transformOrigin = "top left";
           (el as HTMLElement).style.transform = `scale(${scale})`;
           setTimeout(() => {
@@ -853,8 +854,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             setTimeout(() => {
               (el as HTMLElement).style.transform = "";
               hasPrintedRef.current = false;
-            }, 300);
-          }, 100);
+            }, 200);
+          }, 50);
           hasPrintedRef.current = true;
           return;
         }
@@ -864,7 +865,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     window.print();
     setTimeout(() => {
       hasPrintedRef.current = false;
-    }, 900);
+    }, 600);
   };
 
   /* ===== Отправка ===== */
@@ -1014,7 +1015,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           </div>
 
-          {/* Пожелания (общим блоком) */}
+          {/* Пожелания */}
           {frontWishes && (
             <div style={{ ...sectionBox }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
@@ -1203,7 +1204,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </button>
       </div>
 
-      {/* Упрощенный вид (с ЭСКИЗАМИ внизу) */}
+      {/* Упрощенный вид (печатаем только его) */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -1227,7 +1228,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             persons: frontPersons.map((p: any) => ({
               id: p.id,
               fio1: (p.lastName || "").trim(),
-              fio2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
+              fio2: [p.firstName, p.middleName]
+                .map((s: string) => (s || "").trim())
+                .filter(Boolean)
+                .join(" "),
               dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
               photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || ""
             })),
@@ -1532,7 +1536,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Упрощённый вид (A4) — 3 колонки + ЭСКИЗЫ ===== */
+/* ===== Упрощённый вид (A4) — 3 колонки + ЭСКИЗЫ, поля 5мм, без хедеров/футеров ===== */
 function PrintOverlay({
   onClose,
   onPrint,
@@ -1595,7 +1599,7 @@ function PrintOverlay({
           overflow: "auto",
           borderRadius: 8,
           boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
-          padding: "12mm"
+          padding: "5mm" /* печатные поля 5 мм */
         }}
       >
         {/* Управление */}
@@ -1609,7 +1613,7 @@ function PrintOverlay({
               if (!printing) {
                 setPrinting(true);
                 onPrint();
-                setTimeout(() => setPrinting(false), 900);
+                setTimeout(() => setPrinting(false), 600);
               }
             }}
             style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}
@@ -1754,7 +1758,7 @@ function PrintOverlay({
           </div>
           <hr />
 
-          {/* Эскизы (в упрощенном виде показываем) */}
+          {/* Эскизы */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: previews.back ? "1fr 1fr" : "1fr", gap: 8 }}>
@@ -1769,13 +1773,32 @@ function PrintOverlay({
         </div>
       </div>
 
-      {/* Печать только этого листа */}
+      {/* Печать: поля 5мм, попытка убрать хедеры/футеры, печатаем только один лист (масштабируем) */}
       <style>{`
-        @page { size: A4; margin: 12mm; }
+        @page {
+          size: A4;
+          margin: 5mm;
+          /* Попытка скрыть номера страниц/URL/дату — поддержка зависит от браузера */
+          @top-left { content: '' }
+          @top-center { content: '' }
+          @top-right { content: '' }
+          @bottom-left { content: '' }
+          @bottom-center { content: '' }
+          @bottom-right { content: '' }
+        }
         @media print {
           body * { visibility: hidden !important; }
           #print-root, #print-root * { visibility: visible !important; }
-          #print-root { position: fixed; inset: 0; width: 210mm; height: auto; max-height: none; padding: 12mm; box-shadow: none !important; }
+          #print-root {
+            position: fixed;
+            inset: 0;
+            width: 210mm;
+            height: auto;
+            max-height: none;
+            padding: 5mm;
+            box-shadow: none !important;
+            transform-origin: top left;
+          }
           [role="dialog"] { background: transparent !important; }
           button { display: none !important; }
         }
