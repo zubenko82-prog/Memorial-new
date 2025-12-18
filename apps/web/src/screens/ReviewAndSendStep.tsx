@@ -1688,7 +1688,7 @@ function PrintOverlay({
                       <div>
                         {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
                         {p.fio2 && <div>{p.fio2}</div>}
-                        {p.dates && <div>{п.dates}</div>}
+                        {p.dates && <div>{p.dates}</div>}
                       </div>
                     </div>
                   ))
