@@ -7,12 +7,12 @@
 // - Миниатюра резной работы как обычная Thumb (без спец‑подложки).
 // - Основные разделы «Лицевая/Тыльная»: 3 колонки (1. Усопшие, 2. Графика, 3. Эпитафии). В обычном виде — с миниатюрами.
 // - Тыльная: «Усопшие» скрыты (колонка = «—»). Если тыльная пуста — скрываем раздел и её эскиз.
-// - Эскиз тыльной: отражён по горизонтали; непрозрачные области залиты #282828, контур подсвечен (силуэт виден).
+// - Эскиз тыльной: отражён по горизонтали, без контура.
 // - Плита: поддержка «Свой вариант» для размера и толщины.
-// - «Выбрано для плиты»: возможность удалять элементы.
+// - «Выбрано для плиты»: возможность удалять элементы графики и отдельные эпитафии; если чекбокс «Надгробная плита» снят — блок прячем (данные сохраняем, при повторном включении показываем). В упрощённом виде — «нет».
 // - Над кнопками — пояснение: «Если не нашли нужного…».
 // - Упрощённый вид (A4): без миниатюр графики (кроме фото усопших), 3 колонки; внизу — ЭСКИЗЫ, при печати масштабируем, чтобы влезло на 1 лист.
-// - Печать: только упрощённый вид, поля 5 мм со всех сторон, пытаемся убрать хедеры/футеры браузера через @page (на практике отключаются в диалоге печати).
+// - Печать: только упрощённый вид, поля 5 мм со всех сторон, попытка убрать хедеры/футеры браузера через @page.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -233,7 +233,7 @@ function LoudAccordion({
   );
 }
 
-/* ===== Подложка превью (rear: заливка #282828 + контур, mirror) ===== */
+/* ===== Подложка превью (rear: заливка #282828, mirror, без контура) ===== */
 function supportsMask(): boolean {
   try {
     // @ts-ignore
@@ -268,9 +268,7 @@ function Underlay({
     transformOrigin: "center",
     zIndex: 1,
     pointerEvents: "none",
-    filter: outline
-      ? "drop-shadow(0 0 2px rgba(0,0,0,0.9)) drop-shadow(0 0 1px rgba(0,0,0,0.9))"
-      : "none"
+    filter: outline ? "drop-shadow(0 0 2px rgba(0,0,0,0.9)) drop-shadow(0 0 1px rgba(0,0,0,0.9))" : "none"
   };
 
   return (
@@ -312,7 +310,7 @@ function Underlay({
               width: "100%",
               height: "100%",
               objectFit: "contain",
-              filter: `${outline ? "drop-shadow(0 0 2px rgba(0,0,0,0.9)) drop-shadow(0 0 1px rgba(0,0,0,0.9)) " : ""}grayscale(1) brightness(0)`,
+              filter: `grayscale(1) brightness(0)`,
               opacity: 0.88,
               mixBlendMode: "multiply"
             }}
@@ -394,7 +392,7 @@ function SidePreview({
           mirror={rear}
           showSilhouette
           fillColor={rear ? "#282828" : "rgba(25,25,25,0.9)"}
-          outline={rear}
+          outline={false /* убрали контур на тыльной стороне */}
         />
         {hasPreview ? (
           <img
@@ -804,23 +802,30 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   };
   useEffect(() => () => { if (orderNotesTimerRef.current) window.clearTimeout(orderNotesTimerRef.current); }, []);
 
-  // Сохранение extras
+  // Сохранение extras (важно: сохраняем выбранные элементы плиты даже при снятом чекбоксе)
   useEffect(() => {
     const prev = loadOrderDraft();
+    const prevExtras = ((prev as any).extras || {}) as any;
+
     const extras: any = {
-      ...(prev as any).extras,
+      ...prevExtras,
       base: extraBase,
       flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateCustomSize: extraPlate && plateSize === "Свой вариант" ? (plateCustomSize || undefined) : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateCustomThickness: extraPlate && plateThickness === "Свой вариант" ? (plateCustomThickness || undefined) : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph?.trim() || undefined) : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : undefined,
-      plateGraphicsMeta: extraPlate ? plateMeta : undefined
+      headstonePlate: extraPlate
     };
+
+    if (extraPlate) {
+      extras.plateSize = plateSize;
+      extras.plateCustomSize = plateSize === "Свой вариант" ? (plateCustomSize || undefined) : prevExtras.plateCustomSize;
+      extras.plateThickness = plateThickness;
+      extras.plateCustomThickness = plateThickness === "Свой вариант" ? (plateCustomThickness || undefined) : prevExtras.plateCustomThickness;
+      extras.plateOrientation = plateOrientation;
+      extras.plateEpitaph = (plateEpitaph || "").trim() || undefined;
+      extras.plateGraphicsIds = plateIds;
+      extras.plateGraphicsMeta = plateMeta;
+    }
+    // если extraPlate=false, НЕ затираем ранее выбранные элементы (plate* поля оставляем как в prevExtras)
+
     saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
@@ -926,6 +931,27 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   };
 
+  // Удаление одной эпитафии из выбранных (в блоке «Выбрано для плиты»)
+  const deletePlateEpitaphAt = (idx: number) => {
+    const arr = (plateEpitaph || "")
+      .split(/\n{2,}/g)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (idx < 0 || idx >= arr.length) return;
+    arr.splice(idx, 1);
+    setPlateEpitaph(arr.join("\n\n"));
+  };
+
+  // Эпитафии, разбитые для отображения/удаления
+  const plateEpitaphList = useMemo(
+    () =>
+      (plateEpitaph || "")
+        .split(/\n{2,}/g)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [plateEpitaph]
+  );
+
   return (
     <>
       {/* Навигация */}
@@ -941,7 +967,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Информация о заказчике + Резная работа */}
       <EditableOrderSummary orderNo={orderNo} />
 
-      {/* Лицевая — 3 колонки с миниатюрами */}
+      {/* Лицевая — 3 колонки */}
       {(frontPersons.length || frontUnique.length || frontEpitaphs.length || frontWishes) ? (
         <section id={frontId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12, borderColor: "rgba(138,180,255,0.55)" }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1099,11 +1125,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       <section id={extrasId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700 }}>Дополнительно</div>
 
-        {(chosenPlateList.length > 0 || (plateEpitaph || "").trim()) && (
+        {/* ВАЖНО: блок «Выбрано для плиты» показываем ТОЛЬКО если чекбокс «Надгробная плита» активен */}
+        {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
+
+            {/* Выбранные графики */}
             {chosenPlateList.length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: (plateEpitaph || "").trim() ? 8 : 0 }}>
+              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
@@ -1117,11 +1146,19 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 ))}
               </div>
             )}
-            {(plateEpitaph || "").trim() && (
-              <AccentBox>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафия</div>
-                <div style={{ whiteSpace: "pre-wrap" }}>{(plateEpitaph || "").trim()}</div>
-              </AccentBox>
+
+            {/* Выбранные эпитафии с кнопками «Удалить» */}
+            {plateEpitaphList.length > 0 && (
+              <div style={{ display: "grid", gap: 6 }}>
+                {plateEpitaphList.map((t, idx) => (
+                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">
+                      Удалить
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -1140,7 +1177,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           </div>
         </div>
 
-        {/* Плита */}
+        {/* Плита (настройки сохраняются даже при отключении чекбокса) */}
         <PlateBlock
           extraPlate={extraPlate}
           setExtraPlate={setExtraPlate}
@@ -1256,8 +1293,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           plate={{
             size: plateSize === "Свой вариант" ? (plateCustomSize || "Свой вариант") : plateSize,
             thickness: plateThickness === "Свой вариант" ? (plateCustomThickness || "Свой вариант") : plateThickness,
-            graphics: chosenPlateList.map((g) => ({ name: g.name || g.id })),
-            epitaph: (plateEpitaph || "").trim()
+            graphics: extraPlate ? chosenPlateList.map((g) => ({ name: g.name || g.id })) : [],
+            epitaph: extraPlate ? (plateEpitaph || "").trim() : ""
           }}
           notes={(orderNotes || "").trim()}
           previews={{ front: frontMini || "", back: rearHasContent ? (backMini || "") : "" }}
@@ -1651,7 +1688,7 @@ function PrintOverlay({
                       <div>
                         {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
                         {p.fio2 && <div>{p.fio2}</div>}
-                        {p.dates && <div>{p.dates}</div>}
+                        {p.dates && <div>{п.dates}</div>}
                       </div>
                     </div>
                   ))
@@ -1727,7 +1764,7 @@ function PrintOverlay({
           </div>
           <hr />
 
-          {/* Плита — 3 колонки */}
+          {/* Плита — 3 колонки (пишем «нет», если чекбокс снят) */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
             <div>Размер: {plate.size || "—"}; Толщина: {plate.thickness || "—"}</div>
@@ -1740,12 +1777,12 @@ function PrintOverlay({
               {/* 2. Графика */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                {plate.graphics.length > 0 ? plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>) : <div>—</div>}
+                {plate.graphics.length > 0 ? plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>) : <div>нет</div>}
               </div>
               {/* 3. Эпитафии */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                {plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>}
+                {plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>нет</div>}
               </div>
             </div>
           </div>
@@ -1778,7 +1815,6 @@ function PrintOverlay({
         @page {
           size: A4;
           margin: 5mm;
-          /* Попытка скрыть номера страниц/URL/дату — поддержка зависит от браузера */
           @top-left { content: '' }
           @top-center { content: '' }
           @top-right { content: '' }
