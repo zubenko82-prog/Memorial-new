@@ -1,9 +1,8 @@
 // src/App.tsx
-// Правки:
-// - Делаем StepNav НЕ липкой, а фиксированной (position: fixed) вверху.
-// - Добавляем отступ контенту под фиксированную панель.
-// - Прокидываем CSS‑переменную --fixed-nav-h, чтобы локальные "липкие" панели шагов могли знать отступ сверху.
-// - Навигация внутри шагов оставляем/делаем липкой (см. ниже патч для каждой панели).
+// Обновления:
+// - Убрали шаг «Редактор» (EditorStep) — после «Эпитафии» сразу переходим на «Тыл» (BackEditorStep).
+// - StepNav фиксированная (position: fixed) вверху, НЕ липкая.
+// - Локальная навигация внутри шагов — липкая (каждый шаг использует top: var(--fixed-nav-h)).
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -24,14 +23,37 @@ type Step =
   | 'inscription'
   | 'graphics'
   | 'epitaph'
-  // | 'editor'
+  // | 'editor' // удалено
   | 'editorBack'
   | 'review'
   | 'done';
 
 const LS_KEY = 'memorial.progress.v6';
 
-// ... (glassButtonStyle, forceScrollTop без изменений)
+function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
+  const map = { nano: '6px 10px', sm: '10px 14px', md: '12px 18px' } as const;
+  return {
+    padding: map[size],
+    borderRadius: 12,
+    border: '1px solid rgba(255,255,255,0.28)',
+    background:
+      'linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)',
+    color: '#fff',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    whiteSpace: 'nowrap',
+    boxShadow:
+      'inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)',
+    opacity: disabled ? 0.6 : 1
+  } as React.CSSProperties;
+}
+
+// Прокрутка к началу при смене шага
+function forceScrollTop() {
+  try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); } catch {}
+  try { (document.scrollingElement as any).scrollTop = 0; } catch {}
+  try { (document.documentElement as any).scrollTop = 0; } catch {}
+  try { (document.body as any).scrollTop = 0; } catch {}
+}
 
 // Скрываем из StepNav «extras» и «editor»
 const NAV_STEPS = STEPS.filter(s => s.id !== 'extras' && s.id !== 'editor');
@@ -99,7 +121,7 @@ function setHashForStep(id: StepId, replace = false) {
 
 export default function App() {
   const [step, setStep] = useState<Step>('start');
-  const [navUnlocked, setNavUnlocked] = useState<boolean>(false);
+  const [navUnlocked, setNavUnlocked] = useState<boolean>(false); // после «review» показываем StepNav на всех экранах
 
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [sizeResult, setSizeResult] = useState<any>(null);
@@ -149,7 +171,7 @@ export default function App() {
     };
   }, []);
 
-  // Сохранение прогресса
+  // Сохранение прогресса (включая флаг navUnlocked)
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -188,7 +210,7 @@ export default function App() {
     };
   }, [step]);
 
-  // Синхронизация hash + разблокировка навигации
+  // Синхронизация hash с локальным шагом + разблокировка навигации
   useEffect(() => {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
@@ -204,50 +226,170 @@ export default function App() {
     setHashForStep(id as StepId);
   };
 
-  // Колбэки шагов (сокращено до изменённых):
+  // Колбэки шагов
+  const onStartConfirm = (item: any) => { setSelectedItem(item); setStep('size'); };
+
+  const onSizeBack = () => setStep('start');
+  const onSizeDone = (data: any) => { setSizeResult(data); setStep('inscription'); };
+
+  const onEngravingBack = () => setStep('size');
+  const onEngravingSave = (data: any) => setEngraving(data);
+  const onEngravingDone = (data: any) => { setEngraving(data); setStep('graphics'); };
+
+  const onGraphicsBack = () => setStep('inscription');
+  const onGraphicsSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
   const onGraphicsDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('epitaph'); };
-  const onEpitaphDone = (data: any) => { setDecor((prev: any) =>ЛЯ "ЛИПКИХ" ПАНЕЛЕЙ ВНУТРИ ШАГОВ
-// На каждом шаге (SizeStep / EngravingStep / GraphicsStep / EpitaphStep / BackEditorStep / ReviewAndSendStep)
-// у верхней панели навигации задайте position: sticky и top = высоте фиксированной StepNav.
-// Мы пробрасываем CSS‑переменную --fixed-nav-h из App, поэтому достаточно так:
 
-// Пример: в верхней панели внутри шага замените контейнер стилей на:
-<div
-  style={{
-    position: 'sticky',
-    top: 'var(--fixed-nav-h, 0px)', // отступ под фиксированный StepNav
-    zIndex: 1000,
-    background: 'rgba(0,0,0,0.92)',
-    backdropFilter: 'saturate(120%) blur(8px)',
-    WebkitBackdropFilter: 'saturate(120%) blur(8px)',
-    border: '1px solid rgba(255,255,255,0.14)',
-    borderRadius: 12,
-    padding: '8px 10px',
-    margin: '10px 0'
-  }}
->
-  {/* элементы локальной навигации шага */}
-</div>
+  const onEpitaphBack = () => setStep('graphics');
+  const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
+  const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editorBack'); };
 
-// В ReviewAndSendStep у вас уже есть StickyNav. Просто убедитесь, что top использует переменную:
-const StickyNav = ({ ...props }) => (
-  <div
-    style={{
-      position: 'sticky',
-      top: 'var(--fixed-nav-h, 0px)',
-      zIndex: 1000,
-      background: 'rgba(0,0,0,0.92)',
-      backdropFilter: 'saturate(120%) blur(8px)',
-      WebkitBackdropFilter: 'saturate(120%) blur(8px)',
-      border: '1px solid rgba(255,255,255,0.14)',
-      borderRadius: 12,
-      padding: '8px 10px',
-      margin: '10px 0'
-    }}
-  >
-    {/* ... */}
-  </div>
-);
+  // Тыльная (BackEditorStep)
+  const onBackEditorBack = () => setStep('epitaph');
+  const onBackEditorDone = (payload: any) => {
+    setEditorBackState(payload);
+    setStep('review');
+  };
 
-// Аналогично обновите локальные "липкие" панели остальных шагов.
-// Так локальные панели снова станут липкими, а StepNav будет фиксированной наверху страницы.
+  // ReviewAndSend
+  const onReviewBack = () => setStep('editorBack');
+  const onReviewSend = () => setStep('done');
+
+  const resetAll = () => {
+    try { localStorage.removeItem(LS_KEY); } catch {}
+    setSelectedItem(null);
+    setSizeResult(null);
+    setEngraving(null);
+    setDecor({});
+    setEditorBackState(null);
+    setNavUnlocked(false);
+    setStep('start');
+  };
+
+  const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
+
+  // Высота фиксированной панели (для отступа контента)
+  const FIXED_NAV_H = 56;
+  const showFixedNav = step !== 'done' && navUnlocked;
+
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        background: '#0f0f12',
+        color: '#fff',
+        paddingTop: showFixedNav ? FIXED_NAV_H : 0,
+        // @ts-ignore кастомное свойство для липких панелей шагов
+        ['--fixed-nav-h' as any]: `${FIXED_NAV_H}px`
+      }}
+    >
+      {/* Глобальная навигация по шагам — ФИКСИРОВАННАЯ (fixed), не липкая */}
+      {showFixedNav && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: '0 0 auto 0',
+            height: FIXED_NAV_H,
+            zIndex: 1200,
+            background: 'rgba(15,15,18,0.92)',
+            backdropFilter: 'saturate(140%) blur(10px)',
+            WebkitBackdropFilter: 'saturate(140%) blur(10px)',
+            borderBottom: '1px solid rgba(255,255,255,0.12)',
+            display: 'grid',
+            alignItems: 'center'
+          }}
+        >
+          <StepNav
+            steps={NAV_STEPS}
+            currentId={currentWizardId}
+            onSelect={handleNavSelect}
+            sticky={false} // важно: StepNav НЕ липкая, отрисовывается во fixed-контейнере
+            enabled={navUnlocked}
+            activateOnFinish={false}
+          />
+        </div>
+      )}
+
+      {/* Контент */}
+      <div style={{ minHeight: 0, overflow: 'auto' }}>
+        {step === 'start' && <Start onConfirm={onStartConfirm} />}
+
+        {step === 'size' && selectedItem && (
+          <SizeStep
+            item={selectedItem}
+            initial={sizeResult || undefined}
+            onBack={onSizeBack}
+            onDone={onSizeDone}
+          />
+        )}
+
+        {step === 'inscription' && selectedItem && sizeResult && (
+          <EngravingStep
+            item={selectedItem}
+            sizeResult={sizeResult}
+            initial={engraving || undefined}
+            onBack={onEngravingBack}
+            onSaveDraft={onEngravingSave}
+            onDone={onEngravingDone}
+          />
+        )}
+
+        {step === 'graphics' && selectedItem && sizeResult && engraving && (
+          <GraphicsStep
+            item={selectedItem}
+            engraving={engraving}
+            initial={decor || undefined}
+            onBack={onGraphicsBack}
+            onSaveDraft={onGraphicsSave}
+            onDone={onGraphicsDone}
+          />
+        )}
+
+        {step === 'epitaph' && selectedItem && sizeResult && engraving && (
+          <EpitaphStep
+            item={selectedItem}
+            engraving={engraving}
+            initial={decor || undefined}
+            onBack={onEpitaphBack}
+            onSaveDraft={onEpitaphSave}
+            onDone={onEpitaphDone}
+          />
+        )}
+
+        {/* Убран шаг editor */}
+
+        {step === 'editorBack' && (
+          <BackEditorStep
+            onBack={onBackEditorBack}
+            onContinue={(payload) => onBackEditorDone(payload)}
+          />
+        )}
+
+        {step === 'review' && (
+          <ReviewAndSendStep
+            onBack={onReviewBack}
+            onSend={onReviewSend}
+          />
+        )}
+
+        {step === 'done' && (
+          <div style={{ padding: 16 }}>
+            <h2 style={{ marginTop: 0 }}>Заявка отправлена менеджерам</h2>
+            <div style={{ opacity: 0.9, marginBottom: 12 }}>
+              Спасибо! Менеджер свяжется с вами. Вы можете начать заново.
+            </div>
+            <button style={glassButtonStyle('sm')} onClick={resetAll}>Начать заново</button>
+          </div>
+        )}
+
+        {/* Фолбек на случай неизвестного шага */}
+        {!['start','size','inscription','graphics','epitaph','editorBack','review','done'].includes(step) && (
+          <div style={{ padding: 16 }}>
+            <h3>Неизвестный шаг: {String(step)}</h3>
+            <button style={glassButtonStyle('sm')} onClick={() => setStep('start')}>На главную</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
