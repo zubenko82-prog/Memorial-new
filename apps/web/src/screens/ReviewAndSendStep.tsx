@@ -24,6 +24,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
+import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import { fetchCatalog } from "../api";
 
 /* ===== UI ===== */
