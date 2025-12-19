@@ -1,12 +1,14 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Обновления:
-// - Эскизы: Лицевая — показываем превью шага «Эпитафии» (frontMini), Тыльная — превью шага «Тыл» (backMini).
-//   Оба эскиза «вписаны» (object-fit: contain), под каждым — градиентная подложка.
-// - В печати: в блоке «Эскизы» используем те же frontMini/backMini. Исправлено отсутствие эскиза тыльной стороны.
-// - «Выбрано для плиты» — под эскизами. Аккордеон «Надгробная плита» — под чекбоксами «Тумба/Цветник».
-// - Состав заказа корректный. Текст переносим, не обрезаем. Поля печати 5мм, авто‑масштаб до 1 страницы.
+// Правки по требованию:
+// - Эскизы: используем превью из драфта
+//   • Лицевая: как на шаге «Эпитафии» → draft.editor.previewHiUrl || previewUrl
+//   • Тыльная: как на шаге «Тыл»       → draft.editorBack.previewHiUrl || previewUrl
+//   Оба эскиза вписаны (object-fit: contain), под ними — градиент.
+// - «Выбрано для плиты» — под эскизами.
+// - Аккордеон «Надгробная плита» — под чекбоксами «Тумба/Цветник» (без отдельного заголовка).
+// - Печать: в блоке «Эскизы» — те же превью front/back из драфта; если есть тыльная, она отобразится.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -168,7 +170,6 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
         <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
       </div>
       <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={{ ...inputStyle(), marginBottom: 10 }} />
-
       {/* Миниатюра резной работы с градиентом */}
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", width: 100, height: 100, borderRadius: 10, overflow: "hidden" }}>
@@ -188,7 +189,7 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
   );
 }
 
-/* ===== Main ===== */
+/* ===== Главный компонент ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
@@ -209,11 +210,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const frontId = "section-front", rearId = "section-rear", previewsId = "section-previews", extrasId = "section-extras";
   const goTo = (id: string) => { const el = document.getElementById(id); if (!el) return; window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 8, behavior: "smooth" }); };
 
-  // Превью с шагов редактора (как просили): front = «Эпитафии», back = «Тыл»
+  // Эскизы из драфта (как просили)
   const frontSketchUrl = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
-  // Aspect по самой резной работе (для контейнера)
+  // Aspect по изделию (для контейнера эскизов)
   const itemUrl = (draft as any)?.item?.url as string | undefined;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -457,7 +458,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {(frontPersons.length || frontUnique.length || frontEpitaphs.length) ? (
         <section id={frontId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая", true)}</div>
-
           {/* Люди */}
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие</div>
@@ -479,7 +479,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               </div>
             ) : <div>—</div>}
           </div>
-
           {/* Графика */}
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
@@ -500,7 +499,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               </div>
             ) : <div>—</div>}
           </div>
-
           {/* Эпитафии */}
           {frontEpitaphs.length > 0 && (
             <div style={{ ...sectionBox }}>
@@ -517,7 +515,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {rearHasContent ? (
         <section id={rearId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
-
           {/* Графика */}
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
@@ -538,7 +535,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               </div>
             ) : <div>—</div>}
           </div>
-
           {/* Эпитафии */}
           {rearEpitaphs.length > 0 && (
             <div style={{ ...sectionBox }}>
@@ -551,7 +547,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       ) : null}
 
-      {/* Эскизы — используем frontMini/backMini (как на шагах эпитафии и тыл) */}
+      {/* Эскизы — используем frontSketchUrl/backSketchUrl из драфта (как на шагах) */}
       <section id={previewsId} style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: rearHasContent ? "1fr 1fr" : "1fr", gap: 12 }}>
           <SketchCard title="Лицевая" url={frontSketchUrl} aspect={aspect} />
@@ -596,59 +592,39 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       )}
 
       {/* Дополнительно — чекбоксы и аккордеон плиты */}
-      <section id={extrasId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
-        <div style={{ fontWeight: 700 }}>Дополнительно</div>
-
-        {/* Тумба/Цветник */}
-        <div style={{ ...sectionBox }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
-              <span>Тумба</span>
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
-              <span>Цветник</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Надгробная плита — только аккордеон (без отдельного заголовка) */}
-        <PlateBlock
-          extraPlate={extraPlate}
-          setExtraPlate={setExtraPlate}
-          plateSize={plateSize}
-          setPlateSize={setPlateSize}
-          plateCustomSize={plateCustomSize}
-          setPlateCustomSize={setPlateCustomSize}
-          plateThickness={plateThickness}
-          setPlateThickness={setPlateThickness}
-          plateCustomThickness={plateCustomThickness}
-          setPlateCustomThickness={setPlateCustomThickness}
-          plateOrientation={plateOrientation}
-          setPlateOrientation={setPlateOrientation}
-          plateEpitaph={plateEpitaph}
-          setPlateEpitaph={setPlateEpitaph}
-          catsLoading={catsLoading}
-          catsError={catsError}
-          cats={cats}
-          catOpen={catOpen}
-          setCatOpen={setCatOpen}
-          addPlateGraphic={addPlateGraphic}
-          removePlateGraphic={removePlateGraphic}
-          plateIds={plateIds}
-        />
-      </section>
+      <ExtrasSection
+        extraBase={extraBase}
+        setExtraBase={setExtraBase}
+        extraFlowerbed={extraFlowerbed}
+        setExtraFlowerbed={setExtraFlowerbed}
+        extraPlate={extraPlate}
+        setExtraPlate={setExtraPlate}
+        plateSize={plateSize}
+        setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize}
+        setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness}
+        setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness}
+        setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation}
+        setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph}
+        setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading}
+        catsError={catsError}
+        cats={cats}
+        catOpen={catOpen}
+        setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic}
+        removePlateGraphic={removePlateGraphic}
+        plateIds={plateIds}
+      />
 
       {/* Примечание к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
         <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
-      </section>
-
-      {/* Подсказка перед кнопками */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={wrapText(13)}>Если не нашли нужного элемента или затрудняетесь с выбором — просто отправьте заказ как есть, всё согласуем лично.</div>
       </section>
 
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
@@ -658,7 +634,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Упрощенный вид (Печать) — эскизы из frontMini/backMini */}
+      {/* Упрощенный вид (Печать) — эскизы из front/back превью редакторов */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -710,7 +686,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   );
 }
 
-/* ===== Блок плиты: аккордеоны ===== */
+/* ===== Дополнительно: чекбоксы + аккордеон плиты ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
@@ -908,7 +884,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Печать (A4) — эскизы из frontMini/backMini с градиентом ===== */
+/* ===== Печать (A4) — эскизы из фронт/бэк редакторов ===== */
 function PrintOverlay({
   onClose, onPrint, orderNo, name, phone, itemName, dimsText, front, rear, extras, plate, notes, previewFront, previewBack
 }: {
@@ -995,7 +971,7 @@ function PrintOverlay({
           </div>
           <hr />
 
-          {/* Эскизы: используем frontMini/backMini, с градиентом подложкой */}
+          {/* Эскизы из драфта: front/back */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: rear ? "1fr 1fr" : "1fr", gap: 8 }}>
@@ -1051,5 +1027,83 @@ function PrintOverlay({
         }
       `}</style>
     </div>
+  );
+}
+
+/* ===== Дополнительно (секция обёртка) ===== */
+function ExtrasSection(props: {
+  extraBase: boolean; setExtraBase: (v: boolean) => void;
+  extraFlowerbed: boolean; setExtraFlowerbed: (v: boolean) => void;
+  extraPlate: boolean; setExtraPlate: (v: boolean) => void;
+  plateSize: string; setPlateSize: (v: string) => void;
+  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
+  plateThickness: string; setPlateThickness: (v: string) => void;
+  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
+  plateOrientation: string; setPlateOrientation: (v: string) => void;
+  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
+  catsLoading: boolean; catsError: string; cats: any[];
+  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
+  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
+  plateIds: string[];
+}) {
+  const {
+    extraBase, setExtraBase,
+    extraFlowerbed, setExtraFlowerbed,
+    extraPlate, setExtraPlate,
+    plateSize, setPlateSize,
+    plateCustomSize, setPlateCustomSize,
+    plateThickness, setPlateThickness,
+    plateCustomThickness, setPlateCustomThickness,
+    plateOrientation, setPlateOrientation,
+    plateEpitaph, setPlateEpitaph,
+    catsLoading, catsError, cats, catOpen, setCatOpen,
+    addPlateGraphic, removePlateGraphic,
+    plateIds
+  } = props;
+
+  return (
+    <section id="section-extras" style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+      <div style={{ fontWeight: 700 }}>Дополнительно</div>
+
+      {/* Тумба / Цветник */}
+      <div style={{ ...sectionBox }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <span>Тумба</span>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <span>Цветник</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Аккордеон плиты */}
+      <PlateBlock
+        extraPlate={extraPlate}
+        setExtraPlate={setExtraPlate}
+        plateSize={plateSize}
+        setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize}
+        setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness}
+        setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness}
+        setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation}
+        setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph}
+        setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading}
+        catsError={catsError}
+        cats={cats}
+        catOpen={catOpen}
+        setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic}
+        removePlateGraphic={removePlateGraphic}
+        plateIds={plateIds}
+      />
+    </section>
   );
 }
