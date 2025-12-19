@@ -1,10 +1,9 @@
 // src/App.tsx
 // Обновления:
-// - Глобальная навигация по экранам (StepNav) НЕ липкая.
-// - Появляется на ВСЕХ шагах ПОСЛЕ того, как пользователь впервые дошёл до шага подтверждения (review).
-// - Флаг «разблокирована навигация» (navUnlocked) сохраняется в localStorage и действует при возврате на предыдущие шаги и при перезагрузке.
-// - Внутренние «липкие» панели внутри шагов остаются как были (т.к. StepNav не sticky).
-// - Дублирования StepNav на шаге подтверждения нет (мы удалили локальные вставки в ReviewAndSendStep/Start).
+// - Убрали шаг «Редактор» (EditorStep.tsx) — после «Эпитафии» сразу переходим на «Тыл» (BackEditorStep).
+// - StepNav снова липкая (sticky=true), «зафиксирована» вверху.
+// - В StepNav скрыли пункт «editor» (навигация не будет показывать убранный шаг).
+// - Остальные правила сохранены: StepNav появляется на всех шагах после первого достижения «review» (navUnlocked в localStorage).
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -12,7 +11,7 @@ import SizeStep from './screens/SizeStep';
 import EngravingStep from './screens/EngravingStep';
 import GraphicsStep from './screens/GraphicsStep';
 import EpitaphStep from './screens/EpitaphStep';
-import EditorStep from './screens/EditorStep';
+// import EditorStep from './screens/EditorStep'; // шаг убран
 import BackEditorStep from './screens/BackEditorStep';
 import ReviewAndSendStep from './screens/ReviewAndSendStep';
 
@@ -25,7 +24,7 @@ type Step =
   | 'inscription'
   | 'graphics'
   | 'epitaph'
-  | 'editor'
+  // | 'editor'   // шаг убран
   | 'editorBack'
   | 'review'
   | 'done';
@@ -61,8 +60,8 @@ function forceScrollTop() {
   try { (document.body as any).scrollTop = 0; } catch {}
 }
 
-// «extras» в этом мастере не используется
-const NAV_STEPS = STEPS.filter(s => s.id !== 'extras');
+// Скрываем из StepNav «extras» и «editor»
+const NAV_STEPS = STEPS.filter(s => s.id !== 'extras' && s.id !== 'editor');
 const STEP_IDS = NAV_STEPS.map(s => s.id);
 const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
@@ -73,7 +72,8 @@ const localStepFromId = (id: StepId): Step => {
     case 'persons': return 'inscription';
     case 'graphics':return 'graphics';
     case 'epitaph': return 'epitaph';
-    case 'editor':  return 'editor';
+    // Перенаправляем старые ссылки на editor сразу на «тыл»
+    case 'editor':  return 'editorBack';
     case 'rear':    return 'editorBack';
     case 'extras':  return 'review';
     case 'finish':  return 'review';
@@ -87,7 +87,7 @@ const idFromLocalStep = (s: Step): StepId => {
     case 'inscription': return 'persons';
     case 'graphics':    return 'graphics';
     case 'epitaph':     return 'epitaph';
-    case 'editor':      return 'editor';
+    // case 'editor':   return 'editor'; // убрано
     case 'editorBack':  return 'rear';
     case 'review':      return 'finish';
     case 'done':        return 'finish';
@@ -134,7 +134,7 @@ export default function App() {
   const [sizeResult, setSizeResult] = useState<any>(null);
   const [engraving, setEngraving] = useState<any>(null);
   const [decor, setDecor] = useState<any>({});
-  const [editorState, setEditorState] = useState<any>(null);
+  // const [editorState, setEditorState] = useState<any>(null); // не требуется для убранного шага
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
   // Восстановление прогресса
@@ -149,9 +149,8 @@ export default function App() {
         setSizeResult(p.sizeResult ?? null);
         setEngraving(p.engraving ?? null);
         setDecor(p.decor ?? {});
-        setEditorState(p.editorState ?? null);
+        // setEditorState(p.editorState ?? null);
         setEditorBackState(p.editorBackState ?? null);
-        // восстанавливаем «разблокирована навигация»
         setNavUnlocked(Boolean(p.navUnlocked) || p.step === 'review' || p.step === 'done');
       }
     } catch {}
@@ -192,19 +191,19 @@ export default function App() {
           sizeResult,
           engraving,
           decor,
-          editorState,
+          // editorState,
           editorBackState,
           navUnlocked
         })
       );
     } catch {}
-  }, [step, selectedItem, sizeResult, engraving, decor, editorState, editorBackState, navUnlocked]);
+  }, [step, selectedItem, sizeResult, engraving, decor, /*editorState,*/ editorBackState, navUnlocked]);
 
   // Guards
   useEffect(() => {
     if (!selectedItem && step !== 'start') { setStep('start'); return; }
     if (step !== 'start' && !sizeResult) { setStep('size'); return; }
-    if ((step === 'graphics' || step === 'epitaph' || step === 'editor' || step === 'editorBack' || step === 'review') && !engraving) {
+    if ((step === 'graphics' || step === 'epitaph' || step === 'editorBack' || step === 'review') && !engraving) {
       setStep('inscription');
       return;
     }
@@ -215,10 +214,7 @@ export default function App() {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
     const t1 = setTimeout(forceScrollTop, 150);
-    return () => {
-      clearTimeout(t0);
-      clearTimeout(t1);
-    };
+    return () => { clearTimeout(t0); clearTimeout(t1); };
   }, [step]);
 
   // Синхронизация hash с локальным шагом + разблокировка навигации
@@ -253,20 +249,12 @@ export default function App() {
 
   const onEpitaphBack = () => setStep('graphics');
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
-  const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editor'); };
+  // РАНЬШЕ: после эпитафии шли на editor → теперь сразу на тыл:
+  const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editorBack'); };
 
-  // Редактор (лицевая)
-  const onEditorBack = () => setStep('epitaph');
-  const onEditorSave = (payload: any) => setEditorState(payload);
-  const onSendOrder = (payload: any) => { setEditorState(payload); setStep('editorBack'); };
-  const onGenerateSketch = (payload: any) => {
-    console.log('Генерация эскиза (заглушка):', payload);
-    alert('Генерация эскиза будет подключена позже.');
-  };
-  const onRearSide = (payload: any) => { setEditorState(payload); setStep('editorBack'); };
-
-  // Редактор (тыльная)
-  const onBackEditorBack = () => setStep('editor');
+  // Тыльная (BackEditorStep)
+  // Назад с тыла теперь ведёт на «Эпитафию»
+  const onBackEditorBack = () => setStep('epitaph');
   const onBackEditorDone = (payload: any) => {
     setEditorBackState(payload);
     setStep('review');
@@ -282,9 +270,9 @@ export default function App() {
     setSizeResult(null);
     setEngraving(null);
     setDecor({});
-    setEditorState(null);
+    // setEditorState(null);
     setEditorBackState(null);
-    setNavUnlocked(false); // сброс «разблокирована навигация»
+    setNavUnlocked(false);
     setStep('start');
   };
 
@@ -292,16 +280,16 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0f0f12', color: '#fff', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
-      {/* Глобальная навигация по шагам — НЕ липкая.
-          Показывается на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
+      {/* Глобальная навигация по шагам — теперь снова липкая (sticky=true).
+          По‑прежнему показываем её на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
       {step !== 'done' && navUnlocked && (
         <StepNav
-          steps={NAV_STEPS}           // STEPS без 'extras'
+          steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
           currentId={currentWizardId}
           onSelect={handleNavSelect}
-          sticky={false}              // панель НЕ липкая
-          enabled={navUnlocked}       // явно управляем показом из App
-          activateOnFinish={false}    // внутреннюю автоактивацию StepNav отключаем
+          sticky={true}               // панель ЛИПКая (зафиксирована вверху)
+          enabled={navUnlocked}
+          activateOnFinish={false}
         />
       )}
 
@@ -350,6 +338,7 @@ export default function App() {
           />
         )}
 
+        {/* УБРАНО:
         {step === 'editor' && selectedItem && sizeResult && engraving && (
           <EditorStep
             item={selectedItem}
@@ -361,7 +350,7 @@ export default function App() {
             onRearSide={onRearSide}
             onSaveDraft={onEditorSave}
           />
-        )}
+        )} */}
 
         {step === 'editorBack' && (
           <BackEditorStep
@@ -388,7 +377,7 @@ export default function App() {
         )}
 
         {/* Фолбек на случай неизвестного шага */}
-        {!['start','size','inscription','graphics','epitaph','editor','editorBack','review','done'].includes(step) && (
+        {!['start','size','inscription','graphics','epitaph','editorBack','review','done'].includes(step) && (
           <div style={{ padding: 16 }}>
             <h3>Неизвестный шаг: {String(step)}</h3>
             <button style={glassButtonStyle('sm')} onClick={() => setStep('start')}>На главную</button>

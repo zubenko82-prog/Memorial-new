@@ -5,7 +5,7 @@ export type StepId =
   | 'persons'
   | 'graphics'
   | 'epitaph'
-  //| 'editor'
+  | 'editor'
   | 'rear'
   | 'extras'
   | 'finish';
@@ -16,7 +16,7 @@ export const STEPS: { id: StepId; title: string }[] = [
   { id: 'persons', title: 'Усопшие' },
   { id: 'graphics',title: 'Графика' },
   { id: 'epitaph', title: 'Эпитафия' },
-  //{ id: 'editor',  title: 'Редактор' },
+  { id: 'editor',  title: 'Редактор' },
   { id: 'rear',    title: 'Тыльная сторона' },
   { id: 'extras',  title: 'Доп. элементы' },
   { id: 'finish',  title: 'Завершение' }
