@@ -1,27 +1,30 @@
 // src/router/WizardRouter.tsx
-import React, { useMemo } from "react";
+import React from "react";
 import StepNav from "../components/StepNav";
 import { STEPS, type StepId } from "../wizard/steps";
 import { useCurrentStep, navigateToStep } from "./wizard";
 
-// Экран шагов мастера
+// Экраны мастера
 import Start from "../screens/Start";                       // 'item'
 import ParamsStep from "../screens/ParamsStep";             // 'params'
 import PersonsStep from "../screens/PersonsStep";           // 'persons'
 import GraphicsStep from "../screens/GraphicsStep";         // 'graphics'
 import EpitaphStep from "../screens/EpitaphStep";           // 'epitaph'
-// УБРАНО: FrontEditorStep (шаг «Редактор»)
+// import FrontEditorStep from "../screens/FrontEditorStep"; // 'editor' — УБРАНО/ЗАКОММЕНТИРОВАНО
 import BackEditorStep from "../screens/BackEditorStep";     // 'rear'
 import ReviewAndSendStep from "../screens/ReviewAndSendStep"; // 'finish'
-import ExtrasStep from "../screens/ExtrasStep";             // 'extras' (если используется)
+import ExtrasStep from "../screens/ExtrasStep";             // 'extras' (опционально)
 
-/**
- * Единая функция выбора экрана по шагу.
- * Шаг «editor» удалён:
- *  - после «epitaph» сразу переходим на «rear»
- *  - из «rear» назад — на «epitaph»
- */
+// ВАЖНО: рекомендуется убрать 'editor' из STEPS в ../wizard/steps.
+// На случай, если 'editor' всё ещё есть в STEPS/URL — добавлен редирект на 'rear' ниже.
+
 function ScreenByStep({ step }: { step: StepId }) {
+  // Редирект: если по инерции попадём на step = 'editor' — сразу ведём на 'rear'
+  if (step === "editor") {
+    navigateToStep("rear");
+    return null;
+  }
+
   switch (step) {
     case "item":
       return <Start onConfirm={() => navigateToStep("params")} />;
@@ -51,7 +54,7 @@ function ScreenByStep({ step }: { step: StepId }) {
       );
 
     case "epitaph":
-      // СРАЗУ на «rear» (тыл), без «editor»
+      // После «Эпитафии» сразу на «Тыл» (rear), шага «editor» больше нет
       return (
         <EpitaphStep
           onNext={() => navigateToStep("rear")}
@@ -59,8 +62,12 @@ function ScreenByStep({ step }: { step: StepId }) {
         />
       );
 
+    // case "editor":
+    //   // УБРАНО
+    //   return <FrontEditorStep onContinue={() => navigateToStep("rear")} onBack={() => navigateToStep("epitaph")} />;
+
     case "rear":
-      // Если «extras» нужен — идём туда, иначе можно сразу на finish
+      // Если «extras» нужен — ведём туда; иначе можно сразу finish
       return (
         <BackEditorStep
           onContinue={() => navigateToStep("extras")}
@@ -69,6 +76,7 @@ function ScreenByStep({ step }: { step: StepId }) {
       );
 
     case "extras":
+      // Если экран Extras отсутствует — можно временно сменить на navigateToStep("finish")
       return (
         <ExtrasStep
           onNext={() => navigateToStep("finish")}
@@ -77,8 +85,6 @@ function ScreenByStep({ step }: { step: StepId }) {
       );
 
     case "finish":
-      // Панель навигации (StepNav) остаётся всегда сверху (см. ниже).
-      // Вернули «липкость» навигаций внутри шагов: убран собственный скролл контейнер у роутера.
       return (
         <ReviewAndSendStep
           onBack={() => navigateToStep("rear")}
@@ -91,40 +97,22 @@ function ScreenByStep({ step }: { step: StepId }) {
   }
 }
 
-/**
- * Маршрутизатор мастера.
- *
- * Важно для «липкости» навигаций внутри шагов:
- * - УБРАН overflow: auto с контейнера контента, чтобы sticky внутри экранов
- *   работал относительно окна (viewport), а не внутреннего скролла.
- * - StepNav оставлен вверху всегда (в т.ч. на шаге подтверждения).
- */
 export default function WizardRouter() {
   const step = useCurrentStep();
 
-  // Убираем шаг «editor» из визуальной навигации StepNav, не меняя глобальный STEPS
-  const stepsForNav = useMemo(
-    () => (STEPS as StepId[]).filter((s) => s !== "editor"),
-    []
-  );
-
   return (
-    <div
-      style={{
-        minHeight: "100dvh",
-        display: "grid",
-        gridTemplateRows: "auto 1fr"
-      }}
-    >
-      {/* Панель навигации шагов — всегда видна сверху (в т.ч. на шаге подтверждения) */}
+    <div style={{ minHeight: "100dvh", display: "grid", gridTemplateRows: "auto 1fr" }}>
+      {/* Навигация по шагам.
+         РЕКОМЕНДУЕТСЯ удалить 'editor' из STEPS в ../wizard/steps,
+         чтобы индикатор шагов не показывал удалённый шаг. */}
       <StepNav
-        steps={stepsForNav}
+        steps={STEPS}
         currentId={step}
         onSelect={(_, id) => navigateToStep(id as StepId)}
       />
 
-      {/* Текущий шаг (БЕЗ собственного скролла, чтобы sticky внутри шагов работал) */}
-      <div style={{ minHeight: 0 /* без overflow: auto */ }}>
+      {/* Текущий шаг */}
+      <div style={{ minHeight: 0, overflow: "auto" }}>
         <ScreenByStep step={step} />
       </div>
     </div>
