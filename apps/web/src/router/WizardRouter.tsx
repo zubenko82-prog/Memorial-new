@@ -10,7 +10,7 @@ import ParamsStep from "../screens/ParamsStep";           // 'params'
 import PersonsStep from "../screens/PersonsStep";         // 'persons'
 import GraphicsStep from "../screens/GraphicsStep";       // 'graphics'
 import EpitaphStep from "../screens/EpitaphStep";         // 'epitaph'
-import FrontEditorStep from "../screens/FrontEditorStep"; // 'editor'
+//import FrontEditorStep from "../screens/FrontEditorStep"; // 'editor'
 import BackEditorStep from "../screens/BackEditorStep";   // 'rear'
 import ReviewAndSendStep from "../screens/ReviewAndSendStep"; // 'finish'
 // Если есть свой экран «Доп. элементы», импортируйте его
@@ -28,8 +28,8 @@ function ScreenByStep({ step }: { step: StepId }) {
       return <GraphicsStep onNext={() => navigateToStep("epitaph")} onBack={() => navigateToStep("persons")} />;
     case "epitaph":
       return <EpitaphStep onNext={() => navigateToStep("editor")} onBack={() => navigateToStep("graphics")} />;
-    case "editor":
-      return <FrontEditorStep onContinue={() => navigateToStep("rear")} onBack={() => navigateToStep("epitaph")} />;
+    //case "editor":
+      //return <FrontEditorStep onContinue={() => navigateToStep("rear")} onBack={() => navigateToStep("epitaph")} />;
     case "rear":
       // Если «extras» реально нужен — ведём туда, иначе сразу finish
       return <BackEditorStep onContinue={() => navigateToStep("extras")} onBack={() => navigateToStep("editor")} />;

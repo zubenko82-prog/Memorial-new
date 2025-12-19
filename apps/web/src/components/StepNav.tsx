@@ -115,7 +115,7 @@ export default function StepNav({
   onSelect,
   hint,
   linkForId,
-  sticky = true,                 // по умолчанию НЕ липкая
+  sticky = false,                 // по умолчанию НЕ липкая
   enabled: enabledProp,           // внешний контроль показа (опционально)
   activateOnFinish = true,        // авто-включение после finish
   persistKey = "memorial.navEnabled"
