@@ -1,13 +1,22 @@
 // src/screens/EngravingStep.tsx
 // Шаг «Информация об усопших» (без редактора).
 //
-// Что важно:
-// - Навигация внутри шага — ЛИПКАЯ. Её верхний отступ учитывает фиксированную панель StepNav (через CSS-переменную --fixed-nav-h).
-// - Сохранение драфта НЕ «на лету» — только по кнопкам «Назад»/«Продолжить».
-// - Локальные превью фото через blob:ObjectURL с корректным revoke.
-// - Перемещение карточек усопших ▲/▼.
-// - SketchTemplate для превью: отображаем людей, выбранную графику и эпитафии.
-// - Подсказка над кнопкой фото при отсутствии фото.
+// Фото/драфт:
+// - Драфт НЕ сохраняем «на лету». saveOrderDraft вызывается только по «Назад»/«Продолжить».
+// - Транзиентный blob:ObjectURL для превью (ревок при замене/очистке/анмаунте).
+// - Перемещение по порядку (▲/▼) — оставлено.
+//
+// Навигация:
+// - Внутренняя навигация — липкая (sticky).
+// - «Компактный вид ☰» — ссылка; при нажатии сворачивает все аккордеоны с усопшими.
+//   Показываем «Компактный вид ☰» только если усопших больше одного.
+//
+// Исправлено/упрощено:
+// - validateDates/parseFlexibleDate на месте.
+// - Подключён общий SketchTemplate (общий предпросмотр с гориз./верт. шаблонами) из ../components/SketchTemplate.
+// - Прозрачность резной работы настраивается через carvingOpacity (передаётся в SketchTemplate).
+// - Передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
+// - ПОДСКАЗКА: при отсутствии фото выводим подсказку НАД кнопкой «Прикрепить фото».
 
 import React, {
   useCallback,
@@ -159,17 +168,6 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
-/* ===== Хелпер для высоты фиксированной верхней панели (StepNav) ===== */
-function getFixedNavH(): number {
-  try {
-    const v = getComputedStyle(document.documentElement).getPropertyValue("--fixed-nav-h") || "0";
-    const n = parseFloat(String(v).trim());
-    return Number.isFinite(n) ? n : 0;
-  } catch {
-    return 0;
-  }
-}
-
 /* ===== Component ===== */
 type Props = {
   item: any;
@@ -288,7 +286,8 @@ export default function EngravingStep({
       const next = prev.filter((_, i) => i !== idx);
       return next.length > 0 ? next : [makeBlankPerson("p-0")];
     });
-  const addPerson = () => setPersons((prev) => prev.concat([makeBlankPerson()]));
+  const addPerson = () =>
+    setPersons((prev) => prev.concat([makeBlankPerson()]));
   const moveUp = (idx: number) =>
     setPersons((prev) =>
       idx === 0
@@ -383,27 +382,23 @@ export default function EngravingStep({
     }
   };
 
-  /* ===== Навигация / sticky-панель (с учётом фиксированного StepNav сверху) ===== */
+  /* ===== Навигация / sticky-панель ===== */
   const navRef = useRef<HTMLDivElement | null>(null);
   const navRowRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState(56);
-  const [fixedNavH, setFixedNavH] = useState<number>(0);
 
   useLayoutEffect(() => {
     const measure = () => {
       const h = navRef.current?.getBoundingClientRect().height || 0;
       setNavH(h);
-      setFixedNavH(getFixedNavH());
     };
     measure();
     const ro = new ResizeObserver(measure);
     if (navRef.current) ro.observe(navRef.current);
     window.addEventListener("resize", measure);
-    window.addEventListener("orientationchange", measure);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", measure);
-      window.removeEventListener("orientationchange", measure);
     };
   }, []);
 
@@ -412,9 +407,8 @@ export default function EngravingStep({
     const el = formRefs.current[id];
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const offset = fixedNavH + navH + 10;
     window.scrollTo({
-      top: Math.max(0, window.scrollY + r.top - offset),
+      top: Math.max(0, window.scrollY + r.top - (navH + 10)),
       behavior: "smooth"
     });
   };
@@ -423,9 +417,8 @@ export default function EngravingStep({
     const el = previewRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const offset = fixedNavH + navH + 10;
     window.scrollTo({
-      top: Math.max(0, window.scrollY + r.top - offset),
+      top: Math.max(0, window.scrollY + r.top - (navH + 10)),
       behavior: "smooth"
     });
   };
@@ -505,7 +498,7 @@ export default function EngravingStep({
     }
     if (Array.isArray(initial?.epitaphs)) return (initial!.epitaphs as string[]).filter(Boolean);
     if (typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()) {
-      return initial!.epitaphText!
+      return initial!.епитaphText!
         .split(/\r?\n/)
         .map((s: string) => s.trim())
         .filter(Boolean);
@@ -532,13 +525,13 @@ export default function EngravingStep({
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
-        {/* Навигация (липкая) */}
+        {/* Навигация (липкая, как раньше) */}
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: "var(--fixed-nav-h, 0px)", // учитываем фиксированную StepNav сверху
-            zIndex: 1000,
+            top: 2,
+            zIndex: 50,
             paddingTop: "env(safe-area-inset-top)",
             background: "rgba(0,0,0,0.96)",
             borderRadius: 12,
@@ -568,8 +561,7 @@ export default function EngravingStep({
                 }}
                 style={linkLikeStyle()}
                 title="Компактный вид"
-              >
-                Компактный вид ☰
+              >                
               </a>
             )}
 
@@ -734,7 +726,7 @@ export default function EngravingStep({
                               onChange={(e) =>
                                 updatePerson(idx, { lastName: e.target.value })
                               }
-                              style={inputStyleField()}
+                              style={inputStyle()}
                               placeholder="Иванов"
                             />
                           </Field>
@@ -744,7 +736,7 @@ export default function EngravingStep({
                               onChange={(e) =>
                                 updatePerson(idx, { firstName: e.target.value })
                               }
-                              style={inputStyleField()}
+                              style={inputStyle()}
                               placeholder="Иван"
                             />
                           </Field>
@@ -754,7 +746,7 @@ export default function EngravingStep({
                               onChange={(e) =>
                                 updatePerson(idx, { middleName: e.target.value })
                               }
-                              style={inputStyleField()}
+                              style={inputStyle()}
                               placeholder="Иванович"
                             />
                           </Field>
@@ -776,7 +768,7 @@ export default function EngravingStep({
                                 })
                               }
                               style={{
-                                ...inputStyleField(),
+                                ...inputStyle(),
                                 borderColor:
                                   err && err.includes("рождения")
                                     ? "salmon"
@@ -794,7 +786,7 @@ export default function EngravingStep({
                                 })
                               }
                               style={{
-                                ...inputStyleField(),
+                                ...inputStyle(),
                                 borderColor:
                                   err &&
                                   (err.includes("смерти") ||
@@ -829,7 +821,7 @@ export default function EngravingStep({
                                 opacity: 0.92
                               }}
                             >
-                              Прикрепите фотографию (по возможности в хорошем качестве).
+                              
                             </div>
                           )}
                           <PhotoField
@@ -923,7 +915,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   );
 }
-function inputStyleField(): React.CSSProperties {
+function inputStyle(): React.CSSProperties {
   return {
     width: "100%",
     maxWidth: "100%",
