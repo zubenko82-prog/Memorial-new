@@ -1,1563 +1,1109 @@
-// src/screens/EditorStep.tsx
-// Редактор: изначально на эскизе только резная работа.
-// Сверху — единая палитра миниатюр (без подписей), несколько столбцов, прозрачный фон.
-// Картинки и текст в миниатюрах вписаны и ограничены 120×120 по большей стороне.
-// Клик/DnD добавляет элемент по центру (исчезает из палитры). На рамке — мини‑панель с корзиной 🗑 и инструментами.
+// src/screens/ReviewAndSendStep.tsx
+// Обзор и подтверждение (без TopBar).
+//
+// Правки по требованию:
+// - Эскизы: используем превью из драфта
+//   • Лицевая: как на шаге «Эпитафии» → draft.editor.previewHiUrl || previewUrl
+//   • Тыльная: как на шаге «Тыл»       → draft.editorBack.previewHiUrl || previewUrl
+//   Оба эскиза вписаны (object-fit: contain), под ними — градиент.
+// - «Выбрано для плиты» — под эскизами.
+// - Аккордеон «Надгробная плита» — под чекбоксами «Тумба/Цветник» (без отдельного заголовка).
+// - Печать: в блоке «Эскизы» — те же превью front/back из драфта; если есть тыльная, она отобразится.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import TopBarWithIntro from "../components/TopBarWithIntro";
-import {
-  loadOrderDraft,
-  saveOrderDraft,
-  type OrderDraft,
-  DRAFT_UPDATED_EVENT
-} from "../lib/order";
+import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
+import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
+import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
+import { fetchCatalog } from "../api";
+import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 
 /* ===== UI ===== */
 function glassPanelStyle(): React.CSSProperties {
-  return {
-    background: "rgba(20,20,24,0.55)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: 12,
-    color: "#fff",
-    boxSizing: "border-box"
-  };
+  return { background: "rgba(20,20,24,0.90)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, color: "#fff", boxSizing: "border-box" };
 }
-function linkLikeButton(): React.CSSProperties {
+function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
+  const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
-    padding: 0,
-    border: "none",
-    background: "transparent",
-    color: "#8ab4ff",
-    textDecoration: "underline",
-    cursor: "pointer",
-    font: "inherit"
-  };
-}
-function glassButtonStyle(size: "nano" | "sm" | "md" = "sm"): React.CSSProperties {
-  const pad = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
-  return {
-    padding: pad[size],
+    padding: map[size],
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.1)",
+    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
-    cursor: "pointer",
+    cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
-    boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)"
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
+    opacity: disabled ? 0.6 : 1
   };
 }
-function bottomUnderlayGradient(): React.CSSProperties {
+function inputStyle(): React.CSSProperties {
+  return { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none", boxSizing: "border-box" };
+}
+const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
+function chip(txt: string, accent = false) {
+  return (
+    <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 999, fontSize: 12, background: accent ? "rgba(138,180,255,0.28)" : "rgba(138,180,255,0.18)", border: accent ? "1px solid rgba(138,180,255,0.65)" : "1px solid rgba(138,180,255,0.35)", color: "#dbe7ff", whiteSpace: "nowrap" }}>
+      {txt}
+    </span>
+  );
+}
+function wrapText(fontPx = 13): React.CSSProperties {
+  return { whiteSpace: "pre-wrap", wordBreak: "break-word", overflow: "visible", fontSize: `clamp(${Math.max(11, fontPx - 2)}px, 1.9vw, ${fontPx}px)` };
+}
+function gradientUnderlay(): React.CSSProperties {
   return {
-    backgroundColor: "#000",
-    backgroundImage:
-      "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+    position: "absolute",
+    inset: 0,
+    background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+    zIndex: 0
   };
 }
 
-/* ===== Types ===== */
-type ElType = "portrait" | "metric" | "epitaph" | "cross" | "graphic";
-type EditorEl = {
-  id: string;
-  type: ElType;
-  x: number;
-  y: number;
-  w: number;
-  h: number; // проценты
-  z: number;
-  title?: string;
-  locked?: boolean;
-  uppercase?: boolean;
-  italic?: boolean;
-  flipH?: boolean;
-  bw?: boolean;
-  staircase?: boolean;
-};
-
-/* ===== Helpers ===== */
-const DND_MIME = "application/x-memorial-editor-el";
-const SKETCH_PAD = 8;
-const KNOB_HIT = 28; // зона захвата, px (ASCII)
-const KNOB_VIS = 14; // видимая точка, px (ASCII)
-// Защита от случайных кириллических имён, оставшихся в коде/бандле:
-const KNOB_HИТ = KNOB_HIT; // ИТ — кириллица
-const KNOB_ВИС = KNOB_VIS; // ВИС — кириллица
-
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
-const clampBox = (x: number, y: number, w: number, h: number) => ({
-  x: clamp(x, 0, 100 - w),
-  y: clamp(y, 0, 100 - h),
-  w: clamp(w, 2, 100),
-  h: clamp(h, 2, 100)
-});
-const SNAP_STEP_DEFAULT = 1;
-const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
-const isCrossCategoryName = (s?: string) =>
-  (s || "").toLowerCase().includes("крест") || (s || "").toLowerCase().includes("cross");
-
-function linesFromPerson(p: any) {
+/* ===== Utils ===== */
+function orientationLabelShort(o?: string) {
+  if (!o) return "";
+  const k = String(o).toLowerCase();
+  if (k.startsWith("h")) return "горизонтально";
+  if (k.startsWith("v")) return "вертикально";
+  return "";
+}
+function personLines(p: any): string[] {
   const l1 = (p?.lastName || "").trim();
   const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-const normRemember = (t?: string) =>
-  (t || "")
-    .toLowerCase()
-    .replace(/[.,…!?:;]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-const isRememberLoveMourn = (t?: string) => normRemember(t) === "помним любим скорбим";
-function splitRememberPreserve(text: string) {
-  const t = (text || "").trim();
-  const parts: string[] = [];
-  let buf = "";
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    buf += ch;
-    if (ch === ",") {
-      parts.push(buf.trim());
-      buf = "";
-    }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  const top = parts[0] || "Помним,";
-  const mid = parts[1] || "любим,";
-  const bot = (parts.length > 2 ? parts.slice(2).join(" ") : "скорбим…").trim();
-  return { top, mid, bot };
+
+/* ===== Навигация ===== */
+function StickyNav({
+  showRear, onGoFront, onGoRear, onGoPreviews, onGoExtras, onSimpleView
+}: { showRear: boolean; onGoFront: () => void; onGoRear: () => void; onGoPreviews: () => void; onGoExtras: () => void; onSimpleView: () => void; }) {
+  return (
+    <div style={{ position: "sticky", top: 0, zIndex: 50, background: "rgba(0,0,0,0.92)", backdropFilter: "saturate(120%) blur(8px)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, padding: "8px 10px", margin: "10px 0" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button type="button" onClick={onGoFront} style={glassButtonStyle("nano")}>Лицевая</button>
+        {showRear && <button type="button" onClick={onGoRear} style={glassButtonStyle("nano")}>Тыльная</button>}
+        <button type="button" onClick={onGoPreviews} style={glassButtonStyle("nano")}>Эскизы</button>
+        <button type="button" onClick={onGoExtras} style={glassButtonStyle("nano")}>Дополнительно</button>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onSimpleView} style={glassButtonStyle("nano")} title="Упрощенный вид">Упрощенный вид</button>
+      </div>
+    </div>
+  );
 }
 
-/* ===== Measuring helpers ===== */
-let __measureCtx: CanvasRenderingContext2D | null = null;
-function getMeasureCtx(): CanvasRenderingContext2D {
-  if (__measureCtx) return __measureCtx;
-  const c = document.createElement("canvas");
-  __measureCtx = c.getContext("2d");
-  return __measureCtx!;
-}
-function setFontOnCtx(ctx: CanvasRenderingContext2D, italic: boolean, px: number, family: string) {
-  ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.round(px))}px ${family}`;
-}
-function measureTextAt(ctx: CanvasRenderingContext2D, text: string, italic: boolean, family: string, sizePx: number) {
-  setFontOnCtx(ctx, italic, sizePx, family);
-  return ctx.measureText(text).width;
-}
-function fitMultilineFontPxGeneric({
-  text,
-  boxW,
-  boxH,
-  italic,
-  family,
-  padX = 4,
-  padY = 2,
-  lineHeight = 1.15,
-  minPx = 10,
-  maxPx = 96
-}: {
-  text: string;
-  boxW: number;
-  boxH: number;
-  italic: boolean;
-  family: string;
-  padX?: number;
-  padY?: number;
-  lineHeight?: number;
-  minPx?: number;
-  maxPx?: number;
-}) {
-  const ctx = getMeasureCtx();
-  const raw = String(text || "");
-  const lines = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  const count = Math.max(1, lines.length);
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const fByH = usableH / (count * lineHeight);
-  let fByW = maxPx;
-  for (const ln of lines.length ? lines : [" "]) {
-    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
-    const fLine = (usableW * 100) / w100;
-    fByW = Math.min(fByW, fLine);
-  }
-  const fontPx = clamp(Math.floor(Math.min(fByH, fByW, maxPx)), minPx, maxPx);
-  return { fontPx, lines: lines.length ? lines : [""] };
-}
-function fitMetricFontsPx({
-  lines,
-  boxW,
-  boxH,
-  italic,
-  family,
-  padX = 4,
-  padY = 2,
-  lineHeight = 1.12,
-  minPx = 10,
-  weights = [0.36, 0.3, 0.26]
-}: {
-  lines: string[];
-  boxW: number;
-  boxH: number;
-  italic: boolean;
-  family: string;
-  padX?: number;
-  padY?: number;
-  lineHeight?: number;
-  minPx?: number;
-  weights?: number[];
-}) {
-  const ctx = getMeasureCtx();
-  const L = Math.min(3, lines.length);
-  if (L === 0) return [];
-  const usableW = Math.max(8, boxW - padX * 2);
-  const usableH = Math.max(8, boxH - padY * 2);
-  const wSum = weights.slice(0, L).reduce((a, b) => a + b, 0);
-  const baseByH = usableH / (lineHeight * wSum);
-  const initial = Array.from({ length: L }, (_, i) => baseByH * weights[i]);
-  let sW = 1;
-  for (let i = 0; i < L; i++) {
-    const ln = lines[i] || "";
-    const w100 = Math.max(1, measureTextAt(ctx, ln, italic, family, 100));
-    const maxFi = (usableW * 100) / w100;
-    sW = Math.min(sW, maxFi / initial[i]);
-  }
-  return initial.map((sz) => Math.max(minPx, Math.floor(sz * sW)));
+/* ===== Thumb ===== */
+const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
+  <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
+    {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
+  </div>
+);
+
+/* ===== Эскиз-карточка (используем frontMini/backMini) ===== */
+function SketchCard({ title, url, aspect }: { title: string; url?: string | null; aspect?: string }) {
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
+      <div style={{ fontWeight: 700 }}>{title}</div>
+      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
+        <div style={gradientUnderlay()} />
+        {url ? (
+          <img src={url} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
+        ) : (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 1 }}>Нет</div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-/* ===== Component ===== */
-type Props = {
-  onBack?: () => void;
-  onContinue?: (payload?: any) => void;
-  onRearSide?: (payload?: any) => void;
-  onSendOrder?: (payload?: any) => void;
-};
-
-export default function EditorStep({ onBack, onContinue, onRearSide, onSendOrder }: Props) {
-  const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
-  const [outro, setOutro] = useState(false);
-
-  const [elements, setElements] = useState<EditorEl[]>(
-    () => ((draft as any)?.editor?.elements as EditorEl[]) || []
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [wishes, setWishes] = useState<string>(() => ((draft as any)?.editor?.wishes as string) || "");
-
-  const editorWrapRef = useRef<HTMLDivElement | null>(null);
-  const previewTimerRef = useRef<number | null>(null);
-
-  // ts последнего локального применения — защита от «отката»
-  const lastAppliedTsRef = useRef<number>(
-    (draft as any)?.editor?.updatedAt ? Number((draft as any).editor.updatedAt) : 0
-  );
-
-  // aspectRatio
-  const [imgWH, setImgWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const aspect = useMemo(() => (imgWH.w > 0 && imgWH.h > 0 ? `${imgWH.w} / ${imgWH.h}` : undefined), [imgWH]);
-
-  // Источники
-  const item = draft?.item || null;
-  const engr: any = draft?.engraving || {};
-  const graphics: any[] = Array.isArray(draft?.graphics) ? (draft.graphics as any[]) : [];
-
-  // Блоки людей
-  const peopleBlocks = useMemo(() => {
-    if (Array.isArray(engr?.persons) && engr.persons.length > 0) {
-      return engr.persons.map((p: any, idx: number) => {
-        const lines = linesFromPerson(p);
-        const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null;
-        return { id: p.id || `person-${idx}`, lines, photo };
-      });
-    }
-    const legacyLines: string[] = [];
-    if (engr?.fullName) legacyLines.push(String(engr.fullName));
-    const dates: string[] = [];
-    if (engr?.birthDate) dates.push(String(engr.birthDate));
-    if (engr?.deathDate) dates.push(String(engr.deathDate));
-    if (dates.length) legacyLines.push(dates.join(" — "));
-    if (Array.isArray(engr?.lines)) legacyLines.push(...(engr.lines as string[]).filter(Boolean));
-    const photo = engr?.photoPreview || engr?.photoDataUrl || engr?.photoUrl || engr?.photo || null;
-    return legacyLines.length || photo ? [{ id: "legacy-0", lines: legacyLines, photo }] : [];
-  }, [engr]);
-
-  // Эпитафии (строго epitaphText)
-  const epitaphs = useMemo(() => {
-    const e: any = engr || {};
-    if (Array.isArray(e.epitaphs) && e.epitaphs.length) return (e.epitaphs as string[]).filter(Boolean);
-    const raw = typeof e.epitaphText === "string" ? e.epitaphText : "";
-    const one = raw.trim();
-    return one ? [one] : [];
-  }, [engr]);
-
-  // Графика
-  const crosses = useMemo(
-    () => graphics.filter((g) => isCrossCategoryName(g.catName) || isCrossCategoryName(g.catSlug)),
-    [graphics]
-  );
-  const others = useMemo(
-    () => graphics.filter((g) => !isCrossCategoryName(g.catName) && !isCrossCategoryName(g.catSlug)),
-    [graphics]
-  );
-
-  // Что уже размещено на эскизе
-  const placedPortraitIds = useMemo(
-    () => new Set(elements.filter((e) => e.type === "portrait").map((e) => e.id.replace(/^portrait-/, ""))),
-    [elements]
-  );
-  const placedMetricIds = useMemo(
-    () => new Set(elements.filter((e) => e.type === "metric").map((e) => e.id.replace(/^metric-/, ""))),
-    [elements]
-  );
-  const placedEpitaphIdx = useMemo(
-    () => new Set(elements.filter((e) => e.type === "epitaph").map((e) => Number(e.id.replace(/^epitaph-/, "")))),
-    [elements]
-  );
-  const placedCrossIdx = useMemo(
-    () => new Set(elements.filter((e) => e.type === "cross").map((e) => Number(e.id.replace(/^cross-/, "")))),
-    [elements]
-  );
-  const placedGraphicIdx = useMemo(
-    () => new Set(elements.filter((e) => e.type === "graphic").map((e) => Number(e.id.replace(/^graphic-/, "")))),
-    [elements]
-  );
-
-  // Палитра миниатюр (единая, без подписей)
-  type TrayItem = { type: ElType; key: string | number; node: React.ReactNode };
-  const trayItems: TrayItem[] = useMemo(() => {
-    const items: TrayItem[] = [];
-
-    // Портреты
-    for (const p of peopleBlocks) {
-      if (!placedPortraitIds.has(p.id)) {
-        items.push({
-          type: "portrait",
-          key: p.id,
-          node: p.photo ? (
-            <img
-              src={p.photo}
-              alt=""
-              style={{ maxWidth: 120, maxHeight: 120, width: "auto", height: "auto", objectFit: "contain", display: "block" }}
-            />
-          ) : (
-            <div style={{ width: 120, height: 120, display: "grid", placeItems: "center", opacity: 0.7, fontSize: 12 }}>—</div>
-          )
-        });
-      }
-    }
-
-    // Метрика (текст)
-    for (const p of peopleBlocks) {
-      if (!placedMetricIds.has(p.id)) {
-        const ln = (p.lines || []) as string[];
-        items.push({
-          type: "metric",
-          key: p.id,
-          node: (
-            <div
-              style={{
-                maxWidth: 120,
-                maxHeight: 120,
-                padding: 6,
-                boxSizing: "border-box",
-                display: "grid",
-                placeItems: "center",
-                textAlign: "center",
-                lineHeight: 1.15,
-                fontSize: 12,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                color: "#fff"
-              }}
-            >
-              <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{ln[0] || "—"}</div>
-              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{ln[1] || ""}</div>
-              <div style={{ opacity: 0.9, overflow: "hidden", textOverflow: "ellipsis" }}>{ln[2] || ""}</div>
+/* ===== Каталог графики для плиты ===== */
+function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
+      {items.map((g: any, idx: number) => {
+        const gid = String(g.id || g.relPath || g.url || g.name || idx);
+        const qty = plateIds.filter((x) => x === gid).length;
+        const thumbUrl = g.preview || g.url || "";
+        const name = g.name || gid;
+        return (
+          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 12 }}>
+            <div role="button" title={name} onClick={() => addGraphic(g)} style={{ borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer" }}>
+              {thumbUrl ? <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
             </div>
-          )
-        });
-      }
-    }
-
-    // Эпитафии (текст)
-    epitaphs.forEach((t, i) => {
-      if (!placedEpitaphIdx.has(i)) {
-        items.push({
-          type: "epitaph",
-          key: i,
-          node: (
-            <div
-              style={{
-                maxWidth: 120,
-                maxHeight: 120,
-                padding: 6,
-                boxSizing: "border-box",
-                display: "grid",
-                placeItems: "center",
-                textAlign: "center",
-                lineHeight: 1.15,
-                fontSize: 12,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                color: "#fff"
-              }}
-              title={t}
-            >
-              {t}
+            <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>{name}</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>−</button>
+              <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
+              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>+</button>
             </div>
-          )
-        });
-      }
-    });
-
-    // Кресты
-    crosses.forEach((g, i) => {
-      if (!placedCrossIdx.has(i)) {
-        items.push({
-          type: "cross",
-          key: i,
-          node: g.url ? (
-            <img
-              src={g.url}
-              alt=""
-              style={{ maxWidth: 120, maxHeight: 120, width: "auto", height: "auto", objectFit: "contain", display: "block" }}
-            />
-          ) : (
-            <div style={{ width: 120, height: 120, display: "grid", placeItems: "center", opacity: 0.7, fontSize: 12 }}>—</div>
-          )
-        });
-      }
-    });
-
-    // Графика
-    others.forEach((g, i) => {
-      if (!placedGraphicIdx.has(i)) {
-        items.push({
-          type: "graphic",
-          key: i,
-          node: g.url ? (
-            <img
-              src={g.url}
-              alt=""
-              style={{ maxWidth: 120, maxHeight: 120, width: "auto", height: "auto", objectFit: "contain", display: "block" }}
-            />
-          ) : (
-            <div style={{ width: 120, height: 120, display: "grid", placeItems: "center", opacity: 0.7, fontSize: 12 }}>—</div>
-          )
-        });
-      }
-    });
-
-    return items;
-  }, [peopleBlocks, placedPortraitIds, placedMetricIds, epitaphs, placedEpitaphIdx, crosses, placedCrossIdx, others, placedGraphicIdx]);
-
-  // Добавление по центру (сразу в стор, updatedAt)
-  const nextZ = () => (elements.length ? Math.max(...elements.map((e) => e.z || 0)) + 10 : 10);
-  const addCentered = (type: ElType, key: string | number) => {
-    let newEl: EditorEl | null = null;
-    const baseCenter = (w: number, h: number) => clampBox((100 - w) / 2, (100 - h) / 2, w, h);
-
-    if (type === "portrait" && typeof key === "string") {
-      if (elements.some((e) => e.type === "portrait" && e.id === `portrait-${key}`)) return;
-      const r = baseCenter(28, 34);
-      newEl = { id: `portrait-${key}`, type, ...r, z: nextZ(), bw: true, title: "Портрет" };
-    } else if (type === "metric" && typeof key === "string") {
-      if (elements.some((e) => e.type === "metric" && e.id === `metric-${key}`)) return;
-      const r = baseCenter(44, 20);
-      newEl = { id: `metric-${key}`, type, ...r, z: nextZ(), uppercase: true, italic: false, title: "Метрика" };
-    } else if (type === "epitaph" && typeof key === "number") {
-      if (elements.some((e) => e.type === "epitaph" && e.id === `epitaph-${key}`)) return;
-      const r = baseCenter(72, 16);
-      const txt = epitaphs[key] || "";
-      newEl = { id: `epitaph-${key}`, type, ...r, z: nextZ(), uppercase: false, italic: false, staircase: isRememberLoveMourn(txt), title: "Эпитафия" };
-    } else if (type === "cross" && typeof key === "number") {
-      if (elements.some((e) => e.type === "cross" && e.id === `cross-${key}`)) return;
-      const r = baseCenter(16, 16);
-      newEl = { id: `cross-${key}`, type, ...r, z: nextZ(), title: "Крест" };
-    } else if (type === "graphic" && typeof key === "number") {
-      if (elements.some((e) => e.type === "graphic" && e.id === `graphic-${key}`)) return;
-      const r = baseCenter(24, 16);
-      newEl = { id: `graphic-${key}`, type, ...r, z: nextZ(), flipH: false, title: "Графика" };
-    }
-
-    if (newEl) {
-      const nextEls = [...elements, newEl];
-      setElements(nextEls);
-      setSelectedId(newEl.id);
-      const ts = Date.now();
-      lastAppliedTsRef.current = ts;
-      const cur = loadOrderDraft();
-      saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: nextEls, wishes, updatedAt: ts } });
-      queuePreviewGeneration();
-    }
-  };
-
-  // DnD из палитры
-  const onTrayDragStart = (e: React.DragEvent, payload: { type: ElType; key: string | number }) => {
-    try {
-      e.dataTransfer?.setData(DND_MIME, JSON.stringify(payload));
-      (e.dataTransfer as DataTransfer).effectAllowed = "copyMove";
-    } catch {}
-  };
-  const onEditorDragOver = (e: React.DragEvent) => {
-    if (e.dataTransfer?.types?.includes(DND_MIME)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
-    }
-  };
-  const onEditorDrop = (e: React.DragEvent) => {
-    const dt = e.dataTransfer;
-    if (!dt || !dt.types.includes(DND_MIME)) return;
-    e.preventDefault();
-    try {
-      const raw = dt.getData(DND_MIME);
-      const obj = JSON.parse(raw) as { type: ElType; key: string | number };
-      addCentered(obj.type, obj.key);
-    } catch {}
-  };
-
-  // Подписка: применяем стор только если он новее локального
-  const refreshRef = useRef<(opts?: { force?: boolean }) => void>(() => {});
-  const isRefreshingRef = useRef(false);
-  const lastStoreSigRef = useRef<string>("");
-
-  const refreshFromDraft = React.useCallback(
-    (opts?: { force?: boolean }) => {
-      if (isRefreshingRef.current) return;
-      isRefreshingRef.current = true;
-      try {
-        const fresh = loadOrderDraft();
-
-        const pick = { item: fresh?.item || null, engraving: fresh?.engraving || null, graphics: fresh?.graphics || null };
-        const sig = JSON.stringify(pick);
-        if (sig !== lastStoreSigRef.current) {
-          setDraft(fresh);
-          lastStoreSigRef.current = sig;
-        }
-
-        const incoming = ((fresh as any)?.editor || {}) as any;
-        const incomingEls: EditorEl[] = Array.isArray(incoming.elements) ? (incoming.elements as EditorEl[]) : [];
-        const incomingWishes: string = typeof incoming.wishes === "string" ? incoming.wishes : "";
-        const incomingTs: number = Number(incoming.updatedAt || 0);
-        const localTs = lastAppliedTsRef.current;
-
-        const allowEls =
-          (opts?.force && elements.length === 0 && incomingEls.length > 0) || incomingTs > localTs;
-
-        if (allowEls) {
-          setElements(incomingEls);
-          setWishes(incomingWishes);
-          lastAppliedTsRef.current = incomingTs;
-        }
-      } finally {
-        isRefreshingRef.current = false;
-      }
-    },
-    [elements.length]
+          </div>
+        );
+      })}
+    </div>
   );
+}
 
+/* ===== Шапка заказа (миниатюра с градиентом) ===== */
+function EditableOrderSummary({ orderNo }: { orderNo: string }) {
+  const [draft] = useState(() => loadOrderDraft());
+  const introState = loadIntroState();
+  const [name, setName] = useState<string>(introState.intro?.customerName || "");
+  const [phone, setPhone] = useState<string>(introState.intro?.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState<string>(introState.intro?.customerNotes || "");
+  const saveTimer = useRef<number | null>(null);
+  const scheduleSave = () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      const nextIntro: Intro = { customerName: (name || "").trim(), customerPhone: (phone || "").trim(), customerNotes: (contactNotes || "").trim() || undefined };
+      saveIntro(nextIntro, { lock: false });
+    }, 250) as unknown as number;
+  };
+  useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
+  const dims = `${(draft?.size?.width && Math.round(draft.size.width / 10)) || "—"}×${(draft?.size?.height && Math.round(draft.size.height / 10)) || "—"}×${(draft?.size?.thickness && Math.round(draft.size.thickness / 10)) || "—"} см`;
+  const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
+  const itemUrl = (draft as any)?.item?.url as string | undefined;
+
+  return (
+    <section style={{ ...glassPanelStyle(), padding: 12 }}>
+      <div style={{ fontSize: 13, opacity: 0.95, marginBottom: 8 }}>заказ № {orderNo || "—"}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
+        <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+      </div>
+      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={{ ...inputStyle(), marginBottom: 10 }} />
+      {/* Миниатюра резной работы с градиентом */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
+        <div style={{ position: "relative", width: 100, height: 100, borderRadius: 10, overflow: "hidden" }}>
+          <div style={gradientUnderlay()} />
+          {itemUrl ? (
+            <img src={itemUrl} alt="Резная работа" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
+          ) : (
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 1, opacity: 0.9 }}>нет</div>
+          )}
+        </div>
+        <div style={{ display: "grid", gap: 4 }}>
+          {(draft?.item?.name || draft?.item?.url) && <div style={wrapText(13)}>{draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}</div>}
+          <div style={{ opacity: 0.9, ...wrapText(13) }}>Размеры: {dims}{orient ? ` · ${orient}` : ""}</div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ===== Главный компонент ===== */
+type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
+export default function ReviewAndSendStep({ onBack, onSend }: Props) {
+  const [draft, setDraft] = useState(loadOrderDraft());
+  const [introState, setIntroState] = useState(() => loadIntroState());
   useEffect(() => {
-    refreshRef.current = refreshFromDraft;
-  }, [refreshFromDraft]);
-
-  useEffect(() => {
-    const onAny = () => refreshRef.current();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refreshRef.current();
-    };
-    window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
-    window.addEventListener("storage", onAny);
-    window.addEventListener("memorial:orderDraftUpdated", onAny as any);
-    window.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onAny);
-    window.addEventListener("pageshow", onAny as any);
-    window.addEventListener("popstate", onAny);
-    window.addEventListener("hashchange", onAny);
-
-    refreshRef.current({ force: true });
-
+    const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
+    window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+    window.addEventListener("storage", refresh);
+    refresh();
     return () => {
-      window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
-      window.removeEventListener("storage", onAny);
-      window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
-      window.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onAny);
-      window.removeEventListener("pageshow", onAny as any);
-      window.removeEventListener("popstate", onAny);
-      window.removeEventListener("hashchange", onAny);
+      window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+      window.removeEventListener("storage", refresh);
     };
   }, []);
+  const orderNo = String(introState.orderNumber || "").trim();
 
-  /* ===== DnD/Resize на эскизе (handlers) ===== */
-  const dragRef = useRef<{
-    id: string;
-    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-    startX: number;
-    startY: number;
-    start: EditorEl;
-  } | null>(null);
+  // IDs
+  const frontId = "section-front", rearId = "section-rear", previewsId = "section-previews", extrasId = "section-extras";
+  const goTo = (id: string) => { const el = document.getElementById(id); if (!el) return; window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 8, behavior: "smooth" }); };
 
-  const rafMoveScheduled = useRef(false);
-  const rafMovePayload = useRef<{ id: string; next: EditorEl } | null>(null);
+  // Эскизы из драфта (как просили)
+  const frontSketchUrl = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
+  const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
-  const scheduleMoveCommit = () => {
-    if (rafMoveScheduled.current) return;
-    rafMoveScheduled.current = true;
-    requestAnimationFrame(() => {
-      rafMoveScheduled.current = false;
-      const payload = rafMovePayload.current;
-      if (!payload) return;
-      setElements((prev) => prev.map((el) => (el.id === payload.id ? payload.next : el)));
-      rafMovePayload.current = null;
+  // Aspect по изделию (для контейнера эскизов)
+  const itemUrl = (draft as any)?.item?.url as string | undefined;
+  const [aspect, setAspect] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!itemUrl) return;
+    const im = new Image();
+    im.onload = () => { const w = im.naturalWidth || 0, h = im.naturalHeight || 0; if (w && h) setAspect(`${w} / ${h}`); };
+    im.src = itemUrl;
+  }, [itemUrl]);
+
+  /* ——— Лицевая: люди/графика/эпитафии ——— */
+  const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
+  const frontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
+  const frontCountsById = useMemo(() => {
+    const m: Record<string, number> = {};
+    frontGraphics.forEach((g) => { const id = g?.id || g?.url || g?.name || ""; if (id) m[id] = (m[id] || 0) + 1; });
+    return m;
+  }, [frontGraphics]);
+  const frontUnique = useMemo(() => {
+    const seen = new Set<string>(); const out: any[] = [];
+    frontGraphics.forEach((g) => { const id = g?.id || g?.url || g?.name || ""; if (id && !seen.has(id)) { seen.add(id); out.push(g); } });
+    return out;
+  }, [frontGraphics]);
+  const frontEpitaphs: string[] = useMemo(() => {
+    const arr = Array.isArray(draft.engraving?.epitaphs) ? (draft.engraving!.epitaphs || []).filter(Boolean) : [];
+    if (arr.length) return arr;
+    const single = (draft.engraving?.epitaphText || "").trim();
+    return single ? [single] : [];
+  }, [draft.engraving]);
+
+  /* ——— Тыльная: графика/эпитафии ——— */
+  const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+  const rearCounts: Record<string, number> = useMemo(() => {
+    const m: Record<string, number> = {};
+    (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
+    return m;
+  }, [rearIds]);
+  const rearUnique = useMemo(() => {
+    const ids = Array.from(new Set(rearIds || []));
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+  }, [rearIds, rearMeta]);
+  const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
+  const backWishes = (((draft as any)?.editorBack?.wishes || "").trim());
+  const rearHasContent = rearUnique.length > 0 || rearEpitaphs.length > 0 || !!backWishes;
+
+  /* ===== Дополнительно (плита) ===== */
+  const extras0 = (draft as any)?.extras || {};
+  const [extraBase, setExtraBase] = useState<boolean>(extras0.base ?? true);
+  const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!extras0.flowerbed);
+  const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
+  const sizeOptions = ["100×50 см", "120×60 см", "140×70 см", "Свой вариант"];
+  const thicknessOptions = ["5 см", "8 см", "10 см", "Свой вариант"];
+  const [plateSize, setPlateSize] = useState<string>(extras0.plateSize && sizeOptions.includes(extras0.plateSize) ? extras0.plateSize : sizeOptions[0]);
+  const [plateCustomSize, setPlateCustomSize] = useState<string>(extras0.plateCustomSize || "");
+  const [plateThickness, setPlateThickness] = useState<string>(extras0.plateThickness && thicknessOptions.includes(extras0.plateThickness) ? extras0.plateThickness : thicknessOptions[0]);
+  const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
+  const [plateOrientation, setPlateOrientation] = useState<string>(extras0.plateOrientation || (((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")) ? "horizontal" : "vertical"));
+  const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
+  const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
+  const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
+  const addPlateGraphic = (g: any) => {
+    const gid = String(g.id || g.relPath || g.url || g.name);
+    setPlateIds((prev) => prev.concat(gid));
+    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } }));
+  };
+  const removePlateGraphic = (gid: string) => {
+    setPlateIds((prev) => {
+      const i = prev.findIndex((x) => x === gid);
+      if (i === -1) return prev;
+      const next = prev.slice();
+      next.splice(i, 1);
+      return next;
     });
   };
 
-  const onPointerDownBox = (
-    e: React.PointerEvent,
-    id: string,
-    mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" = "move"
-  ) => {
-    e.stopPropagation();
-    const el = elements.find((x) => x.id === id);
-    if (!el || el.locked) return;
-    setSelectedId(id);
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
-    dragRef.current = {
-      id,
-      mode,
-      startX: e.clientX,
-      startY: e.clientY,
-      start: { ...el }
-    };
-  };
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    e.preventDefault();
-    const rect = editorWrapRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const contentW = rect.width - SKETCH_PAD * 2;
-    const contentH = rect.height - SKETCH_PAD * 2;
-    if (contentW <= 0 || contentH <= 0) return;
-
-    const dxPct = ((e.clientX - d.startX) / contentW) * 100;
-    const dyPct = ((e.clientY - d.startY) / contentH) * 100;
-
-    const keepRatio = e.shiftKey;
-    const snap = (v: number, step = SNAP_STEP_DEFAULT) => Math.round(v / step) * step;
-
-    const base = d.start;
-    let nx = base.x, ny = base.y, nw = base.w, nh = base.h;
-
-    if (d.mode === "move") {
-      nx = snap(base.x + dxPct);
-      ny = snap(base.y + dyPct);
-    } else {
-      const ratio = (base.w || 1) / (base.h || 1);
-      if (d.mode.includes("e")) nw = snap(base.w + dxPct);
-      if (d.mode.includes("s")) nh = snap(base.h + dyPct);
-      if (d.mode.includes("w")) { nx = snap(base.x + dxPct); nw = snap(base.w - dxPct); }
-      if (d.mode.includes("n")) { ny = snap(base.y + dyPct); nh = snap(base.h - dyPct); }
-      if (keepRatio) {
-        if (["e", "w"].some((s) => d.mode.includes(s))) nh = nw / ratio;
-        if (["n", "s"].some((s) => d.mode.includes(s))) nw = nh * ratio;
+  // Каталог для выбора графики на плите
+  const [catsLoading, setCatsLoading] = useState(false);
+  const [catsError, setCatsError] = useState("");
+  const [cats, setCats] = useState<any[]>([]);
+  const [catOpen, setCatOpen] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCatsLoading(true); setCatsError("");
+      try {
+        const data = await fetchCatalog("graphics");
+        const root = (data as any)?.categories || data;
+        const catsArr = Array.isArray(root) ? root : [];
+        if (alive) setCats(catsArr);
+      } catch {
+        if (alive) setCatsError("Не удалось загрузить каталог графики.");
+      } finally {
+        if (alive) setCatsLoading(false);
       }
-    }
-
-    const clamped = clampBox(nx, ny, nw, nh);
-    const nextEl: EditorEl = { ...base, ...clamped };
-    rafMovePayload.current = { id: d.id, next: nextEl };
-    scheduleMoveCommit();
-  };
-
-  const onPointerUp = () => {
-    if (dragRef.current) {
-      const ts = Date.now();
-      lastAppliedTsRef.current = ts;
-      const cur = loadOrderDraft();
-      const latest = elements;
-      saveOrderDraft({
-        ...cur,
-        editor: { ...(cur as any).editor, elements: latest, wishes, updatedAt: ts }
-      });
-      queuePreviewGeneration();
-    }
-    dragRef.current = null;
-  };
-
-  /* ===== Генерация превью ===== */
-  function queuePreviewGeneration() {
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
-    previewTimerRef.current = window.setTimeout(async () => {
-      const wrap = editorWrapRef.current;
-      if (!wrap) return;
-      const r = wrap.getBoundingClientRect();
-      const pad = SKETCH_PAD;
-
-      async function drawPreview(W: number, H: number): Promise<string | null> {
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.floor(W));
-        canvas.height = Math.max(1, Math.floor(H));
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return null;
-
-        // фон
-        const grad = ctx.createLinearGradient(0, 0, 0, H);
-        grad.addColorStop(0, "#6e6e6e");
-        grad.addColorStop(0.2, "#464545");
-        grad.addColorStop(0.4, "#424242");
-        grad.addColorStop(0.7, "#888888");
-        grad.addColorStop(1.0, "#ffffff");
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, W, H);
-
-        // изделие
-        const base = await new Promise<HTMLImageElement | null>((resolve) => {
-          const url = item?.url || "";
-          if (!url) return resolve(null);
-          const i = new Image();
-          i.crossOrigin = "anonymous";
-          i.loading = "eager";
-          (i as any).fetchpriority = "high";
-          i.decoding = "sync";
-          i.onload = () => resolve(i);
-          i.onerror = () => resolve(null);
-          i.src = url;
-        });
-
-        const CX = pad, CY = pad, PW = W - pad * 2, PH = H - pad * 2;
-        if (base) {
-          const sr = base.width / base.height, dr = PW / PH;
-          ctx.globalAlpha = 0.35;
-          if (sr > dr) {
-            const rw = PW, rh = Math.round(PW / sr), rx = CX, ry = CY + Math.round((PH - rh) / 2);
-            ctx.drawImage(base, rx, ry, rw, rh);
-          } else {
-            const rh = PH, rw = Math.round(PH * sr), ry = CY, rx = CX + Math.round((PW - rw) / 2);
-            ctx.drawImage(base, rx, ry, rw, rh);
-          }
-          ctx.globalAlpha = 1;
-        }
-
-        // элементы
-        const fam = FONT_CENTURY;
-        const safeIndex = (raw: string, max: number) => {
-          const n = parseInt(raw, 10);
-          if (!Number.isFinite(n) || n < 0) return 0;
-          return Math.min(n, Math.max(0, max - 1));
-        };
-
-        for (const el of elements.slice().sort((a, b) => a.z - b.z)) {
-          const rbox = { x: CX + (el.x / 100) * PW, y: CY + (el.y / 100) * PH, w: (el.w / 100) * PW, h: (el.h / 100) * PH };
-          const key = el.id.split("-").slice(1).join("-");
-          if (el.type === "portrait") {
-            const p = peopleBlocks.find((pp) => pp.id === key);
-            const url = p?.photo || "";
-            if (!url) continue;
-            const im = await new Promise<HTMLImageElement | null>((resolve) => {
-              const i = new Image();
-              i.crossOrigin = "anonymous";
-              i.loading = "eager";
-              (i as any).fetchpriority = "low";
-              i.decoding = "async";
-              i.onload = () => resolve(i);
-              i.onerror = () => resolve(null);
-              i.src = url;
-            });
-            if (!im) continue;
-            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(rbox.x, rbox.y, rbox.w, rbox.h);
-            ctx.clip();
-            if (el.bw) ctx.filter = "grayscale(100%)";
-            if (sr2 > dr2) {
-              const hh = rbox.h, ww = Math.round(hh * sr2), xx = Math.round(rbox.x + (rbox.w - ww) / 2), yy = rbox.y;
-              ctx.drawImage(im, xx, yy, ww, hh);
-            } else {
-              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
-              ctx.drawImage(im, xx, yy, ww, hh);
-            }
-            ctx.restore();
-            ctx.filter = "none";
-          } else if (el.type === "metric") {
-            const p = peopleBlocks.find((pp) => pp.id === key);
-            const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-            const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-            ctx.save();
-            ctx.fillStyle = "#fff";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.1));
-            const fitted = fitMetricFontsPx({ lines: lines.map(tf), boxW: rbox.w, boxH: rbox.h, italic: !!el.italic, family: fam, padX: padX2, padY: padY2, lineHeight: 1.12, minPx: 10 });
-            const totalH = fitted.reduce((a, b) => a + b * 1.12, 0);
-            let y = rbox.y + (rbox.h - totalH) / 2 + ((fitted[0] || 10) * 1.12) / 2;
-            for (let i = 0; i < fitted.length; i++) {
-              setFontOnCtx(ctx, !!el.italic, fitted[i], fam);
-              ctx.fillText(tf(lines[i] || ""), rbox.x + rbox.w / 2, y);
-              y += fitted[i] * 1.12;
-            }
-            ctx.restore();
-          } else if (el.type === "epitaph") {
-            const idx = safeIndex(key, epitaphs.length);
-            const tRaw = epitaphs[idx] || "";
-            const isRLM = isRememberLoveMourn(tRaw);
-            const padX2 = Math.max(4, Math.round(rbox.w * 0.04)), padY2 = Math.max(2, Math.round(rbox.h * 0.06));
-            ctx.save();
-            ctx.fillStyle = "#fff";
-            ctx.textBaseline = "middle";
-            if (isRLM && el.staircase) {
-              const r = splitRememberPreserve(tRaw);
-              const parts = [r.top, r.mid, r.bot];
-              const ctxm = getMeasureCtx();
-              const w1 = measureTextAt(ctxm, parts[0], !!el.italic, fam, 100);
-              const w2 = measureTextAt(ctxm, parts[1], !!el.italic, fam, 100);
-              const w3 = measureTextAt(ctxm, parts[2], !!el.italic, fam, 100);
-              const maxW = Math.max(w1, w2, w3);
-              const fByW = ((rbox.w - padX2 * 2) * 100) / Math.max(1, maxW);
-              const fByH = (rbox.h - padY2 * 2) / (3 * 1.15);
-              const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
-              const slotH = (rbox.h - padY2 * 2) / 3;
-              ctx.textAlign = "left";
-              ctx.fillText(parts[0], rbox.x + padX2, rbox.y + padY2 + slotH * 0.5);
-              ctx.textAlign = "center";
-              ctx.fillText(parts[1], rbox.x + rbox.w / 2, rbox.y + padY2 + slotH * 1.5);
-              ctx.textAlign = "right";
-              ctx.fillText(parts[2], rbox.x + rbox.w - padX2, rbox.y + padY2 + slotH * 2.5);
-            } else {
-              const { fontPx, lines } = fitMultilineFontPxGeneric({
-                text: el.uppercase ? tRaw.toUpperCase() : tRaw,
-                boxW: rbox.w,
-                boxH: rbox.h,
-                italic: !!el.italic,
-                family: fam,
-                padX: padX2,
-                padY: padY2,
-                lineHeight: 1.15
-              });
-              setFontOnCtx(ctx, !!el.italic, fontPx, fam);
-              ctx.textAlign = "center";
-              ctx.fillText(lines.join(" "), rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
-            }
-            ctx.restore();
-          } else if (el.type === "graphic" || el.type === "cross") {
-            const idx = Number(key);
-            const list = el.type === "cross" ? crosses : others;
-            const g = Number.isFinite(idx) ? list[idx] : null;
-            if (!g?.url) continue;
-            const im = await new Promise<HTMLImageElement | null>((resolve) => {
-              const i = new Image();
-              i.crossOrigin = "anonymous";
-              i.loading = "eager";
-              (i as any).fetchpriority = "low";
-              i.decoding = "async";
-              i.onload = () => resolve(i);
-              i.onerror = () => resolve(null);
-              i.src = g.url;
-            });
-            if (!im) continue;
-            ctx.save();
-            if (el.type === "graphic" && el.flipH) {
-              ctx.translate(rbox.x + rbox.w / 2, rbox.y + rbox.h / 2);
-              ctx.scale(-1, 1);
-              ctx.translate(-(rbox.x + rbox.w / 2), -(rbox.y + rbox.h / 2));
-            }
-            const sr2 = im.width / im.height, dr2 = rbox.w / rbox.h;
-            if (sr2 > dr2) {
-              const ww = rbox.w, hh = Math.round(ww / sr2), xx = rbox.x, yy = Math.round(rbox.y + (rbox.h - hh) / 2);
-              ctx.drawImage(im, xx, yy, ww, hh);
-            } else {
-              const hh = rbox.h, ww = Math.round(hh / sr2), xx = rbox.x + Math.round((rbox.w - ww) / 2), yy = rbox.y;
-              ctx.drawImage(im, xx, yy, ww, hh);
-            }
-            ctx.restore();
-          }
-        }
-
-        return canvas.toDataURL("image/jpeg", 0.9);
+    })();
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (!cats.length) return;
+    setCatOpen((prev) => {
+      const next = { ...prev };
+      for (const c of cats) {
+        const key = String(c._id || c.name || "");
+        if (!(key in next)) next[key] = false;
       }
+      return next;
+    });
+  }, [cats]);
 
-      const mini = await drawPreview(Math.max(320, Math.floor(r.width)), Math.max(320, Math.floor(r.height)));
-      const maxSide = 1600,
-        ratio = r.width / Math.max(1, r.height);
-      const bigW = ratio >= 1 ? maxSide : Math.round(maxSide * ratio);
-      const bigH = ratio >= 1 ? Math.round(maxSide / ratio) : maxSide;
-      const big = await drawPreview(bigW, bigH);
-
-      const cur = loadOrderDraft();
-      saveOrderDraft({
-        ...cur,
-        editor: {
-          ...(cur as any).editor,
-          previewUrl: mini || (cur as any).editor?.previewUrl || null,
-          previewHiUrl: big || (cur as any).editor?.previewHiUrl || null,
-          previewUpdatedAt: Date.now(),
-          elements,
-          wishes
-        }
+  const chosenPlateList = useMemo(() => {
+    const index: Record<string, any> = {};
+    cats.forEach((cat: any) => {
+      const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
+        const id = String(it.id || it.relPath || it.url || it.name || "");
+        if (!id) return;
+        if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
       });
+      collect(cat.items || []);
+      (cat.children || []).forEach((sub: any) => collect(sub.items || []));
+    });
+    const uniq = Array.from(new Set(plateIds));
+    return uniq.map((gid) => plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "" });
+  }, [plateIds, plateMeta, cats]);
+
+  // Эпитафии плиты -> список
+  const plateEpitaphList = useMemo(() => (plateEpitaph || "").split(/\n{2,}/g).map((s) => s.trim()).filter(Boolean), [plateEpitaph]);
+  const deletePlateEpitaphAt = (idx: number) => {
+    const arr = plateEpitaphList.slice();
+    if (idx < 0 || idx >= arr.length) return;
+    arr.splice(idx, 1);
+    setPlateEpitaph(arr.join("\n\n"));
+  };
+
+  // Примечания
+  const [orderNotes, setOrderNotes] = useState<string>(extras0.orderNotes || "");
+  const notesTimer = useRef<number | null>(null);
+  const scheduleSaveOrderNotes = () => {
+    if (notesTimer.current) window.clearTimeout(notesTimer.current);
+    notesTimer.current = window.setTimeout(() => {
+      const prev = loadOrderDraft();
+      const extras: any = { ...(prev as any).extras, orderNotes: (orderNotes || "").trim() || undefined };
+      saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+      setDraft(loadOrderDraft());
     }, 300) as unknown as number;
-  }
+  };
+  useEffect(() => () => { if (notesTimer.current) window.clearTimeout(notesTimer.current); }, []);
 
-  /* ===== Мини‑панель инструментов ===== */
-  const MiniToolbar: React.FC<{ el: EditorEl }> = ({ el }) => {
-    const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "2px 6px", fontSize: 11 };
-    const isMetric = el.type === "metric";
-    const isEpitaph = el.type === "epitaph";
-    const isGraphic = el.type === "graphic";
-    const isPortrait = el.type === "portrait";
-
-    let canStair = false;
-    if (isEpitaph) {
-      const idx = Number(el.id.split("-")[1]);
-      const tRaw = Number.isFinite(idx) ? epitaphs[idx] || "" : "";
-      canStair = isRememberLoveMourn(tRaw);
+  // Сохранение extras (плиту не затираем при снятом чекбоксе)
+  useEffect(() => {
+    const prev = loadOrderDraft();
+    const prevExtras = ((prev as any).extras || {}) as any;
+    const extras: any = { ...prevExtras, base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate };
+    if (extraPlate) {
+      extras.plateSize = plateSize;
+      extras.plateCustomSize = plateSize === "Свой вариант" ? (plateCustomSize || undefined) : prevExtras.plateCustomSize;
+      extras.plateThickness = plateThickness;
+      extras.plateCustomThickness = plateThickness === "Свой вариант" ? (plateCustomThickness || undefined) : prevExtras.plateCustomThickness;
+      extras.plateOrientation = plateOrientation;
+      extras.plateEpitaph = (plateEpitaph || "").trim() || undefined;
+      extras.plateGraphicsIds = plateIds;
+      extras.plateGraphicsMeta = plateMeta;
     }
+    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+    setDraft(loadOrderDraft());
+  }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
-    const commit = (mut: (prev: EditorEl[]) => EditorEl[]) => {
-      setElements((prev) => {
-        const next = mut(prev);
-        const ts = Date.now();
-        lastAppliedTsRef.current = ts;
-        const cur = loadOrderDraft();
-        saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements: next, wishes, updatedAt: ts } });
-        return next;
-      });
-      queuePreviewGeneration();
+  /* ===== Печать ===== */
+  const [simpleOpen, setSimpleOpen] = useState(false);
+  const hasPrintedRef = useRef(false);
+  const printSimple = () => {
+    if (hasPrintedRef.current) return;
+    try {
+      const el = document.getElementById("print-root");
+      if (el) {
+        const a4HeightPx = 1122; // ~297мм
+        const marginPx = Math.round(5 * 3.78);
+        const available = a4HeightPx - marginPx * 2;
+        const h = el.scrollHeight;
+        if (h > available) {
+          const scale = Math.max(0.5, Math.min(1, available / h));
+          (el as HTMLElement).style.transformOrigin = "top left";
+          (el as HTMLElement).style.transform = `scale(${scale})`;
+          setTimeout(() => { window.print(); setTimeout(() => { (el as HTMLElement).style.transform = ""; hasPrintedRef.current = false; }, 150); }, 50);
+          hasPrintedRef.current = true;
+          return;
+        }
+      }
+    } catch {}
+    hasPrintedRef.current = true;
+    window.print();
+    setTimeout(() => { hasPrintedRef.current = false; }, 400);
+  };
+
+  /* ===== Отправка ===== */
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>("");
+  const handleSend = async () => {
+    setBusy(true); setErr("");
+    const attachments: any = {
+      frontPreview: frontSketchUrl || null,
+      backPreview: rearHasContent ? (backSketchUrl || null) : null,
+      itemUrl: itemUrl || null,
+      plateGraphics: chosenPlateList
     };
-
-    return (
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          top: -30,
-          display: "flex",
-          gap: 6,
-          background: "rgba(0,0,0,0.6)",
-          border: "1px solid rgba(255,255,255,0.25)",
-          borderRadius: 6,
-          padding: "2px 6px",
-          alignItems: "center",
-          pointerEvents: "auto",
-          zIndex: 3000
-        }}
-        onPointerDown={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        {isMetric && (
-          <button
-            type="button"
-            style={btn}
-            title={el.uppercase ? "Показать строчные" : "Показать ПРОПИСНЫЕ"}
-            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, uppercase: !x.uppercase } : x)))}
-          >
-            {el.uppercase ? "строчные" : "ПРОПИСНЫЕ"}
-          </button>
-        )}
-        {isEpitaph && (
-          <>
-            <button
-              type="button"
-              style={btn}
-              title={el.italic ? "Обычный" : "Курсив"}
-              onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, italic: !x.italic } : x)))}
-            >
-              {el.italic ? "Обычный" : "Курсив"}
-            </button>
-            {canStair && (
-              <button
-                type="button"
-                style={btn}
-                title={el.staircase ? "В строку" : "Лесенкой"}
-                onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, staircase: !x.staircase } : x)))}
-              >
-                {el.staircase ? "В строку" : "Лесенкой"}
-              </button>
-            )}
-          </>
-        )}
-        {isGraphic && (
-          <button
-            type="button"
-            style={btn}
-            title="Отразить по горизонтали"
-            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, flipH: !x.flipH } : x)))}
-          >
-            ⇄
-          </button>
-        )}
-        {isPortrait && (
-          <button
-            type="button"
-            style={btn}
-            title={el.bw ? "Сделать цветным" : "Сделать ч/б"}
-            onClick={() => commit((prev) => prev.map((x) => (x.id === el.id ? { ...x, bw: !x.bw } : x)))}
-          >
-            {el.bw ? "Цвет" : "Ч/Б"}
-          </button>
-        )}
-        <button
-          type="button"
-          style={{ ...btn, padding: "2px 8px" }}
-          title="Удалить с эскиза"
-          onClick={() => commit((prev) => prev.filter((x) => x.id !== el.id))}
-        >
-          🗑
-        </button>
-      </div>
-    );
-  };
-
-  // Слой содержимого холста
-  const ContentLayer: React.FC = () => {
-    const wrap = editorWrapRef.current?.getBoundingClientRect();
-    const contentW = Math.max(1, (wrap?.width || 1) - SKETCH_PAD * 2);
-    const contentH = Math.max(1, (wrap?.height || 1) - SKETCH_PAD * 2);
-
-    return (
-      <div
-        style={{
-          position: "absolute",
-          left: SKETCH_PAD,
-          top: SKETCH_PAD,
-          right: SKETCH_PAD,
-          bottom: SKETCH_PAD,
-          pointerEvents: "none",
-          zIndex: 1000,
-          transform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-          contain: "paint"
-        }}
-      >
-        {elements
-          .slice()
-          .sort((a, b) => a.z - b.z)
-          .map((el) => {
-            const key = el.id.split("-").slice(1).join("-");
-            const boxPx = {
-              x: (el.x / 100) * contentW,
-              y: (el.y / 100) * contentH,
-              w: (el.w / 100) * contentW,
-              h: (el.h / 100) * contentH
-            };
-            const wrapperStyle: React.CSSProperties = {
-              position: "absolute",
-              left: Math.round(boxPx.x),
-              top: Math.round(boxPx.y),
-              width: Math.round(boxPx.w),
-              height: Math.round(boxPx.h),
-              zIndex: el.z,
-              pointerEvents: "none",
-              willChange: "transform",
-              transform: "translateZ(0)",
-              backfaceVisibility: "hidden",
-              contain: "paint",
-              boxSizing: "border-box"
-            };
-
-            if (el.type === "portrait") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const url = p?.photo || "";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {url ? (
-                    <img
-                      src={url}
-                      alt=""
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        filter: el.bw ? "grayscale(100%)" : "none",
-                        display: "block",
-                        willChange: "transform",
-                        transform: "translateZ(0)",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            if (el.type === "metric") {
-              const p = peopleBlocks.find((pp) => pp.id === key);
-              const lines = (p?.lines || []).filter(Boolean).slice(0, 3);
-              const tf = el.uppercase ? (s: string) => s.toUpperCase() : (s: string) => s;
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.1));
-              const fitted = fitMetricFontsPx({
-                lines: lines.map(tf),
-                boxW: boxPx.w,
-                boxH: boxPx.h,
-                italic: !!el.italic,
-                family: FONT_CENTURY,
-                padX,
-                padY,
-                lineHeight: 1.12,
-                minPx: 10
-              });
-              return (
-                <div
-                  key={`content-${el.id}`}
-                  style={{
-                    ...wrapperStyle,
-                    color: "#fff",
-                    fontFamily: FONT_CENTURY,
-                    textAlign: "center"
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "grid",
-                      placeItems: "center",
-                      padding: `${padY}px ${padX}px`,
-                      boxSizing: "border-box",
-                      lineHeight: 1.12,
-                      fontStyle: el.italic ? "italic" : "normal",
-                      textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                    }}
-                  >
-                    <div style={{ display: "grid", gap: 2, width: "100%" }}>
-                      {lines[0] && <div style={{ fontWeight: 700, fontSize: fitted[0] || 12 }}>{tf(lines[0])}</div>}
-                      {lines[1] && <div style={{ fontWeight: 600, fontSize: fitted[1] || 11 }}>{tf(lines[1])}</div>}
-                      {lines[2] && (
-                        <div style={{ fontWeight: 400, fontSize: fitted[2] || 10, opacity: 0.95 }}>{tf(lines[2])}</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            if (el.type === "epitaph") {
-              const idx = Number(key);
-              const tRaw = epitaphs[idx] || "";
-              const isRLM = isRememberLoveMourn(tRaw);
-              const padX = Math.max(4, Math.round(boxPx.w * 0.04));
-              const padY = Math.max(2, Math.round(boxPx.h * 0.06));
-
-              if (isRLM && el.staircase) {
-                const r = splitRememberPreserve(tRaw);
-                const parts = [r.top, r.mid, r.bot];
-                const ctxm = getMeasureCtx();
-                const w1 = measureTextAt(ctxm, parts[0], !!el.italic, FONT_CENTURY, 100);
-                const w2 = measureTextAt(ctxm, parts[1], !!el.italic, FONT_CENTURY, 100);
-                const w3 = measureTextAt(ctxm, parts[2], !!el.italic, FONT_CENTURY, 100);
-                const maxW = Math.max(w1, w2, w3);
-                const fByW = ((boxPx.w - padX * 2) * 100) / Math.max(1, maxW);
-                const fByH = (boxPx.h - padY * 2) / (3 * 1.15);
-                const fontPx = Math.max(10, Math.floor(Math.min(fByW, fByH)));
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY }}>
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: padX,
-                        top: padY,
-                        right: padX,
-                        bottom: padY,
-                        display: "grid",
-                        gridTemplateRows: "1fr 1fr 1fr"
-                      }}
-                    >
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "start",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[0]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "center",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[1]}
-                      </div>
-                      <div
-                        style={{
-                          alignSelf: "center",
-                          justifySelf: "end",
-                          fontWeight: 600,
-                          fontStyle: el.italic ? "italic" : "normal",
-                          fontSize: fontPx,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                        }}
-                      >
-                        {parts[2]}
-                      </div>
-                    </div>
-                  </div>
-                );
-              } else {
-                const textDisplay = el.uppercase ? tRaw.toUpperCase() : tRaw;
-                const { fontPx, lines } = fitMultilineFontPxGeneric({
-                  text: textDisplay,
-                  boxW: boxPx.w,
-                  boxH: boxPx.h,
-                  italic: !!el.italic,
-                  family: FONT_CENTURY,
-                  padX,
-                  padY,
-                  lineHeight: 1.15
-                });
-                return (
-                  <div key={`content-${el.id}`} style={{ ...wrapperStyle, color: "#fff", fontFamily: FONT_CENTURY, textAlign: "center" }}>
-                    <div
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        display: "grid",
-                        placeItems: "center",
-                        padding: `${padY}px ${padX}px`,
-                        boxSizing: "border-box",
-                        lineHeight: 1.15,
-                        fontStyle: el.italic ? "italic" : "normal",
-                        textShadow: "0 1px 2px rgba(0,0,0,0.6)"
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, fontSize: fontPx, whiteSpace: "pre-wrap" }}>{lines.join("\n")}</div>
-                    </div>
-                  </div>
-                );
-              }
-            }
-
-            if (el.type === "cross" || el.type === "graphic") {
-              const idx = Number(key);
-              const list = el.type === "cross" ? crosses : others;
-              const g = Number.isFinite(idx) ? list[idx] : null;
-              const tr = el.type === "graphic" && el.flipH ? "scaleX(-1) translateZ(0)" : "translateZ(0)";
-              return (
-                <div key={`content-${el.id}`} style={wrapperStyle}>
-                  {g?.url ? (
-                    <img
-                      src={g.url}
-                      alt=""
-                      draggable={false}
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        display: "block",
-                        transform: tr,
-                        filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                        willChange: "transform",
-                        backfaceVisibility: "hidden"
-                      }}
-                    />
-                  ) : null}
-                </div>
-              );
-            }
-
-            return null;
-          })}
-      </div>
-    );
-  };
-
-  // Карточка миниатюры
-  const TrayCard: React.FC<{
-    onClick: () => void;
-    onDragStart: (e: React.DragEvent) => void;
-    children: React.ReactNode;
-  }> = ({ onClick, onDragStart, children }) => (
-    <button
-      type="button"
-      draggable
-      onDragStart={onDragStart}
-      onClick={onClick}
-      style={{
-        width: "100%",
-        minHeight: 120,
-        display: "grid",
-        placeItems: "center",
-        background: "transparent",
-        border: "none",
-        padding: 0,
-        cursor: "grab",
-        userSelect: "none"
-      }}
-    >
-      {children}
-    </button>
-  );
-
-  const MAX_W = 600;
-
-  const handleBack = () => {
-    const ts = Date.now();
-    lastAppliedTsRef.current = ts;
-    const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: ts } });
-    setOutro(true);
-    setTimeout(() => onBack?.(), 150);
-  };
-  const handleContinue = () => {
-    const ts = Date.now();
-    lastAppliedTsRef.current = ts;
-    const cur = loadOrderDraft();
-    saveOrderDraft({ ...cur, editor: { ...(cur as any).editor, elements, wishes, updatedAt: ts } });
-    const go = onRearSide || onSendOrder || onContinue;
-    if (!go) return;
-    setOutro(true);
-    setTimeout(() => go({ elements, wishes }), 150);
+    const extras: Extras & {
+      base?: boolean; flowerbed?: boolean; headstonePlate?: boolean;
+      plateSize?: string; plateCustomSize?: string; plateThickness?: string; plateCustomThickness?: string; plateOrientation?: string; plateEpitaph?: string; plateGraphicsIds?: string[];
+      orderNo?: string; orderNotes?: string; attachments?: any;
+    } = {
+      base: extraBase,
+      flowerbed: extraFlowerbed,
+      headstonePlate: extraPlate,
+      plateSize: extraPlate ? plateSize : undefined,
+      plateCustomSize: extraPlate && plateSize === "Свой вариант" ? plateCustomSize : undefined,
+      plateThickness: extraPlate ? plateThickness : undefined,
+      plateCustomThickness: extraPlate && plateThickness === "Свой вариант" ? plateCustomThickness : undefined,
+      plateOrientation: extraPlate ? plateOrientation : undefined,
+      plateEpitaph: extraPlate ? (plateEpitaph || "").trim() || undefined : undefined,
+      plateGraphicsIds: extraPlate ? plateIds : undefined,
+      orderNo,
+      orderNotes: (orderNotes || "").trim() || undefined,
+      attachments
+    };
+    try {
+      await sendOrderEmailAndNotifyTg(extras);
+      const nm = (introState.intro?.customerName || "").trim() || "Заказчик";
+      window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами для подтверждения деталей.`);
+      onSend?.({ extras });
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
+    } finally { setBusy(false); }
   };
 
   return (
-    <div
-      style={{
-        color: "#fff",
-        padding: 12,
-        opacity: outro ? 0 : 1,
-        transition: "opacity 240ms ease",
-        backgroundImage: `url(/data/bg.svg)`,
-        backgroundSize: "cover",
-        backgroundPosition: "center center",
-        backgroundAttachment: "fixed"
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        <TopBarWithIntro title="Memorial" />
+    <>
+      <StickyNav showRear={rearHasContent} onGoFront={() => goTo(frontId)} onGoRear={() => goTo(rearId)} onGoPreviews={() => goTo(previewsId)} onGoExtras={() => goTo(extrasId)} onSimpleView={() => setSimpleOpen(true)} />
 
-        {/* Подсказка */}
-        <section
-          style={{
-            ...glassPanelStyle(),
-            padding: "10px 12px",
-            margin: "8px 0",
-            fontSize: 13,
-            lineHeight: 1.4
-          }}
-        >
-         Сделайте набросок: кликните по миниатюре, затем настройте позицию и масштаб. Не уверены или нет конкретных пожеланий? Оставьте эскиз пустым, на усмотрение специалиста — нажмите {" "}
-         <button type="button" onClick={handleContinue} style={linkLikeButton()}>
-             «Продолжить»
-          </button>.
-        </section>
+      <EditableOrderSummary orderNo={orderNo} />
 
-        {/* Единая палитра миниатюр (без подписей) */}
-        <section style={{ ...glassPanelStyle(), padding: 10, margin: "12px 0" }}>
-          {trayItems.length > 0 ? (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-                gap: 10,
-                alignItems: "stretch"
-              }}
-            >
-              {trayItems.map((it, idx) => (
-                <TrayCard
-                  key={`ti-${it.type}-${it.key}-${idx}`}
-                  onClick={() => addCentered(it.type, it.key)}
-                  onDragStart={(e) => onTrayDragStart(e, { type: it.type, key: it.key })}
-                >
-                  {it.node}
-                </TrayCard>
-              ))}
-            </div>
-          ) : (
-            <div style={{ fontSize: 13, opacity: 0.9 }}>Все выбранные элементы уже размещены на эскизе.</div>
-          )}
-        </section>
-
-        {/* Эскиз */}
-        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-          <div
-            ref={editorWrapRef}
-            onDragOver={onEditorDragOver}
-            onDrop={onEditorDrop}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            style={{
-              position: "relative",
-              width: "100%",
-              borderRadius: 10,
-              overflow: "hidden",
-              userSelect: "none",
-              ...bottomUnderlayGradient(),
-              aspectRatio: aspect,
-              minHeight: aspect ? undefined : 540
-            }}
-          >
-            {/* Подложка изделия */}
-            {item?.url && (
-              <img
-                src={item.url}
-                alt=""
-                decoding="sync"
-                loading="eager"
-                style={{
-                  position: "absolute",
-                  left: SKETCH_PAD,
-                  top: SKETCH_PAD,
-                  width: `calc(100% - ${SKETCH_PAD * 2}px)`,
-                  height: `calc(100% - ${SKETCH_PAD * 2}px)`,
-                  objectFit: "contain",
-                  opacity: 0.35,
-                  pointerEvents: "none",
-                  backfaceVisibility: "hidden",
-                  transform: "translateZ(0)"
-                }}
-                draggable={false}
-              />
-            )}
-
-            {/* Для aspectRatio */}
-            <img
-              src={item?.url || ""}
-              alt=""
-              style={{ position: "absolute", inset: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
-              onLoad={(e) => {
-                const im = e.currentTarget as HTMLImageElement;
-                if (im.naturalWidth && im.naturalHeight) setImgWH({ w: im.naturalWidth, h: im.naturalHeight });
-              }}
-              onError={() => {
-                if (!(imgWH.w && imgWH.h)) setImgWH({ w: 4, h: 3 });
-              }}
-            />
-
-            {/* Содержимое */}
-            <ContentLayer />
-
-            {/* Рамки + ручки */}
-            <div
-              onPointerDown={(e) => {
-                if (e.target === e.currentTarget) setSelectedId(null);
-              }}
-              style={{
-                position: "absolute",
-                left: SKETCH_PAD,
-                top: SKETCH_PAD,
-                right: SKETCH_PAD,
-                bottom: SKETCH_PAD,
-                zIndex: 1001,
-                pointerEvents: "auto"
-              }}
-            >
-              {elements
-                .slice()
-                .sort((a, b) => a.z - b.z)
-                .map((el) => {
-                  const selected = el.id === selectedId;
-                  const frameStyle: React.CSSProperties = {
-                    position: "absolute",
-                    left: `${el.x}%`,
-                    top: `${el.y}%`,
-                    width: `${el.w}%`,
-                    height: `${el.h}%`,
-                    border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
-                    borderRadius: 4,
-                    boxSizing: "border-box",
-                    background: "transparent",
-                    pointerEvents: "auto",
-                    cursor: el.locked ? "not-allowed" : "move",
-                    touchAction: "none"
-                  };
-
-                  const knob = (left: string, top: string, cursor: string) =>
-                    ({
-                      position: "absolute",
-                      left,
-                      top,
-                      width: KNOB_HIT,
-                      height: KNOB_HIT,
-                      cursor,
-                      pointerEvents: "auto",
-                      display: "grid",
-                      placeItems: "center"
-                    } as React.CSSProperties);
-
-                  const knobDot: React.CSSProperties = {
-                    width: KNOB_VIS,
-                    height: KNOB_VIS,
-                    background: "#fff",
-                    border: "1px solid #000",
-                    borderRadius: 3,
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.3)"
-                  };
-
+      {/* Лицевая */}
+      {(frontPersons.length || frontUnique.length || frontEpitaphs.length) ? (
+        <section id={frontId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Лицевая", true)}</div>
+          {/* Люди */}
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие</div>
+            {frontPersons.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {frontPersons.map((p: any, idx: number) => {
+                  const [l1, l2, l3] = personLines(p);
                   return (
-                    <div key={el.id} onPointerDown={(ev) => onPointerDownBox(ev, el.id, "move")} style={frameStyle} title={el.title || el.id}>
-                      {selected && <MiniToolbar el={el} />}
-                      {selected && !el.locked && (
-                        <>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "nw")} style={knob(`-${KNOB_HIT / 2}px`, `-${KNOB_HИТ / 2}px`, "nwse-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "ne")} style={knob(`calc(100% - ${KNOB_HIT / 2}px)`, `-${KNOB_HИТ / 2}px`, "nesw-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "se")} style={knob(`calc(100% - ${KNOB_HИТ / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "nwse-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "sw")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(100% - ${KNOB_HИТ / 2}px)`, "nesw-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "n")} style={knob(`calc(50% - ${KNOB_HИТ / 2}px)`, `-${KNOB_HИТ / 2}px`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "e")} style={knob(`calc(100% - ${KNOB_HИТ / 2}px)`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "s")} style={knob(`calc(50% - ${KNOB_HИТ / 2}px)`, `calc(100% - ${KNOB_HИТ / 2}px)`, "ns-resize")}><div style={knobDot} /></div>
-                          <div onPointerDown={(ev) => onPointerDownBox(ev as any, el.id, "w")} style={knob(`-${KNOB_HИТ / 2}px`, `calc(50% - ${KNOB_HИТ / 2}px)`, "ew-resize")}><div style={knobDot} /></div>
-                        </>
-                      )}
+                    <div key={p.id || `fp-${idx}`} style={{ display: "grid", gridTemplateColumns: p.photoPreview ? "40px 1fr" : "1fr", gap: 8, alignItems: "center" }}>
+                      {p.photoPreview && <Thumb url={p.photoPreview} size={40} />}
+                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                        {l1 && <div style={{ fontWeight: 700, ...wrapText(13) }}>{l1}</div>}
+                        {l2 && <div style={wrapText(13)}>{l2}</div>}
+                        {l3 && <div style={{ opacity: 0.9, ...wrapText(13) }}>{l3}</div>}
+                      </div>
                     </div>
                   );
                 })}
+              </div>
+            ) : <div>—</div>}
+          </div>
+          {/* Графика */}
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
+            {frontUnique.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {frontUnique.map((g: any, i: number) => {
+                  const id = g?.id || g?.url || g?.name || `fg-${i}`;
+                  const qty = (g?.id || g?.url || g?.name) ? (frontCountsById[g?.id || g?.url || g?.name] || 0) : 1;
+                  const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : id);
+                  return (
+                    <div key={id} style={{ display: "grid", gridTemplateColumns: g?.url ? "40px 1fr auto" : "1fr auto", gap: 8, alignItems: "center" }}>
+                      {g?.url && <Thumb url={g.url} size={40} />}
+                      <div style={wrapText(13)}>{name}</div>
+                      {qty > 1 && <div style={{ opacity: 0.85, fontSize: 12 }}>×{qty}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <div>—</div>}
+          </div>
+          {/* Эпитафии */}
+          {frontEpitaphs.length > 0 && (
+            <div style={{ ...sectionBox }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {frontEpitaphs.map((t, i) => (<div key={`fe-${i}`} style={wrapText(13)}>{t}</div>))}
+              </div>
             </div>
+          )}
+        </section>
+      ) : null}
+
+      {/* Тыльная */}
+      {rearHasContent ? (
+        <section id={rearId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>{chip("Тыльная")}</div>
+          {/* Графика */}
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
+            {rearUnique.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {rearUnique.map((g: any, i: number) => {
+                  const id = g?.id || g?.relPath || g?.url || g?.name || `rg-${i}`;
+                  const qty = rearCounts[id] || 0;
+                  const name = g?.name || (g?.url ? decodeURIComponent(g.url.split("/").pop() || "") : id);
+                  return (
+                    <div key={id} style={{ display: "grid", gridTemplateColumns: g?.url ? "40px 1fr auto" : "1fr auto", gap: 8, alignItems: "center" }}>
+                      {g?.url && <Thumb url={g.url} size={40} />}
+                      <div style={wrapText(13)}>{name}</div>
+                      {qty > 1 && <div style={{ opacity: 0.85, fontSize: 12 }}>×{qty}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <div>—</div>}
+          </div>
+          {/* Эпитафии */}
+          {rearEpitaphs.length > 0 && (
+            <div style={{ ...sectionBox }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {rearEpitaphs.map((t, i) => (<div key={`re-${i}`} style={wrapText(13)}>{t}</div>))}
+              </div>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {/* Эскизы — используем frontSketchUrl/backSketchUrl из драфта (как на шагах) */}
+      <section id={previewsId} style={{ ...glassPanelStyle(), padding: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: rearHasContent ? "1fr 1fr" : "1fr", gap: 12 }}>
+          <SketchCard title="Лицевая" url={frontSketchUrl} aspect={aspect} />
+          {rearHasContent && <SketchCard title="Тыльная" url={backSketchUrl} aspect={aspect} />}
+        </div>
+      </section>
+
+      {/* Выбрано для плиты — под эскизами */}
+      {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
+        <section style={{ ...glassPanelStyle(), padding: 12 }}>
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
+            {chosenPlateList.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
+                {chosenPlateList.map((g, i) => (
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
+                    <Thumb url={g.url} />
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {g.name || g.id}
+                    </div>
+                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">
+                      Удалить
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {plateEpitaphList.length > 0 && (
+              <div style={{ display: "grid", gap: 6 }}>
+                {plateEpitaphList.map((t, idx) => (
+                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">
+                      Удалить
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
+      )}
 
-        {/* Пожелания */}
-        <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
-          <label htmlFor="wishes" style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>
-            Пожелания по эскизу
-          </label>
-          <textarea
-            id="wishes"
-            value={wishes}
-            onChange={(e) => setWishes(e.target.value)}
-            rows={4}
-            placeholder="Например: портрет уменьшить, метрику сузить, эпитафию — лесенкой…"
-            style={{
-              width: "100%",
-              borderRadius: 8,
-              border: "1px solid rgba(255,255,255,0.25)",
-              background: "rgba(0,0,0,0.35)",
-              color: "#fff",
-              padding: 10,
-              resize: "vertical",
-              outline: "none",
-              boxSizing: "border-box"
-            }}
-          />
-        </section>
+      {/* Дополнительно — чекбоксы и аккордеон плиты */}
+      <ExtrasSection
+        extraBase={extraBase}
+        setExtraBase={setExtraBase}
+        extraFlowerbed={extraFlowerbed}
+        setExtraFlowerbed={setExtraFlowerbed}
+        extraPlate={extraPlate}
+        setExtraPlate={setExtraPlate}
+        plateSize={plateSize}
+        setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize}
+        setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness}
+        setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness}
+        setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation}
+        setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph}
+        setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading}
+        catsError={catsError}
+        cats={cats}
+        catOpen={catOpen}
+        setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic}
+        removePlateGraphic={removePlateGraphic}
+        plateIds={plateIds}
+      />
 
-        <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
-          <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
-            Назад
-          </button>
-          <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
-            Продолжить
-          </button>
-        </div>
+      {/* Примечание к заказу */}
+      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+        <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
+        <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
+      </section>
+
+      {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
+
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
+        <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy)} disabled={busy}>Назад</button>
+        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
+      </div>
+
+      {/* Упрощенный вид (Печать) — эскизы из front/back превью редакторов */}
+      {simpleOpen && (
+        <PrintOverlay
+          onClose={() => setSimpleOpen(false)}
+          onPrint={printSimple}
+          orderNo={orderNo}
+          name={(introState.intro?.customerName || "").trim()}
+          phone={(introState.intro?.customerPhone || "").trim()}
+          itemName={draft?.item?.name || (draft?.item?.url ? decodeURIComponent((draft.item.url || "").split("/").pop() || "") : "")}
+          dimsText={() => {
+            const dims = `${(draft?.size?.width && Math.round(draft.size.width / 10)) || "—"}×${(draft?.size?.height && Math.round(draft.size.height / 10)) || "—"}×${(draft?.size?.thickness && Math.round(draft.size.thickness / 10)) || "—"} см`;
+            const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
+            return `${dims}${orient ? ` · ${orient}` : ""}`;
+          }}
+          front={{
+            persons: frontPersons.map((p: any) => ({
+              id: p.id,
+              fio1: (p.lastName || "").trim(),
+              fio2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
+              dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
+              photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || ""
+            })),
+            graphics: frontUnique.map((g: any) => ({
+              name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id),
+              qty: (g?.id || g?.url || g?.name) ? (frontCountsById[g?.id || g?.url || g?.name] || 0) : 1
+            })),
+            epitaphs: frontEpitaphs.slice()
+          }}
+          rear={rearHasContent ? {
+            graphics: rearUnique.map((g: any) => ({
+              name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id),
+              qty: rearCounts[g?.id || g?.url || g?.name] || 0
+            })),
+            epitaphs: rearEpitaphs.slice()
+          } : null}
+          extras={{ base: extraBase, flowerbed: extraFlowerbed }}
+          plate={{
+            enabled: extraPlate,
+            size: extraPlate ? (plateSize === "Свой вариант" ? (plateCustomSize || "Свой вариант") : plateSize) : "нет",
+            thickness: extraPlate ? (plateThickness === "Свой вариант" ? (plateCustomThickness || "Свой вариант") : plateThickness) : "нет",
+            graphics: extraPlate ? chosenPlateList.map((g) => ({ name: g.name || g.id })) : [],
+            epitaph: extraPlate ? (plateEpitaph || "").trim() : ""
+          }}
+          notes={(orderNotes || "").trim()}
+          previewFront={frontSketchUrl || ""}
+          previewBack={rearHasContent ? (backSketchUrl || "") : ""}
+        />
+      )}
+    </>
+  );
+}
+
+/* ===== Дополнительно: чекбоксы + аккордеон плиты ===== */
+function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const m = () => setH(ref.current?.scrollHeight || 0);
+    m();
+    const ro = new (window as any).ResizeObserver?.(m);
+    if (ref.current && ro) ro.observe(ref.current);
+    return () => ro?.disconnect?.();
+  }, [children]);
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 0, borderWidth: 2, borderColor: "rgba(138,180,255,0.35)" }}>
+      <button type="button" onClick={onToggle} style={{ width: "100%", textAlign: "left", padding: "12px 14px", background: "rgba(255,255,255,0.06)", border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 15, fontWeight: 700 }}>
+        <span>{title}</span>
+        <span aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
+        <div ref={ref} style={{ padding: 12 }}>{children}</div>
       </div>
     </div>
+  );
+}
+
+function PlateBlock(props: {
+  extraPlate: boolean;
+  setExtraPlate: (v: boolean) => void;
+  plateSize: string; setPlateSize: (v: string) => void;
+  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
+  plateThickness: string; setPlateThickness: (v: string) => void;
+  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
+  plateOrientation: string; setPlateOrientation: (v: string) => void;
+  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
+  catsLoading: boolean; catsError: string; cats: any[];
+  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
+  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
+  plateIds: string[];
+}) {
+  const {
+    extraPlate, setExtraPlate,
+    plateSize, setPlateSize, plateCustomSize, setPlateCustomSize,
+    plateThickness, setPlateThickness, plateCustomThickness, setPlateCustomThickness,
+    plateOrientation, setPlateOrientation,
+    plateEpitaph, setPlateEpitaph,
+    catsLoading, catsError, cats, catOpen, setCatOpen,
+    addPlateGraphic, removePlateGraphic, plateIds
+  } = props;
+
+  const [graphicsOpen, setGraphicsOpen] = useState(false);
+  const [showMoreEpitaphs, setShowMoreEpitaphs] = useState(false);
+  const [plateEpitaphs, setPlateEpitaphs] = useState<string[]>((plateEpitaph || "").trim() ? (plateEpitaph as string).split(/\n{2,}/g) : []);
+  useEffect(() => { setPlateEpitaph(plateEpitaphs.map((s) => String(s || "").trim()).filter(Boolean).join("\n\n")); }, [plateEpitaphs, setPlateEpitaph]);
+
+  const norm = (t: string) => (t || "").replace(/\r\n?/g, "\n").trim();
+  const hasByNorm = (list: string[], t: string) => list.some((x) => norm(x) === norm(t));
+  const toggleEpitaph = (t: string) => setPlateEpitaphs((prev) => (hasByNorm(prev, t) ? prev.filter((x) => norm(x) !== norm(t)) : prev.concat([t])));
+  const [customText, setCustomText] = useState("");
+
+  return (
+    <div style={{ ...sectionBox, display: "grid", gap: 12 }}>
+      {/* Переключатель плиты */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+          <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
+          <span style={{ fontWeight: 700 }}>Надгробная плита</span>
+        </label>
+      </div>
+
+      {extraPlate && (
+        <>
+          {/* Размер */}
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>Размер</div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {["100×50 см", "120×60 см", "140×70 см", "Свой вариант"].map((v) => (
+                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
+                  <span>{v}</span>
+                </label>
+              ))}
+            </div>
+            {plateSize === "Свой вариант" && (
+              <input value={plateCustomSize} onChange={(e) => setPlateCustomSize(e.target.value)} placeholder="Укажите свой размер (например, 130×60 см)" style={inputStyle()} />
+            )}
+          </div>
+
+          {/* Толщина */}
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>Толщина</div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {["5 см", "8 см", "10 см", "Свой вариант"].map((v) => (
+                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
+                  <span>{v}</span>
+                </label>
+              ))}
+            </div>
+            {plateThickness === "Свой вариант" && (
+              <input value={plateCustomThickness} onChange={(e) => setPlateCustomThickness(e.target.value)} placeholder="Укажите толщину (например, 7 см)" style={inputStyle()} />
+            )}
+          </div>
+
+          {/* Ориентация */}
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>Ориентация</div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {[{ v: "vertical", t: "вертикально" }, { v: "horizontal", t: "горизонтально" }].map(({ v, t }) => (
+                <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => setPlateOrientation(v)} />
+                  <span>{t}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Эпитафии */}
+          <LoudAccordion title="Эпитафия на надгробной плите" open={true} onToggle={() => null}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div>
+                <div style={{ marginBottom: 8 }}>Быстрый выбор:</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {QUICK_EPITAPHS.map((t) => {
+                    const active = hasByNorm(plateEpitaphs, t);
+                    return (
+                      <button key={t} type="button" onClick={() => toggleEpitaph(t)} style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }} title={t}>
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <button type="button" onClick={() => setShowMoreEpitaphs((v) => !v)} style={glassButtonStyle("nano")}>
+                  {showMoreEpitaphs ? "Скрыть список" : "Все эпитафии"}
+                </button>
+                {showMoreEpitaphs && (
+                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+                    {MORE_EPITAPHS.map((t, idx) => {
+                      const active = hasByNorm(plateEpitaphs, t);
+                      return (
+                        <button key={idx} type="button" onClick={() => toggleEpitaph(t)} title={t}
+                          style={{ textAlign: "left", ...glassPanelStyle(), borderRadius: 10, padding: 10, cursor: "pointer", outline: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.14)", fontSize: 13, lineHeight: 1.25, whiteSpace: "pre-wrap" }}>
+                          {t}
+                          <div style={{ marginTop: 6, fontSize: 12 }}>{active ? "Удалить из выбранных" : "Добавить к выбранным"}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div style={{ marginBottom: 6 }}>Свой вариант:</div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <textarea rows={3} value={customText} onChange={(e) => setCustomText(e.target.value)} placeholder="Введите текст и нажмите «Добавить»" style={{ ...inputStyle(), resize: "vertical" }} />
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <button type="button" style={glassButtonStyle("nano")} onClick={() => { const t = (customText || "").trim(); if (!t) return; setPlateEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([t]))); setCustomText(""); }}>Добавить</button>
+                    <button type="button" style={glassButtonStyle("nano")} onClick={() => setPlateEpitaphs([])}>Очистить выбранные</button>
+                    {plateEpitaphs.length > 0 && <div style={{ opacity: 0.8, fontSize: 12 }}>Выбрано: {plateEpitaphs.length}</div>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </LoudAccordion>
+
+          {/* Графика на плите */}
+          <LoudAccordion title="Графика на надгробной плите" open={graphicsOpen} onToggle={() => setGraphicsOpen((v) => !v)}>
+            {catsLoading && <div>Загрузка каталога…</div>}
+            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+            {!catsLoading && cats.length > 0 && (
+              <div style={{ display: "grid", gap: 12 }}>
+                {cats.map((cat: any, idx: number) => {
+                  const catKey = String(cat._id || cat.name || idx);
+                  const open = !!(catOpen || {})[catKey];
+                  const setToggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
+                  return (
+                    <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={setToggle}>
+                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                      {(cat.children || []).map((sub: any, j: number) => (
+                        <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
+                          <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                        </div>
+                      ))}
+                    </LoudAccordion>
+                  );
+                })}
+              </div>
+            )}
+          </LoudAccordion>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ===== Печать (A4) — эскизы из фронт/бэк редакторов ===== */
+function PrintOverlay({
+  onClose, onPrint, orderNo, name, phone, itemName, dimsText, front, rear, extras, plate, notes, previewFront, previewBack
+}: {
+  onClose: () => void; onPrint: () => void;
+  orderNo: string; name: string; phone: string; itemName?: string; dimsText: () => string;
+  front: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number }[]; epitaphs: string[]; };
+  rear: | null | { graphics: { name: string; qty: number }[]; epitaphs: string[]; };
+  extras: { base: boolean; flowerbed: boolean };
+  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
+  notes?: string;
+  previewFront?: string;
+  previewBack?: string;
+}) {
+  const [printing, setPrinting] = useState(false);
+  return (
+    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
+      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+          <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
+          <button type="button" onClick={() => { if (!printing) { setPrinting(true); onPrint(); setTimeout(() => setPrinting(false), 400); } }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }} disabled={printing}>{printing ? "Печать…" : "Печать"}</button>
+        </div>
+
+        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 12, lineHeight: 1.25 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
+          <hr />
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ marginBottom: 4 }}>{name || "—"} · {phone || "—"}</div>
+            <div><strong>Резная работа:</strong> {itemName || "—"}</div>
+            <div><strong>Размер/ориентация:</strong> {dimsText()}</div>
+          </div>
+          <hr />
+
+          {/* Состав заказа */}
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>{front.persons.length ? front.persons.map((p, i) => (
+                <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "24px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                  {p.photo && <img src={p.photo} alt="" style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 4 }} />}
+                  <div>
+                    {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
+                    {p.fio2 && <div>{p.fio2}</div>}
+                    {p.dates && <div>{p.dates}</div>}
+                  </div>
+                </div>
+              )) : <div>—</div>}</div>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{front.graphics.length ? front.graphics.map((g, i) => <div key={`fg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{front.epitaphs.length ? front.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
+            </div>
+          </div>
+          <hr />
+          {rear && (
+            <>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{rear.graphics.length ? rear.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{rear.epitaphs.length ? rear.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
+                </div>
+              </div>
+              <hr />
+            </>
+          )}
+
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
+            <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
+          </div>
+          <hr />
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
+            <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginTop: 4 }}>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{plate.enabled ? (plate.graphics.length ? plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>) : <div>—</div>) : <div>нет</div>}</div>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{plate.enabled ? (plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>) : <div>нет</div>}</div>
+            </div>
+          </div>
+          <hr />
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
+          </div>
+          <hr />
+
+          {/* Эскизы из драфта: front/back */}
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
+            <div style={{ display: "grid", gridTemplateColumns: rear ? "1fr 1fr" : "1fr", gap: 8 }}>
+              <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
+                {previewFront ? (
+                  <img src={previewFront} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                ) : (
+                  <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
+                )}
+              </div>
+              {rear && (
+                <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
+                  {previewBack ? (
+                    <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                  ) : (
+                    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @page {
+          size: A4;
+          margin: 5mm;
+          @top-left { content: '' }
+          @top-center { content: '' }
+          @top-right { content: '' }
+          @bottom-left { content: '' }
+          @bottom-center { content: '' }
+          @bottom-right { content: '' }
+        }
+        @media print {
+          body * { visibility: hidden !important; }
+          #print-root, #print-root * { visibility: visible !important; }
+          #print-root {
+            position: fixed;
+            inset: 0;
+            width: 210mm;
+            height: auto;
+            max-height: none;
+            padding: 5mm;
+            box-shadow: none !important;
+            transform-origin: top left;
+          }
+          [role="dialog"] { background: transparent !important; }
+          button { display: none !important; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+/* ===== Дополнительно (секция обёртка) ===== */
+function ExtrasSection(props: {
+  extraBase: boolean; setExtraBase: (v: boolean) => void;
+  extraFlowerbed: boolean; setExtraFlowerbed: (v: boolean) => void;
+  extraPlate: boolean; setExtraPlate: (v: boolean) => void;
+  plateSize: string; setPlateSize: (v: string) => void;
+  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
+  plateThickness: string; setPlateThickness: (v: string) => void;
+  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
+  plateOrientation: string; setPlateOrientation: (v: string) => void;
+  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
+  catsLoading: boolean; catsError: string; cats: any[];
+  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
+  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
+  plateIds: string[];
+}) {
+  const {
+    extraBase, setExtraBase,
+    extraFlowerbed, setExtraFlowerbed,
+    extraPlate, setExtraPlate,
+    plateSize, setPlateSize,
+    plateCustomSize, setPlateCustomSize,
+    plateThickness, setPlateThickness,
+    plateCustomThickness, setPlateCustomThickness,
+    plateOrientation, setPlateOrientation,
+    plateEpitaph, setPlateEpitaph,
+    catsLoading, catsError, cats, catOpen, setCatOpen,
+    addPlateGraphic, removePlateGraphic,
+    plateIds
+  } = props;
+
+  return (
+    <section id="section-extras" style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+      <div style={{ fontWeight: 700 }}>Дополнительно</div>
+
+      {/* Тумба / Цветник */}
+      <div style={{ ...sectionBox }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <span>Тумба</span>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <span>Цветник</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Аккордеон плиты */}
+      <PlateBlock
+        extraPlate={extraPlate}
+        setExtraPlate={setExtraPlate}
+        plateSize={plateSize}
+        setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize}
+        setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness}
+        setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness}
+        setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation}
+        setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph}
+        setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading}
+        catsError={catsError}
+        cats={cats}
+        catOpen={catOpen}
+        setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic}
+        removePlateGraphic={removePlateGraphic}
+        plateIds={plateIds}
+      />
+    </section>
   );
 }
