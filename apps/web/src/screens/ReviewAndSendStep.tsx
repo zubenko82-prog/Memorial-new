@@ -1,14 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Итоговая версия с учётом последних правок:
-// - «Выбрано для плиты» перенесён ПОД «Эскизы».
-// - Аккордеон «Надгробная плита» перенесён ПОД чекбоксы «Тумба» и «Цветник» (заголовок-строка убран; остаётся только аккордеон).
-// - Под Эскизы и под миниатюру резной работы добавлен градиент (подложка).
-// - Состав заказа корректный (лицевая: люди, графика, эпитафии; тыльная: графика, эпитафии).
-// - Эскизы: только резная работа (лицевая — обычное изображение itemUrl; тыльная — отзеркалённый залитый силуэт #282828).
-// - Печать A4: одна страница, поля 5мм, автоматическое масштабирование, эскизы также только резная работа.
-// - Текст переносим, не обрезаем.
+// Обновления:
+// - Эскизы: Лицевая — показываем превью шага «Эпитафии» (frontMini), Тыльная — превью шага «Тыл» (backMini).
+//   Оба эскиза «вписаны» (object-fit: contain), под каждым — градиентная подложка.
+// - В печати: в блоке «Эскизы» используем те же frontMini/backMini. Исправлено отсутствие эскиза тыльной стороны.
+// - «Выбрано для плиты» — под эскизами. Аккордеон «Надгробная плита» — под чекбоксами «Тумба/Цветник».
+// - Состав заказа корректный. Текст переносим, не обрезаем. Поля печати 5мм, авто‑масштаб до 1 страницы.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -91,60 +89,24 @@ function StickyNav({
   );
 }
 
-/* ===== Простые визуальные хелперы ===== */
+/* ===== Thumb ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
   <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
   </div>
 );
 
-/* ===== rear silhouette (без подложек) ===== */
-function supportsMask(): boolean {
-  try {
-    // @ts-ignore
-    return typeof CSS !== "undefined" && CSS.supports && (CSS.supports("mask-image", 'url("")') || CSS.supports("-webkit-mask-image", 'url("")'));
-  } catch { return false; }
-}
-function RearSilhouette({ itemUrl }: { itemUrl?: string }) {
-  const can = supportsMask();
-  if (!itemUrl) return <div style={{ display: "grid", placeItems: "center", height: "100%" }}>Нет</div>;
-  const isPng = /\.png(\?|#|$)/i.test(itemUrl);
-  return isPng && can ? (
-    <div style={{ position: "absolute", inset: 0, background: "#282828", WebkitMaskImage: `url(${itemUrl})`, WebkitMaskRepeat: "no-repeat", WebkitMaskPosition: "center", WebkitMaskSize: "contain", maskImage: `url(${itemUrl})`, maskRepeat: "no-repeat", maskPosition: "center", maskSize: "contain", transform: "scaleX(-1)" }} />
-  ) : (
-    <img src={itemUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", transform: "scaleX(-1)", filter: "grayscale(1) brightness(0)", opacity: 0.9 }} />
-  );
-}
-
-/* ===== Эскизы: только резная работа + ГРАДИЕНТ подложка ===== */
-function SidePreview({
-  title,
-  frontItemUrl,
-  rearItemUrl,
-  aspect,
-  side // 'front' | 'rear'
-}: {
-  title: string;
-  frontItemUrl?: string;
-  rearItemUrl?: string;
-  aspect?: string;
-  side: "front" | "rear";
-}) {
+/* ===== Эскиз-карточка (используем frontMini/backMini) ===== */
+function SketchCard({ title, url, aspect }: { title: string; url?: string | null; aspect?: string }) {
   return (
     <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
       <div style={{ fontWeight: 700 }}>{title}</div>
-      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220, background: "transparent" }}>
+      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
         <div style={gradientUnderlay()} />
-        {side === "front" ? (
-          frontItemUrl ? (
-            <img src={frontItemUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
-          ) : (
-            <div style={{ display: "grid", placeItems: "center", height: "100%", position: "relative", zIndex: 1 }}>Нет</div>
-          )
+        {url ? (
+          <img src={url} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
         ) : (
-          <div style={{ position: "relative", zIndex: 1, width: "100%", height: "100%" }}>
-            <RearSilhouette itemUrl={rearItemUrl} />
-          </div>
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 1 }}>Нет</div>
         )}
       </div>
     </div>
@@ -207,7 +169,7 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
       </div>
       <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={{ ...inputStyle(), marginBottom: 10 }} />
 
-      {/* Миниатюра резной работы с ГРАДИЕНТОМ подложкой */}
+      {/* Миниатюра резной работы с градиентом */}
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", width: 100, height: 100, borderRadius: 10, overflow: "hidden" }}>
           <div style={gradientUnderlay()} />
@@ -247,7 +209,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const frontId = "section-front", rearId = "section-rear", previewsId = "section-previews", extrasId = "section-extras";
   const goTo = (id: string) => { const el = document.getElementById(id); if (!el) return; window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 8, behavior: "smooth" }); };
 
-  // Item and aspect
+  // Превью с шагов редактора (как просили): front = «Эпитафии», back = «Тыл»
+  const frontSketchUrl = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
+  const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
+
+  // Aspect по самой резной работе (для контейнера)
   const itemUrl = (draft as any)?.item?.url as string | undefined;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -256,10 +222,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.onload = () => { const w = im.naturalWidth || 0, h = im.naturalHeight || 0; if (w && h) setAspect(`${w} / ${h}`); };
     im.src = itemUrl;
   }, [itemUrl]);
-
-  // Previews (editor) — пригодится для отправки/печати
-  const frontMini = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
-  const backMini = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
   /* ——— Лицевая: люди/графика/эпитафии ——— */
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
@@ -451,8 +413,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const handleSend = async () => {
     setBusy(true); setErr("");
     const attachments: any = {
-      frontPreview: frontMini || null,
-      backPreview: rearHasContent ? (backMini || null) : null,
+      frontPreview: frontSketchUrl || null,
+      backPreview: rearHasContent ? (backSketchUrl || null) : null,
       itemUrl: itemUrl || null,
       plateGraphics: chosenPlateList
     };
@@ -589,23 +551,15 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       ) : null}
 
-      {/* Эскизы — только резная работа + ГРАДИЕНТ подложка */}
+      {/* Эскизы — используем frontMini/backMini (как на шагах эпитафии и тыл) */}
       <section id={previewsId} style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: rearHasContent ? "1fr 1fr" : "1fr", gap: 12 }}>
-          <div style={{ position: "relative", borderRadius: 10, overflow: "hidden" }}>
-            <div style={gradientUnderlay()} />
-            <SidePreview title="Лицевая" frontItemUrl={itemUrl} aspect={aspect} side="front" />
-          </div>
-          {rearHasContent && (
-            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden" }}>
-              <div style={gradientUnderlay()} />
-              <SidePreview title="Тыльная" rearItemUrl={itemUrl} aspect={aspect} side="rear" />
-            </div>
-          )}
+          <SketchCard title="Лицевая" url={frontSketchUrl} aspect={aspect} />
+          {rearHasContent && <SketchCard title="Тыльная" url={backSketchUrl} aspect={aspect} />}
         </div>
       </section>
 
-      {/* ВЫБРАНО ДЛЯ ПЛИТЫ — ПОД ЭСКИЗАМИ (перенесено) */}
+      {/* Выбрано для плиты — под эскизами */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
         <section style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ ...sectionBox }}>
@@ -641,11 +595,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно — чекбоксы и АККОРДЕОН плиты (перенесён под чекбоксы) */}
+      {/* Дополнительно — чекбоксы и аккордеон плиты */}
       <section id={extrasId} style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700 }}>Дополнительно</div>
 
-        {/* Тумба/Цветник (сначала чекбоксы) */}
+        {/* Тумба/Цветник */}
         <div style={{ ...sectionBox }}>
           <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
@@ -659,7 +613,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           </div>
         </div>
 
-        {/* Только АККОРДЕОН плиты (без заголовка-строки) */}
+        {/* Надгробная плита — только аккордеон (без отдельного заголовка) */}
         <PlateBlock
           extraPlate={extraPlate}
           setExtraPlate={setExtraPlate}
@@ -704,7 +658,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Упрощенный вид (Печать) */}
+      {/* Упрощенный вид (Печать) — эскизы из frontMini/backMini */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -748,14 +702,15 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             epitaph: extraPlate ? (plateEpitaph || "").trim() : ""
           }}
           notes={(orderNotes || "").trim()}
-          itemUrl={itemUrl || ""}
+          previewFront={frontSketchUrl || ""}
+          previewBack={rearHasContent ? (backSketchUrl || "") : ""}
         />
       )}
     </>
   );
 }
 
-/* ===== Блок плиты: чекбокс + настройки (аккордеоны) ===== */
+/* ===== Блок плиты: аккордеоны ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
@@ -953,9 +908,9 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Упрощённый вид (A4) — печать только его ===== */
+/* ===== Печать (A4) — эскизы из frontMini/backMini с градиентом ===== */
 function PrintOverlay({
-  onClose, onPrint, orderNo, name, phone, itemName, dimsText, front, rear, extras, plate, notes, itemUrl
+  onClose, onPrint, orderNo, name, phone, itemName, dimsText, front, rear, extras, plate, notes, previewFront, previewBack
 }: {
   onClose: () => void; onPrint: () => void;
   orderNo: string; name: string; phone: string; itemName?: string; dimsText: () => string;
@@ -964,11 +919,10 @@ function PrintOverlay({
   extras: { base: boolean; flowerbed: boolean };
   plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
   notes?: string;
-  itemUrl: string;
+  previewFront?: string;
+  previewBack?: string;
 }) {
   const [printing, setPrinting] = useState(false);
-  const can = supportsMask();
-  const isPng = /\.png(\?|#|$)/i.test(itemUrl || "");
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
       <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
@@ -1041,23 +995,25 @@ function PrintOverlay({
           </div>
           <hr />
 
-          {/* Эскизы с градиентом подложкой */}
+          {/* Эскизы: используем frontMini/backMini, с градиентом подложкой */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: rear ? "1fr 1fr" : "1fr", gap: 8 }}>
               <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
                 <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
-                {itemUrl ? <img src={itemUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} /> : <div style={{ display: "grid", placeItems: "center", height: "100%", position: "relative", zIndex: 1 }}>Нет</div>}
+                {previewFront ? (
+                  <img src={previewFront} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                ) : (
+                  <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
+                )}
               </div>
               {rear && (
                 <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
                   <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
-                  {itemUrl ? (
-                    (can && isPng)
-                      ? <div style={{ position: "absolute", inset: 0, background: "#282828", WebkitMaskImage: `url(${itemUrl})`, WebkitMaskRepeat: "no-repeat", WebkitMaskPosition: "center", WebkitMaskSize: "contain", maskImage: `url(${itemUrl})`, maskRepeat: "no-repeat", maskPosition: "center", maskSize: "contain", transform: "scaleX(-1)" }} />
-                      : <img src={itemUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", transform: "scaleX(-1)", filter: "grayscale(1) brightness(0)", opacity: 0.9 }} />
+                  {previewBack ? (
+                    <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
                   ) : (
-                    <div style={{ display: "grid", placeItems: "center", height: "100%", position: "relative", zIndex: 1 }}>Нет</div>
+                    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
                   )}
                 </div>
               )}

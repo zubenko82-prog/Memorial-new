@@ -50,7 +50,7 @@ const defaultSteps: StepDef[] = [
   { id: "persons", title: "Усопшие" },
   { id: "graphics",title: "Графика" },
   { id: "epitaph", title: "Эпитафия" },
-  { id: "editor",  title: "Редактор" },
+  //{ id: "editor",  title: "Редактор" },
   { id: "rear",    title: "Тыльная сторона" },
   { id: "finish",  title: "Завершение" }
 ];
