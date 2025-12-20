@@ -1,10 +1,10 @@
 // src/App.tsx
 // Обновления:
 // - Убрали шаг «Редактор» (EditorStep.tsx) — после «Эпитафии» сразу переходим на «Тыл» (BackEditorStep).
-// - StepNav не липкая (sticky=false).
+// - StepNav снова липкая (sticky=true), «зафиксирована» вверху.
 // - В StepNav скрыли пункт «editor» (навигация не будет показывать убранный шаг).
 // - Остальные правила сохранены: StepNav появляется на всех шагах после первого достижения «review» (navUnlocked в localStorage).
-
+// - ВАЖНО: StepNav перемещён внутрь скролл‑контейнера (overflow: auto), чтобы sticky работал корректно.
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -299,7 +299,7 @@ export default function App() {
             steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
             currentId={currentWizardId}
             onSelect={handleNavSelect}
-            sticky={false}               // панель не ЛИПКая (зафиксирована вверху контейнера прокрутки)
+            sticky={true}               // панель не ЛИПКая (зафиксирована вверху контейнера прокрутки)
             enabled={navUnlocked}
             activateOnFinish={false}
           />
