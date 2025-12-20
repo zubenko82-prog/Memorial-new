@@ -4,7 +4,7 @@
 // - StepNav не липкая (sticky=false).
 // - В StepNav скрыли пункт «editor» (навигация не будет показывать убранный шаг).
 // - Остальные правила сохранены: StepNav появляется на всех шагах после первого достижения «review» (navUnlocked в localStorage).
-// - ВАЖНО: StepNav перемещён внутрь скролл‑контейнера (overflow: auto), чтобы sticky работал корректно.
+
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';

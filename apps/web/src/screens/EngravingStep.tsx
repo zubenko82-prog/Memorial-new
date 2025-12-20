@@ -527,66 +527,67 @@ export default function EngravingStep({
 
         {/* Навигация (липкая, как раньше) */}
         <div
-          ref={navRef}
-          style={{
-            position: "sticky",
-            top: 2,
-            zIndex: 100,
-            paddingTop: "env(safe-area-inset-top)",
-            background: "rgba(0,0,0,0.96)",
-            borderRadius: 12,
-            border: "1px dashed rgba(255, 255, 255, 0.6)",
-            marginBottom: 10,
-            transform: "translateZ(0)"
-          }}
+  ref={navRef}
+  style={{
+    position: "sticky",
+    // Safari: можно оставить как есть; если нужно, добавьте префикс:
+    // @ts-expect-error
+    // position: "-webkit-sticky",
+    top: 0,                        // было 2 → прилипает к верху скролл-контейнера
+    zIndex: 900,                   // выше контента шага, ниже глобального StepNav (если тот zIndex ~1000)
+    paddingTop: "env(safe-area-inset-top)",
+    background: "rgba(0,0,0,0.92)",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.14)", // вместо dashed
+    marginBottom: 10,
+    // УБРАНО: transform: "translateZ(0)" — ломал sticky
+    backdropFilter: "saturate(120%) blur(8px)",
+    WebkitBackdropFilter: "saturate(120%) blur(8px)"
+  }}
+>
+  <div
+    ref={navRowRef}
+    style={{
+      display: "flex",
+      gap: 8,
+      padding: 12,
+      flexWrap: "wrap",
+      alignItems: "center",
+      justifyContent: "flex-start"
+    }}
+  >
+    {/* Ссылка «Компактный вид ☰» — только если больше одного усопшего */}
+    {persons.length > 1 && (
+      <a
+        href="#"
+        onClick={(e) => { e.preventDefault(); collapseAll(); }}
+        style={linkLikeStyle()}
+        title="Компактный вид"
+      >
+        Компактный вид ☰
+      </a>
+    )}
+
+    {persons.map((p) => {
+      const name = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+      return (
+        <button
+          key={p.id}
+          onClick={() => scrollToForm(p.id)}
+          style={glassButtonStyle("nano")}
+          title={name}
         >
-          <div
-            ref={navRowRef}
-            style={{
-              display: "flex",
-              gap: 8,
-              padding: 12,
-              flexWrap: "wrap",
-              alignItems: "center",
-              justifyContent: "flex-start"
-            }}
-          >
-            {/* Ссылка «Компактный вид ☰» — только если больше одного усопшего */}
-            {persons.length > 1 && (
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  collapseAll();
-                }}
-                style={linkLikeStyle()}
-                title="Компактный вид"
-              >                
-              </a>
-            )}
+          {name}
+        </button>
+      );
+    })}
 
-            {persons.map((p) => {
-              const name =
-                [p.firstName, p.middleName].filter(Boolean).join(" ") ||
-                "Без имени";
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => scrollToForm(p.id)}
-                  style={glassButtonStyle("nano")}
-                  title={name}
-                >
-                  {name}
-                </button>
-              );
-            })}
-
-            <div style={{ flex: 1 }} />
-            <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>
-              Эскиз
-            </button>
-          </div>
-        </div>
+    <div style={{ flex: 1 }} />
+    <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>
+      Эскиз
+    </button>
+  </div>
+</div>
 
         {/* Список персон */}
         <section>
