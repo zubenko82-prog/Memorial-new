@@ -287,7 +287,7 @@ export default function App() {
           steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
           currentId={currentWizardId}
           onSelect={handleNavSelect}
-          sticky={true}               // панель ЛИПКая (зафиксирована вверху)
+          sticky={false}               // панель ЛИПКая (зафиксирована вверху)
           enabled={navUnlocked}
           activateOnFinish={false}
         />
