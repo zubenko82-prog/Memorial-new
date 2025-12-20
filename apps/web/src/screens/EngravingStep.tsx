@@ -7,7 +7,7 @@
 // - Перемещение по порядку (▲/▼) — оставлено.
 //
 // Навигация:
-// - Внутренняя навигация — липкая (sticky).
+// - Внутренняя навигация — липкая (sticky), зафиксирована вверху шага.
 // - «Компактный вид ☰» — ссылка; при нажатии сворачивает все аккордеоны с усопшими.
 //   Показываем «Компактный вид ☰» только если усопших больше одного.
 //
@@ -17,6 +17,7 @@
 // - Прозрачность резной работы настраивается через carvingOpacity (передаётся в SketchTemplate).
 // - Передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
 // - ПОДСКАЗКА: при отсутствии фото выводим подсказку НАД кнопкой «Прикрепить фото».
+// - Sticky-панель: увеличен z-index, top: 0, убран translateZ(0), добавлен backdropFilter.
 
 import React, {
   useCallback,
@@ -84,6 +85,36 @@ function linkLikeStyle(): React.CSSProperties {
     textDecoration: "underline",
     cursor: "pointer",
     background: "transparent"
+  };
+}
+function inputStyle(): React.CSSProperties {
+  return {
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.18)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    outline: "none",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25)",
+    boxSizing: "border-box"
+  };
+}
+function iconBtn(): React.CSSProperties {
+  return {
+    padding: "2px 6px",
+    borderRadius: 6,
+    border: "1px solid rgba(255,255,255,0.25)",
+    background: "rgba(255,255,255,0.12)",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 12,
+    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center"
   };
 }
 
@@ -498,7 +529,7 @@ export default function EngravingStep({
     }
     if (Array.isArray(initial?.epitaphs)) return (initial!.epitaphs as string[]).filter(Boolean);
     if (typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()) {
-      return initial!.епитaphText!
+      return initial!.epitaphText!
         .split(/\r?\n/)
         .map((s: string) => s.trim())
         .filter(Boolean);
@@ -525,19 +556,20 @@ export default function EngravingStep({
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Memorial" />
 
-        {/* Навигация (липкая, как раньше) */}
+        {/* Навигация (липкая, зафиксирована вверху шага) */}
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: 2,
-            zIndex: 50,
+            top: 0,
+            zIndex: 100,
             paddingTop: "env(safe-area-inset-top)",
-            background: "rgba(0,0,0,0.96)",
+            background: "rgba(0,0,0,0.92)",
             borderRadius: 12,
-            border: "1px dashed rgba(255, 255, 255, 0.6)",
+            border: "1px solid rgba(255,255,255,0.14)",
             marginBottom: 10,
-            transform: "translateZ(0)"
+            backdropFilter: "saturate(120%) blur(8px)",
+            WebkitBackdropFilter: "saturate(120%) blur(8px)"
           }}
         >
           <div
@@ -561,7 +593,8 @@ export default function EngravingStep({
                 }}
                 style={linkLikeStyle()}
                 title="Компактный вид"
-              >                
+              >
+                Компактный вид ☰
               </a>
             )}
 
@@ -821,7 +854,7 @@ export default function EngravingStep({
                                 opacity: 0.92
                               }}
                             >
-                              
+                              Прикрепите фотографию для более точного эскиза.
                             </div>
                           )}
                           <PhotoField
@@ -914,34 +947,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
-}
-function inputStyle(): React.CSSProperties {
-  return {
-    width: "100%",
-    maxWidth: "100%",
-    minWidth: 0,
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#fff",
-    outline: "none",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25)",
-    boxSizing: "border-box"
-  };
-}
-function iconBtn(): React.CSSProperties {
-  return {
-    padding: "2px 6px",
-    borderRadius: 6,
-    border: "1px solid rgba(255,255,255,0.25)",
-    background: "rgba(255,255,255,0.12)",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 12,
-    lineHeight: 1,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center"
-  };
 }
