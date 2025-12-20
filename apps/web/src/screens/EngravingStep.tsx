@@ -551,7 +551,7 @@ export default function EngravingStep({
               justifyContent: "flex-start"
             }}
           >
-            {/* Ссылка «Компактный вид ☰» — только если больше одного усопшего */}
+            {/* Ссылка «Список ☰» — только если больше одного усопшего */}
             {persons.length > 1 && (
               <a
                 href="#"
@@ -560,7 +560,7 @@ export default function EngravingStep({
                   collapseAll();
                 }}
                 style={linkLikeStyle()}
-                title="Компактный вид"
+                title="Список"
               >                
               </a>
             )}

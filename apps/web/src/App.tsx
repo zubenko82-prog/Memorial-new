@@ -1,10 +1,9 @@
 // src/App.tsx
 // Обновления:
 // - Убрали шаг «Редактор» (EditorStep.tsx) — после «Эпитафии» сразу переходим на «Тыл» (BackEditorStep).
-// - StepNav снова липкая (sticky=true), «зафиксирована» вверху.
-// - В StepNav скрыли пункт «editor» (навигация не будет показывать убранный шаг).
-// - Остальные правила сохранены: StepNav появляется на всех шагах после первого достижения «review» (navUnlocked в localStorage).
-// - ВАЖНО: StepNav перемещён внутрь скролл‑контейнера (overflow: auto), чтобы sticky работал корректно.
+// - StepNav снова липкая (sticky=true) и размещена ВНУТРИ общего скролл‑контейнера, чтобы sticky работал корректно.
+// - В StepNav скрыт пункт «editor» (навигация не будет показывать убранный шаг).
+// - StepNav показывается на всех шагах после первого достижения «review» (флаг navUnlocked хранится в localStorage).
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -210,7 +209,7 @@ export default function App() {
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
-  // Прокрутка вверх
+  // Прокрутка вверх при смене шага
   useLayoutEffect(() => {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
@@ -254,7 +253,6 @@ export default function App() {
   const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editorBack'); };
 
   // Тыльная (BackEditorStep)
-  // Назад с тыла теперь ведёт на «Эпитафию»
   const onBackEditorBack = () => setStep('epitaph');
   const onBackEditorDone = (payload: any) => {
     setEditorBackState(payload);
@@ -290,7 +288,7 @@ export default function App() {
       }}
     >
       {/* Весь контент, включая StepNav и шаги — внутри одного скролл‑контейнера.
-          Это нужно, чтобы sticky в StepNav работал корректно. */}
+          Это нужно, чтобы position: sticky работал и для StepNav, и для внутренних панелей. */}
       <div style={{ minHeight: 0, overflow: 'auto' }}>
         {/* Глобальная навигация по шагам — липкая (sticky=true).
             Показывается на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
@@ -299,7 +297,7 @@ export default function App() {
             steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
             currentId={currentWizardId}
             onSelect={handleNavSelect}
-            sticky={true}               // панель не ЛИПКая (зафиксирована вверху контейнера прокрутки)
+            sticky={true}               // липкая панель
             enabled={navUnlocked}
             activateOnFinish={false}
           />
