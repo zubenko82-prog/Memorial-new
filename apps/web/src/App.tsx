@@ -1,9 +1,10 @@
 // src/App.tsx
 // Обновления:
 // - Убрали шаг «Редактор» (EditorStep.tsx) — после «Эпитафии» сразу переходим на «Тыл» (BackEditorStep).
-// - StepNav снова липкая (sticky=true), «зафиксирована» вверху.
+// - StepNav не липкая (sticky=false).
 // - В StepNav скрыли пункт «editor» (навигация не будет показывать убранный шаг).
 // - Остальные правила сохранены: StepNav появляется на всех шагах после первого достижения «review» (navUnlocked в localStorage).
+// - ВАЖНО: StepNav перемещён внутрь скролл‑контейнера (overflow: auto), чтобы sticky работал корректно.
 
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Start from './screens/Start';
@@ -279,21 +280,32 @@ export default function App() {
   const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0f0f12', color: '#fff', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
-      {/* Глобальная навигация по шагам — теперь снова липкая (sticky=true).
-          По‑прежнему показываем её на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
-      {step !== 'done' && navUnlocked && (
-        <StepNav
-          steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
-          currentId={currentWizardId}
-          onSelect={handleNavSelect}
-          sticky={false}               // панель ЛИПКая (зафиксирована вверху)
-          enabled={navUnlocked}
-          activateOnFinish={false}
-        />
-      )}
-
+    <div
+      style={{
+        minHeight: '100vh',
+        background: '#0f0f12',
+        color: '#fff',
+        display: 'grid',
+        gridTemplateRows: '1fr' // один общий скролл‑контейнер
+      }}
+    >
+      {/* Весь контент, включая StepNav и шаги — внутри одного скролл‑контейнера.
+          Это нужно, чтобы sticky в StepNav работал корректно. */}
       <div style={{ minHeight: 0, overflow: 'auto' }}>
+        {/* Глобальная навигация по шагам — липкая (sticky=true).
+            Показывается на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
+        {step !== 'done' && navUnlocked && (
+          <StepNav
+            steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
+            currentId={currentWizardId}
+            onSelect={handleNavSelect}
+            sticky={false}               // панель не ЛИПКая (зафиксирована вверху контейнера прокрутки)
+            enabled={navUnlocked}
+            activateOnFinish={false}
+          />
+        )}
+
+        {/* Шаги */}
         {step === 'start' && <Start onConfirm={onStartConfirm} />}
 
         {step === 'size' && selectedItem && (

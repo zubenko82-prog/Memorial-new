@@ -531,7 +531,7 @@ export default function EngravingStep({
           style={{
             position: "sticky",
             top: 2,
-            zIndex: 50,
+            zIndex: 100,
             paddingTop: "env(safe-area-inset-top)",
             background: "rgba(0,0,0,0.96)",
             borderRadius: 12,
