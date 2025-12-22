@@ -1,13 +1,16 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Изменения по требованию:
-// - Навигацию убрали.
-// - Вверху показываем только номер заказа + ссылку «Заказ списком» в одну строку,
-//   и поля клиента (Имя, Телефон, Примечание для связи). Резную работу НЕ показываем.
-// - Эскизы: лицевая — рендерим через SketchTemplate; тыльная — превью из драфта.
-// - В «Заказе списком» (печать) — лицевая тоже через SketchTemplate; тыльная — превью.
-// - «Дополнительно» и «Примечания» — без изменений.
+// Выполнено по требованиям:
+// - Вверху: номер заказа + ссылка «Заказ списком» в одной строке; поля клиента. Резную работу в шапке НЕ показываем.
+// - Эскизы: «вписаны», без внешних отступов и границ.
+//   • Лицевая — рендер через SketchTemplate.
+//   • Тыльная — превью из драфта + ПОВЕРХ него «контур резной работы» (силуэт item.url с малой непрозрачностью).
+// - Блок «Выбрано для плиты» показываем ТОЛЬКО если что‑то выбрано (графика и/или эпитафии).
+// - «Заказ списком» (оверлей):
+//   • Кнопка «Сохранить» — делаем скрин (html-to-image) и сохраняем PNG; уменьшаем шрифт/эскизы, вписываем в А4.
+//   • В списке отображаем элементы и для тыльной стороны (graphics/epitaphs).
+//   • Эскизы без рамок/отступов; лицевая — SketchTemplate, тыльная — превью.
 // - Отправка — без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -40,28 +43,8 @@ function inputStyle(): React.CSSProperties {
   return { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none", boxSizing: "border-box" };
 }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
-function wrapText(fontPx = 13): React.CSSProperties {
-  return { whiteSpace: "pre-wrap", wordBreak: "break-word", overflow: "visible", fontSize: `clamp(${Math.max(11, fontPx - 2)}px, 1.9vw, ${fontPx}px)` };
-}
-function gradientUnderlay(): React.CSSProperties {
-  return {
-    position: "absolute",
-    inset: 0,
-    background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
-    zIndex: 0
-  };
-}
-function linkLike(): React.CSSProperties {
-  return {
-    color: "#8ab4ff",
-    textDecoration: "underline",
-    cursor: "pointer",
-    background: "transparent",
-    border: "none",
-    padding: 0,
-    font: "inherit"
-  };
-}
+function wrapText(fontPx = 13): React.CSSProperties { return { whiteSpace: "pre-wrap", wordBreak: "break-word", overflow: "visible", fontSize: `clamp(${Math.max(11, fontPx - 2)}px, 1.9vw, ${fontPx}px)` }; }
+function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
 
 /* ===== Utils ===== */
 function personLines(p: any): string[] {
@@ -77,23 +60,6 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
   </div>
 );
-
-/* ===== Эскиз-карточка для тыльной (превью из драфта) ===== */
-function SketchCard({ title, url, aspect }: { title: string; url?: string | null; aspect?: string }) {
-  return (
-    <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
-      <div style={{ fontWeight: 700 }}>{title}</div>
-      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
-        <div style={gradientUnderlay()} />
-        {url ? (
-          <img src={url} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
-        ) : (
-          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 1 }}>Нет</div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /* ===== Каталог графики для плиты ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
@@ -124,42 +90,32 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
 
 /* ===== Раздел с номером заказа, клиентом и ссылкой «Заказ списком» (без резной работы) ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
-  const introState = loadIntroState();
-  const [name, setName] = useState<string>(introState.intro?.customerName || "");
-  const [phone, setPhone] = useState<string>(introState.intro?.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(introState.intro?.customerNotes || "");
-
-  const saveTimer = useRef<number | null>(null);
-  const scheduleSave = () => {
-    if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      const nextIntro: Intro = {
-        customerName: (name || "").trim(),
-        customerPhone: (phone || "").trim(),
-        customerNotes: (contactNotes || "").trim() || undefined
-      };
-      saveIntro(nextIntro, { lock: false });
+  const intro = loadIntroState();
+  const [name, setName] = useState<string>(intro.intro?.customerName || "");
+  const [phone, setPhone] = useState<string>(intro.intro?.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState<string>(intro.intro?.customerNotes || "");
+  const timer = useRef<number | null>(null);
+  const debSave = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const next: Intro = { customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined };
+      saveIntro(next, { lock: false });
     }, 250) as unknown as number;
   };
-  useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      {/* Номер заказа + «Заказ списком» */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Показать заказ списком (печать)">
-          Заказ списком
-        </button>
+        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Показать заказ списком">Заказ списком</button>
       </div>
-
-      {/* Данные заказчика */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
-        <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
-        <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+        <input value={name} onChange={(e) => { setName(e.target.value); debSave(); }} placeholder="Имя" style={inputStyle()} />
+        <input value={phone} onChange={(e) => { setPhone(e.target.value); debSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
       </div>
-      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={inputStyle()} />
+      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); debSave(); }} placeholder="Примечание для связи…" style={inputStyle()} />
     </section>
   );
 }
@@ -181,30 +137,27 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, []);
   const orderNo = String(introState.orderNumber || "").trim();
 
-  // Эскизы: back — из драфта, front — рисуем через SketchTemplate
+  // Back preview from draft
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
-  // Параметры изделия (для aspect)
+  // Item for aspect and contour
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
     const im = new Image();
-    im.onload = () => { const w = im.naturalWidth || 0, h = im.naturalHeight || 0; if (w && h) setAspect(`${w} / ${h}`); };
+    im.onload = () => { if (im.naturalWidth && im.naturalHeight) setAspect(`${im.naturalWidth} / ${im.naturalHeight}`); };
     im.src = itemUrl;
   }, [itemUrl]);
 
-  /* ——— Лицевая: данные для SketchTemplate ——— */
+  // Front data for SketchTemplate
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
-  const peopleBlocks = useMemo(
-    () => frontPersons.map((p: any, i: number) => ({
-      id: p.id || `p-${i}`,
-      lines: personLines(p),
-      photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
-    })),
-    [frontPersons]
-  );
+  const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
+    id: p.id || `p-${i}`,
+    lines: personLines(p),
+    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
+  })), [frontPersons]);
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
@@ -221,11 +174,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [extraBase, setExtraBase] = useState<boolean>(extras0.base ?? true);
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
-  const sizeOptions = ["100×50 см", "120×60 см", "140×70 см", "Свой вариант"];
-  const thicknessOptions = ["5 см", "8 см", "10 см", "Свой вариант"];
-  const [plateSize, setPlateSize] = useState<string>(extras0.plateSize && sizeOptions.includes(extras0.plateSize) ? extras0.plateSize : sizeOptions[0]);
+  const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
   const [plateCustomSize, setPlateCustomSize] = useState<string>(extras0.plateCustomSize || "");
-  const [plateThickness, setPlateThickness] = useState<string>(extras0.plateThickness && thicknessOptions.includes(extras0.plateThickness) ? extras0.plateThickness : thicknessOptions[0]);
+  const [plateThickness, setPlateThickness] = useState<string>(extras0.plateThickness || "5 см");
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
   const [plateOrientation, setPlateOrientation] = useState<string>(extras0.plateOrientation || (((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")) ? "horizontal" : "vertical"));
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
@@ -240,13 +191,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setPlateIds((prev) => {
       const i = prev.findIndex((x) => x === gid);
       if (i === -1) return prev;
-      const next = prev.slice();
-      next.splice(i, 1);
-      return next;
+      const next = prev.slice(); next.splice(i, 1); return next;
     });
   };
 
-  // Каталог для выбора графики на плите
+  // Каталог для плиты
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -260,11 +209,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         const root = (data as any)?.categories || data;
         const catsArr = Array.isArray(root) ? root : [];
         if (alive) setCats(catsArr);
-      } catch {
-        if (alive) setCatsError("Не удалось загрузить каталог графики.");
-      } finally {
-        if (alive) setCatsLoading(false);
-      }
+      } catch { if (alive) setCatsError("Не удалось загрузить каталог графики."); }
+      finally { if (alive) setCatsLoading(false); }
     })();
     return () => { alive = false; };
   }, []);
@@ -272,10 +218,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     if (!cats.length) return;
     setCatOpen((prev) => {
       const next = { ...prev };
-      for (const c of cats) {
-        const key = String(c._id || c.name || "");
-        if (!(key in next)) next[key] = false;
-      }
+      for (const c of cats) { const key = String(c._id || c.name || ""); if (!(key in next)) next[key] = false; }
       return next;
     });
   }, [cats]);
@@ -284,8 +227,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
       const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
-        const id = String(it.id || it.relPath || it.url || it.name || "");
-        if (!id) return;
+        const id = String(it.id || it.relPath || it.url || it.name || ""); if (!id) return;
         if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
       });
       collect(cat.items || []);
@@ -295,14 +237,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return uniq.map((gid) => plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta, cats]);
 
-  // Эпитафии плиты -> список
+  // Эпитафии плиты (список)
   const plateEpitaphList = useMemo(() => (plateEpitaph || "").split(/\n{2,}/g).map((s) => s.trim()).filter(Boolean), [plateEpitaph]);
-  const deletePlateEpitaphAt = (idx: number) => {
-    const arr = plateEpitaphList.slice();
-    if (idx < 0 || idx >= arr.length) return;
-    arr.splice(idx, 1);
-    setPlateEpitaph(arr.join("\n\n"));
-  };
 
   // Примечания
   const [orderNotes, setOrderNotes] = useState<string>(extras0.orderNotes || "");
@@ -337,31 +273,47 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
-  /* ===== Печать («Заказ списком») ===== */
+  /* ===== Оверлей «Заказ списком» — Сохранение PNG ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
-  const hasPrintedRef = useRef(false);
-  const printSimple = () => {
-    if (hasPrintedRef.current) return;
+  const hasSavedRef = useRef(false);
+  const saveAsPng = async () => {
+    if (hasSavedRef.current) return;
+    hasSavedRef.current = true;
     try {
       const el = document.getElementById("print-root");
-      if (el) {
-        const a4HeightPx = 1122; // ~297мм
-        const marginPx = Math.round(5 * 3.78);
-        const available = a4HeightPx - marginPx * 2;
-        const h = el.scrollHeight;
-        if (h > available) {
-          const scale = Math.max(0.5, Math.min(1, available / h));
-          (el as HTMLElement).style.transformOrigin = "top left";
-          (el as HTMLElement).style.transform = `scale(${scale})`;
-          setTimeout(() => { window.print(); setTimeout(() => { (el as HTMLElement).style.transform = ""; hasPrintedRef.current = false; }, 150); }, 50);
-          hasPrintedRef.current = true;
-          return;
-        }
+      if (!el) return;
+      // Вписываем в A4: уменьшаем, если контент выше
+      const a4h = 1122; // px ~ 297mm при ~96dpi
+      const margin = Math.round(5 * 3.78);
+      const avail = a4h - margin * 2;
+      const h = el.scrollHeight;
+      let scaled = false;
+      let prev = el.getAttribute("data-prev-transform") || "";
+      if (h > avail) {
+        const scale = Math.max(0.5, Math.min(1, avail / h));
+        (el as HTMLElement).style.transformOrigin = "top left";
+        (el as HTMLElement).style.transform = `scale(${scale})`;
+        el.setAttribute("data-prev-transform", prev);
+        scaled = true;
+        await new Promise((r) => setTimeout(r, 60));
       }
-    } catch {}
-    hasPrintedRef.current = true;
-    window.print();
-    setTimeout(() => { hasPrintedRef.current = false; }, 400);
+      // html-to-image (динамический импорт)
+      const mod: any = await import(/* webpackChunkName: "html-to-image" */ "html-to-image");
+      const dataUrl = await mod.toPng(el, { pixelRatio: 2, cacheBust: true, backgroundColor: "#ffffff" });
+      const link = document.createElement("a");
+      link.download = `order-${orderNo || Date.now()}.png`;
+      link.href = dataUrl;
+      link.click();
+      if (scaled) {
+        (el as HTMLElement).style.transform = prev || "";
+        el.removeAttribute("data-prev-transform");
+      }
+    } catch (e) {
+      console.warn("save png failed, fallback to print", e);
+      window.print();
+    } finally {
+      setTimeout(() => { hasSavedRef.current = false; }, 400);
+    }
   };
 
   /* ===== Отправка ===== */
@@ -370,8 +322,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const handleSend = async () => {
     setBusy(true); setErr("");
     const attachments: any = {
-      // Для телеграма оставим превью, если нужны; фронт — можно сформировать отдельно, но тыльную берём из драфта
-      frontPreview: null,
+      frontPreview: null, // по требованию — не отправляем лицевой превью
       backPreview: backSketchUrl || null,
       itemUrl: null,
       plateGraphics: chosenPlateList
@@ -405,20 +356,33 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     } finally { setBusy(false); }
   };
 
+  // rear lists для оверлея
+  const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+  const rearCounts: Record<string, number> = useMemo(() => {
+    const m: Record<string, number> = {};
+    (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
+    return m;
+  }, [rearIds]);
+  const rearUnique = useMemo(() => {
+    const ids = Array.from(new Set(rearIds || []));
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+  }, [rearIds, rearMeta]);
+  const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
+
   return (
     <>
-      {/* Номер заказа + клиент + ссылка «Заказ списком» */}
       <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
 
-      {/* Эскизы: лицевая — SketchTemplate; тыльная — превью */}
+      {/* Эскизы: «вписаны», без отступов/границ. Тыльная с контуром резной работы */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
           {/* Лицевая — SketchTemplate */}
-          <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
+          <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
             <div style={{ fontWeight: 700 }}>Лицевая</div>
-            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
-              <div style={gradientUnderlay()} />
-              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 8, boxSizing: "border-box" }}>
+            <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
+              {/* без отступов, без рамок */}
+              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 0 }}>
                 <SketchTemplate
                   item={item}
                   peopleBlocks={peopleBlocks}
@@ -430,10 +394,82 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               </div>
             </div>
           </div>
-          {/* Тыльная — превью из редактора тыла */}
-          {backSketchUrl && <SketchCard title="Тыльная" url={backSketchUrl} aspect={aspect} />}
+
+          {/* Тыльная — превью + контур резной работы */}
+          {backSketchUrl && (
+            <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
+              <div style={{ fontWeight: 700 }}>Тыльная</div>
+              <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
+                {/* Контур изделия (силуэт) */}
+                {itemUrl && (
+                  <img
+                    src={itemUrl}
+                    alt=""
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "contain",
+                      opacity: 0.22,
+                      filter: "grayscale(100%) contrast(190%) brightness(180%)",
+                      zIndex: 0,
+                      pointerEvents: "none"
+                    }}
+                  />
+                )}
+                {/* Сам превью тыльной стороны */}
+                <img
+                  src={backSketchUrl}
+                  alt=""
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                    zIndex: 1,
+                    pointerEvents: "none"
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </section>
+
+      {/* Выбрано для плиты — показываем ТОЛЬКО если есть выбранное */}
+      {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
+        <section style={{ ...glassPanelStyle(), padding: 12 }}>
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
+            {chosenPlateList.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
+                {chosenPlateList.map((g, i) => (
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
+                    <Thumb url={g.url} />
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
+                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">Удалить</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {plateEpitaphList.length > 0 && (
+              <div style={{ display: "grid", gap: 6 }}>
+                {plateEpitaphList.map((t, idx) => (
+                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                    <button type="button" onClick={() => {
+                      const arr = [...plateEpitaphList]; arr.splice(idx, 1);
+                      setPlateEpitaph(arr.join("\n\n"));
+                    }} style={glassButtonStyle("nano")} title="Удалить эпитафию">Удалить</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Дополнительно — чекбоксы и плита */}
       <ExtrasSection
@@ -468,7 +504,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Примечание к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
-      <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
+        <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
       </section>
 
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
@@ -479,15 +515,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Заказ списком (Печать) — лицевая из SketchTemplate, тыльная — превью */}
+      {/* Заказ списком — «Сохранить» PNG; тыльные элементы отрисовываем в списке */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
-          onPrint={() => { if (!hasPrintedRef.current) { hasPrintedRef.current = true; printSimple(); setTimeout(() => (hasPrintedRef.current = false), 400); } }}
+          onSave={saveAsPng}
           orderNo={orderNo}
           name={(loadIntroState().intro?.customerName || "").trim()}
           phone={(loadIntroState().intro?.customerPhone || "").trim()}
-          // Рисуем лицевую через SketchTemplate внутри оверлея
           frontSketch={
             <SketchTemplate
               item={item}
@@ -499,7 +534,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             />
           }
           previewBack={backSketchUrl || ""}
-          // Остальные данные для "состава заказа"
+          // Списки (включая тыльную сторону)
           frontData={{
             persons: frontPersons.map((p: any) => ({
               id: p.id,
@@ -514,14 +549,20 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             })),
             epitaphs: frontEpitaphs.slice()
           }}
-          rearData={backSketchUrl ? { graphics: [], epitaphs: [] } : null}
+          rearData={{
+            graphics: rearUnique.map((g: any) => ({
+              name: g.name || g.id,
+              qty: rearCounts[g?.id || g?.url || g?.name] || 1
+            })),
+            epitaphs: rearEpitaphs.slice()
+          }}
           extras={{ base: extraBase, flowerbed: extraFlowerbed }}
           plate={{
             enabled: extraPlate,
-            size: extraPlate ? (plateSize === "Свой вариант" ? (plateCustomSize || "Свой вариант") : plateSize) : "нет",
-            thickness: extraPlate ? (plateThickness === "Свой вариант" ? (plateCustomThickness || "Свой вариант") : plateThickness) : "нет",
-            graphics: extraPlate ? chosenPlateList.map((g) => ({ name: g.name || g.id })) : [],
-            epitaph: extraPlate ? (plateEpitaph || "").trim() : ""
+            size: extraPlate ? plateSize : undefined,
+            thickness: extraPlate ? plateThickness : undefined,
+            graphics: chosenPlateList.map((g) => ({ name: g.name || g.id })),
+            epitaph: (plateEpitaph || "").trim()
           }}
           notes={(orderNotes || "").trim()}
           aspect={aspect}
@@ -813,47 +854,42 @@ function ExtrasSection(props: {
   );
 }
 
-/* ===== Печать (A4) — «Заказ списком»: фронт = SketchTemplate, тыл = превью ===== */
+/* ===== Оверлей «Заказ списком» — Сохранение PNG, малый шрифт, без рамок у эскизов ===== */
 function PrintOverlay({
-  onClose, onPrint, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
+  onClose, onSave, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
 }: {
-  onClose: () => void; onPrint: () => void;
+  onClose: () => void; onSave: () => void;
   orderNo: string; name: string; phone: string;
   frontSketch: React.ReactNode;
   previewBack?: string;
   frontData: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number }[]; epitaphs: string[]; };
-  rearData: | null | { graphics: { name: string; qty: number }[]; epitaphs: string[]; };
+  rearData: { graphics: { name: string; qty: number }[]; epitaphs: string[] } | null;
   extras: { base: boolean; flowerbed: boolean };
-  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
+  plate: { enabled?: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
   notes?: string;
   aspect?: string;
 }) {
-  const [printing, setPrinting] = useState(false);
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
       <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
           <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
-          <button type="button" onClick={() => { if (!printing) { setPrinting(true); onPrint(); setTimeout(() => setPrinting(false), 400); } }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }} disabled={printing}>{printing ? "Печать…" : "Печать"}</button>
+          <button type="button" onClick={onSave} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить</button>
         </div>
 
-        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 12, lineHeight: 1.25 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
-          <hr />
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ marginBottom: 4 }}>{name || "—"} · {phone || "—"}</div>
-          </div>
-          <hr />
+        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
+          <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
 
-          {/* Состав заказа */}
+          {/* Состав — лицевая */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
                 {frontData.persons.length ? frontData.persons.map((p, i) => (
-                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "24px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                    {p.photo && <img src={p.photo} alt="" style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 4 }} />}
+                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "18px 1fr" : "1fr", gap: 4, alignItems: "center", marginBottom: 2 }}>
+                    {p.photo && <img src={p.photo} alt="" style={{ width: 18, height: 18, objectFit: "cover", borderRadius: 3 }} />}
                     <div>
                       {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
                       {p.fio2 && <div>{p.fio2}</div>}
@@ -872,59 +908,52 @@ function PrintOverlay({
               </div>
             </div>
           </div>
-          <hr />
 
+          {/* Состав — тыльная (отображаем элементы) */}
           {rearData && (
-            <>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{rearData.graphics.length ? rearData.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
+            <div style={{ margin: "6px 0" }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
+                <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
+                  {rearData.graphics.length ? rearData.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                  {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
                 </div>
               </div>
-              <hr />
-            </>
+            </div>
           )}
 
-          <div style={{ marginBottom: 6 }}>
+          {/* Дополнительно */}
+          <div style={{ margin: "6px 0" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
             <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
           </div>
-          <hr />
-          <div style={{ marginBottom: 6 }}>
+
+          {/* Плита */}
+          <div style={{ margin: "6px 0" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
             <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginTop: 4 }}>
-              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
-              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{plate.enabled ? (plate.graphics.length ? plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>) : <div>—</div>) : <div>нет</div>}</div>
-              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{plate.enabled ? (plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>) : <div>нет</div>}</div>
-            </div>
           </div>
-          <hr />
-          <div style={{ marginBottom: 6 }}>
+
+          {/* Примечания */}
+          <div style={{ margin: "6px 0" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
             <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
           </div>
-          <hr />
 
-          {/* Эскизы: лицевая — SketchTemplate, тыльная — превью */}
-          <div>
+          {/* Эскизы — без рамок/отступов, вписаны */}
+          <div style={{ marginTop: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
-            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 8 }}>
-              {/* Front via SketchTemplate */}
-              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
-                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
-                <div style={{ position: "absolute", inset: 0, padding: 6, boxSizing: "border-box" }}>
-                  {frontSketch}
-                </div>
+            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
+              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
+                <div style={{ position: "absolute", inset: 0, padding: 0 }}>{frontSketch}</div>
               </div>
-
-              {/* Back preview */}
               {rearData && (
-                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
-                  <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
+                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
                   {previewBack ? (
                     <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
                   ) : (
@@ -936,35 +965,6 @@ function PrintOverlay({
           </div>
         </div>
       </div>
-
-      <style>{`
-        @page {
-          size: A4;
-          margin: 5mm;
-          @top-left { content: '' }
-          @top-center { content: '' }
-          @top-right { content: '' }
-          @bottom-left { content: '' }
-          @bottom-center { content: '' }
-          @bottom-right { content: '' }
-        }
-        @media print {
-          body * { visibility: hidden !important; }
-          #print-root, #print-root * { visibility: visible !important; }
-          #print-root {
-            position: fixed;
-            inset: 0;
-            width: 210mm;
-            height: auto;
-            max-height: none;
-            padding: 5mm;
-            box-shadow: none !important;
-            transform-origin: top left;
-          }
-          [role="dialog"] { background: transparent !important; }
-          button { display: none !important; }
-        }
-      `}</style>
     </div>
   );
 }
