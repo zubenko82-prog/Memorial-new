@@ -1,13 +1,13 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Требования:
-// - Максимальная ширина страницы 600px (центрирование).
-// - Сверху: номер заказа + ссылка «Заказ списком» (в одной строке), поля клиента. Резную работу НЕ показываем.
-// - Эскизы «вписываем»: лицевая — через SketchTemplate БЕЗ отступов и рамок; тыльная — снимок со шага BackEditor (предпочтительно контур).
-// - Блок «Выбрано для плиты» показываем ТОЛЬКО если выбраны графика и/или эпитафии.
-// - Вместо печати — «Сохранить PDF» (html2canvas + jsPDF из CDN, без сборочных импортов).
-// - Отправка заказа без изменений (фронтовый превью не прикладываем).
+// По требованиям:
+// - Навигации нет.
+// - Вверху: номер заказа + ссылка «Заказ списком» (в одной строке) и поля клиента. Резную работу НЕ показываем.
+// - Эскизы «вписываем»: лицевая — через SketchTemplate; тыльная — превью из драфта (без резной работы).
+// - Блок «Выбрано для плиты» показываем ТОЛЬКО если что‑то выбрано (графика и/или эпитафии для плиты).
+// - «Дополнительно» и «Примечание» — как прежде.
+// - В «Заказе списком» лицевой эскиз — через SketchTemplate; тыльный — превью.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -17,10 +17,7 @@ import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
-/* ===== UI helpers ===== */
-function pageWrap(): React.CSSProperties {
-  return { width: "100%", maxWidth: 600, margin: "0 auto" };
-}
+/* ===== UI ===== */
 function glassPanelStyle(): React.CSSProperties {
   return { background: "rgba(20,20,24,0.90)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, color: "#fff", boxSizing: "border-box" };
 }
@@ -42,8 +39,27 @@ function inputStyle(): React.CSSProperties {
   return { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none", boxSizing: "border-box" };
 }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
+function wrapText(fontPx = 13): React.CSSProperties {
+  return { whiteSpace: "pre-wrap", wordBreak: "break-word", overflow: "visible", fontSize: `clamp(${Math.max(11, fontPx - 2)}px, 1.9vw, ${fontPx}px)` };
+}
+function gradientUnderlay(): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)",
+    zIndex: 0
+  };
+}
 function linkLike(): React.CSSProperties {
-  return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" };
+  return {
+    color: "#8ab4ff",
+    textDecoration: "underline",
+    cursor: "pointer",
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    font: "inherit"
+  };
 }
 
 /* ===== Utils ===== */
@@ -54,14 +70,31 @@ function personLines(p: any): string[] {
   return [l1, l2, l3].filter(Boolean);
 }
 
-/* ===== Thumb ===== */
+/* ===== Thumb (миниатюры) ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
   <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
   </div>
 );
 
-/* ===== Catalog grid (плита) ===== */
+/* ===== Эскиз-карточка для тыльной (превью из драфта) ===== */
+function SketchCard({ title, url, aspect }: { title: string; url?: string | null; aspect?: string }) {
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
+      <div style={{ fontWeight: 700 }}>{title}</div>
+      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
+        <div style={gradientUnderlay()} />
+        {url ? (
+          <img src={url} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
+        ) : (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 1 }}>Нет</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ===== Каталог графики для плиты ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
@@ -88,7 +121,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Верх: номер заказа + клиент (без превью резной) ===== */
+/* ===== Раздел с номером заказа, клиентом и ссылкой «Заказ списком» (без резной работы) ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
   const introState = loadIntroState();
   const [name, setName] = useState<string>(introState.intro?.customerName || "");
@@ -99,7 +132,11 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
   const scheduleSave = () => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const nextIntro: Intro = { customerName: (name || "").trim(), customerPhone: (phone || "").trim(), customerNotes: (contactNotes || "").trim() || undefined };
+      const nextIntro: Intro = {
+        customerName: (name || "").trim(),
+        customerPhone: (phone || "").trim(),
+        customerNotes: (contactNotes || "").trim() || undefined
+      };
       saveIntro(nextIntro, { lock: false });
     }, 250) as unknown as number;
   };
@@ -107,11 +144,16 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
 
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
+      {/* Номер заказа + «Заказ списком» */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Заказ списком (PDF)">Заказ списком</button>
+        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Показать заказ списком (печать)">
+          Заказ списком
+        </button>
       </div>
+
+      {/* Данные заказчика */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
         <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
@@ -119,31 +161,6 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
       <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={inputStyle()} />
     </section>
   );
-}
-
-/* ===== CDN loader для PDF ===== */
-function loadScriptOnce(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = document.createElement("script");
-    s.src = src;
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`Failed to load ${src}`));
-    document.head.appendChild(s);
-  });
-}
-async function ensurePdfLibs(): Promise<{ html2canvas: any; jsPDF: any }> {
-  const w = window as any;
-  if (w.html2canvas && (w.jspdf?.jsPDF || w.jsPDF)) {
-    return { html2canvas: w.html2canvas, jsPDF: w.jspdf?.jsPDF || w.jsPDF };
-  }
-  await loadScriptOnce("https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js");
-  await loadScriptOnce("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js");
-  const html2canvas = (window as any).html2canvas;
-  const jsPDF = (window as any).jspdf?.jsPDF || (window as any).jsPDF;
-  if (!html2canvas || !jsPDF) throw new Error("PDF libs not available");
-  return { html2canvas, jsPDF };
 }
 
 /* ===== Главный компонент ===== */
@@ -163,30 +180,21 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, []);
   const orderNo = String(introState.orderNumber || "").trim();
 
-  // Тыльная: предпочитаем контур (outline), иначе снимки
-  const backSketchUrl = (
-    ((draft as any)?.editorBack?.outlineUrl as string | undefined) ||
-    ((draft as any)?.editorBack?.previewContourUrl as string | undefined) ||
-    ((draft as any)?.editorBack?.previewHiUrl as string | undefined) ||
-    ((draft as any)?.editorBack?.previewUrl as string | undefined) ||
-    null
-  );
+  // Эскизы: back — из драфта (без резной работы), front — через SketchTemplate
+  const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
-  // Аспект по изображению изделия (для контейнеров эскизов)
+  // Параметры изделия (для aspect)
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
     const im = new Image();
-    im.onload = () => {
-      const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
-      if (w && h) setAspect(`${w} / ${h}`);
-    };
+    im.onload = () => { const w = im.naturalWidth || 0, h = im.naturalHeight || 0; if (w && h) setAspect(`${w} / ${h}`); };
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Лицевая (SketchTemplate) — подготовка данных
+  /* ——— Лицевая: данные для SketchTemplate ——— */
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(
     () => frontPersons.map((p: any, i: number) => ({
@@ -328,52 +336,40 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
-  /* ===== PDF («Заказ списком») ===== */
+  /* ===== Печать («Заказ списком») ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
-  const pdfRootId = "pdf-root";
-  const handleSavePdf = async () => {
+  const hasPrintedRef = useRef(false);
+  const printSimple = () => {
+    if (hasPrintedRef.current) return;
     try {
-      const { html2canvas, jsPDF } = await ensurePdfLibs();
-      const el = document.getElementById(pdfRootId);
-      if (!el) return;
-
-      const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 600 });
-      const imgData = canvas.toDataURL("image/png");
-
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const imgWidthMm = pageWidth;
-      const imgHeightMm = (canvas.height / canvas.width) * imgWidthMm;
-
-      if (imgHeightMm <= pageHeight) {
-        pdf.addImage(imgData, "PNG", 0, 0, imgWidthMm, imgHeightMm, undefined, "FAST");
-      } else {
-        let heightLeft = imgHeightMm;
-        let position = 0;
-        pdf.addImage(imgData, "PNG", 0, position, imgWidthMm, imgHeightMm, undefined, "FAST");
-        heightLeft -= pageHeight;
-        while (heightLeft > 0) {
-          position = heightLeft * -1;
-          pdf.addPage();
-          pdf.addImage(imgData, "PNG", 0, position, imgWidthMm, imgHeightMm, undefined, "FAST");
-          heightLeft -= pageHeight;
+      const el = document.getElementById("print-root");
+      if (el) {
+        const a4HeightPx = 1122; // ~297мм
+        const marginPx = Math.round(5 * 3.78);
+        const available = a4HeightPx - marginPx * 2;
+        const h = el.scrollHeight;
+        if (h > available) {
+          const scale = Math.max(0.5, Math.min(1, available / h));
+          (el as HTMLElement).style.transformOrigin = "top left";
+          (el as HTMLElement).style.transform = `scale(${scale})`;
+          setTimeout(() => { window.print(); setTimeout(() => { (el as HTMLElement).style.transform = ""; hasPrintedRef.current = false; }, 150); }, 50);
+          hasPrintedRef.current = true;
+          return;
         }
       }
-      pdf.save(`order_${orderNo || "no"}.pdf`);
-    } catch (e) {
-      console.error("PDF save error:", e);
-      window.alert("Не удалось сохранить PDF. Попробуйте ещё раз.");
-    }
+    } catch {}
+    hasPrintedRef.current = true;
+    window.print();
+    setTimeout(() => { hasPrintedRef.current = false; }, 400);
   };
 
-  /* ===== Отправка заказа ===== */
+  /* ===== Отправка ===== */
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>("");
   const handleSend = async () => {
     setBusy(true); setErr("");
     const attachments: any = {
-      frontPreview: null,                // по требованиям не отправляем фронтовое превью
+      frontPreview: null, // лицевую отправкой не прикладываем (по требованию), рисуем в UI
       backPreview: backSketchUrl || null,
       itemUrl: null,
       plateGraphics: chosenPlateList
@@ -407,46 +403,43 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     } finally { setBusy(false); }
   };
 
-  // Флаг для показа блока плиты
+  // Выбрано для плиты — показываем, только если что-то выбрано
   const hasPlateSelection = chosenPlateList.length > 0 || plateEpitaphList.length > 0;
 
   return (
-    <div style={pageWrap()}>
-      {/* Верх */}
+    <>
+      {/* Номер заказа + клиент + ссылка «Заказ списком» */}
       <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
 
-      {/* Эскизы: лицевая — full-bleed SketchTemplate; тыльная — контур/превью из BackEditor */}
+      {/* Эскизы: лицевая — SketchTemplate (вписываем), тыльная — превью (вписываем) */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
-          {/* Лицевая — full-bleed */}
-          <div style={{ display: "grid", gap: 6 }}>
+          {/* Лицевая — SketchTemplate */}
+          <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 8 }}>
             <div style={{ fontWeight: 700 }}>Лицевая</div>
-            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3" }}>
-              <div style={{ position: "absolute", inset: 0 }}>
-                <SketchTemplate
-                  item={item}
-                  peopleBlocks={peopleBlocks}
-                  crosses={selectedCrosses}
-                  others={selectedOthers}
-                  epitaphs={frontEpitaphs}
-                  carvingOpacity={0.4}
-                />
+            <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
+              <div style={gradientUnderlay()} />
+              {/* Вписываем внутрь контейнера */}
+              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 0, boxSizing: "border-box", display: "grid", placeItems: "center" }}>
+                <div style={{ width: "100%", height: "100%" }}>
+                  <SketchTemplate
+                    item={item}
+                    peopleBlocks={peopleBlocks}
+                    crosses={selectedCrosses}
+                    others={selectedOthers}
+                    epitaphs={frontEpitaphs}
+                    carvingOpacity={0.4}
+                  />
+                </div>
               </div>
             </div>
           </div>
-          {/* Тыльная — контур/превью */}
-          {backSketchUrl && (
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={{ fontWeight: 700 }}>Тыльная</div>
-              <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", background: "rgba(255,255,255,0.04)" }}>
-                <img src={backSketchUrl} alt="Тыльная" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
-              </div>
-            </div>
-          )}
+          {/* Тыльная — превью из редактора тыла (без резной работы) */}
+          {backSketchUrl && <SketchCard title="Тыльная" url={backSketchUrl} aspect={aspect} />}
         </div>
       </section>
 
-      {/* Выбрано для плиты — только если есть выбор */}
+      {/* Выбрано для плиты — показываем ТОЛЬКО если что-то выбрано */}
       {hasPlateSelection && (
         <section style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ ...sectionBox }}>
@@ -459,7 +452,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.name || g.id}
                     </div>
-                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">Удалить</button>
+                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">
+                      Удалить
+                    </button>
                   </div>
                 ))}
               </div>
@@ -469,7 +464,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {plateEpitaphList.map((t, idx) => (
                   <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">Удалить</button>
+                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">
+                      Удалить
+                    </button>
                   </div>
                 ))}
               </div>
@@ -478,7 +475,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно */}
+      {/* Дополнительно — чекбоксы и плита */}
       <ExtrasSection
         extraBase={extraBase}
         setExtraBase={setExtraBase}
@@ -514,7 +511,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
       </section>
 
-      {/* Ошибка отправки */}
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
 
       {/* Действия */}
@@ -523,30 +519,27 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* «Заказ списком» (PDF) */}
+      {/* Заказ списком (Печать) — лицевая через SketchTemplate, тыльная — превью */}
       {simpleOpen && (
-        <PdfOverlay
-          rootId="pdf-root"
+        <PrintOverlay
           onClose={() => setSimpleOpen(false)}
-          onSavePdf={handleSavePdf}
+          onPrint={() => { if (!hasPrintedRef.current) { hasPrintedRef.current = true; printSimple(); setTimeout(() => (hasPrintedRef.current = false), 400); } }}
           orderNo={orderNo}
           name={(loadIntroState().intro?.customerName || "").trim()}
           phone={(loadIntroState().intro?.customerPhone || "").trim()}
+          // Лицевая: SketchTemplate
           frontSketch={
-            <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden", borderRadius: 8 }}>
-              <div style={{ position: "absolute", inset: 0 }}>
-                <SketchTemplate
-                  item={item}
-                  peopleBlocks={peopleBlocks}
-                  crosses={selectedCrosses}
-                  others={selectedOthers}
-                  epitaphs={frontEpitaphs}
-                  carvingOpacity={0.4}
-                />
-              </div>
-            </div>
+            <SketchTemplate
+              item={item}
+              peopleBlocks={peopleBlocks}
+              crosses={selectedCrosses}
+              others={selectedOthers}
+              epitaphs={frontEpitaphs}
+              carvingOpacity={0.4}
+            />
           }
           previewBack={backSketchUrl || ""}
+          // Состав заказа
           frontData={{
             persons: frontPersons.map((p: any) => ({
               id: p.id,
@@ -564,9 +557,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           rearData={backSketchUrl ? { graphics: [], epitaphs: [] } : null}
           extras={{ base: extraBase, flowerbed: extraFlowerbed }}
           plate={{
-            enabled: hasPlateSelection,
-            size: hasPlateSelection ? (plateSize === "Свой вариант" ? (plateCustomSize || "Свой вариант") : plateSize) : "нет",
-            thickness: hasPlateSelection ? (plateThickness === "Свой вариант" ? (plateCustomThickness || "Свой вариант") : plateThickness) : "нет",
+            enabled: !!(chosenPlateList.length || plateEpitaphList.length),
+            size: extraPlate ? (plateSize === "Свой вариант" ? (plateCustomSize || "Свой вариант") : plateSize) : "нет",
+            thickness: extraPlate ? (plateThickness === "Свой вариант" ? (plateCustomThickness || "Свой вариант") : plateThickness) : "нет",
             graphics: chosenPlateList.map((g) => ({ name: g.name || g.id })),
             epitaph: (plateEpitaph || "").trim()
           }}
@@ -574,7 +567,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           aspect={aspect}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -860,12 +853,11 @@ function ExtrasSection(props: {
   );
 }
 
-/* ===== PDF Overlay ===== */
-function PdfOverlay({
-  rootId, onClose, onSavePdf, orderNo, name, phone,
-  frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
+/* ===== Печать (A4) — «Заказ списком»: фронт = SketchTemplate, тыл = превью ===== */
+function PrintOverlay({
+  onClose, onPrint, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
 }: {
-  rootId: string; onClose: () => void; onSavePdf: () => void;
+  onClose: () => void; onPrint: () => void;
   orderNo: string; name: string; phone: string;
   frontSketch: React.ReactNode;
   previewBack?: string;
@@ -876,33 +868,36 @@ function PdfOverlay({
   notes?: string;
   aspect?: string;
 }) {
+  const [printing, setPrinting] = useState(false);
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
-      <div style={{ width: "100%", maxWidth: 600, maxHeight: "95vh", overflow: "auto", borderRadius: 12, background: "#fff", color: "#000", boxShadow: "0 20px 60px rgba(0,0,0,0.55)" }}>
-        {/* Toolbar */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: 10, position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #e5e5e5", zIndex: 10 }}>
-          <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #bbb", background: "#f7f7f7", cursor: "pointer" }}>Закрыть</button>
-          <button type="button" onClick={onSavePdf} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #2c5fb8", background: "#e6f2ff", cursor: "pointer", color: "#174ea6" }}>Сохранить PDF</button>
+      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+          <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
+          <button type="button" onClick={() => { if (!printing) { setPrinting(true); onPrint(); setTimeout(() => setPrinting(false), 400); } }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }} disabled={printing}>{printing ? "Печать…" : "Печать"}</button>
         </div>
 
-        {/* PDF root */}
-        <div id={rootId} style={{ padding: 12 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
-          <div style={{ marginBottom: 8 }}>{name || "—"} · {phone || "—"}</div>
+        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 12, lineHeight: 1.25 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
+          <hr />
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ marginBottom: 4 }}>{name || "—"} · {phone || "—"}</div>
+          </div>
+          <hr />
 
-          {/* Состав заказа — кратко */}
-          <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
+          {/* Состав заказа */}
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
                 {frontData.persons.length ? frontData.persons.map((p, i) => (
-                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "20px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                    {p.photo && <img src={p.photo} alt="" style={{ width: 20, height: 20, objectFit: "cover", borderRadius: 4 }} />}
+                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "24px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                    {p.photo && <img src={p.photo} alt="" style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 4 }} />}
                     <div>
                       {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
                       {p.fio2 && <div>{p.fio2}</div>}
-                      {p.dates && <div style={{ opacity: 0.9 }}>{p.dates}</div>}
+                      {p.dates && <div>{p.dates}</div>}
                     </div>
                   </div>
                 )) : <div>—</div>}
@@ -917,60 +912,101 @@ function PdfOverlay({
               </div>
             </div>
           </div>
+          <hr />
 
           {rearData && (
-            <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
-              {/* Детализация состава тыльной опущена, ниже — эскиз-тыльная */}
-            </div>
+            <>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{rearData.graphics.length ? rearData.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
+                </div>
+              </div>
+              <hr />
+            </>
           )}
 
-          {/* Дополнительно */}
-          <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
+          <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
             <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
           </div>
-
-          {/* Плита */}
-          <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
+          <hr />
+          <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
             <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
-            <div style={{ marginTop: 4 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-              {plate.enabled ? (plate.graphics.length ? plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>) : <div>—</div>) : <div>нет</div>}
-            </div>
-            <div style={{ marginTop: 4 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-              {plate.enabled ? (plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>) : <div>нет</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginTop: 4 }}>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{plate.enabled ? (plate.graphics.length ? plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>) : <div>—</div>) : <div>нет</div>}</div>
+              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{plate.enabled ? (plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>) : <div>нет</div>}</div>
             </div>
           </div>
-
-          {/* Примечания */}
-          <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
+          <hr />
+          <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
             <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
           </div>
+          <hr />
 
-          {/* Эскизы — лицевая (full-bleed) и тыльная (превью) */}
-          <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Эскизы</div>
-            <div style={{ display: "grid", gridTemplateColumns: previewBack ? "1fr 1fr" : "1fr", gap: 8 }}>
-              {/* Front */}
-              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden", borderRadius: 8 }}>
-                <div style={{ position: "absolute", inset: 0 }}>
-                  {frontSketch}
+          {/* Эскизы: лицевая — SketchTemplate, тыльная — превью; оба вписаны */}
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
+            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 8 }}>
+              {/* Front via SketchTemplate */}
+              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
+                <div style={{ position: "absolute", inset: 0, padding: 6, boxSizing: "border-box", display: "grid", placeItems: "center" }}>
+                  <div style={{ width: "100%", height: "100%" }}>
+                    {frontSketch}
+                  </div>
                 </div>
               </div>
-              {/* Back */}
-              {previewBack && (
-                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden", borderRadius: 8, background: "#f5f5f5" }}>
-                  <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+
+              {/* Back preview */}
+              {rearData && (
+                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
+                  {previewBack ? (
+                    <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                  ) : (
+                    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
+                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
       </div>
+
+      <style>{`
+        @page {
+          size: A4;
+          margin: 5mm;
+          @top-left { content: '' }
+          @top-center { content: '' }
+          @top-right { content: '' }
+          @bottom-left { content: '' }
+          @bottom-center { content: '' }
+          @bottom-right { content: '' }
+        }
+        @media print {
+          body * { visibility: hidden !important; }
+          #print-root, #print-root * { visibility: visible !important; }
+          #print-root {
+            position: fixed;
+            inset: 0;
+            width: 210mm;
+            height: auto;
+            max-height: none;
+            padding: 5mm;
+            box-shadow: none !important;
+            transform-origin: top left;
+          }
+          [role="dialog"] { background: transparent !important; }
+          button { display: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
