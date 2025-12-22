@@ -2,12 +2,12 @@
 // Обзор и подтверждение (без TopBar).
 //
 // Требования:
-// - Максимальная ширина страницы 600px (центрируем).
-// - Сверху: номер заказа + ссылка «Заказ списком», поля клиента. Резную работу НЕ показываем.
-// - Эскизы «вписываем»: лицевая — через SketchTemplate БЕЗ отступов и границ; тыльная — снимок со шага BackEditorStep
-//   (предпочтительно контур, берём outlineUrl/previewContourUrl, иначе previewHiUrl/previewUrl).
+// - Максимальная ширина страницы 600px (центрирование).
+// - Сверху: номер заказа + ссылка «Заказ списком» (в одной строке), поля клиента. Резную работу НЕ показываем.
+// - Эскизы «вписываем»: лицевая — через SketchTemplate БЕЗ отступов и рамок; тыльная — снимок со шага BackEditor (предпочтительно контур).
 // - Блок «Выбрано для плиты» показываем ТОЛЬКО если выбраны графика и/или эпитафии.
-// - Вместо печати — сохраняем в PDF (кнопка «Сохранить PDF»), генерируем PDF на клиенте через html2canvas + jsPDF.
+// - Вместо печати — «Сохранить PDF» (html2canvas + jsPDF из CDN, без сборочных импортов).
+// - Отправка заказа без изменений (фронтовый превью не прикладываем).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -17,7 +17,7 @@ import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
-/* ===== UI ===== */
+/* ===== UI helpers ===== */
 function pageWrap(): React.CSSProperties {
   return { width: "100%", maxWidth: 600, margin: "0 auto" };
 }
@@ -42,9 +42,6 @@ function inputStyle(): React.CSSProperties {
   return { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none", boxSizing: "border-box" };
 }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
-function wrapText(fontPx = 13): React.CSSProperties {
-  return { whiteSpace: "pre-wrap", wordBreak: "break-word", overflow: "visible", fontSize: `clamp(${Math.max(11, fontPx - 2)}px, 1.9vw, ${fontPx}px)` };
-}
 function linkLike(): React.CSSProperties {
   return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" };
 }
@@ -64,7 +61,7 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== Каталог графики для плиты ===== */
+/* ===== Catalog grid (плита) ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 12 }}>
@@ -91,7 +88,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Раздел с номером заказа, клиентом и ссылкой «Заказ списком» (без резной работы) ===== */
+/* ===== Верх: номер заказа + клиент (без превью резной) ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
   const introState = loadIntroState();
   const [name, setName] = useState<string>(introState.intro?.customerName || "");
@@ -102,11 +99,7 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
   const scheduleSave = () => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const nextIntro: Intro = {
-        customerName: (name || "").trim(),
-        customerPhone: (phone || "").trim(),
-        customerNotes: (contactNotes || "").trim() || undefined
-      };
+      const nextIntro: Intro = { customerName: (name || "").trim(), customerPhone: (phone || "").trim(), customerNotes: (contactNotes || "").trim() || undefined };
       saveIntro(nextIntro, { lock: false });
     }, 250) as unknown as number;
   };
@@ -114,16 +107,11 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
 
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      {/* Номер заказа + «Заказ списком» */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Показать заказ списком (PDF)">
-          Заказ списком
-        </button>
+        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Заказ списком (PDF)">Заказ списком</button>
       </div>
-
-      {/* Данные заказчика */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
         <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
@@ -131,6 +119,31 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
       <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={inputStyle()} />
     </section>
   );
+}
+
+/* ===== CDN loader для PDF ===== */
+function loadScriptOnce(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+  });
+}
+async function ensurePdfLibs(): Promise<{ html2canvas: any; jsPDF: any }> {
+  const w = window as any;
+  if (w.html2canvas && (w.jspdf?.jsPDF || w.jsPDF)) {
+    return { html2canvas: w.html2canvas, jsPDF: w.jspdf?.jsPDF || w.jsPDF };
+  }
+  await loadScriptOnce("https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js");
+  await loadScriptOnce("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js");
+  const html2canvas = (window as any).html2canvas;
+  const jsPDF = (window as any).jspdf?.jsPDF || (window as any).jsPDF;
+  if (!html2canvas || !jsPDF) throw new Error("PDF libs not available");
+  return { html2canvas, jsPDF };
 }
 
 /* ===== Главный компонент ===== */
@@ -150,7 +163,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, []);
   const orderNo = String(introState.orderNumber || "").trim();
 
-  // Тыльная: предпочитаем контур (outline), иначе снимок
+  // Тыльная: предпочитаем контур (outline), иначе снимки
   const backSketchUrl = (
     ((draft as any)?.editorBack?.outlineUrl as string | undefined) ||
     ((draft as any)?.editorBack?.previewContourUrl as string | undefined) ||
@@ -159,18 +172,21 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     null
   );
 
-  // Параметры изделия (для aspect)
+  // Аспект по изображению изделия (для контейнеров эскизов)
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
     const im = new Image();
-    im.onload = () => { const w = im.naturalWidth || 0, h = im.naturalHeight || 0; if (w && h) setAspect(`${w} / ${h}`); };
+    im.onload = () => {
+      const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
+      if (w && h) setAspect(`${w} / ${h}`);
+    };
     im.src = itemUrl;
   }, [itemUrl]);
 
-  /* ——— Лицевая: данные для SketchTemplate ——— */
+  // Лицевая (SketchTemplate) — подготовка данных
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(
     () => frontPersons.map((p: any, i: number) => ({
@@ -312,55 +328,38 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
-  /* ===== PDF (Заказ списком) ===== */
+  /* ===== PDF («Заказ списком») ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
   const pdfRootId = "pdf-root";
-
   const handleSavePdf = async () => {
     try {
-      const [{ default: html2canvas }, jsPdfMod] = await Promise.all([
-        import("html2canvas"),
-        import("jspdf")
-      ]);
-      const jsPDF = (jsPdfMod as any).default || (jsPdfMod as any).jsPDF || (jsPdfMod as any);
+      const { html2canvas, jsPDF } = await ensurePdfLibs();
       const el = document.getElementById(pdfRootId);
       if (!el) return;
 
-      // Сделаем скрин root блока шириной до 600px
-      const canvas = await html2canvas(el, {
-        scale: 2, // качество
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        windowWidth: 600
-      });
+      const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 600 });
       const imgData = canvas.toDataURL("image/png");
 
-      // PDF: A4, портрет
       const pdf = new jsPDF("p", "mm", "a4");
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-
-      // Масштабируем под ширину страницы
-      const pxToMm = (px: number) => px * 0.264583; // 96dpi → mm
       const imgWidthMm = pageWidth;
       const imgHeightMm = (canvas.height / canvas.width) * imgWidthMm;
 
       if (imgHeightMm <= pageHeight) {
         pdf.addImage(imgData, "PNG", 0, 0, imgWidthMm, imgHeightMm, undefined, "FAST");
       } else {
-        // Многостраничное добавление
         let heightLeft = imgHeightMm;
         let position = 0;
         pdf.addImage(imgData, "PNG", 0, position, imgWidthMm, imgHeightMm, undefined, "FAST");
         heightLeft -= pageHeight;
         while (heightLeft > 0) {
-          position = heightLeft * -1; // смещаем вверх
+          position = heightLeft * -1;
           pdf.addPage();
           pdf.addImage(imgData, "PNG", 0, position, imgWidthMm, imgHeightMm, undefined, "FAST");
           heightLeft -= pageHeight;
         }
       }
-
       pdf.save(`order_${orderNo || "no"}.pdf`);
     } catch (e) {
       console.error("PDF save error:", e);
@@ -368,22 +367,61 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   };
 
-  // Выбрано для плиты — показываем, только если что-то выбрано
+  /* ===== Отправка заказа ===== */
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>("");
+  const handleSend = async () => {
+    setBusy(true); setErr("");
+    const attachments: any = {
+      frontPreview: null,                // по требованиям не отправляем фронтовое превью
+      backPreview: backSketchUrl || null,
+      itemUrl: null,
+      plateGraphics: chosenPlateList
+    };
+    const extras: Extras & {
+      base?: boolean; flowerbed?: boolean; headstonePlate?: boolean;
+      plateSize?: string; plateCustomSize?: string; plateThickness?: string; plateCustomThickness?: string; plateOrientation?: string; plateEpitaph?: string; plateGraphicsIds?: string[];
+      orderNo?: string; orderNotes?: string; attachments?: any;
+    } = {
+      base: extraBase,
+      flowerbed: extraFlowerbed,
+      headstonePlate: extraPlate,
+      plateSize: extraPlate ? plateSize : undefined,
+      plateCustomSize: extraPlate && plateSize === "Свой вариант" ? plateCustomSize : undefined,
+      plateThickness: extraPlate ? plateThickness : undefined,
+      plateCustomThickness: extraPlate && plateThickness === "Свой вариант" ? plateCustomThickness : undefined,
+      plateOrientation: extraPlate ? plateOrientation : undefined,
+      plateEpitaph: extraPlate ? (plateEpitaph || "").trim() || undefined : undefined,
+      plateGraphicsIds: extraPlate ? plateIds : undefined,
+      orderNo,
+      orderNotes: (orderNotes || "").trim() || undefined,
+      attachments
+    };
+    try {
+      await sendOrderEmailAndNotifyTg(extras);
+      const nm = (loadIntroState().intro?.customerName || "").trim() || "Заказчик";
+      window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами для подтверждения деталей.`);
+      onSend?.({ extras });
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
+    } finally { setBusy(false); }
+  };
+
+  // Флаг для показа блока плиты
   const hasPlateSelection = chosenPlateList.length > 0 || plateEpitaphList.length > 0;
 
   return (
     <div style={pageWrap()}>
-      {/* Номер заказа + клиент + ссылка «Заказ списком» */}
+      {/* Верх */}
       <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
 
-      {/* Эскизы: лицевая — SketchTemplate (full-bleed), тыльная — превью (outline/preview) */}
+      {/* Эскизы: лицевая — full-bleed SketchTemplate; тыльная — контур/превью из BackEditor */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
-          {/* Лицевая — full-bleed, без отступов и границ */}
+          {/* Лицевая — full-bleed */}
           <div style={{ display: "grid", gap: 6 }}>
             <div style={{ fontWeight: 700 }}>Лицевая</div>
             <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3" }}>
-              {/* full-bleed: без padding/border */}
               <div style={{ position: "absolute", inset: 0 }}>
                 <SketchTemplate
                   item={item}
@@ -396,24 +434,19 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               </div>
             </div>
           </div>
-
-          {/* Тыльная — снимок с шага BackEditor (предпочтительно контур) */}
+          {/* Тыльная — контур/превью */}
           {backSketchUrl && (
             <div style={{ display: "grid", gap: 6 }}>
               <div style={{ fontWeight: 700 }}>Тыльная</div>
               <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", background: "rgba(255,255,255,0.04)" }}>
-                <img
-                  src={backSketchUrl}
-                  alt="Тыльная"
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-                />
+                <img src={backSketchUrl} alt="Тыльная" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
               </div>
             </div>
           )}
         </div>
       </section>
 
-      {/* Выбрано для плиты — показываем ТОЛЬКО если что-то выбрано */}
+      {/* Выбрано для плиты — только если есть выбор */}
       {hasPlateSelection && (
         <section style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ ...sectionBox }}>
@@ -426,9 +459,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.name || g.id}
                     </div>
-                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">
-                      Удалить
-                    </button>
+                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">Удалить</button>
                   </div>
                 ))}
               </div>
@@ -438,9 +469,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {plateEpitaphList.map((t, idx) => (
                   <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">
-                      Удалить
-                    </button>
+                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">Удалить</button>
                   </div>
                 ))}
               </div>
@@ -449,7 +478,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно — чекбоксы и плита */}
+      {/* Дополнительно */}
       <ExtrasSection
         extraBase={extraBase}
         setExtraBase={setExtraBase}
@@ -494,18 +523,17 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Заказ списком (PDF-оверлей) */}
+      {/* «Заказ списком» (PDF) */}
       {simpleOpen && (
         <PdfOverlay
-          rootId={pdfRootId}
+          rootId="pdf-root"
           onClose={() => setSimpleOpen(false)}
           onSavePdf={handleSavePdf}
           orderNo={orderNo}
           name={(loadIntroState().intro?.customerName || "").trim()}
           phone={(loadIntroState().intro?.customerPhone || "").trim()}
-          // Лицевая: SketchTemplate (full-bleed, без отступов)
           frontSketch={
-            <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
+            <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden", borderRadius: 8 }}>
               <div style={{ position: "absolute", inset: 0 }}>
                 <SketchTemplate
                   item={item}
@@ -519,7 +547,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           }
           previewBack={backSketchUrl || ""}
-          // Состав заказа
           frontData={{
             persons: frontPersons.map((p: any) => ({
               id: p.id,
@@ -894,7 +921,7 @@ function PdfOverlay({
           {rearData && (
             <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
-              {/* (по требованиям — контур/превью) */}
+              {/* Детализация состава тыльной опущена, ниже — эскиз-тыльная */}
             </div>
           )}
 
@@ -924,7 +951,7 @@ function PdfOverlay({
             <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
           </div>
 
-          {/* Эскизы: лицевая full-bleed (без отступов и границ), тыльная — превью */}
+          {/* Эскизы — лицевая (full-bleed) и тыльная (превью) */}
           <div style={{ borderTop: "1px solid #ddd", paddingTop: 8, marginTop: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: previewBack ? "1fr 1fr" : "1fr", gap: 8 }}>

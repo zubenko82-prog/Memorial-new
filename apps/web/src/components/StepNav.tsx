@@ -210,16 +210,13 @@ export default function StepNav({
 
  const containerStyle: React.CSSProperties = sticky
   ? {
-      position: 'sticky',
-      // Safari fallback:
-      // @ts-expect-error -webkit-sticky допустим как строка
-      position: ('-webkit-sticky' as any),
-      top: 'calc(env(safe-area-inset-top, 0px))',
+      position: "sticky",
+      top: "calc(env(safe-area-inset-top, 0px))",
       zIndex: 1000,
-      display: 'grid',
+      display: "grid",
       gap: 6
     }
-  : { display: 'grid', gap: 6 };
+  : { display: "grid", gap: 6 };
 
   // До «активации» панель не отображаем вовсе
   if (!enabled) return null;
