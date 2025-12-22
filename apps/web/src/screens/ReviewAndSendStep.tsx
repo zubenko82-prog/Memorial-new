@@ -420,7 +420,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
               <div style={gradientUnderlay()} />
               {/* Вписываем внутрь контейнера */}
-              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 8, boxSizing: "border-box", display: "grid", placeItems: "center" }}>
+              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 0, boxSizing: "border-box", display: "grid", placeItems: "center" }}>
                 <div style={{ width: "100%", height: "100%" }}>
                   <SketchTemplate
                     item={item}
