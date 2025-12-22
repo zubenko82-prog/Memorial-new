@@ -746,19 +746,7 @@ export default function SketchTemplate({
 
   return (
     <>
-      <div
-        style={{
-          color: "#fff",
-          opacity: 0.9,
-          fontSize: 15,
-          lineHeight: 1.25,
-          margin: "6px 0 8px",
-          textAlign: "center",
-          fontWeight: 400,
-        }}
-      >
-        Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
-      </div>
+      
 
       <div
         ref={containerRef}
