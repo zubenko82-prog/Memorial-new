@@ -1,13 +1,14 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// По требованиям:
-// - Навигации нет.
-// - Вверху: номер заказа + ссылка «Заказ списком» (в одной строке) и поля клиента. Резную работу НЕ показываем.
-// - Эскизы «вписываем»: лицевая — через SketchTemplate; тыльная — превью из драфта (без резной работы).
-// - Блок «Выбрано для плиты» показываем ТОЛЬКО если что‑то выбрано (графика и/или эпитафии для плиты).
-// - «Дополнительно» и «Примечание» — как прежде.
-// - В «Заказе списком» лицевой эскиз — через SketchTemplate; тыльный — превью.
+// Изменения по требованию:
+// - Навигацию убрали.
+// - Вверху показываем только номер заказа + ссылку «Заказ списком» в одну строку,
+//   и поля клиента (Имя, Телефон, Примечание для связи). Резную работу НЕ показываем.
+// - Эскизы: лицевая — рендерим через SketchTemplate; тыльная — превью из драфта.
+// - В «Заказе списком» (печать) — лицевая тоже через SketchTemplate; тыльная — превью.
+// - «Дополнительно» и «Примечания» — без изменений.
+// - Отправка — без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -180,7 +181,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, []);
   const orderNo = String(introState.orderNumber || "").trim();
 
-  // Эскизы: back — из драфта (без резной работы), front — через SketchTemplate
+  // Эскизы: back — из драфта, front — рисуем через SketchTemplate
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
   // Параметры изделия (для aspect)
@@ -369,7 +370,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const handleSend = async () => {
     setBusy(true); setErr("");
     const attachments: any = {
-      frontPreview: null, // лицевую отправкой не прикладываем (по требованию), рисуем в UI
+      // Для телеграма оставим превью, если нужны; фронт — можно сформировать отдельно, но тыльную берём из драфта
+      frontPreview: null,
       backPreview: backSketchUrl || null,
       itemUrl: null,
       plateGraphics: chosenPlateList
@@ -403,15 +405,12 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     } finally { setBusy(false); }
   };
 
-  // Выбрано для плиты — показываем, только если что-то выбрано
-  const hasPlateSelection = chosenPlateList.length > 0 || plateEpitaphList.length > 0;
-
   return (
     <>
       {/* Номер заказа + клиент + ссылка «Заказ списком» */}
       <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
 
-      {/* Эскизы: лицевая — SketchTemplate (вписываем), тыльная — превью (вписываем) */}
+      {/* Эскизы: лицевая — SketchTemplate; тыльная — превью */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
           {/* Лицевая — SketchTemplate */}
@@ -419,61 +418,22 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             <div style={{ fontWeight: 700 }}>Лицевая</div>
             <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", aspectRatio: aspect || "4 / 3", minHeight: 220 }}>
               <div style={gradientUnderlay()} />
-              {/* Вписываем внутрь контейнера */}
-              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 0, boxSizing: "border-box", display: "grid", placeItems: "center" }}>
-                <div style={{ width: "100%", height: "100%" }}>
-                  <SketchTemplate
-                    item={item}
-                    peopleBlocks={peopleBlocks}
-                    crosses={selectedCrosses}
-                    others={selectedOthers}
-                    epitaphs={frontEpitaphs}
-                    carvingOpacity={0.4}
-                  />
-                </div>
+              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 8, boxSizing: "border-box" }}>
+                <SketchTemplate
+                  item={item}
+                  peopleBlocks={peopleBlocks}
+                  crosses={selectedCrosses}
+                  others={selectedOthers}
+                  epitaphs={frontEpitaphs}
+                  carvingOpacity={0.4}
+                />
               </div>
             </div>
           </div>
-          {/* Тыльная — превью из редактора тыла (без резной работы) */}
+          {/* Тыльная — превью из редактора тыла */}
           {backSketchUrl && <SketchCard title="Тыльная" url={backSketchUrl} aspect={aspect} />}
         </div>
       </section>
-
-      {/* Выбрано для плиты — показываем ТОЛЬКО если что-то выбрано */}
-      {hasPlateSelection && (
-        <section style={{ ...glassPanelStyle(), padding: 12 }}>
-          <div style={{ ...sectionBox }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
-            {chosenPlateList.length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
-                {chosenPlateList.map((g, i) => (
-                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
-                    <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {g.name || g.id}
-                    </div>
-                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">
-                      Удалить
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {plateEpitaphList.length > 0 && (
-              <div style={{ display: "grid", gap: 6 }}>
-                {plateEpitaphList.map((t, idx) => (
-                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
-                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button type="button" onClick={() => deletePlateEpitaphAt(idx)} style={glassButtonStyle("nano")} title="Удалить эпитафию">
-                      Удалить
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* Дополнительно — чекбоксы и плита */}
       <ExtrasSection
@@ -508,7 +468,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Примечание к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
-        <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
+      <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
       </section>
 
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
@@ -519,7 +479,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Заказ списком (Печать) — лицевая через SketchTemplate, тыльная — превью */}
+      {/* Заказ списком (Печать) — лицевая из SketchTemplate, тыльная — превью */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -527,7 +487,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           orderNo={orderNo}
           name={(loadIntroState().intro?.customerName || "").trim()}
           phone={(loadIntroState().intro?.customerPhone || "").trim()}
-          // Лицевая: SketchTemplate
+          // Рисуем лицевую через SketchTemplate внутри оверлея
           frontSketch={
             <SketchTemplate
               item={item}
@@ -539,7 +499,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             />
           }
           previewBack={backSketchUrl || ""}
-          // Состав заказа
+          // Остальные данные для "состава заказа"
           frontData={{
             persons: frontPersons.map((p: any) => ({
               id: p.id,
@@ -557,11 +517,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           rearData={backSketchUrl ? { graphics: [], epitaphs: [] } : null}
           extras={{ base: extraBase, flowerbed: extraFlowerbed }}
           plate={{
-            enabled: !!(chosenPlateList.length || plateEpitaphList.length),
+            enabled: extraPlate,
             size: extraPlate ? (plateSize === "Свой вариант" ? (plateCustomSize || "Свой вариант") : plateSize) : "нет",
             thickness: extraPlate ? (plateThickness === "Свой вариант" ? (plateCustomThickness || "Свой вариант") : plateThickness) : "нет",
-            graphics: chosenPlateList.map((g) => ({ name: g.name || g.id })),
-            epitaph: (plateEpitaph || "").trim()
+            graphics: extraPlate ? chosenPlateList.map((g) => ({ name: g.name || g.id })) : [],
+            epitaph: extraPlate ? (plateEpitaph || "").trim() : ""
           }}
           notes={(orderNotes || "").trim()}
           aspect={aspect}
@@ -760,7 +720,7 @@ function PlateBlock(props: {
                       {(cat.children || []).map((sub: any, j: number) => (
                         <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic} />
                         </div>
                       ))}
                     </LoudAccordion>
@@ -949,17 +909,15 @@ function PrintOverlay({
           </div>
           <hr />
 
-          {/* Эскизы: лицевая — SketchTemplate, тыльная — превью; оба вписаны */}
+          {/* Эскизы: лицевая — SketchTemplate, тыльная — превью */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 8 }}>
               {/* Front via SketchTemplate */}
               <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
                 <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
-                <div style={{ position: "absolute", inset: 0, padding: 6, boxSizing: "border-box", display: "grid", placeItems: "center" }}>
-                  <div style={{ width: "100%", height: "100%" }}>
-                    {frontSketch}
-                  </div>
+                <div style={{ position: "absolute", inset: 0, padding: 6, boxSizing: "border-box" }}>
+                  {frontSketch}
                 </div>
               </div>
 
