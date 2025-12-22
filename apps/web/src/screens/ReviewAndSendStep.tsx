@@ -744,7 +744,7 @@ function PlateBlock(props: {
                       {(cat.children || []).map((sub: any, j: number) => (
                         <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic as any} />
+                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
                         </div>
                       ))}
                     </LoudAccordion>
@@ -756,6 +756,84 @@ function PlateBlock(props: {
         </>
       )}
     </div>
+  );
+}
+
+/* ===== Обёртка «Дополнительно» (секция) ===== */
+function ExtrasSection(props: {
+  extraBase: boolean; setExtraBase: (v: boolean) => void;
+  extraFlowerbed: boolean; setExtraFlowerbed: (v: boolean) => void;
+  extraPlate: boolean; setExtraPlate: (v: boolean) => void;
+  plateSize: string; setPlateSize: (v: string) => void;
+  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
+  plateThickness: string; setPlateThickness: (v: string) => void;
+  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
+  plateOrientation: string; setPlateOrientation: (v: string) => void;
+  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
+  catsLoading: boolean; catsError: string; cats: any[];
+  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
+  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
+  plateIds: string[];
+}) {
+  const {
+    extraBase, setExtraBase,
+    extraFlowerbed, setExtraFlowerbed,
+    extraPlate, setExtraPlate,
+    plateSize, setPlateSize,
+    plateCustomSize, setPlateCustomSize,
+    plateThickness, setPlateThickness,
+    plateCustomThickness, setPlateCustomThickness,
+    plateOrientation, setPlateOrientation,
+    plateEpitaph, setPlateEpitaph,
+    catsLoading, catsError, cats, catOpen, setCatOpen,
+    addPlateGraphic, removePlateGraphic,
+    plateIds
+  } = props;
+
+  return (
+    <section id="section-extras" style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+      <div style={{ fontWeight: 700 }}>Дополнительно</div>
+
+      {/* Тумба / Цветник */}
+      <div style={{ ...sectionBox }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <span>Тумба</span>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <span>Цветник</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Надгробная плита */}
+      <PlateBlock
+        extraPlate={extraPlate}
+        setExtraPlate={setExtraPlate}
+        plateSize={plateSize}
+        setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize}
+        setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness}
+        setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness}
+        setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation}
+        setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph}
+        setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading}
+        catsError={catsError}
+        cats={cats}
+        catOpen={catOpen}
+        setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic}
+        removePlateGraphic={removePlateGraphic}
+        plateIds={plateIds}
+      />
+    </section>
   );
 }
 
