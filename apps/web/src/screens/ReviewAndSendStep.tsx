@@ -1,13 +1,14 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Что показываем:
-// - Номер заказа и информацию о заказчике (Имя, Телефон, примечание для связи).
-// - Эскизы: лицевая из SketchTemplate, тыльная — превью из драфта.
-// - Дополнительно (тумба/цветник + надгробная плита).
-// - Примечания к заказу.
-// - «Заказ списком» — оставляем как есть, открывается как оверлей печати.
-// Навигацию по разделам УБРАНА. Ссылка «Заказ списком» находится в ОДНОЙ строке с номером заказа.
+// Изменения по требованию:
+// - Навигацию убрали.
+// - Вверху показываем только номер заказа + ссылку «Заказ списком» в одну строку,
+//   и поля клиента (Имя, Телефон, Примечание для связи). Резную работу НЕ показываем.
+// - Эскизы: лицевая — рендерим через SketchTemplate; тыльная — превью из драфта.
+// - В «Заказе списком» (печать) — лицевая тоже через SketchTemplate; тыльная — превью.
+// - «Дополнительно» и «Примечания» — без изменений.
+// - Отправка — без изменений.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -63,13 +64,6 @@ function linkLike(): React.CSSProperties {
 }
 
 /* ===== Utils ===== */
-function orientationLabelShort(o?: string) {
-  if (!o) return "";
-  const k = String(o).toLowerCase();
-  if (k.startsWith("h")) return "горизонтально";
-  if (k.startsWith("v")) return "вертикально";
-  return "";
-}
 function personLines(p: any): string[] {
   const l1 = (p?.lastName || "").trim();
   const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
@@ -128,9 +122,8 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Раздел с номером заказа, клиентом и ссылкой «Заказ списком» ===== */
+/* ===== Раздел с номером заказа, клиентом и ссылкой «Заказ списком» (без резной работы) ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
-  const [draft] = useState(() => loadOrderDraft());
   const introState = loadIntroState();
   const [name, setName] = useState<string>(introState.intro?.customerName || "");
   const [phone, setPhone] = useState<string>(introState.intro?.customerPhone || "");
@@ -150,13 +143,9 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
   };
   useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
 
-  const dims = `${(draft?.size?.width && Math.round(draft.size.width / 10)) || "—"}×${(draft?.size?.height && Math.round(draft.size.height / 10)) || "—"}×${(draft?.size?.thickness && Math.round(draft.size.thickness / 10)) || "—"} см`;
-  const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
-  const itemUrl = (draft as any)?.item?.url as string | undefined;
-
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      {/* Номер заказа + ссылка «Заказ списком» в одной строке */}
+      {/* Номер заказа + «Заказ списком» */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
         <div style={{ flex: 1 }} />
@@ -166,27 +155,11 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
       </div>
 
       {/* Данные заказчика */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => { setName(e.target.value); scheduleSave(); }} placeholder="Имя" style={inputStyle()} />
         <input value={phone} onChange={(e) => { setPhone(e.target.value); scheduleSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
       </div>
       <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); scheduleSave(); }} placeholder="Примечание для связи (удобное время, мессенджер…)" style={inputStyle()} />
-
-      {/* Миниатюра резной работы */}
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "center" }}>
-        <div style={{ position: "relative", width: 100, height: 100, borderRadius: 10, overflow: "hidden" }}>
-          <div style={gradientUnderlay()} />
-          {itemUrl ? (
-            <img src={itemUrl} alt="Резная работа" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1 }} />
-          ) : (
-            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 1, opacity: 0.9 }}>нет</div>
-          )}
-        </div>
-        <div style={{ display: "grid", gap: 4 }}>
-          {(draft?.item?.name || draft?.item?.url) && <div style={wrapText(13)}>{draft?.item?.name || decodeURIComponent((draft?.item?.url || "").split("/").pop() || "")}</div>}
-          <div style={{ opacity: 0.9, ...wrapText(13) }}>Размеры: {dims}{orient ? ` · ${orient}` : ""}</div>
-        </div>
-      </div>
     </section>
   );
 }
@@ -208,11 +181,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, []);
   const orderNo = String(introState.orderNumber || "").trim();
 
-  // Эскизы: back — из драфта, front — рисуем из SketchTemplate (UI)
-  const frontPreviewForSend = ((draft as any)?.editor?.previewHiUrl as string | undefined) || ((draft as any)?.editor?.previewUrl as string | undefined) || null;
+  // Эскизы: back — из драфта, front — рисуем через SketchTemplate
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
-  // Параметры изделия (для аспектов)
+  // Параметры изделия (для aspect)
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
@@ -223,7 +195,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  /* ——— Лицевая для SketchTemplate ——— */
+  /* ——— Лицевая: данные для SketchTemplate ——— */
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(
     () => frontPersons.map((p: any, i: number) => ({
@@ -346,7 +318,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   };
   useEffect(() => () => { if (notesTimer.current) window.clearTimeout(notesTimer.current); }, []);
 
-  // Сохранение extras (плита/тумба/цветник)
+  // Сохранение extras
   useEffect(() => {
     const prev = loadOrderDraft();
     const prevExtras = ((prev as any).extras || {}) as any;
@@ -398,9 +370,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const handleSend = async () => {
     setBusy(true); setErr("");
     const attachments: any = {
-      frontPreview: frontPreviewForSend || null, // для отправки оставляем превью из драфта
+      // Для телеграма оставим превью, если нужны; фронт — можно сформировать отдельно, но тыльную берём из драфта
+      frontPreview: null,
       backPreview: backSketchUrl || null,
-      itemUrl: itemUrl || null,
+      itemUrl: null,
       plateGraphics: chosenPlateList
     };
     const extras: Extras & {
@@ -424,7 +397,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     };
     try {
       await sendOrderEmailAndNotifyTg(extras);
-      const nm = (introState.intro?.customerName || "").trim() || "Заказчик";
+      const nm = (loadIntroState().intro?.customerName || "").trim() || "Заказчик";
       window.alert(`${nm}, Ваш заказ принят. В ближайшее время менеджер свяжется с Вами для подтверждения деталей.`);
       onSend?.({ extras });
     } catch (e: any) {
@@ -437,7 +410,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Номер заказа + клиент + ссылка «Заказ списком» */}
       <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
 
-      {/* Эскизы: лицевая — SketchTemplate; тыльная — превью из драфта */}
+      {/* Эскизы: лицевая — SketchTemplate; тыльная — превью */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
           {/* Лицевая — SketchTemplate */}
@@ -462,7 +435,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </div>
       </section>
 
-      {/* Дополнительно — чекбоксы, плита */}
+      {/* Дополнительно — чекбоксы и плита */}
       <ExtrasSection
         extraBase={extraBase}
         setExtraBase={setExtraBase}
@@ -495,7 +468,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Примечание к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
-        <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
+      <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
       </section>
 
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
@@ -506,22 +479,29 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy)} disabled={busy}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
       </div>
 
-      {/* Заказ списком (Печать) — оставляем как есть */}
+      {/* Заказ списком (Печать) — лицевая из SketchTemplate, тыльная — превью */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
-          onPrint={printSimple}
+          onPrint={() => { if (!hasPrintedRef.current) { hasPrintedRef.current = true; printSimple(); setTimeout(() => (hasPrintedRef.current = false), 400); } }}
           orderNo={orderNo}
-          name={(introState.intro?.customerName || "").trim()}
-          phone={(introState.intro?.customerPhone || "").trim()}
-          itemName={draft?.item?.name || (draft?.item?.url ? decodeURIComponent((draft.item.url || "").split("/").pop() || "") : "")}
-          dimsText={() => {
-            const dims = `${(draft?.size?.width && Math.round(draft.size.width / 10)) || "—"}×${(draft?.size?.height && Math.round(draft.size.height / 10)) || "—"}×${(draft?.size?.thickness && Math.round(draft.size.thickness / 10)) || "—"} см`;
-            const orient = orientationLabelShort(draft?.size?.orientation || (draft as any)?.orientation);
-            return `${dims}${orient ? ` · ${orient}` : ""}`;
-          }}
-          front={{
-            persons: ((draft.engraving?.persons as any[]) || []).filter(Boolean).map((p: any) => ({
+          name={(loadIntroState().intro?.customerName || "").trim()}
+          phone={(loadIntroState().intro?.customerPhone || "").trim()}
+          // Рисуем лицевую через SketchTemplate внутри оверлея
+          frontSketch={
+            <SketchTemplate
+              item={item}
+              peopleBlocks={peopleBlocks}
+              crosses={selectedCrosses}
+              others={selectedOthers}
+              epitaphs={frontEpitaphs}
+              carvingOpacity={0.4}
+            />
+          }
+          previewBack={backSketchUrl || ""}
+          // Остальные данные для "состава заказа"
+          frontData={{
+            persons: frontPersons.map((p: any) => ({
               id: p.id,
               fio1: (p.lastName || "").trim(),
               fio2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
@@ -534,10 +514,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             })),
             epitaphs: frontEpitaphs.slice()
           }}
-          rear={backSketchUrl ? {
-            graphics: [],
-            epitaphs: []
-          } : null}
+          rearData={backSketchUrl ? { graphics: [], epitaphs: [] } : null}
           extras={{ base: extraBase, flowerbed: extraFlowerbed }}
           plate={{
             enabled: extraPlate,
@@ -547,15 +524,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             epitaph: extraPlate ? (plateEpitaph || "").trim() : ""
           }}
           notes={(orderNotes || "").trim()}
-          previewFront={frontPreviewForSend || ""}
-          previewBack={backSketchUrl || ""}
+          aspect={aspect}
         />
       )}
     </>
   );
 }
 
-/* ===== Дополнительно: обёртка с плейт-блоком ===== */
+/* ===== Дополнительно: аккордеоны и плита ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
@@ -744,7 +720,7 @@ function PlateBlock(props: {
                       {(cat.children || []).map((sub: any, j: number) => (
                         <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                          <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic} />
                         </div>
                       ))}
                     </LoudAccordion>
@@ -837,19 +813,20 @@ function ExtrasSection(props: {
   );
 }
 
-/* ===== Печать (A4) — «Заказ списком» ===== */
+/* ===== Печать (A4) — «Заказ списком»: фронт = SketchTemplate, тыл = превью ===== */
 function PrintOverlay({
-  onClose, onPrint, orderNo, name, phone, itemName, dimsText, front, rear, extras, plate, notes, previewFront, previewBack
+  onClose, onPrint, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
 }: {
   onClose: () => void; onPrint: () => void;
-  orderNo: string; name: string; phone: string; itemName?: string; dimsText: () => string;
-  front: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number }[]; epitaphs: string[]; };
-  rear: | null | { graphics: { name: string; qty: number }[]; epitaphs: string[]; };
+  orderNo: string; name: string; phone: string;
+  frontSketch: React.ReactNode;
+  previewBack?: string;
+  frontData: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number }[]; epitaphs: string[]; };
+  rearData: | null | { graphics: { name: string; qty: number }[]; epitaphs: string[]; };
   extras: { base: boolean; flowerbed: boolean };
   plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
   notes?: string;
-  previewFront?: string;
-  previewBack?: string;
+  aspect?: string;
 }) {
   const [printing, setPrinting] = useState(false);
   return (
@@ -865,8 +842,6 @@ function PrintOverlay({
           <hr />
           <div style={{ marginBottom: 6 }}>
             <div style={{ marginBottom: 4 }}>{name || "—"} · {phone || "—"}</div>
-            <div><strong>Резная работа:</strong> {itemName || "—"}</div>
-            <div><strong>Размер/ориентация:</strong> {dimsText()}</div>
           </div>
           <hr />
 
@@ -874,29 +849,39 @@ function PrintOverlay({
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
-              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>{front.persons.length ? front.persons.map((p, i) => (
-                <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "24px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                  {p.photo && <img src={p.photo} alt="" style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 4 }} />}
-                  <div>
-                    {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
-                    {p.fio2 && <div>{p.fio2}</div>}
-                    {p.dates && <div>{p.dates}</div>}
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
+                {frontData.persons.length ? frontData.persons.map((p, i) => (
+                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "24px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                    {p.photo && <img src={p.photo} alt="" style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 4 }} />}
+                    <div>
+                      {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
+                      {p.fio2 && <div>{p.fio2}</div>}
+                      {p.dates && <div>{p.dates}</div>}
+                    </div>
                   </div>
-                </div>
-              )) : <div>—</div>}</div>
-              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{front.graphics.length ? front.graphics.map((g, i) => <div key={`fg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
-              <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{front.epitaphs.length ? front.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
+                )) : <div>—</div>}
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
+                {frontData.graphics.length ? frontData.graphics.map((g, i) => <div key={`fg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
+              </div>
             </div>
           </div>
           <hr />
-          {rear && (
+
+          {rearData && (
             <>
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
                   <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{rear.graphics.length ? rear.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{rear.epitaphs.length ? rear.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>{rearData.graphics.length ? rearData.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}</div>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>{rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}</div>
                 </div>
               </div>
               <hr />
@@ -924,20 +909,21 @@ function PrintOverlay({
           </div>
           <hr />
 
-          {/* Эскизы */}
+          {/* Эскизы: лицевая — SketchTemplate, тыльная — превью */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
-            <div style={{ display: "grid", gridTemplateColumns: rear ? "1fr 1fr" : "1fr", gap: 8 }}>
-              <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 8 }}>
+              {/* Front via SketchTemplate */}
+              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
                 <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
-                {previewFront ? (
-                  <img src={previewFront} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
-                ) : (
-                  <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
-                )}
+                <div style={{ position: "absolute", inset: 0, padding: 6, boxSizing: "border-box" }}>
+                  {frontSketch}
+                </div>
               </div>
-              {rear && (
-                <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+
+              {/* Back preview */}
+              {rearData && (
+                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
                   <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)" }} />
                   {previewBack ? (
                     <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
