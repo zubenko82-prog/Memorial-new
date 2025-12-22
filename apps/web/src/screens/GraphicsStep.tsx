@@ -824,6 +824,19 @@ export default function GraphicsStep(props: any) {
       </section>
 
       {/* Предпросмотр — общий SketchTemplate с гориз./верт. шаблоном, оверлеями и ЭПИТАФИЯМИ */}
+      <div
+        style={{
+          color: "#fff",
+          opacity: 0.9,
+          fontSize: 15,
+          lineHeight: 1.25,
+          margin: "6px 0 8px",
+          textAlign: "center",
+          fontWeight: 400,
+        }}
+      >
+        Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
+      </div>
       <section ref={previewSectionRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0", scrollMarginTop: navH + 24 }}>
         <SketchTemplate
           item={item}

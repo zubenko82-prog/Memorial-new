@@ -852,6 +852,19 @@ export default function EngravingStep({
         </section>
 
         {/* Эскиз — общий шаблон SketchTemplate (с эпитафиями) */}
+        <div
+        style={{
+          color: "#fff",
+          opacity: 0.9,
+          fontSize: 15,
+          lineHeight: 1.25,
+          margin: "6px 0 8px",
+          textAlign: "center",
+          fontWeight: 400,
+        }}
+      >
+        Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
+      </div>
         <section
           ref={previewRef as any}
           style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}
