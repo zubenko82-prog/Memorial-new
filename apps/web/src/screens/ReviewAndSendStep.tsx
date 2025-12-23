@@ -1,13 +1,13 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Новые правки по требованию:
-// - В «Заказ списком» миниатюры фотографий 70×70 px.
-// - PDF с корректной кириллицей (встраиваем шрифт Roboto Cyrillic).
-// - PDF размером 1512×2138 px (единицы px), автоперенос на новые страницы при переполнении.
-// - В PDF добавляем прикрепленные фото (фото усопших) на отдельных страницах, вписанные целиком.
-// - Отправляем PDF менеджеру в Telegram/на почту через /api/send-order-pdf.
-// - Остальные ранее согласованные правки сохранены.
+// Правки:
+// - «Заказ списком»: показываем миниатюры (70×70) у усопших и у пунктов «Графика» (фронт/тыл).
+// - PDF: корректная кириллица (Noto Sans из GitHub), размер страницы 1512×2138 px (в px), автоперенос,
+//        на отдельных страницах добавляем прикреплённые фото усопших (вписанные).
+// - PDF сохраняем локально и отправляем в Telegram/Email через /api/send-order-pdf.
+// - Страница по центру, max-width: 600px; эскизы «вписаны», тыльная с контуром изделия;
+//   галерея минимум 2 столбца; «Выбрано для плиты» — только если есть.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -17,7 +17,7 @@ import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
-/* ===== jsPDF с CDN (для PDF) ===== */
+/* ===== jsPDF с CDN (PDF) ===== */
 declare global {
   interface Window { jspdf?: any }
 }
@@ -26,10 +26,10 @@ async function ensureJsPdf(): Promise<any> {
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
   const CDN = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
   await new Promise<void>((res, rej) => {
-    const exist = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
-    if (exist) {
-      exist.addEventListener("load", () => res(), { once: true });
-      exist.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
+    const ex = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
+    if (ex) {
+      ex.addEventListener("load", () => res(), { once: true });
+      ex.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
       return;
     }
     const s = document.createElement("script");
@@ -43,28 +43,27 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание кириллического шрифта для jsPDF ===== */
+/* ===== Встраивание кириллического шрифта в jsPDF (Noto Sans, Unicode cmap) ===== */
 let fontReady = false;
 async function ensureCyrillicFonts(doc: any) {
   if (fontReady) return;
-  // Берём TTF из @fontsource (поддерживает кириллицу)
-  const REG = "https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-cyrillic-400-normal.ttf";
-  const BLD = "https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-cyrillic-700-normal.ttf";
+  // Используем статические TTF из оф. репозитория Google Fonts (raw.githubusercontent.com).
+  const REG = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Regular.ttf";
+  const BLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Bold.ttf";
   async function fetchTtfToBase64(url: string): Promise<string> {
     const r = await fetch(url);
+    if (!r.ok) throw new Error(`Font fetch failed: ${url}`);
     const ab = await r.arrayBuffer();
-    // base64
     let binary = "";
     const bytes = new Uint8Array(ab);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
     return btoa(binary);
   }
   const [regB64, bldB64] = await Promise.all([fetchTtfToBase64(REG), fetchTtfToBase64(BLD)]);
-  doc.addFileToVFS("Roboto-Regular.ttf", regB64);
-  doc.addFileToVFS("Roboto-Bold.ttf", bldB64);
-  doc.addFont("Roboto-Regular.ttf", "Roboto", "normal");
-  doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
+  doc.addFileToVFS("NotoSans-Regular.ttf", regB64);
+  doc.addFileToVFS("NotoSans-Bold.ttf", bldB64);
+  doc.addFont("NotoSans-Regular.ttf", "NotoSans", "normal");
+  doc.addFont("NotoSans-Bold.ttf", "NotoSans", "bold");
   fontReady = true;
 }
 
@@ -110,14 +109,14 @@ function toParagraphs(input?: string | string[] | null): string[] {
   return t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
-/* ===== Thumb (обычный) ===== */
+/* ===== Миниатюра (thumb) ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
   <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
   </div>
 );
 
-/* ===== Раздел с номером заказа, клиентом и ссылкой «Заказ списком» ===== */
+/* ===== Раздел шапки ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
   const intro = loadIntroState();
   const [name, setName] = useState<string>(intro.intro?.customerName || "");
@@ -149,7 +148,7 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
   );
 }
 
-/* ===== «Дополнительно»: общий аккордеон ===== */
+/* ===== Accordion ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
@@ -173,7 +172,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   );
 }
 
-/* ===== Галерея каталога (минимум 2 столбца) ===== */
+/* ===== Галерея (минимум 2 столбца) ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -213,7 +212,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Блок плиты (настройки/выбор) ===== */
+/* ===== Блок плиты ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -392,7 +391,166 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Основной экран (контейнер) ===== */
+/* ===== Оверлей «Заказ списком» (миниатюры 70×70, кнопка «Сохранить PDF») ===== */
+function PrintOverlay({
+  onClose, onSave, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
+}: {
+  onClose: () => void; onSave: () => void;
+  orderNo: string; name: string; phone: string;
+  frontSketch: React.ReactNode;
+  previewBack?: string;
+  frontData: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number; thumb?: string }[]; epitaphs: string[]; };
+  rearData: { graphics: { name: string; qty: number; thumb?: string }[]; epitaphs: string[] } | null;
+  extras: { base: boolean; flowerbed: boolean };
+  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
+  notes?: string;
+  aspect?: string;
+}) {
+  return (
+    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
+      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+          <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
+          <button type="button" onClick={onSave} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
+        </div>
+
+        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
+          <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
+
+          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+
+          {/* Лицевая */}
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
+              {/* Усопшие с миниатюрами 70×70 */}
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
+                {frontData.persons.length ? frontData.persons.map((p, i) => (
+                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                    {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
+                    <div>
+                      {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
+                      {p.fio2 && <div>{p.fio2}</div>}
+                      {p.dates && <div>{p.dates}</div>}
+                    </div>
+                  </div>
+                )) : <div>—</div>}
+              </div>
+
+              {/* Графика с миниатюрами 70×70, если есть thumb */}
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
+                {frontData.graphics.length ? frontData.graphics.map((g, i) => (
+                  <div key={`fg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                    {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
+                    <div>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
+                  </div>
+                )) : <div>—</div>}
+              </div>
+
+              {/* Эпитафии */}
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
+              </div>
+            </div>
+          </div>
+
+          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+
+          {/* Тыльная */}
+          {rearData && (
+            <>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
+                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
+
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
+                    {rearData.graphics.length ? rearData.graphics.map((g, i) => (
+                      <div key={`rg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                        {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
+                        <div>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
+                      </div>
+                    )) : <div>—</div>}
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                    {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
+                  </div>
+                </div>
+              </div>
+
+              <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+            </>
+          )}
+
+          {/* Дополнительно */}
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
+            <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
+          </div>
+
+          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+
+          {/* Плита */}
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
+            <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
+            {plate.graphics.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
+                {plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>)}
+              </div>
+            )}
+            {plate.epitaph && (
+              <div style={{ marginTop: 4 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div>
+              </div>
+            )}
+          </div>
+
+          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+
+          {/* Примечания */}
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
+          </div>
+
+          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+
+          {/* Эскизы (вписанные) */}
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
+            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
+              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
+                <div style={{ position: "absolute", inset: 0, padding: 0 }}>{frontSketch}</div>
+              </div>
+              {rearData && (
+                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
+                  {previewBack ? (
+                    <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                  ) : (
+                    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===== Основной контейнер (рендер/отправка PDF) ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
@@ -430,12 +588,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     lines: personLines(p),
     photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
   })), [frontPersons]);
+
+  // Графика лицевой
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
 
-  // Эпитафии (нормализовано)
+  // Эпитафии лицевой
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
@@ -512,7 +672,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     return uniq.map((gid) => plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta, cats]);
 
-  // Эпитафии плиты (список)
+  // Эпитафии плиты
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
   // Примечания
@@ -555,15 +715,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const mq = window.matchMedia("(max-width: 600px)");
     const update = () => setOneCol(!!mq.matches);
     update();
-    if (mq.addEventListener) mq.addEventListener("change", update);
-    else (mq as any).addListener(update);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener("change", update);
-      else (mq as any).removeListener(update);
-    };
+    if (mq.addEventListener) mq.addEventListener("change", update); else (mq as any).addListener(update);
+    return () => { if (mq.removeEventListener) mq.removeEventListener("change", update); else (mq as any).removeListener(update); };
   }, []);
 
-  /* ===== Формирование PDF и отправка (Telegram+Email через /api/send-order-pdf) ===== */
+  /* ===== Формирование PDF и отправка ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
   const [sendingPdf, setSendingPdf] = useState(false);
   const [err, setErr] = useState<string>("");
@@ -599,9 +755,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     imgBack?: string | null;
   }): Promise<Blob> {
     const jsPDF = await ensureJsPdf();
-    // Размер страницы 1512×2138 px (в px, не pt)
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
     await ensureCyrillicFonts(doc);
+
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const margin = 48;
@@ -609,24 +765,23 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     let y = margin;
 
     const setFont = (bold = false, size = 24) => {
-      doc.setFont("Roboto", bold ? "bold" : "normal");
+      doc.setFont("NotoSans", bold ? "bold" : "normal");
       doc.setFontSize(size);
     };
     const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
-    const addTitle = (t: string) => { setFont(true, 28); const lines = doc.splitTextToSize(t, contentW); doc.text(lines, margin, y); y += 34 + (lines.length - 1) * 28; };
+    const addTitle = (t: string) => { setFont(true, 28); const lines = doc.splitTextToSize(t, contentW); lines.forEach((ln) => { if (y + 34 > pageH - margin) { doc.addPage(); y = margin; } doc.text(ln, margin, y); y += 34; }); };
     const addText = (t: string, sz = 22, bold = false) => {
       setFont(bold, sz);
       const lh = Math.round(sz * 1.25);
       const lines = doc.splitTextToSize(t, contentW);
-      lines.forEach((ln) => {
+      for (const ln of lines) {
         if (y + lh > pageH - margin) { doc.addPage(); y = margin; }
         doc.text(ln, margin, y);
         y += lh;
-      });
+      }
     };
     const addKV = (k: string, v: string) => addText(`${k}: ${v}`, 22, false);
-
-    const addImageFitted = async (dataUrl: string | null | undefined, maxH = 500) => {
+    const addImageFitted = async (dataUrl: string | null | undefined, maxH = 560) => {
       if (!dataUrl) return;
       const img = new Image();
       await new Promise<void>((res) => { img.onload = () => res(); img.src = dataUrl!; });
@@ -639,9 +794,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       y += h + 12;
     };
 
-    // Заголовок
+    // Header
     addTitle(`Заказ № ${options.orderNo || "—"}`);
-    addText(`${options.customerName || "—"} · ${options.customerPhone || "—"}`, 22, false);
+    addText(`${options.customerName || "—"} · ${options.customerPhone || "—"}`);
 
     addHr();
 
@@ -652,32 +807,24 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       options.frontPersons.forEach((p) => {
         const fio = [p.fio1, p.fio2].filter(Boolean).join(" ");
         const line = [fio, p.dates].filter(Boolean).join(" · ");
-        addText(line, 22, false);
+        addText(line);
       });
-    } else addText("—", 22, false);
-
+    } else addText("—");
     addText("Графика", 24, true);
-    if (options.frontGraphics.length) {
-      options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`, 22, false));
-    } else addText("—", 22, false);
-
+    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`));
+    else addText("—");
     addText("Эпитафии", 24, true);
-    if (options.frontEpitaphs.length) {
-      options.frontEpitaphs.forEach((t) => addText(t, 22, false));
-    } else addText("—", 22, false);
+    if (options.frontEpitaphs.length) options.frontEpitaphs.forEach((t) => addText(t)); else addText("—");
 
     addHr();
 
     // Тыльная
     addTitle("Тыльная");
-    addText("Усопшие", 24, true); addText("—", 22, false);
+    addText("Усопшие", 24, true); addText("—");
     addText("Графика", 24, true);
-    if (options.rearGraphics.length) {
-      options.rearGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`, 22, false));
-    } else addText("—", 22, false);
+    if (options.rearGraphics.length) options.rearGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`)); else addText("—");
     addText("Эпитафии", 24, true);
-    if (options.rearEpitaphs.length) options.rearEpitaphs.forEach((t) => addText(t, 22, false));
-    else addText("—", 22, false);
+    if (options.rearEpitaphs.length) options.rearEpitaphs.forEach((t) => addText(t)); else addText("—");
 
     addHr();
 
@@ -694,41 +841,32 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       addKV("Размер", options.plate.size || "—");
       addKV("Толщина", options.plate.thickness || "—");
       addText("Графика", 24, true);
-      if (options.plate.graphics.length) options.plate.graphics.forEach((g) => addText(g.name, 22, false));
-      else addText("—", 22, false);
+      if (options.plate.graphics.length) options.plate.graphics.forEach((g) => addText(g.name)); else addText("—");
       addText("Эпитафии", 24, true);
-      addText(options.plate.epitaph || "—", 22, false);
-    } else {
-      addText("нет", 22, false);
-    }
+      addText(options.plate.epitaph || "—");
+    } else addText("нет");
 
     addHr();
 
     // Примечания
     addTitle("Примечания");
-    addText(options.notes || "—", 22, false);
+    addText(options.notes || "—");
 
     addHr();
 
-    // Эскизы (вписанные)
+    // Эскизы
     addTitle("Эскизы");
     await addImageFitted(options.imgFront || null, 560);
     await addImageFitted(options.imgBack || null, 560);
 
-    // Фото (на отдельных страницах)
-    const personPhotos: (string | null)[] = await Promise.all(
-      options.frontPersons.map(async (p) => {
-        const src = p.photo || null;
-        return await urlToDataUrl(src || null);
-      })
-    );
-    const photos = personPhotos.filter(Boolean) as string[];
+    // Фото усопших — отдельные страницы
+    const photos = (options.frontPersons || []).map((p) => p.photo).filter(Boolean) as string[];
     if (photos.length) {
-      for (const [idx, ph] of photos.entries()) {
+      for (let i = 0; i < photos.length; i++) {
         doc.addPage();
         y = margin;
-        addTitle(`Фото ${idx + 1}`);
-        await addImageFitted(ph, pageH - margin * 2 - 40); // почти на полную страницу
+        addTitle(`Фото ${i + 1}`);
+        await addImageFitted(photos[i], pageH - margin * 2 - 24);
       }
     }
 
@@ -736,7 +874,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }
 
   async function sendPdfToServer(pdf: Blob, meta: any) {
-    // /api/send-order-pdf — серверный endpoint, который отправит PDF в Telegram/Email
     const fd = new FormData();
     fd.append("pdf", pdf, `order-${meta?.orderNo || Date.now()}.pdf`);
     fd.append("payload", JSON.stringify(meta || {}));
@@ -749,9 +886,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   async function onSavePdf() {
     try {
-      setSendingPdf(true);
-      setErr("");
-
+      setSendingPdf(true); setErr("");
       const orderNo = String(introState.orderNumber || "").trim();
       const name = (loadIntroState().intro?.customerName || "").trim();
       const phone = (loadIntroState().intro?.customerPhone || "").trim();
@@ -762,16 +897,24 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
         photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
       }));
-
-      const frontDataGraphics = (allFrontGraphics || []).map((g: any) => ({
+      const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
+      const frontDataGraphics = allFrontGraphics.map((g: any) => ({
         name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
         qty: 1
       }));
+
+      const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+      const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+      const rearCounts: Record<string, number> = {};
+      (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
+      const rearUnique = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id] || { id, name: id, url: "" });
       const rearDataGraphics = rearUnique.map((g: any) => ({
         name: g.name || g.id,
         qty: rearCounts[g?.id || g?.url || g?.name] || 1
       }));
+      const rearEpitaphs: string[] = ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean));
 
+      // Эскизы
       const frontPreviewUrl = (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null;
       const imgFront = await urlToDataUrl(frontPreviewUrl);
       const imgBack = await urlToDataUrl(backSketchUrl || null);
@@ -800,18 +943,15 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         imgBack
       });
 
-      // Локально скачать
+      // Локально
       const a = document.createElement("a");
       a.href = URL.createObjectURL(pdfBlob);
       a.download = `order-${orderNo || Date.now()}.pdf`;
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => {
-        URL.revokeObjectURL(a.href);
-        a.remove();
-      }, 500);
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 
-      // Отправить менеджеру
+      // Отправка менеджеру
       await sendPdfToServer(pdfBlob, {
         orderNo,
         intro: loadIntroState().intro || {},
@@ -837,7 +977,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   }
 
-  /* ===== Отправка (кнопка «Оформить заказ») — как было, без PDF ===== */
   async function handleSend() {
     setBusy(true); setErr("");
     const attachments: any = {
@@ -876,7 +1015,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     } finally { setBusy(false); }
   }
 
-  // Тыльные списки для «Заказ списком»
+  // Тыльные списки для «Заказ списком» (для миниатюр)
   const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCounts: Record<string, number> = useMemo(() => {
@@ -890,9 +1029,25 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, [rearIds, rearMeta]);
   const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
 
+  // Для «Заказ списком»: собрать графику с миниатюрами 70×70
+  const frontGraphicsWithThumbs = useMemo(() => {
+    return (allFrontGraphics || []).map((g: any) => ({
+      name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
+      qty: 1,
+      thumb: g.preview || g.url || ""
+    }));
+  }, [allFrontGraphics]);
+  const rearGraphicsWithThumbs = useMemo(() => {
+    return (rearUnique || []).map((g: any) => ({
+      name: g.name || g.id,
+      qty: rearCounts[g?.id || g?.url || g?.name] || 1,
+      thumb: g.url || ""
+    }));
+  }, [rearUnique, rearCounts]);
+
   return (
     <div style={{ width: "100%", maxWidth: 600, margin: "0 auto" }}>
-      <EditableOrderSummary orderNo={String(introState.orderNumber || "").trim()} onOpenSimple={() => setSimpleOpen(true)} />
+      <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
 
       {/* Эскизы */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
@@ -958,10 +1113,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {plateEpitaphList.map((t, idx) => (
                   <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button type="button" onClick={() => {
-                      const arr = [...plateEpitaphList]; arr.splice(idx, 1);
-                      setPlateEpitaph(arr.join("\n\n"));
-                    }} style={glassButtonStyle("nano")}>Удалить</button>
+                    <button type="button" onClick={() => { const arr = [...plateEpitaphList]; arr.splice(idx, 1); setPlateEpitaph(arr.join("\n\n")); }} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -970,33 +1122,20 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно и примечания */}
+      {/* Дополнительно и Примечания */}
       <ExtrasSection
-        extraBase={extraBase}
-        setExtraBase={setExtraBase}
-        extraFlowerbed={extraFlowerbed}
-        setExtraFlowerbed={setExtraFlowerbed}
-        extraPlate={extraPlate}
-        setExtraPlate={setExtraPlate}
-        plateSize={plateSize}
-        setPlateSize={setPlateSize}
-        plateCustomSize={plateCustomSize}
-        setPlateCustomSize={setPlateCustomSize}
-        plateThickness={plateThickness}
-        setPlateThickness={setPlateThickness}
-        plateCustomThickness={plateCustomThickness}
-        setPlateCustomThickness={setPlateCustomThickness}
-        plateOrientation={plateOrientation}
-        setPlateOrientation={setPlateOrientation}
-        plateEpitaph={plateEpitaph}
-        setPlateEpitaph={setPlateEpitaph}
-        catsLoading={catsLoading}
-        catsError={catsError}
-        cats={cats}
-        catOpen={catOpen}
-        setCatOpen={setCatOpen}
-        addPlateGraphic={addPlateGraphic}
-        removePlateGraphic={removePlateGraphic}
+        extraBase={extraBase} setExtraBase={setExtraBase}
+        extraFlowerbed={extraFlowerbed} setExtraFlowerbed={setExtraFlowerbed}
+        extraPlate={extraPlate} setExtraPlate={setExtraPlate}
+        plateSize={plateSize} setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness} setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation} setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph} setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading} catsError={catsError} cats={cats}
+        catOpen={catOpen} setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic}
         plateIds={plateIds}
       />
 
@@ -1013,7 +1152,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим PDF…" : "Заказ списком"}</button>
       </div>
 
-      {/* «Заказ списком» — оверлей, миниатюры 70×70 */}
+      {/* «Заказ списком» — миниатюры 70×70 у людей и графики */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -1040,17 +1179,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
               dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
               photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || ""
             })),
-            graphics: (allFrontGraphics || []).map((g: any) => ({
-              name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id),
-              qty: 1
-            })),
+            graphics: frontGraphicsWithThumbs,
             epitaphs: frontEpitaphs.slice()
           }}
           rearData={{
-            graphics: rearUnique.map((g: any) => ({
-              name: g.name || g.id,
-              qty: rearCounts[g?.id || g?.url || g?.name] || 1
-            })),
+            graphics: rearGraphicsWithThumbs,
             epitaphs: rearEpitaphs.slice()
           }}
           extras={{ base: extraBase, flowerbed: extraFlowerbed }}
@@ -1065,224 +1198,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           aspect={aspect}
         />
       )}
-    </div>
-  );
-}
-
-/* ===== Обёртка «Дополнительно» (секция) ===== */
-function ExtrasSection(props: {
-  extraBase: boolean; setExtraBase: (v: boolean) => void;
-  extraFlowerbed: boolean; setExtraFlowerbed: (v: boolean) => void;
-  extraPlate: boolean; setExtraPlate: (v: boolean) => void;
-  plateSize: string; setPlateSize: (v: string) => void;
-  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
-  plateThickness: string; setPlateThickness: (v: string) => void;
-  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
-  plateOrientation: string; setPlateOrientation: (v: string) => void;
-  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
-  catsLoading: boolean; catsError: string; cats: any[];
-  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
-  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
-  plateIds: string[];
-}) {
-  const {
-    extraBase, setExtraBase,
-    extraFlowerbed, setExtraFlowerbed,
-    extraPlate, setExtraPlate,
-    plateSize, setPlateSize,
-    plateCustomSize, setPlateCustomSize,
-    plateThickness, setPlateThickness,
-    plateCustomThickness, setPlateCustomThickness,
-    plateOrientation, setPlateOrientation,
-    plateEpitaph, setPlateEpitaph,
-    catsLoading, catsError, cats, catOpen, setCatOpen,
-    addPlateGraphic, removePlateGraphic,
-    plateIds
-  } = props;
-
-  return (
-    <section id="section-extras" style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
-      <div style={{ fontWeight: 700 }}>Дополнительно</div>
-      <hr style={hrStyle} />
-      <div style={{ ...sectionBox }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
-            <span>Тумба</span>
-          </label>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
-            <span>Цветник</span>
-          </label>
-        </div>
-      </div>
-      <hr style={hrStyle} />
-      <PlateBlock
-        extraPlate={extraPlate}
-        setExtraPlate={setExtraPlate}
-        plateSize={plateSize}
-        setPlateSize={setPlateSize}
-        plateCustomSize={plateCustomSize}
-        setPlateCustomSize={setPlateCustomSize}
-        plateThickness={plateThickness}
-        setPlateThickness={setPlateThickness}
-        plateCustomThickness={plateCustomThickness}
-        setPlateCustomThickness={setPlateCustomThickness}
-        plateOrientation={plateOrientation}
-        setPlateOrientation={setPlateOrientation}
-        plateEpitaph={plateEpitaph}
-        setPlateEpitaph={setPlateEpitaph}
-        catsLoading={catsLoading}
-        catsError={catsError}
-        cats={cats}
-        catOpen={catOpen}
-        setCatOpen={setCatOpen}
-        addPlateGraphic={addPlateGraphic}
-        removePlateGraphic={removePlateGraphic}
-        plateIds={plateIds}
-      />
-    </section>
-  );
-}
-
-/* ===== Оверлей «Заказ списком» (миниатюры 70×70, кнопка «Сохранить PDF») ===== */
-function PrintOverlay({
-  onClose, onSave, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
-}: {
-  onClose: () => void; onSave: () => void;
-  orderNo: string; name: string; phone: string;
-  frontSketch: React.ReactNode;
-  previewBack?: string;
-  frontData: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number }[]; epitaphs: string[]; };
-  rearData: { graphics: { name: string; qty: number }[]; epitaphs: string[] } | null;
-  extras: { base: boolean; flowerbed: boolean };
-  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
-  notes?: string;
-  aspect?: string;
-}) {
-  return (
-    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
-      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
-          <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
-          <button type="button" onClick={onSave} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
-        </div>
-
-        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
-          <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Лицевая */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
-                {frontData.persons.length ? frontData.persons.map((p, i) => (
-                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                    {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
-                    <div>
-                      {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
-                      {p.fio2 && <div>{p.fio2}</div>}
-                      {p.dates && <div>{p.dates}</div>}
-                    </div>
-                  </div>
-                )) : <div>—</div>}
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                {frontData.graphics.length ? frontData.graphics.map((g, i) => <div key={`fg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
-              </div>
-            </div>
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Тыльная */}
-          {rearData && (
-            <>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                    {rearData.graphics.length ? rearData.graphics.map((g, i) => <div key={`rg-${i}`}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>) : <div>—</div>}
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                    {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
-                  </div>
-                </div>
-              </div>
-
-              <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-            </>
-          )}
-
-          {/* Дополнительно */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
-            <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Плита */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
-            <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
-            {plate.graphics.length > 0 && (
-              <div style={{ marginTop: 4 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                {plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>)}
-              </div>
-            )}
-            {plate.epitaph && (
-              <div style={{ marginTop: 4 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div>
-              </div>
-            )}
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Примечания */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
-            <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Эскизы */}
-          <div>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
-            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
-              <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
-                <div style={{ position: "absolute", inset: 0, padding: 0 }}>{frontSketch}</div>
-              </div>
-              {rearData && (
-                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
-                  {previewBack ? (
-                    <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
-                  ) : (
-                    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-        </div>
-      </div>
     </div>
   );
 }
