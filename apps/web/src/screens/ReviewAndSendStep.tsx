@@ -1,16 +1,17 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Правки:
-// - Максимальная ширина страницы ограничена 600px (контент по центру).
-// - В «Заказе списком» разделы разделены горизонтальной линией.
-// - Галерея (каталог графики для плиты) всегда минимум 2 столбца (адаптивно больше).
-// - Эскизы: на узких экранах (≤600px) показываем по одному столбцу; на широких — 2, если есть тыльная.
-// - Эскизы «вписаны» (object-fit: contain), без рамок/внутренних отступов.
-// - Лицевая — SketchTemplate; тыльная — превью + контур резной работы (силуэт item.url).
-// - «Выбрано для плиты» — только если есть выбранные позиции.
-// - «Заказ списком»: кнопка «Сохранить» делает PNG (html-to-image с CDN), мелкий шрифт, вписываем в A4, списки тыльной стороны отображаются.
-// - Отправка — без изменений.
+// Выполнено:
+// - Макс. ширина страницы 600px, выравнивание по центру.
+// - Эскизы «вписаны», без рамок/внутр. отступов:
+//   • Лицевая — SketchTemplate.
+//   • Тыльная — превью + контур резной работы (силуэт item.url).
+// - На узких экранах (≤600px) эскизы в один столбец, иначе — два (если есть тыльная).
+// - «Выбрано для плиты» — отображается только при наличии выбранного.
+// - Галерея каталога: минимум 2 столбца (адаптивно больше).
+// - «Заказ списком»: кнопка «Сохранить» делает PNG (html-to-image c CDN), шрифт уменьшен, разделы разделены горизонтальной линией, эскизы вписаны в A4; списки содержат тыльную сторону.
+// - Исправлено отображение эпитафий (нормализация абзацев).
+// - Исправлена ошибка ReferenceError из-за кириллической «г».
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -76,11 +77,16 @@ function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecora
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
 
 /* ===== Utils ===== */
-function personLines(p: any): string[] {
-  const l1 = (p?.lastName || "").trim();
-  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
-  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
-  return [l1, l2, l3].filter(Boolean);
+// Нормализация эпитафий: вход — строка или массив строк; выход — массив абзацев
+function toParagraphs(input?: string | string[] | null): string[] {
+  if (Array.isArray(input)) {
+    return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
+  }
+  const t = String(input || "").replace(/\r\n?/g, "\n").trim();
+  if (!t) return [];
+  const splitByBlank = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
+  if (splitByBlank.length) return splitByBlank;
+  return t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
 /* ===== Thumb ===== */
@@ -155,8 +161,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
-      // Ширина карточки ≈ 160px с отступами → считаем колонки
-      const c = Math.max(2, Math.floor(w / 160));
+      const c = Math.max(2, Math.floor(w / 160)); // ~160px на карточку с отступами
       setCols(c);
     });
     ro.observe(el);
@@ -408,12 +413,12 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
+
+  // Эпитафии (нормализовано)
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
-    if (Array.isArray(engr.epitaphs) && engr.epitaphs.length) return (engr.epitaphs as string[]).filter(Boolean);
-    const t = (engr.epitaphText || "").trim();
-    return t ? t.split(/\r?\н/).map((s: string) => s.trim()).filter(Boolean) : [];
-  }, [draft]);
+    return toParagraphs(engr.epitaphs ?? engr.epitaphText);
+  }, [draft?.engraving]);
 
   /* ===== Дополнительно (плита) ===== */
   const extras0 = (draft as any)?.extras || {};
@@ -431,7 +436,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
     setPlateIds((prev) => prev.concat(gid));
-    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.preview || г.url || "" } }));
+    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } }));
   };
   const removePlateGraphic = (gid: string) => {
     setPlateIds((prev) => {
@@ -464,7 +469,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     if (!cats.length) return;
     setCatOpen((prev) => {
       const next = { ...prev };
-      for (const c of cats) { const key = String(c._id || c.name || ""); if (!(key in next)) next[key] = false; }
+      for (const c of cats) {
+        const key = String(c._id || c.name || "");
+        if (!(key in next)) next[key] = false;
+      }
       return next;
     });
   }, [cats]);
@@ -484,7 +492,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, [plateIds, plateMeta, cats]);
 
   // Эпитафии плиты (список)
-  const plateEpitaphList = useMemo(() => (plateEpitaph || "").split(/\n{2,}/g).map((s) => s.trim()).filter(Boolean), [plateEpitaph]);
+  const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
   // Примечания
   const [orderNotes, setOrderNotes] = useState<string>(extras0.orderNotes || "");
@@ -700,7 +708,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {chosenPlateList.map((g, i) => (
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || г.id}</div>
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
                     <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">Удалить</button>
                   </div>
                 ))}
