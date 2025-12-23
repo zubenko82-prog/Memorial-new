@@ -2,16 +2,16 @@
 // Обзор и подтверждение (без TopBar).
 //
 // Выполнено:
-// - Макс. ширина страницы 600px, выравнивание по центру.
+// - Макс. ширина страницы 600px, по центру.
 // - Эскизы «вписаны», без рамок/внутр. отступов:
 //   • Лицевая — SketchTemplate.
 //   • Тыльная — превью + контур резной работы (силуэт item.url).
 // - На узких экранах (≤600px) эскизы в один столбец, иначе — два (если есть тыльная).
 // - «Выбрано для плиты» — отображается только при наличии выбранного.
 // - Галерея каталога: минимум 2 столбца (адаптивно больше).
-// - «Заказ списком»: кнопка «Сохранить» делает PNG (html-to-image c CDN), шрифт уменьшен, разделы разделены горизонтальной линией, эскизы вписаны в A4; списки содержат тыльную сторону.
-// - Исправлено отображение эпитафий (нормализация абзацев).
-// - Исправлена ошибка ReferenceError из-за кириллической «г».
+// - «Заказ списком»: кнопка «Сохранить» делает PNG (html-to-image c CDN), мелкий шрифт,
+//   разделы разделены горизонтальной линией, эскизы вписаны в A4; списки включают тыльную.
+// - Исправлено: разбор эпитафий; опечатки с кириллицей; ReferenceError personLines.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -77,7 +77,13 @@ function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecora
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
 
 /* ===== Utils ===== */
-// Нормализация эпитафий: вход — строка или массив строк; выход — массив абзацев
+function personLines(p: any): string[] {
+  const l1 = (p?.lastName || "").trim();
+  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
+  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
+  return [l1, l2, l3].filter(Boolean);
+}
+// Нормализация эпитафий (строка/массив → абзацы)
 function toParagraphs(input?: string | string[] | null): string[] {
   if (Array.isArray(input)) {
     return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
@@ -371,7 +377,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Основной экран ===== */
+/* ===== Основной экран (контейнер) ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
