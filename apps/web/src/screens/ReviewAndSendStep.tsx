@@ -12,7 +12,6 @@
 //   • кнопка «Сохранить PDF»: PDF 1512×2138 px (единицы px), корректная кириллица (Noto Sans из GitHub),
 //     все данные заказа + эскизы; на отдельных страницах — прикреплённые фото усопших,
 //     сохранение локально и отправка PDF в /api/send-order-pdf (Telegram + Email).
-// - Исправлены ошибки (undefined компонентов, кириллица, personLines).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -94,6 +93,7 @@ function inputStyle(): React.CSSProperties {
 }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
+function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
 
 /* ===== Utils ===== */
 function personLines(p: any): string[] {
@@ -117,6 +117,37 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
   </div>
 );
+
+/* ===== Шапка (номер заказа + контакты + ссылка) ===== */
+function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
+  const intro = loadIntroState();
+  const [name, setName] = useState<string>(intro.intro?.customerName || "");
+  const [phone, setPhone] = useState<string>(intro.intro?.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState<string>(intro.intro?.customerNotes || "");
+  const t = useRef<number | null>(null);
+  const debSave = () => {
+    if (t.current) clearTimeout(t.current);
+    t.current = window.setTimeout(() => {
+      const next: Intro = { customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined };
+      saveIntro(next, { lock: false });
+    }, 250) as unknown as number;
+  };
+  useEffect(() => () => { if (t.current) clearTimeout(t.current); }, []);
+  return (
+    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onOpenSimple} style={linkLike()}>Заказ списком</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
+        <input value={name} onChange={(e) => { setName(e.target.value); debSave(); }} placeholder="Имя" style={inputStyle()} />
+        <input value={phone} onChange={(e) => { setPhone(e.target.value); debSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+      </div>
+      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); debSave(); }} placeholder="Примечание для связи…" style={inputStyle()} />
+    </section>
+  );
+}
 
 /* ===== Accordion ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
@@ -402,7 +433,7 @@ function PrintOverlay({
                     {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
                     <div>
                       {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
-                      {p.fio2 && <div>{p.fio2}</div>}
+                      {p.fio2 && <div>{п.fio2}</div>}
                       {p.dates && <div>{p.dates}</div>}
                     </div>
                   </div>
