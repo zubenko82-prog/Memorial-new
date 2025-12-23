@@ -1,13 +1,18 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Правки:
-// - «Заказ списком»: показываем миниатюры (70×70) у усопших и у пунктов «Графика» (фронт/тыл).
-// - PDF: корректная кириллица (Noto Sans из GitHub), размер страницы 1512×2138 px (в px), автоперенос,
-//        на отдельных страницах добавляем прикреплённые фото усопших (вписанные).
-// - PDF сохраняем локально и отправляем в Telegram/Email через /api/send-order-pdf.
-// - Страница по центру, max-width: 600px; эскизы «вписаны», тыльная с контуром изделия;
-//   галерея минимум 2 столбца; «Выбрано для плиты» — только если есть.
+// Реализовано:
+// - Центрирование страницы, max-width: 600px.
+// - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
+// - Адаптив: ≤600px — 1 столбец эскизов, иначе — 2 (если есть тыльная).
+// - Галерея графики для плиты — минимум 2 столбца, адаптив.
+// - «Выбрано для плиты» — показываем только, если есть выбранные позиции.
+// - «Заказ списком»:
+//   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная),
+//   • кнопка «Сохранить PDF»: PDF 1512×2138 px (единицы px), корректная кириллица (Noto Sans из GitHub),
+//     все данные заказа + эскизы; на отдельных страницах — прикреплённые фото усопших,
+//     сохранение локально и отправка PDF в /api/send-order-pdf (Telegram + Email).
+// - Исправлены ошибки (undefined компонентов, кириллица, personLines).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -43,11 +48,10 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание кириллического шрифта в jsPDF (Noto Sans, Unicode cmap) ===== */
+/* ===== Встраивание кириллического шрифта (Noto Sans) ===== */
 let fontReady = false;
 async function ensureCyrillicFonts(doc: any) {
   if (fontReady) return;
-  // Используем статические TTF из оф. репозитория Google Fonts (raw.githubusercontent.com).
   const REG = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Regular.ttf";
   const BLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Bold.ttf";
   async function fetchTtfToBase64(url: string): Promise<string> {
@@ -89,8 +93,6 @@ function inputStyle(): React.CSSProperties {
   return { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none", boxSizing: "border-box" };
 }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
-function wrapText(fontPx = 13): React.CSSProperties { return { whiteSpace: "pre-wrap", wordBreak: "break-word", overflow: "visible", fontSize: `clamp(${Math.max(11, fontPx - 2)}px, 1.9vw, ${fontPx}px)` }; }
-function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
 
 /* ===== Utils ===== */
@@ -109,44 +111,12 @@ function toParagraphs(input?: string | string[] | null): string[] {
   return t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
-/* ===== Миниатюра (thumb) ===== */
+/* ===== Thumb ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
   <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
   </div>
 );
-
-/* ===== Раздел шапки ===== */
-function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
-  const intro = loadIntroState();
-  const [name, setName] = useState<string>(intro.intro?.customerName || "");
-  const [phone, setPhone] = useState<string>(intro.intro?.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(intro.intro?.customerNotes || "");
-  const timer = useRef<number | null>(null);
-  const debSave = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      const next: Intro = { customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined };
-      saveIntro(next, { lock: false });
-    }, 250) as unknown as number;
-  };
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-
-  return (
-    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-        <div style={{ flex: 1 }} />
-        <button type="button" onClick={onOpenSimple} style={linkLike()}>Заказ списком</button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
-        <input value={name} onChange={(e) => { setName(e.target.value); debSave(); }} placeholder="Имя" style={inputStyle()} />
-        <input value={phone} onChange={(e) => { setPhone(e.target.value); debSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
-      </div>
-      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); debSave(); }} placeholder="Примечание для связи…" style={inputStyle()} />
-    </section>
-  );
-}
 
 /* ===== Accordion ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
@@ -172,7 +142,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   );
 }
 
-/* ===== Галерея (минимум 2 столбца) ===== */
+/* ===== Галерея каталога (минимум 2 столбца) ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -181,8 +151,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
-      const c = Math.max(2, Math.floor(w / 160));
-      setCols(c);
+      setCols(Math.max(2, Math.floor(w / 160)));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -212,7 +181,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Блок плиты ===== */
+/* ===== Блок плиты (настройки/выбор) ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -393,7 +362,8 @@ function PlateBlock(props: {
 
 /* ===== Оверлей «Заказ списком» (миниатюры 70×70, кнопка «Сохранить PDF») ===== */
 function PrintOverlay({
-  onClose, onSave, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
+  onClose, onSave, orderNo, name, phone, frontSketch, previewBack,
+  frontData, rearData, extras, plate, notes, aspect
 }: {
   onClose: () => void; onSave: () => void;
   orderNo: string; name: string; phone: string;
@@ -414,7 +384,7 @@ function PrintOverlay({
           <button type="button" onClick={onSave} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
         </div>
 
-        <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
+        <div style={{ fontFamily: "system-ui,-apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
           <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
 
@@ -424,7 +394,7 @@ function PrintOverlay({
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
-              {/* Усопшие с миниатюрами 70×70 */}
+              {/* Усопшие — миниатюры 70×70 */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
                 {frontData.persons.length ? frontData.persons.map((p, i) => (
@@ -439,7 +409,7 @@ function PrintOverlay({
                 )) : <div>—</div>}
               </div>
 
-              {/* Графика с миниатюрами 70×70, если есть thumb */}
+              {/* Графика — миниатюры 70×70, если есть */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
                 {frontData.graphics.length ? frontData.graphics.map((g, i) => (
@@ -550,11 +520,12 @@ function PrintOverlay({
   );
 }
 
-/* ===== Основной контейнер (рендер/отправка PDF) ===== */
+/* ===== Основной компонент ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
+
   useEffect(() => {
     const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
     window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
@@ -565,12 +536,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       window.removeEventListener("storage", refresh);
     };
   }, []);
+
   const orderNo = String(introState.orderNumber || "").trim();
 
   // Тыльный превью
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
 
-  // Резная работа (для аспекта и контура)
+  // Параметры изделия (для aspect и контура)
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
@@ -581,21 +553,18 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Лицевая — данные для SketchTemplate
+  // Лицевая
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
     id: p.id || `p-${i}`,
     lines: personLines(p),
     photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
   })), [frontPersons]);
-
-  // Графика лицевой
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
 
-  // Эпитафии лицевой
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
@@ -658,11 +627,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
   }, [cats]);
 
+  // Выбранная графика плиты
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
       const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
-        const id = String(it.id || it.relPath || it.url || it.name || ""); if (!id) return;
+        const id = String(it.id || it.relPath || it.url || it.name || "");
+        if (!id) return;
         if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
       });
       collect(cat.items || []);
@@ -708,23 +679,22 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
-  /* ===== Адаптивные колонки эскизов ===== */
+  /* ===== Адаптив эскизов ===== */
   const [oneCol, setOneCol] = useState(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const mq = window.matchMedia("(max-width: 600px)");
     const update = () => setOneCol(!!mq.matches);
     update();
-    if (mq.addEventListener) mq.addEventListener("change", update); else (mq as any).addListener(update);
-    return () => { if (mq.removeEventListener) mq.removeEventListener("change", update); else (mq as any).removeListener(update); };
+    if (mq.addEventListener) mq.addEventListener("change", update);
+    else (mq as any).addListener(update);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", update);
+      else (mq as any).removeListener(update);
+    };
   }, []);
 
-  /* ===== Формирование PDF и отправка ===== */
-  const [simpleOpen, setSimpleOpen] = useState(false);
-  const [sendingPdf, setSendingPdf] = useState(false);
-  const [err, setErr] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-
+  /* ===== Служебные: dataURL ===== */
   async function urlToDataUrl(url?: string | null): Promise<string | null> {
     try {
       if (!url) return null;
@@ -736,13 +706,20 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         fr.onload = () => resolve(String(fr.result || ""));
         fr.readAsDataURL(blob);
       });
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
+
+  /* ===== PDF: генерация и отправка ===== */
+  const [simpleOpen, setSimpleOpen] = useState(false);
+  const [sendingPdf, setSendingPdf] = useState(false);
+  const [err, setErr] = useState<string>("");
+  const [busy, setBusy] = useState(false);
 
   async function createPdfBlob(options: {
     orderNo: string;
-    customerName: string;
-    customerPhone: string;
+    customerName: string; customerPhone: string;
     frontPersons: { fio1: string; fio2: string; dates: string; photo?: string | null }[];
     frontGraphics: { name: string; qty: number }[];
     frontEpitaphs: string[];
@@ -750,9 +727,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     rearEpitaphs: string[];
     extras: { base: boolean; flowerbed: boolean };
     plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
-    notes?: string;
-    imgFront?: string | null;
-    imgBack?: string | null;
+    notes?: string; imgFront?: string | null; imgBack?: string | null;
   }): Promise<Blob> {
     const jsPDF = await ensureJsPdf();
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
@@ -764,12 +739,17 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const contentW = pageW - margin * 2;
     let y = margin;
 
-    const setFont = (bold = false, size = 24) => {
-      doc.setFont("NotoSans", bold ? "bold" : "normal");
-      doc.setFontSize(size);
-    };
+    const setFont = (bold = false, size = 24) => { doc.setFont("NotoSans", bold ? "bold" : "normal"); doc.setFontSize(size); };
     const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
-    const addTitle = (t: string) => { setFont(true, 28); const lines = doc.splitTextToSize(t, contentW); lines.forEach((ln) => { if (y + 34 > pageH - margin) { doc.addPage(); y = margin; } doc.text(ln, margin, y); y += 34; }); };
+    const addTitle = (t: string) => {
+      setFont(true, 28);
+      const lines = doc.splitTextToSize(t, contentW);
+      for (const ln of lines) {
+        if (y + 34 > pageH - margin) { doc.addPage(); y = margin; }
+        doc.text(ln, margin, y);
+        y += 34;
+      }
+    };
     const addText = (t: string, sz = 22, bold = false) => {
       setFont(bold, sz);
       const lh = Math.round(sz * 1.25);
@@ -783,6 +763,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const addKV = (k: string, v: string) => addText(`${k}: ${v}`, 22, false);
     const addImageFitted = async (dataUrl: string | null | undefined, maxH = 560) => {
       if (!dataUrl) return;
+      const isPng = /^data:image\/png/i.test(dataUrl);
+      const fmt = isPng ? "PNG" : "JPEG";
       const img = new Image();
       await new Promise<void>((res) => { img.onload = () => res(); img.src = dataUrl!; });
       const iw = img.naturalWidth || 0, ih = img.naturalHeight || 0;
@@ -790,7 +772,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       const scale = Math.min(contentW / iw, maxH / ih, 1);
       const w = Math.round(iw * scale), h = Math.round(ih * scale);
       if (y + h > pageH - margin) { doc.addPage(); y = margin; }
-      doc.addImage(dataUrl!, "JPEG", margin, y, w, h, undefined, "FAST");
+      doc.addImage(dataUrl!, fmt, margin, y, w, h, undefined, "FAST");
       y += h + 12;
     };
 
@@ -887,6 +869,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   async function onSavePdf() {
     try {
       setSendingPdf(true); setErr("");
+
       const orderNo = String(introState.orderNumber || "").trim();
       const name = (loadIntroState().intro?.customerName || "").trim();
       const phone = (loadIntroState().intro?.customerPhone || "").trim();
@@ -897,8 +880,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
         photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
       }));
-      const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
-      const frontDataGraphics = allFrontGraphics.map((g: any) => ({
+
+      const frontDataGraphics = (allFrontGraphics || []).map((g: any) => ({
         name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
         qty: 1
       }));
@@ -914,7 +897,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       }));
       const rearEpitaphs: string[] = ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean));
 
-      // Эскизы
       const frontPreviewUrl = (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null;
       const imgFront = await urlToDataUrl(frontPreviewUrl);
       const imgBack = await urlToDataUrl(backSketchUrl || null);
@@ -943,7 +925,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         imgBack
       });
 
-      // Локально
+      // Сохранить локально
       const a = document.createElement("a");
       a.href = URL.createObjectURL(pdfBlob);
       a.download = `order-${orderNo || Date.now()}.pdf`;
@@ -951,7 +933,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 
-      // Отправка менеджеру
+      // Отправить менеджеру (Telegram + Email)
       await sendPdfToServer(pdfBlob, {
         orderNo,
         intro: loadIntroState().intro || {},
@@ -977,6 +959,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   }
 
+  /* ===== Отправка «Оформить заказ» (без PDF) ===== */
   async function handleSend() {
     setBusy(true); setErr("");
     const attachments: any = {
@@ -985,7 +968,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       itemUrl: null,
       plateGraphics: chosenPlateList
     };
-    const orderNo = String(introState.orderNumber || "").trim();
     const extras: Extras & {
       base?: boolean; flowerbed?: boolean; headstonePlate?: boolean;
       plateSize?: string; plateCustomSize?: string; plateThickness?: string; plateCustomThickness?: string; plateOrientation?: string; plateEpitaph?: string; plateGraphicsIds?: string[];
@@ -1015,7 +997,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     } finally { setBusy(false); }
   }
 
-  // Тыльные списки для «Заказ списком» (для миниатюр)
+  // Тыльная графика для «Заказ списком» (миниатюры)
   const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCounts: Record<string, number> = useMemo(() => {
@@ -1029,7 +1011,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   }, [rearIds, rearMeta]);
   const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
 
-  // Для «Заказ списком»: собрать графику с миниатюрами 70×70
+  // Графика с миниатюрами 70×70 для "Заказ списком"
   const frontGraphicsWithThumbs = useMemo(() => {
     return (allFrontGraphics || []).map((g: any) => ({
       name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
@@ -1051,7 +1033,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
       {/* Эскизы */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: oneCol ? "1fr" : (backSketchUrl ? "1fr 1fr" : "1fr"), gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: backSketchUrl && !oneCol ? "1fr 1fr" : "1fr", gap: 12 }}>
           {/* Лицевая — SketchTemplate */}
           <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
             <div style={{ fontWeight: 700 }}>Лицевая</div>
@@ -1069,7 +1051,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           </div>
 
-          {/* Тыльная — превью + контур изделия */}
+          {/* Тыльная — превью + контур */}
           {backSketchUrl && (
             <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
               <div style={{ fontWeight: 700 }}>Тыльная</div>
@@ -1103,7 +1085,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
+                    <button type="button" onClick={() => setPlateIds((prev) => {
+                      const idx = prev.indexOf(g.id || g.url || "");
+                      if (idx === -1) return prev;
+                      const next = prev.slice(); next.splice(idx, 1); return next;
+                    })} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -1113,7 +1099,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {plateEpitaphList.map((t, idx) => (
                   <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button type="button" onClick={() => { const arr = [...plateEpitaphList]; arr.splice(idx, 1); setPlateEpitaph(arr.join("\n\n")); }} style={glassButtonStyle("nano")}>Удалить</button>
+                    <button type="button" onClick={() => {
+                      const arr = plateEpitaphList.slice(); arr.splice(idx, 1); setPlateEpitaph(arr.join("\n\n"));
+                    }} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -1122,7 +1110,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно и Примечания */}
+      {/* Дополнительно */}
       <ExtrasSection
         extraBase={extraBase} setExtraBase={setExtraBase}
         extraFlowerbed={extraFlowerbed} setExtraFlowerbed={setExtraFlowerbed}
@@ -1139,6 +1127,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         plateIds={plateIds}
       />
 
+      {/* Примечания */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
         <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
@@ -1146,13 +1135,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
 
+      {/* Кнопки */}
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>Назад</button>
         <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
         <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим PDF…" : "Заказ списком"}</button>
       </div>
 
-      {/* «Заказ списком» — миниатюры 70×70 у людей и графики */}
+      {/* Оверлей «Заказ списком» */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -1199,5 +1189,81 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         />
       )}
     </div>
+  );
+}
+
+/* ===== Обёртка «Дополнительно» (секция) ===== */
+function ExtrasSection(props: {
+  extraBase: boolean; setExtraBase: (v: boolean) => void;
+  extraFlowerbed: boolean; setExtraFlowerbed: (v: boolean) => void;
+  extraPlate: boolean; setExtraPlate: (v: boolean) => void;
+  plateSize: string; setPlateSize: (v: string) => void;
+  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
+  plateThickness: string; setPlateThickness: (v: string) => void;
+  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
+  plateOrientation: string; setPlateOrientation: (v: string) => void;
+  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
+  catsLoading: boolean; catsError: string; cats: any[];
+  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
+  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
+  plateIds: string[];
+}) {
+  const {
+    extraBase, setExtraBase,
+    extraFlowerbed, setExtraFlowerbed,
+    extraPlate, setExtraPlate,
+    plateSize, setPlateSize,
+    plateCustomSize, setPlateCustomSize,
+    plateThickness, setPlateThickness,
+    plateCustomThickness, setPlateCustomThickness,
+    plateOrientation, setPlateOrientation,
+    plateEpitaph, setPlateEpitaph,
+    catsLoading, catsError, cats, catOpen, setCatOpen,
+    addPlateGraphic, removePlateGraphic,
+    plateIds
+  } = props;
+
+  return (
+    <section id="section-extras" style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 12 }}>
+      <div style={{ fontWeight: 700 }}>Дополнительно</div>
+      <hr style={hrStyle} />
+      <div style={{ ...sectionBox }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraBase} onChange={(e) => setExtraBase(e.target.checked)} />
+            <span>Тумба</span>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={extraFlowerbed} onChange={(e) => setExtraFlowerbed(e.target.checked)} />
+            <span>Цветник</span>
+          </label>
+        </div>
+      </div>
+      <hr style={hrStyle} />
+      <PlateBlock
+        extraPlate={extraPlate}
+        setExtraPlate={setExtraPlate}
+        plateSize={plateSize}
+        setPlateSize={setPlateSize}
+        plateCustomSize={plateCustomSize}
+        setPlateCustomSize={setPlateCustomSize}
+        plateThickness={plateThickness}
+        setPlateThickness={setPlateThickness}
+        plateCustomThickness={plateCustomThickness}
+        setPlateCustomThickness={setPlateCustomThickness}
+        plateOrientation={plateOrientation}
+        setPlateOrientation={setPlateOrientation}
+        plateEpitaph={plateEpitaph}
+        setPlateEpitaph={setPlateEpitaph}
+        catsLoading={catsLoading}
+        catsError={catsError}
+        cats={cats}
+        catOpen={catOpen}
+        setCatOpen={setCatOpen}
+        addPlateGraphic={addPlateGraphic}
+        removePlateGraphic={removePlateGraphic}
+        plateIds={plateIds}
+      />
+    </section>
   );
 }
