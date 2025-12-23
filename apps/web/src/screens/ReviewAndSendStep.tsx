@@ -1,17 +1,13 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Изменения:
-// - Страница центрирована, max-width: 600px.
-// - Эскизы «вписаны», без рамок/внутренних отступов:
-//   • Лицевая — SketchTemplate.
-//   • Тыльная — превью + контур резной работы (силуэт item.url).
-// - На узких экранах (≤600px) эскизы в один столбец, иначе — два (если есть тыльная).
-// - «Выбрано для плиты» — выводим только, если что-то выбрано.
-// - Галерея каталога: минимум 2 столбца (адаптивно больше).
-// - «Заказ списком»: кнопка «Сохранить PDF» формирует PDF со всей информацией (НЕ скриншот),
-//   скачивает его локально и отправляет PDF в менеджер-чат Telegram и на почту через API /api/send-order-pdf.
-// - Исправлено: парсинг эпитафий; опечатки; ReferenceError personLines.
+// Новые правки по требованию:
+// - В «Заказ списком» миниатюры фотографий 70×70 px.
+// - PDF с корректной кириллицей (встраиваем шрифт Roboto Cyrillic).
+// - PDF размером 1512×2138 px (единицы px), автоперенос на новые страницы при переполнении.
+// - В PDF добавляем прикрепленные фото (фото усопших) на отдельных страницах, вписанные целиком.
+// - Отправляем PDF менеджеру в Telegram/на почту через /api/send-order-pdf.
+// - Остальные ранее согласованные правки сохранены.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -21,24 +17,21 @@ import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
-/* ===== jsPDF с CDN (без импортов, чтобы не падала сборка) ===== */
+/* ===== jsPDF с CDN (для PDF) ===== */
 declare global {
-  interface Window { jspdf?: any; htmlToImage?: any }
+  interface Window { jspdf?: any }
 }
 async function ensureJsPdf(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
   const CDN = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
-  const existing = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
-  if (existing) {
-    if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
-    await new Promise<void>((res, rej) => {
-      existing.addEventListener("load", () => res(), { once: true });
-      existing.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
-    });
-    return window.jspdf.jsPDF;
-  }
   await new Promise<void>((res, rej) => {
+    const exist = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
+    if (exist) {
+      exist.addEventListener("load", () => res(), { once: true });
+      exist.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
+      return;
+    }
     const s = document.createElement("script");
     s.src = CDN;
     s.async = true;
@@ -48,6 +41,31 @@ async function ensureJsPdf(): Promise<any> {
   });
   if (!window.jspdf?.jsPDF) throw new Error("jspdf unavailable");
   return window.jspdf.jsPDF;
+}
+
+/* ===== Встраивание кириллического шрифта для jsPDF ===== */
+let fontReady = false;
+async function ensureCyrillicFonts(doc: any) {
+  if (fontReady) return;
+  // Берём TTF из @fontsource (поддерживает кириллицу)
+  const REG = "https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-cyrillic-400-normal.ttf";
+  const BLD = "https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-cyrillic-700-normal.ttf";
+  async function fetchTtfToBase64(url: string): Promise<string> {
+    const r = await fetch(url);
+    const ab = await r.arrayBuffer();
+    // base64
+    let binary = "";
+    const bytes = new Uint8Array(ab);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+  const [regB64, bldB64] = await Promise.all([fetchTtfToBase64(REG), fetchTtfToBase64(BLD)]);
+  doc.addFileToVFS("Roboto-Regular.ttf", regB64);
+  doc.addFileToVFS("Roboto-Bold.ttf", bldB64);
+  doc.addFont("Roboto-Regular.ttf", "Roboto", "normal");
+  doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
+  fontReady = true;
 }
 
 /* ===== UI helpers ===== */
@@ -83,11 +101,8 @@ function personLines(p: any): string[] {
   const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
   return [l1, l2, l3].filter(Boolean);
 }
-// Нормализация эпитафий (строка/массив → абзацы)
 function toParagraphs(input?: string | string[] | null): string[] {
-  if (Array.isArray(input)) {
-    return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
-  }
+  if (Array.isArray(input)) return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
   if (!t) return [];
   const splitByBlank = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
@@ -95,7 +110,7 @@ function toParagraphs(input?: string | string[] | null): string[] {
   return t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
-/* ===== Thumb ===== */
+/* ===== Thumb (обычный) ===== */
 const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) => (
   <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
     {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
@@ -123,7 +138,7 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={onOpenSimple} style={linkLike()} title="Показать заказ списком">Заказ списком</button>
+        <button type="button" onClick={onOpenSimple} style={linkLike()}>Заказ списком</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => { setName(e.target.value); debSave(); }} placeholder="Имя" style={inputStyle()} />
@@ -158,7 +173,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   );
 }
 
-/* ===== Галерея каталога для плиты (минимум 2 столбца) ===== */
+/* ===== Галерея каталога (минимум 2 столбца) ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -167,7 +182,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
-      const c = Math.max(2, Math.floor(w / 160)); // ~160px на карточку с отступами
+      const c = Math.max(2, Math.floor(w / 160));
       setCols(c);
     });
     ro.observe(el);
@@ -198,7 +213,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Блок плиты (настройки, выбор) ===== */
+/* ===== Блок плиты (настройки/выбор) ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -533,7 +548,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     setDraft(loadOrderDraft());
   }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
 
-  /* ===== Адаптивные колонки эскизов (1 колонка на узких экранах) ===== */
+  /* ===== Адаптивные колонки эскизов ===== */
   const [oneCol, setOneCol] = useState(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -551,6 +566,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   /* ===== Формирование PDF и отправка (Telegram+Email через /api/send-order-pdf) ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
   const [sendingPdf, setSendingPdf] = useState(false);
+  const [err, setErr] = useState<string>("");
+  const [busy, setBusy] = useState(false);
 
   async function urlToDataUrl(url?: string | null): Promise<string | null> {
     try {
@@ -570,10 +587,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     orderNo: string;
     customerName: string;
     customerPhone: string;
-    frontPersons: any[];
-    frontGraphics: any[];
+    frontPersons: { fio1: string; fio2: string; dates: string; photo?: string | null }[];
+    frontGraphics: { name: string; qty: number }[];
     frontEpitaphs: string[];
-    rearGraphics: any[];
+    rearGraphics: { name: string; qty: number }[];
     rearEpitaphs: string[];
     extras: { base: boolean; flowerbed: boolean };
     plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
@@ -582,76 +599,85 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     imgBack?: string | null;
   }): Promise<Blob> {
     const jsPDF = await ensureJsPdf();
-    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    // Размер страницы 1512×2138 px (в px, не pt)
+    const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
+    await ensureCyrillicFonts(doc);
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
-    const margin = 36;
+    const margin = 48;
     const contentW = pageW - margin * 2;
     let y = margin;
 
-    const addHr = () => { doc.setDrawColor(180); doc.setLineWidth(0.5); doc.line(margin, y, pageW - margin, y); y += 8; };
-    const addTitle = (t: string) => { doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text(t, margin, y); y += 14; };
-    const addText = (t: string, size = 11, bold = false) => {
-      doc.setFont("helvetica", bold ? "bold" : "normal");
+    const setFont = (bold = false, size = 24) => {
+      doc.setFont("Roboto", bold ? "bold" : "normal");
       doc.setFontSize(size);
-      const lines = doc.splitTextToSize(t, contentW);
-      doc.text(lines, margin, y);
-      y += 14 * lines.length * (size >= 12 ? 1 : 0.95);
     };
-    const addKV = (k: string, v: string) => addText(`${k}: ${v}`);
+    const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
+    const addTitle = (t: string) => { setFont(true, 28); const lines = doc.splitTextToSize(t, contentW); doc.text(lines, margin, y); y += 34 + (lines.length - 1) * 28; };
+    const addText = (t: string, sz = 22, bold = false) => {
+      setFont(bold, sz);
+      const lh = Math.round(sz * 1.25);
+      const lines = doc.splitTextToSize(t, contentW);
+      lines.forEach((ln) => {
+        if (y + lh > pageH - margin) { doc.addPage(); y = margin; }
+        doc.text(ln, margin, y);
+        y += lh;
+      });
+    };
+    const addKV = (k: string, v: string) => addText(`${k}: ${v}`, 22, false);
 
-    const addImageFitted = async (dataUrl: string | null | undefined, maxH = 220) => {
+    const addImageFitted = async (dataUrl: string | null | undefined, maxH = 500) => {
       if (!dataUrl) return;
       const img = new Image();
-      const ok = await new Promise<boolean>((res) => { img.onload = () => res(true); img.onerror = () => res(false); img.src = dataUrl!; });
-      if (!ok || !img.naturalWidth || !img.naturalHeight) return;
-      const iw = img.naturalWidth, ih = img.naturalHeight;
+      await new Promise<void>((res) => { img.onload = () => res(); img.src = dataUrl!; });
+      const iw = img.naturalWidth || 0, ih = img.naturalHeight || 0;
+      if (!iw || !ih) return;
       const scale = Math.min(contentW / iw, maxH / ih, 1);
-      const w = iw * scale, h = ih * scale;
+      const w = Math.round(iw * scale), h = Math.round(ih * scale);
       if (y + h > pageH - margin) { doc.addPage(); y = margin; }
       doc.addImage(dataUrl!, "JPEG", margin, y, w, h, undefined, "FAST");
-      y += h + 10;
+      y += h + 12;
     };
 
-    // Header
+    // Заголовок
     addTitle(`Заказ № ${options.orderNo || "—"}`);
-    addText(`${options.customerName || "—"} · ${options.customerPhone || "—"}`);
+    addText(`${options.customerName || "—"} · ${options.customerPhone || "—"}`, 22, false);
 
     addHr();
 
     // Лицевая
     addTitle("Лицевая");
-    // Персоны
-    addText("Усопшие", 11, true);
+    addText("Усопшие", 24, true);
     if (options.frontPersons.length) {
       options.frontPersons.forEach((p) => {
         const fio = [p.fio1, p.fio2].filter(Boolean).join(" ");
         const line = [fio, p.dates].filter(Boolean).join(" · ");
-        addText(line, 11, false);
+        addText(line, 22, false);
       });
-    } else addText("—");
-    // Графика
-    addText("Графика", 11, true);
+    } else addText("—", 22, false);
+
+    addText("Графика", 24, true);
     if (options.frontGraphics.length) {
-      options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`));
-    } else addText("—");
-    // Эпитафии
-    addText("Эпитафии", 11, true);
+      options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`, 22, false));
+    } else addText("—", 22, false);
+
+    addText("Эпитафии", 24, true);
     if (options.frontEpitaphs.length) {
-      options.frontEpitaphs.forEach((t) => addText(t));
-    } else addText("—");
+      options.frontEpitaphs.forEach((t) => addText(t, 22, false));
+    } else addText("—", 22, false);
 
     addHr();
 
     // Тыльная
     addTitle("Тыльная");
-    addText("Усопшие", 11, true); addText("—");
-    addText("Графика", 11, true);
+    addText("Усопшие", 24, true); addText("—", 22, false);
+    addText("Графика", 24, true);
     if (options.rearGraphics.length) {
-      options.rearGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`));
-    } else addText("—");
-    addText("Эпитафии", 11, true);
-    if (options.rearEpitaphs.length) { options.rearEpitaphs.forEach((t) => addText(t)); } else addText("—");
+      options.rearGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`, 22, false));
+    } else addText("—", 22, false);
+    addText("Эпитафии", 24, true);
+    if (options.rearEpitaphs.length) options.rearEpitaphs.forEach((t) => addText(t, 22, false));
+    else addText("—", 22, false);
 
     addHr();
 
@@ -667,34 +693,50 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     if (options.plate.enabled) {
       addKV("Размер", options.plate.size || "—");
       addKV("Толщина", options.plate.thickness || "—");
-      addText("Графика", 11, true);
-      if (options.plate.graphics.length) options.plate.graphics.forEach((g) => addText(g.name));
-      else addText("—");
-      addText("Эпитафии", 11, true);
-      addText(options.plate.epitaph || "—");
+      addText("Графика", 24, true);
+      if (options.plate.graphics.length) options.plate.graphics.forEach((g) => addText(g.name, 22, false));
+      else addText("—", 22, false);
+      addText("Эпитафии", 24, true);
+      addText(options.plate.epitaph || "—", 22, false);
     } else {
-      addText("нет");
+      addText("нет", 22, false);
     }
 
     addHr();
 
     // Примечания
     addTitle("Примечания");
-    addText(options.notes || "—");
+    addText(options.notes || "—", 22, false);
 
     addHr();
-    addTitle("Эскизы");
-    await addImageFitted(options.imgFront || null, 220);
-    await addImageFitted(options.imgBack || null, 220);
 
-    // Вернуть Blob
+    // Эскизы (вписанные)
+    addTitle("Эскизы");
+    await addImageFitted(options.imgFront || null, 560);
+    await addImageFitted(options.imgBack || null, 560);
+
+    // Фото (на отдельных страницах)
+    const personPhotos: (string | null)[] = await Promise.all(
+      options.frontPersons.map(async (p) => {
+        const src = p.photo || null;
+        return await urlToDataUrl(src || null);
+      })
+    );
+    const photos = personPhotos.filter(Boolean) as string[];
+    if (photos.length) {
+      for (const [idx, ph] of photos.entries()) {
+        doc.addPage();
+        y = margin;
+        addTitle(`Фото ${idx + 1}`);
+        await addImageFitted(ph, pageH - margin * 2 - 40); // почти на полную страницу
+      }
+    }
+
     return doc.output("blob");
   }
 
   async function sendPdfToServer(pdf: Blob, meta: any) {
-    // Требуется серверный API /api/send-order-pdf:
-    // - принимает multipart/form-data: { pdf: File, payload: JSON-string }
-    // - отправляет PDF документ в Telegram (sendDocument) и на почту (SMTP/почтовый сервис)
+    // /api/send-order-pdf — серверный endpoint, который отправит PDF в Telegram/Email
     const fd = new FormData();
     fd.append("pdf", pdf, `order-${meta?.orderNo || Date.now()}.pdf`);
     fd.append("payload", JSON.stringify(meta || {}));
@@ -705,15 +747,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   }
 
-  const [err, setErr] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-
   async function onSavePdf() {
     try {
       setSendingPdf(true);
       setErr("");
 
-      // Данные для PDF
       const orderNo = String(introState.orderNumber || "").trim();
       const name = (loadIntroState().intro?.customerName || "").trim();
       const phone = (loadIntroState().intro?.customerPhone || "").trim();
@@ -721,8 +759,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       const frontDataPersons = frontPersons.map((p: any) => ({
         fio1: (p.lastName || "").trim(),
         fio2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
-        dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ")
+        dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
+        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
       }));
+
       const frontDataGraphics = (allFrontGraphics || []).map((g: any) => ({
         name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
         qty: 1
@@ -732,7 +772,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         qty: rearCounts[g?.id || g?.url || g?.name] || 1
       }));
 
-      // Подтянуть превью для PDF (если есть)
       const frontPreviewUrl = (draft as any)?.editor?.previewHiUrl || (draft as any)?.editor?.previewUrl || null;
       const imgFront = await urlToDataUrl(frontPreviewUrl);
       const imgBack = await urlToDataUrl(backSketchUrl || null);
@@ -761,7 +800,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         imgBack
       });
 
-      // Локальное сохранение
+      // Локально скачать
       const a = document.createElement("a");
       a.href = URL.createObjectURL(pdfBlob);
       a.download = `order-${orderNo || Date.now()}.pdf`;
@@ -772,7 +811,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         a.remove();
       }, 500);
 
-      // Отправка в Telegram и на почту
+      // Отправить менеджеру
       await sendPdfToServer(pdfBlob, {
         orderNo,
         intro: loadIntroState().intro || {},
@@ -798,7 +837,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   }
 
-  /* ===== Отправка (кнопка «Оформить заказ») ===== */
+  /* ===== Отправка (кнопка «Оформить заказ») — как было, без PDF ===== */
   async function handleSend() {
     setBusy(true); setErr("");
     const attachments: any = {
@@ -853,7 +892,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   return (
     <div style={{ width: "100%", maxWidth: 600, margin: "0 auto" }}>
-      <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
+      <EditableOrderSummary orderNo={String(introState.orderNumber || "").trim()} onOpenSimple={() => setSimpleOpen(true)} />
 
       {/* Эскизы */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
@@ -884,31 +923,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   <img
                     src={itemUrl}
                     alt=""
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "contain",
-                      opacity: 0.22,
-                      filter: "grayscale(100%) contrast(180%) brightness(180%)",
-                      zIndex: 0,
-                      pointerEvents: "none"
-                    }}
+                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", opacity: 0.22, filter: "grayscale(100%) contrast(180%) brightness(180%)", zIndex: 0, pointerEvents: "none" }}
                   />
                 )}
                 <img
                   src={backSketchUrl}
                   alt=""
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                    zIndex: 1,
-                    pointerEvents: "none"
-                  }}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1, pointerEvents: "none" }}
                 />
               </div>
             </div>
@@ -916,7 +937,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </div>
       </section>
 
-      {/* Выбрано для плиты — только если есть что показать */}
+      {/* Выбрано для плиты */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
         <section style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ ...sectionBox }}>
@@ -927,7 +948,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")} title="Удалить">Удалить</button>
+                    <button type="button" onClick={() => removePlateGraphic(g.id || g.url || "")} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -937,17 +958,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
                 {plateEpitaphList.map((t, idx) => (
                   <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const arr = [...plateEpitaphList]; arr.splice(idx, 1);
-                        setPlateEpitaph(arr.join("\n\n"));
-                      }}
-                      style={glassButtonStyle("nano")}
-                      title="Удалить эпитафию"
-                    >
-                      Удалить
-                    </button>
+                    <button type="button" onClick={() => {
+                      const arr = [...plateEpitaphList]; arr.splice(idx, 1);
+                      setPlateEpitaph(arr.join("\n\n"));
+                    }} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -956,7 +970,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно и Примечания */}
+      {/* Дополнительно и примечания */}
       <ExtrasSection
         extraBase={extraBase}
         setExtraBase={setExtraBase}
@@ -995,15 +1009,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>Назад</button>
-        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>
-          {busy ? "Отправляем…" : "Оформить заказ"}
-        </button>
-        <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>
-          {sendingPdf ? "Готовим PDF…" : "Заказ списком"}
-        </button>
+        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
+        <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим PDF…" : "Заказ списком"}</button>
       </div>
 
-      {/* «Заказ списком» — формирование и отправка PDF */}
+      {/* «Заказ списком» — оверлей, миниатюры 70×70 */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
@@ -1135,7 +1145,7 @@ function ExtrasSection(props: {
   );
 }
 
-/* ===== Оверлей «Заказ списком» (кнопка «Сохранить PDF») ===== */
+/* ===== Оверлей «Заказ списком» (миниатюры 70×70, кнопка «Сохранить PDF») ===== */
 function PrintOverlay({
   onClose, onSave, orderNo, name, phone, frontSketch, previewBack, frontData, rearData, extras, plate, notes, aspect
 }: {
@@ -1164,14 +1174,15 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
+          {/* Лицевая */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
                 {frontData.persons.length ? frontData.persons.map((p, i) => (
-                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "18px 1fr" : "1fr", gap: 4, alignItems: "center", marginBottom: 2 }}>
-                    {p.photo && <img src={p.photo} alt="" style={{ width: 18, height: 18, objectFit: "cover", borderRadius: 3 }} />}
+                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                    {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
                     <div>
                       {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
                       {p.fio2 && <div>{p.fio2}</div>}
@@ -1193,6 +1204,7 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
+          {/* Тыльная */}
           {rearData && (
             <>
               <div style={{ marginBottom: 6 }}>
@@ -1214,6 +1226,7 @@ function PrintOverlay({
             </>
           )}
 
+          {/* Дополнительно */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
             <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
@@ -1221,6 +1234,7 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
+          {/* Плита */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
             <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
@@ -1240,6 +1254,7 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
+          {/* Примечания */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
             <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
@@ -1247,6 +1262,7 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
+          {/* Эскизы */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
