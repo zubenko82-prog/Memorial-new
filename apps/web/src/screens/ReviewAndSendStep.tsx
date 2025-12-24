@@ -1,44 +1,44 @@
 // src/screens/ReviewAndSendStep.tsx
-// Обзор и подтверждение (без TopBar).
+// Шаг «Обзор и подтверждение» с интегрированным TopBar.
 //
-// Изменения по задаче:
-// - PDF: как в «Заказе списком» (3 колонки), оба эскиза — на той же странице,
-//   прикреплённые фото — на отдельных страницах после состава заказа.
-// - Кнопка «Оформить заказ» переименована в «Рассчитать стоимость» (и на главной, и в «Заказе списком»).
-// - В «Заказе списком» добавлена отдельная кнопка «Рассчитать стоимость» — отправляет PDF в админ-чат.
-// - После отправки показываем оверлей с сообщением и кнопками: [×] (закрыть) и «Новый заказ» (переход на начало).
-// - Исправлено: при редактировании имени/телефона/примечания «съедается» последняя буква —
-//   теперь сохраняем по onBlur (без автообновления во время ввода).
-// - Шрифт PDF: Century Schoolbook (Bold — для метрик/заголовков; Bold Italic — для эпитафий).
-//   Положите TTF-файлы в /public/fonts:
+// Что сделано по задаче:
+// - Интегрирован TopBarWithIntro (наверху страницы).
+// - Кнопка «Посмотреть состав заказа» — разворачивает TopBar и скроллит к нему.
+// - Сверху отображаем блоки:
+//   • «Выбрано для плиты» (если есть выбранные позиции для надгробной плиты),
+//   • «Дополнительно» (тумба/цветник/настройки плиты с выбором графики/эпитафий).
+// - Ниже — эскиз лицевой стороны; ниже — эскиз тыльной (если есть).
+// - Ниже — «Примечание к заказу».
+// - Ниже — подсказка: «Не беспокойтесь: даже при отсутствии нужного пункта финальное подтверждение — по телефону или лично.»
+// - Ниже — кнопки «Назад» / «Рассчитать стоимость». При нажатии — всплывающая модалка с анимацией:
+//     • «Отправить» — генерирует PDF и отправляет в админ-чат,
+//     • «Сохранить PDF» — сохраняет PDF локально,
+//     • кнопка «×» — закрыть.
+// - PDF: как в составе заказа (3 колонки), оба эскиза — на той же странице; прикреплённые фото — на отдельных страницах.
+// - Шрифт PDF: Century Schoolbook (Bold — метрики/заголовки, Bold Italic — эпитафии).
+//   Положите файлы в /public/fonts/
 //     /public/fonts/CenturySchoolbook-Bold.ttf
 //     /public/fonts/CenturySchoolbook-BoldItalic.ttf
-//   Если отсутствуют — будет fallback на helvetica (латиница).
 //
-// Примечание: чтобы миниатюры/фото попали в PDF, их URL должны быть доступны браузеру с CORS.
-// Иначе вставим только подписи, игнорируя саму картинку (без падения).
+// Примечание: для корректного попадания миниатюр/фото в PDF источники изображений должны быть доступны по CORS.
+// Иначе изображения будут пропущены, но текст останется.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
-import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
+import { loadIntroState } from "../lib/intro";
 import { sendOrderEmailAndNotifyTg, type Extras } from "../lib/send";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
-/* ===== html-to-image для DOM->PNG (эскиз лицевой) ===== */
+/* ===== html-to-image (DOM -> PNG) для лицевого эскиза ===== */
 declare global { interface Window { htmlToImage?: any; jspdf?: any } }
 async function ensureHtmlToImage(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
   if (window.htmlToImage) return window.htmlToImage;
   const CDN = "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js";
   await new Promise<void>((res, rej) => {
-    const ex = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
-    if (ex) {
-      ex.addEventListener("load", () => res(), { once: true });
-      ex.addEventListener("error", () => rej(new Error("html-to-image load error")), { once: true });
-      return;
-    }
     const s = document.createElement("script");
     s.src = CDN; s.async = true;
     s.onload = () => res();
@@ -49,18 +49,12 @@ async function ensureHtmlToImage(): Promise<any> {
   return window.htmlToImage;
 }
 
-/* ===== jsPDF (PDF) ===== */
+/* ===== jsPDF ===== */
 async function ensureJsPdf(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
   const CDN = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
   await new Promise<void>((res, rej) => {
-    const ex = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
-    if (ex) {
-      ex.addEventListener("load", () => res(), { once: true });
-      ex.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
-      return;
-    }
     const s = document.createElement("script");
     s.src = CDN; s.async = true;
     s.onload = () => res();
@@ -71,16 +65,12 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание Century Schoolbook (Bold, Bold Italic) ===== */
-let csFontReady = false; // оба начертания готовы
+/* ===== Century Schoolbook (Bold, Bold Italic) для PDF ===== */
+let csFontReady = false;
 async function ensureCenturyFonts(doc: any) {
   if (csFontReady) return;
-  const BOLD_CAND = [
-    "/fonts/CenturySchoolbook-Bold.ttf",
-  ];
-  const BOLD_IT_CAND = [
-    "/fonts/CenturySchoolbook-BoldItalic.ttf",
-  ];
+  const BOLD = "/fonts/CenturySchoolbook-Bold.ttf";
+  const BOLDIT = "/fonts/CenturySchoolbook-BoldItalic.ttf";
   async function fetchTtfToBase64(url: string): Promise<string | null> {
     try {
       const r = await fetch(url, { mode: "cors" });
@@ -92,26 +82,11 @@ async function ensureCenturyFonts(doc: any) {
       return btoa(binary);
     } catch { return null; }
   }
-  async function firstOk(urls: string[]): Promise<string | null> {
-    for (const u of urls) {
-      const b64 = await fetchTtfToBase64(u);
-      if (b64) return b64;
-    }
-    return null;
-  }
-  const [boldB64, boldItB64] = await Promise.all([firstOk(BOLD_CAND), firstOk(BOLD_IT_CAND)]);
-  if (boldB64) {
-    doc.addFileToVFS("CenturySchoolbook-Bold.ttf", boldB64);
-    doc.addFont("CenturySchoolbook-Bold.ttf", "CenturySchoolbook", "bold");
-  }
-  if (boldItB64) {
-    doc.addFileToVFS("CenturySchoolbook-BoldItalic.ttf", boldItB64);
-    doc.addFont("CenturySchoolbook-BoldItalic.ttf", "CenturySchoolbook", "bolditalic");
-  }
-  csFontReady = !!(boldB64 && boldItB64);
-  if (!csFontReady) {
-    console.warn("Century Schoolbook TTF не найден в /public/fonts. В PDF будет fallback на helvetica.");
-  }
+  const [b64, bIt64] = await Promise.all([fetchTtfToBase64(BOLD), fetchTtfToBase64(BOLDIT)]);
+  if (b64) { doc.addFileToVFS("CenturySchoolbook-Bold.ttf", b64); doc.addFont("CenturySchoolbook-Bold.ttf", "CenturySchoolbook", "bold"); }
+  if (bIt64) { doc.addFileToVFS("CenturySchoolbook-BoldItalic.ttf", bIt64); doc.addFont("CenturySchoolbook-BoldItalic.ttf", "CenturySchoolbook", "bolditalic"); }
+  csFontReady = !!(b64 && bIt64);
+  if (!csFontReady) console.warn("Century Schoolbook TTF не найден. Будет fallback на helvetica (латиница).");
 }
 
 /* ===== UI helpers ===== */
@@ -119,13 +94,11 @@ function glassPanelStyle(): React.CSSProperties {
   return { background: "rgba(20,20,24,0.90)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, color: "#fff", boxSizing: "border-box" };
 }
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
-  const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
+  const pad = size === "nano" ? "6px 10px" : size === "sm" ? "10px 14px" : "12px 18px";
   return {
-    padding: map[size], borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.28)",
+    padding: pad, borderRadius: 12, border: "1px solid rgba(255,255,255,0.28)",
     background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
-    color: "#fff", cursor: disabled ? "not-allowed" : "pointer",
-    whiteSpace: "nowrap",
+    color: "#fff", cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap",
     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1
   };
@@ -135,23 +108,15 @@ function inputStyle(): React.CSSProperties {
 }
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
-function grid3(): React.CSSProperties { return { display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }; }
 function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
 
 /* ===== Utils ===== */
-function personLines(p: any): string[] {
-  const l1 = (p?.lastName || "").trim();
-  const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
-  const l3 = [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ");
-  return [l1, l2, l3].filter(Boolean);
-}
 function toParagraphs(input?: string | string[] | null): string[] {
   if (Array.isArray(input)) return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
   if (!t) return [];
-  const splitByBlank = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
-  if (splitByBlank.length) return splitByBlank;
-  return t.split(/\n/g).map(s => s.trim()).filter(Boolean);
+  const blocks = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
+  return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
 /* ===== Thumb ===== */
@@ -161,82 +126,7 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== Шапка: номер заказа + контакты + «Заказ списком» ===== */
-function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
-  // Локальное состояние без автосохранения на onChange (сохраняем на onBlur) — чтобы не «съедались» буквы
-  const introInitial = loadIntroState().intro || {};
-  const [name, setName] = useState<string>(introInitial.customerName || "");
-  const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
-
-  const saveOnBlur = () => {
-    const next: Intro = {
-      customerName: (name || "").trim(),
-      customerPhone: (phone || "").trim(),
-      customerNotes: (contactNotes || "").trim() || undefined
-    };
-    saveIntro(next, { lock: false });
-  };
-
-  return (
-    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-        <div style={{ flex: 1 }} />
-        <button type="button" onClick={onOpenSimple} style={linkLike()}>Заказ списком</button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={saveOnBlur}
-          placeholder="Имя"
-          style={inputStyle()}
-        />
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          onBlur={saveOnBlur}
-          placeholder="+7..."
-          inputMode="tel"
-          style={inputStyle()}
-        />
-      </div>
-      <input
-        value={contactNotes}
-        onChange={(e) => setContactNotes(e.target.value)}
-        onBlur={saveOnBlur}
-        placeholder="Примечание для связи…"
-        style={inputStyle()}
-      />
-    </section>
-  );
-}
-
-/* ===== Accordion ===== */
-function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [h, setH] = useState(0);
-  useEffect(() => {
-    const m = () => setH(ref.current?.scrollHeight || 0);
-    m();
-    const ro = new (window as any).ResizeObserver?.(m);
-    if (ref.current && ro) ro.observe(ref.current);
-    return () => ro?.disconnect?.();
-  }, [children]);
-  return (
-    <div style={{ ...glassPanelStyle(), padding: 0, borderWidth: 2, borderColor: "rgba(138,180,255,0.35)" }}>
-      <button type="button" onClick={onToggle} style={{ width: "100%", textAlign: "left", padding: "12px 14px", background: "rgba(255,255,255,0.06)", border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 15, fontWeight: 700 }}>
-        <span>{title}</span><span aria-hidden>{open ? "▾" : "▸"}</span>
-      </button>
-      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
-        <div ref={ref} style={{ padding: 12 }}>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/* ===== Галерея каталога (минимум 2 столбца) ===== */
+/* ===== Каталог — сетка ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -274,7 +164,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Блок плиты (настройки/выбор) ===== */
+/* ===== Плита — блок выбора ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -453,153 +343,28 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Оверлей «Заказ списком» (три колонки), с кнопкой «Рассчитать стоимость» ===== */
-function PrintOverlay({
-  onClose, onSavePdf, onSendCost, orderNo, name, phone, frontSketch, previewBack,
-  frontData, rearData, extras, plate, notes, aspect
-}: {
-  onClose: () => void;
-  onSavePdf: () => void;      // Сохранить PDF (локально + попытка отправки)
-  onSendCost: () => void;     // Отправить PDF в админ-чат (тот же onSavePdf)
-  orderNo: string; name: string; phone: string;
-  frontSketch: React.ReactNode;
-  previewBack?: string;
-  frontData: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number; thumb?: string }[]; epitaphs: string[]; };
-  rearData: { graphics: { name: string; qty: number; thumb?: string }[]; epitaphs: string[] } | null;
-  extras: { base: boolean; flowerbed: boolean };
-  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string; thumb?: string }[]; epitaph?: string };
-  notes?: string;
-  aspect?: string;
-}) {
+/* ===== Модалка подтверждения отправки (анимация) ===== */
+function ConfirmSendModal({
+  onClose, onSend, onSavePdf
+}: { onClose: () => void; onSend: () => void; onSavePdf: () => void }) {
   return (
-    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
-      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm", position: "relative" }}>
-        <div style={{ display: "flex", gap: 8, position: "sticky", top: 0, background: "#fff", paddingBottom: 6, justifyContent: "flex-end", zIndex: 2 }}>
-          <button type="button" onClick={onClose} title="Закрыть" style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>×</button>
-          <button type="button" onClick={onSavePdf} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
-          <button type="button" onClick={onSendCost} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e5ffe5", cursor: "pointer" }}>Рассчитать стоимость</button>
-        </div>
-
-        <div style={{ fontFamily: "system-ui,-apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
-          <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Лицевая */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
-            <div style={grid3()}>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
-                {frontData.persons.length ? frontData.persons.map((p, i) => (
-                  <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                    {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
-                    <div>
-                      {p.fio1 && <div style={{ fontWeight: 700 }}>{p.fio1}</div>}
-                      {p.fio2 && <div style={{ fontWeight: 700 }}>{p.fio2}</div>}
-                      {p.dates && <div style={{ fontWeight: 700 }}>{p.dates}</div>}
-                    </div>
-                  </div>
-                )) : <div>—</div>}
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                {frontData.graphics.length ? frontData.graphics.map((g, i) => (
-                  <div key={`fg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                    {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                    <div style={{ fontWeight: 700 }}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
-                  </div>
-                )) : <div>—</div>}
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontStyle: "italic", fontWeight: 700 }}>{t}</div>) : <div>—</div>}
-              </div>
-            </div>
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Тыльная */}
-          {rearData && (
-            <>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
-                <div style={grid3()}>
-                  <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                    {rearData.graphics.length ? rearData.graphics.map((g, i) => (
-                      <div key={`rg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                        {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                        <div style={{ fontWeight: 700 }}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
-                      </div>
-                    )) : <div>—</div>}
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                    {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontStyle: "italic", fontWeight: 700 }}>{t}</div>) : <div>—</div>}
-                  </div>
-                </div>
-              </div>
-
-              <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-            </>
-          )}
-
-          {/* Плита */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
-            <div style={grid3()}>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Параметры</div>
-                <div style={{ fontWeight: 700 }}>Размер: {plate.enabled ? (plate.size || "—") : "нет"}</div>
-                <div style={{ fontWeight: 700 }}>Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                {plate.enabled && plate.graphics.length ? plate.graphics.map((g, i) => (
-                  <div key={`pg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                    {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                    <div style={{ fontWeight: 700 }}>{g.name}</div>
-                  </div>
-                )) : <div>—</div>}
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                {plate.enabled && plate.epitaph ? <div style={{ whiteSpace: "pre-wrap", fontStyle: "italic", fontWeight: 700 }}>{plate.epitaph}</div> : <div>—</div>}
-              </div>
-            </div>
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Эскизы на той же странице */}
-          <div>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
-            <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
-              <div id="pdf-front-sketch" style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden", background: "#fff" }}>
-                <div style={{ position: "absolute", inset: 0, padding: 0 }}>{frontSketch}</div>
-              </div>
-              {rearData && (
-                <div style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden" }}>
-                  {previewBack ? (
-                    <img src={previewBack} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#fff" }} />
-                  ) : (
-                    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>Нет</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Примечания */}
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
-            <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
-          </div>
+    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 10000, display: "grid", placeItems: "center" }}>
+      <div
+        style={{
+          width: "100%", maxWidth: 420, background: "#fff", color: "#111",
+          borderRadius: 12, padding: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
+          transform: "scale(0.98)", opacity: 0, animation: "modalIn 180ms ease forwards", position: "relative"
+        }}
+      >
+        <style>{`
+          @keyframes modalIn { to { transform: scale(1); opacity: 1; } }
+          .btn { padding: 8px 12px; border-radius: 8px; border: 1px solid #999; cursor: pointer; background: #f7f7f7; }
+        `}</style>
+        <button onClick={onClose} title="Закрыть" style={{ position: "absolute", top: 8, right: 8, width: 32, height: 32, borderRadius: 8, border: "1px solid #ccc", background: "#fafafa", cursor: "pointer" }}>×</button>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Вы хотите отправить заказ менеджерам для просчёта стоимости?</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <button className="btn" onClick={onSavePdf} title="Сохранить PDF локально">Сохранить PDF</button>
+          <button className="btn" onClick={onSend} title="Отправить PDF менеджерам" style={{ background: "#e5ffe5", borderColor: "#99d199" }}>Отправить</button>
         </div>
       </div>
     </div>
@@ -624,20 +389,26 @@ function SentModal({ onClose, onNew }: { onClose: () => void; onNew: () => void 
   );
 }
 
-/* ===== Основной компонент ===== */
+/* ===== Основной компонент шага ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
 
+  // Топбар разворачивать программно (клик по его кнопке)
+  function openTopbar() {
+    try {
+      const btn = document.querySelector<HTMLButtonElement>('button[aria-controls="order-panel"]');
+      if (btn && btn.getAttribute("aria-expanded") !== "true") btn.click();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch {}
+  }
+
   useEffect(() => {
     const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
-    // ВНИМАНИЕ: не подписываемся на "storage", чтобы не «дергать» поля ввода при печати символов
     window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
     refresh();
-    return () => {
-      window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
-    };
+    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
   }, []);
 
   const orderNo = String(introState.orderNumber || "").trim();
@@ -656,19 +427,23 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Лицевая — данные
+  // Данные лицевой
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
     id: p.id || `p-${i}`,
-    lines: personLines(p),
-    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null // прикреплённые фото
+    lines: [
+      (p?.lastName || "").trim(),
+      [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" "),
+      [p?.birthDate, p?.deathDate].map((x) => (x || "").trim()).filter(Boolean).join(" — ")
+    ].filter(Boolean),
+    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
   })), [frontPersons]);
+
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
 
-  // Эпитафии лицевой
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
@@ -731,7 +506,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
   }, [cats]);
 
-  // Выбранная графика плиты (мета)
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
@@ -749,7 +523,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  /* ===== Списки для «Заказ списком» и PDF ===== */
+  /* ===== Списки для PDF (миниатюры) ===== */
   const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCounts: Record<string, number> = useMemo(() => {
@@ -786,7 +560,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }));
   }, [chosenPlateList]);
 
-  /* ===== Инструменты для PDF ===== */
+  /* ===== Служебные для PDF ===== */
   async function urlToDataUrl(url?: string | null): Promise<string | null> {
     try {
       if (!url) return null;
@@ -795,13 +569,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       if (!res.ok) return null;
       const blob = await res.blob();
       return await new Promise<string>((resolve) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result || ""));
-        fr.readAsDataURL(blob);
+        const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(blob);
       });
     } catch { return null; }
   }
-
   async function captureFrontSketchPng(): Promise<string | null> {
     try {
       const node = document.getElementById("pdf-front-sketch");
@@ -809,6 +580,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       const htmlToImage = await ensureHtmlToImage();
       return await htmlToImage.toPng(node, { backgroundColor: "#ffffff", pixelRatio: 2, cacheBust: true });
     } catch { return null; }
+  }
+  async function ensurePdfReady(): Promise<any> {
+    const jsPDF = await ensureJsPdf();
+    return jsPDF;
   }
 
   async function createPdfBlob(options: {
@@ -824,10 +599,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     imgFront?: string | null; // PNG лицевой эскиз
     imgBack?: string | null;  // PNG тыльный эскиз
   }): Promise<Blob> {
-    const jsPDF = await ensureJsPdf();
+    const jsPDF = await ensurePdfReady();
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
     await ensureCenturyFonts(doc);
-    const FONT_BASE = csFontReady ? "CenturySchoolbook" : "helvetica";
+    const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
 
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
@@ -836,10 +611,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const contentH = pageH - margin * 2;
     let y = margin;
 
-    const setFont = (style: "bold" | "bolditalic", size: number) => {
-      doc.setFont(FONT_BASE, style);
-      doc.setFontSize(size);
-    };
+    const setFont = (style: "bold" | "bolditalic", size: number) => { doc.setFont(FONT, style); doc.setFontSize(size); };
     const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
     const addTitle = (t: string) => {
       setFont("bold", 28);
@@ -901,7 +673,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       }
     }
 
-    // Шапка + состав заказа (3 колонки), ЭСКИЗЫ — на той же странице
+    // Шапка и состав заказа
     addTitle(`Заказ № ${options.orderNo || "—"}`);
     addMetric(`${options.customerName || "—"} · ${options.customerPhone || "—"}`);
 
@@ -940,9 +712,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       await addThumbList("Графика", options.plate.graphics);
       addMetric("Эпитафии", 24);
       if (options.plate.epitaph) addEpitaph(options.plate.epitaph); else addMetric("—");
-    } else {
-      addMetric("нет");
-    }
+    } else addMetric("нет");
 
     addHr();
 
@@ -952,7 +722,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
     addHr();
 
-    // Эскизы (на той же странице)
+    // Эскизы
     addTitle("Эскизы");
     await addImageFitted(options.imgFront || null, 560);
     await addImageFitted(options.imgBack || null, 560);
@@ -962,9 +732,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     if (photos.length) {
       for (let i = 0; i < photos.length; i++) {
         doc.addPage();
-        y = margin;
+        let y2 = margin;
         addTitle(`Фото ${i + 1}`);
-        // Вписать по высоте контентной области
         const data = await urlToDataUrl(photos[i]);
         if (data) {
           const fmt = /^data:image\/png/i.test(data) ? "PNG" : "JPEG";
@@ -975,27 +744,43 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             const scale = Math.min(contentW / iw, (contentH - 20) / ih, 1);
             const w = Math.round(iw * scale), h = Math.round(ih * scale);
             const x = margin + Math.max(0, (contentW - w) / 2);
-            doc.addImage(data, fmt, x, y, w, h, undefined, "FAST");
+            doc.addImage(data, fmt, x, y2, w, h, undefined, "FAST");
           }
-        } else {
-          addMetric("—");
-        }
+        } else addMetric("—");
       }
     }
 
     return doc.output("blob");
   }
 
-  /* ===== UI: «Заказ списком» / Отправка / Сохранение ===== */
-  const [simpleOpen, setSimpleOpen] = useState(false);
+  async function sendPdfToServer(pdf: Blob, meta: any) {
+    try {
+      const fd = new FormData();
+      fd.append("pdf", pdf, `order-${meta?.orderNo || Date.now()}.pdf`);
+      fd.append("payload", JSON.stringify(meta || {}));
+      const res = await fetch("/api/send-order-pdf", { method: "POST", body: fd });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`Не удалось отправить PDF: ${t || res.statusText}`);
+      }
+    } catch (e) {
+      console.warn(e);
+      alert("PDF сохранён локально. Отправка менеджерам недоступна (сервер).");
+    }
+  }
+
+  /* ===== Кнопки / Модалки ===== */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [sentOpen, setSentOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [sendingPdf, setSendingPdf] = useState(false);
-  const [sentModalOpen, setSentModalOpen] = useState(false);
   const [err, setErr] = useState<string>("");
 
-  async function onSavePdfInternal() {
+  async function runCreatePdf(sendAlso: boolean) {
     try {
       setSendingPdf(true); setErr("");
-      await new Promise(r => setTimeout(r, 120)); // дать дорисовать DOM
+      // Дать DOM дорисоваться (эскиз)
+      await new Promise(r => setTimeout(r, 120));
 
       const orderNo = String(introState.orderNumber || "").trim();
       const name = (loadIntroState().intro?.customerName || "").trim();
@@ -1030,27 +815,27 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         imgBack: backPng
       });
 
-      // Сохранить локально
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(pdfBlob);
-      a.download = `order-${orderNo || Date.now()}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
-
-      // Отправить в админ-чат (бэкенд)
-      await sendPdfToServer(pdfBlob, {
-        orderNo,
-        intro: loadIntroState().intro || {},
-        extras: {
-          base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate,
-          plateSize, plateThickness, plateOrientation, plateEpitaph,
-          plateGraphics: plateGraphicsWithThumbs.map(g => g.name)
-        }
-      });
-
-      setSimpleOpen(false);
-      setSentModalOpen(true);
+      if (sendAlso) {
+        await sendPdfToServer(pdfBlob, {
+          orderNo,
+          intro: loadIntroState().intro || {},
+          extras: {
+            base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate,
+            plateSize, plateThickness, plateOrientation, plateEpitaph,
+            plateGraphics: plateGraphicsWithThumbs.map(g => g.name)
+          }
+        });
+        setConfirmOpen(false);
+        setSentOpen(true);
+      } else {
+        // Сохранить локально
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(pdfBlob);
+        a.download = `order-${orderNo || Date.now()}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+      }
     } catch (e: any) {
       console.error(e);
       setErr(e?.message || "Не удалось сформировать/отправить PDF.");
@@ -1059,70 +844,19 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   }
 
-  function goNewOrder() {
-    // Очистка драфта/интро при необходимости:
-    // localStorage.removeItem('...') — по вашему ключу.
-    // Переход на начальную:
-    if (typeof window !== "undefined") {
-      window.location.href = "/"; // подстройте под ваш роутинг
-    }
-  }
-
-  /* ===== Отправка «Рассчитать стоимость» (без PDF) — переименовано ===== */
-  const [busy, setBusy] = useState(false);
-  async function handleSend() {
-    // Теперь это тоже «Рассчитать стоимость»: генерим и отправляем PDF (как в «Заказ списком»)
-    await onSavePdfInternal();
-  }
+  const hintStyle: React.CSSProperties = { fontSize: 12, opacity: 0.85, margin: "4px 12px 12px" };
 
   return (
     <div style={{ width: "100%", maxWidth: 600, margin: "0 auto" }}>
-      <EditableOrderSummary orderNo={orderNo} onOpenSimple={() => setSimpleOpen(true)} />
+      {/* Интегрированный TopBar */}
+      <TopBarWithIntro title="Memorial" />
 
-      {/* Эскизы */}
-      <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
-          {/* Лицевая — SketchTemplate */}
-          <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
-            <div style={{ fontWeight: 700 }}>Лицевая</div>
-            <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-              <div style={{ position: "absolute", inset: 0, zIndex: 1, padding: 0 }}>
-                <SketchTemplate
-                  item={item}
-                  peopleBlocks={peopleBlocks}
-                  crosses={selectedCrosses}
-                  others={selectedOthers}
-                  epitaphs={frontEpitaphs}
-                  carvingOpacity={0.4}
-                />
-              </div>
-            </div>
-          </div>
+      {/* Кнопка — «Посмотреть состав заказа» (разворачиваем топбар) */}
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "8px 0 12px" }}>
+        <button type="button" onClick={openTopbar} style={linkLike()}>Посмотреть состав заказа</button>
+      </div>
 
-          {/* Тыльная — превью + контур изделия */}
-          {backSketchUrl && (
-            <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
-              <div style={{ fontWeight: 700 }}>Тыльная</div>
-              <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-                {itemUrl && (
-                  <img
-                    src={itemUrl}
-                    alt=""
-                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", opacity: 0.22, filter: "grayscale(100%) contrast(180%) brightness(180%)", zIndex: 0, pointerEvents: "none" }}
-                  />
-                )}
-                <img
-                  src={backSketchUrl}
-                  alt=""
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1, pointerEvents: "none" }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Выбрано для плиты */}
+      {/* Если для плиты выбраны элементы — показываем сверху */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
         <section style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ ...sectionBox }}>
@@ -1130,14 +864,9 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             {chosenPlateList.length > 0 && (
               <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
-                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                    <button type="button" onClick={() => setPlateIds((prev) => {
-                      const idx = prev.indexOf(g.id || g.url || "");
-                      if (idx === -1) return prev;
-                      const next = prev.slice(); next.splice(idx, 1); return next;
-                    })} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -1145,11 +874,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             {plateEpitaphList.length > 0 && (
               <div style={{ display: "grid", gap: 6 }}>
                 {plateEpitaphList.map((t, idx) => (
-                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8 }}>
+                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, display: "grid", gridTemplateColumns: "1fr", gap: 8, alignItems: "center", padding: 8 }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button type="button" onClick={() => {
-                      const arr = plateEpitaphList.slice(); arr.splice(idx, 1); setPlateEpitaph(arr.join("\n\n"));
-                    }} style={glassButtonStyle("nano")}>Удалить</button>
                   </div>
                 ))}
               </div>
@@ -1158,7 +884,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         </section>
       )}
 
-      {/* Дополнительно */}
+      {/* Блок «Дополнительно» */}
       <ExtrasSection
         extraBase={extraBase} setExtraBase={setExtraBase}
         extraFlowerbed={extraFlowerbed} setExtraFlowerbed={setExtraFlowerbed}
@@ -1175,8 +901,39 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         plateIds={plateIds}
       />
 
-      {/* Примечания */}
-      <section style={{ ...glassPanelStyle(), padding: 12 }}>
+      {/* Эскиз лицевой */}
+      <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Эскиз — лицевая</div>
+        <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
+          <div id="pdf-front-sketch" style={{ position: "absolute", inset: 0, zIndex: 1, padding: 0 }}>
+            <SketchTemplate
+              item={item}
+              peopleBlocks={peopleBlocks}
+              crosses={selectedCrosses}
+              others={selectedOthers}
+              epitaphs={frontEpitaphs}
+              carvingOpacity={0.4}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Эскиз тыльной (если есть) */}
+      {backSketchUrl && (
+        <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Эскиз — тыльная</div>
+          <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
+            <img
+              src={backSketchUrl}
+              alt=""
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", zIndex: 1, pointerEvents: "none" }}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Примечание к заказу */}
+      <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
         <textarea id="order-notes" rows={3} defaultValue={extras0.orderNotes || ""} onBlur={(e) => {
           const prev = loadOrderDraft();
@@ -1186,68 +943,35 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
       </section>
 
-      {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
-
-      {/* Кнопки — Переименовано в «Рассчитать стоимость» */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
-        <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>Назад</button>
-        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf || sendingPdf}>{sendingPdf ? "Готовим…" : "Рассчитать стоимость"}</button>
-        <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим…" : "Заказ списком"}</button>
+      {/* Подсказка */}
+      <div style={hintStyle}>
+        Не беспокойтесь: даже при отсутствии нужного пункта финальное подтверждение — по телефону или лично.
       </div>
 
-      {/* Оверлей «Заказ списком» */}
-      {simpleOpen && (
-        <PrintOverlay
-          onClose={() => setSimpleOpen(false)}
-          onSavePdf={onSavePdfInternal}
-          onSendCost={onSavePdfInternal}
-          orderNo={orderNo}
-          name={(loadIntroState().intro?.customerName || "").trim()}
-          phone={(loadIntroState().intro?.customerPhone || "").trim()}
-          frontSketch={
-            <SketchTemplate
-              item={item}
-              peopleBlocks={peopleBlocks}
-              crosses={selectedCrosses}
-              others={selectedOthers}
-              epitaphs={frontEpitaphs}
-              carvingOpacity={0.4}
-            />
-          }
-          previewBack={backSketchUrl || ""}
-          frontData={{
-            persons: frontPersons.map((p: any) => ({
-              id: p.id,
-              fio1: (p.lastName || "").trim(),
-              fio2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
-              dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — "),
-              photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || ""
-            })),
-            graphics: frontGraphicsWithThumbs,
-            epitaphs: frontEpitaphs.slice()
-          }}
-          rearData={{
-            graphics: rearGraphicsWithThumbs,
-            epitaphs: rearEpitaphs.slice()
-          }}
-          extras={{ base: extraBase, flowerbed: extraFlowerbed }}
-          plate={{
-            enabled: extraPlate,
-            size: extraPlate ? plateSize : undefined,
-            thickness: extraPlate ? plateThickness : undefined,
-            graphics: plateGraphicsWithThumbs,
-            epitaph: (plateEpitaph || "").trim()
-          }}
-          notes={(extras0.orderNotes || "").trim()}
-          aspect={aspect}
+      {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
+
+      {/* Кнопки */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
+        <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>Назад</button>
+        <button type="button" onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>
+          Рассчитать стоимость
+        </button>
+      </div>
+
+      {/* Модалка подтверждения */}
+      {confirmOpen && (
+        <ConfirmSendModal
+          onClose={() => setConfirmOpen(false)}
+          onSavePdf={() => runCreatePdf(false)}
+          onSend={() => runCreatePdf(true)}
         />
       )}
 
       {/* Модалка «Отправлено» */}
-      {sentModalOpen && (
+      {sentOpen && (
         <SentModal
-          onClose={() => setSentModalOpen(false)}
-          onNew={goNewOrder}
+          onClose={() => setSentOpen(false)}
+          onNew={() => { if (typeof window !== "undefined") window.location.href = "/"; }}
         />
       )}
     </div>
