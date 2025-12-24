@@ -1,25 +1,22 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Что реализовано:
-// - Центрирование (max-width: 600px).
-// - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
-// - Адаптив: ≤600px — 1 столбец, иначе — 2 (если есть тыльная).
-// - Галерея графики (плита) — минимум 2 столбца (адаптив).
-// - «Выбрано для плиты» — показываем только при наличии выбранных.
-// - «Заказ списком» (оверлей):
-//   • три колонки (Усопшие / Графика / Эпитафии) и миниатюры 70×70 для лицевой, тыльной и плиты,
-//   • кнопка «Сохранить PDF»: PDF 1512×2138 px, шрифт Century Schoolbook:
-//       - Bold — для метрик (ФИО, даты, параметры, названия),
-//       - Bold Italic — для эпитафий,
-//     весь заказ целиком, эскизы (лицевая — через DOM->PNG), отдельные страницы с фото усопших (при необходимости);
-//     PDF скачивается локально и отправляется на /api/send-order-pdf (если настроен сервер).
+// Изменения по задаче:
+// - PDF: как в «Заказе списком» (3 колонки), оба эскиза — на той же странице,
+//   прикреплённые фото — на отдельных страницах после состава заказа.
+// - Кнопка «Оформить заказ» переименована в «Рассчитать стоимость» (и на главной, и в «Заказе списком»).
+// - В «Заказе списком» добавлена отдельная кнопка «Рассчитать стоимость» — отправляет PDF в админ-чат.
+// - После отправки показываем оверлей с сообщением и кнопками: [×] (закрыть) и «Новый заказ» (переход на начало).
+// - Исправлено: при редактировании имени/телефона/примечания «съедается» последняя буква —
+//   теперь сохраняем по onBlur (без автообновления во время ввода).
+// - Шрифт PDF: Century Schoolbook (Bold — для метрик/заголовков; Bold Italic — для эпитафий).
+//   Положите TTF-файлы в /public/fonts:
+//     /public/fonts/CenturySchoolbook-Bold.ttf
+//     /public/fonts/CenturySchoolbook-BoldItalic.ttf
+//   Если отсутствуют — будет fallback на helvetica (латиница).
 //
-// Важно по шрифтам:
-// - Положите файлы шрифтов в /public/fonts/:
-//   /public/fonts/CenturySchoolbook-Bold.ttf
-//   /public/fonts/CenturySchoolbook-BoldItalic.ttf
-// - Если шрифты недоступны, будет fallback на helvetica (латиница).
+// Примечание: чтобы миниатюры/фото попали в PDF, их URL должны быть доступны браузеру с CORS.
+// Иначе вставим только подписи, игнорируя саму картинку (без падения).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -74,15 +71,15 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание Century Schoolbook (Bold, BoldItalic) ===== */
-let csFontReady = false;
+/* ===== Встраивание Century Schoolbook (Bold, Bold Italic) ===== */
+let csFontReady = false; // оба начертания готовы
 async function ensureCenturyFonts(doc: any) {
   if (csFontReady) return;
-  const REG_CAND = [
-    "/fonts/CenturySchoolbook-Bold.ttf"
+  const BOLD_CAND = [
+    "/fonts/CenturySchoolbook-Bold.ttf",
   ];
-  const IT_CAND = [
-    "/fonts/CenturySchoolbook-BoldItalic.ttf"
+  const BOLD_IT_CAND = [
+    "/fonts/CenturySchoolbook-BoldItalic.ttf",
   ];
   async function fetchTtfToBase64(url: string): Promise<string | null> {
     try {
@@ -102,7 +99,7 @@ async function ensureCenturyFonts(doc: any) {
     }
     return null;
   }
-  const [boldB64, boldItB64] = await Promise.all([firstOk(REG_CAND), firstOk(IT_CAND)]);
+  const [boldB64, boldItB64] = await Promise.all([firstOk(BOLD_CAND), firstOk(BOLD_IT_CAND)]);
   if (boldB64) {
     doc.addFileToVFS("CenturySchoolbook-Bold.ttf", boldB64);
     doc.addFont("CenturySchoolbook-Bold.ttf", "CenturySchoolbook", "bold");
@@ -113,7 +110,7 @@ async function ensureCenturyFonts(doc: any) {
   }
   csFontReady = !!(boldB64 && boldItB64);
   if (!csFontReady) {
-    console.warn("Century Schoolbook TTF не найден в /public/fonts. Fallback на helvetica.");
+    console.warn("Century Schoolbook TTF не найден в /public/fonts. В PDF будет fallback на helvetica.");
   }
 }
 
@@ -164,21 +161,23 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== Шапка (номер заказа + контакты + «Заказ списком») ===== */
+/* ===== Шапка: номер заказа + контакты + «Заказ списком» ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
-  const intro = loadIntroState();
-  const [name, setName] = useState<string>(intro.intro?.customerName || "");
-  const [phone, setPhone] = useState<string>(intro.intro?.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(intro.intro?.customerNotes || "");
-  const t = useRef<number | null>(null);
-  const debSave = () => {
-    if (t.current) clearTimeout(t.current);
-    t.current = window.setTimeout(() => {
-      const next: Intro = { customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined };
-      saveIntro(next, { lock: false });
-    }, 250) as unknown as number;
+  // Локальное состояние без автосохранения на onChange (сохраняем на onBlur) — чтобы не «съедались» буквы
+  const introInitial = loadIntroState().intro || {};
+  const [name, setName] = useState<string>(introInitial.customerName || "");
+  const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
+
+  const saveOnBlur = () => {
+    const next: Intro = {
+      customerName: (name || "").trim(),
+      customerPhone: (phone || "").trim(),
+      customerNotes: (contactNotes || "").trim() || undefined
+    };
+    saveIntro(next, { lock: false });
   };
-  useEffect(() => () => { if (t.current) clearTimeout(t.current); }, []);
+
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -187,10 +186,29 @@ function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOp
         <button type="button" onClick={onOpenSimple} style={linkLike()}>Заказ списком</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input value={name} onChange={(e) => { setName(e.target.value); debSave(); }} placeholder="Имя" style={inputStyle()} />
-        <input value={phone} onChange={(e) => { setPhone(e.target.value); debSave(); }} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={saveOnBlur}
+          placeholder="Имя"
+          style={inputStyle()}
+        />
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          onBlur={saveOnBlur}
+          placeholder="+7..."
+          inputMode="tel"
+          style={inputStyle()}
+        />
       </div>
-      <input value={contactNotes} onChange={(e) => { setContactNotes(e.target.value); debSave(); }} placeholder="Примечание для связи…" style={inputStyle()} />
+      <input
+        value={contactNotes}
+        onChange={(e) => setContactNotes(e.target.value)}
+        onBlur={saveOnBlur}
+        placeholder="Примечание для связи…"
+        style={inputStyle()}
+      />
     </section>
   );
 }
@@ -435,12 +453,14 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Оверлей «Заказ списком» — миниатюры 70×70, 3 колонки ===== */
+/* ===== Оверлей «Заказ списком» (три колонки), с кнопкой «Рассчитать стоимость» ===== */
 function PrintOverlay({
-  onClose, onSave, orderNo, name, phone, frontSketch, previewBack,
+  onClose, onSavePdf, onSendCost, orderNo, name, phone, frontSketch, previewBack,
   frontData, rearData, extras, plate, notes, aspect
 }: {
-  onClose: () => void; onSave: () => void;
+  onClose: () => void;
+  onSavePdf: () => void;      // Сохранить PDF (локально + попытка отправки)
+  onSendCost: () => void;     // Отправить PDF в админ-чат (тот же onSavePdf)
   orderNo: string; name: string; phone: string;
   frontSketch: React.ReactNode;
   previewBack?: string;
@@ -453,13 +473,14 @@ function PrintOverlay({
 }) {
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 9999, display: "grid", placeItems: "center", padding: 12 }}>
-      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm" }}>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
-          <button type="button" onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>Закрыть</button>
-          <button type="button" onClick={onSave} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
+      <div id="print-root" style={{ background: "#fff", color: "#000", width: "100%", maxWidth: "210mm", maxHeight: "95vh", overflow: "auto", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.55)", padding: "5mm", position: "relative" }}>
+        <div style={{ display: "flex", gap: 8, position: "sticky", top: 0, background: "#fff", paddingBottom: 6, justifyContent: "flex-end", zIndex: 2 }}>
+          <button type="button" onClick={onClose} title="Закрыть" style={{ width: 36, height: 36, borderRadius: 8, border: "1px solid #999", background: "#f0f0f0", cursor: "pointer" }}>×</button>
+          <button type="button" onClick={onSavePdf} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
+          <button type="button" onClick={onSendCost} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e5ffe5", cursor: "pointer" }}>Рассчитать стоимость</button>
         </div>
 
-        <div style={{ fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif", fontSize: 11, lineHeight: 1.25 }}>
+        <div style={{ fontFamily: "system-ui,-apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
           <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
 
@@ -554,7 +575,7 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
-          {/* Эскизы (DOM контейнер для лицевой — id="pdf-front-sketch") */}
+          {/* Эскизы на той же странице */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
@@ -573,6 +594,30 @@ function PrintOverlay({
             </div>
           </div>
 
+          {/* Примечания */}
+          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Примечания</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{notes || "—"}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===== Модалка «Отправлено менеджерам» ===== */
+function SentModal({ onClose, onNew }: { onClose: () => void; onNew: () => void }) {
+  return (
+    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.60)", zIndex: 10000, display: "grid", placeItems: "center", padding: 12 }}>
+      <div style={{ position: "relative", width: "100%", maxWidth: 420, background: "#fff", color: "#111", borderRadius: 12, padding: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        <button onClick={onClose} title="Закрыть" style={{ position: "absolute", top: 8, right: 8, width: 32, height: 32, borderRadius: 8, border: "1px solid #ccc", background: "#f7f7f7", cursor: "pointer" }}>×</button>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Ваш заказ отправлен менеджерам</div>
+        <div style={{ fontSize: 14, lineHeight: 1.4, marginBottom: 16 }}>
+          Мы просчитаем заказ и свяжемся с Вами в ближайшее время.
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onNew} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Новый заказ</button>
         </div>
       </div>
     </div>
@@ -587,12 +632,11 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   useEffect(() => {
     const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
+    // ВНИМАНИЕ: не подписываемся на "storage", чтобы не «дергать» поля ввода при печати символов
     window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
-    window.addEventListener("storage", refresh);
     refresh();
     return () => {
       window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
-      window.removeEventListener("storage", refresh);
     };
   }, []);
 
@@ -617,7 +661,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
     id: p.id || `p-${i}`,
     lines: personLines(p),
-    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
+    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null // прикреплённые фото
   })), [frontPersons]);
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
@@ -692,7 +736,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
       const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
-        const id = String(it.id || it.relPath || it.url || it.name || ""); if (!id) return;
+        const id = String(it.id || it.relPath || it.url || it.name || "");
+        if (!id) return;
         if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
       });
       collect(cat.items || []);
@@ -704,53 +749,42 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // Примечания
-  const [orderNotes, setOrderNotes] = useState<string>(extras0.orderNotes || "");
-  const notesTimer = useRef<number | null>(null);
-  const scheduleSaveOrderNotes = () => {
-    if (notesTimer.current) window.clearTimeout(notesTimer.current);
-    notesTimer.current = window.setTimeout(() => {
-      const prev = loadOrderDraft();
-      const extras: any = { ...(prev as any).extras, orderNotes: (orderNotes || "").trim() || undefined };
-      saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-      setDraft(loadOrderDraft());
-    }, 300) as unknown as number;
-  };
-  useEffect(() => () => { if (notesTimer.current) window.clearTimeout(notesTimer.current); }, []);
+  /* ===== Списки для «Заказ списком» и PDF ===== */
+  const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+  const rearCounts: Record<string, number> = useMemo(() => {
+    const m: Record<string, number> = {};
+    (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
+    return m;
+  }, [rearIds]);
+  const rearUnique = useMemo(() => {
+    const ids = Array.from(new Set(rearIds || []));
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+  }, [rearIds, rearMeta]);
+  const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
 
-  // Сохранение extras
-  useEffect(() => {
-    const prev = loadOrderDraft();
-    const prevExtras = ((prev as any).extras || {}) as any;
-    const extras: any = { ...prevExtras, base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate };
-    if (extraPlate) {
-      extras.plateSize = plateSize;
-      extras.plateCustomSize = plateSize === "Свой вариант" ? (plateCustomSize || undefined) : prevExtras.plateCustomSize;
-      extras.plateThickness = plateThickness;
-      extras.plateCustomThickness = plateThickness === "Свой вариант" ? (plateCustomThickness || undefined) : prevExtras.plateCustomThickness;
-      extras.plateOrientation = plateOrientation;
-      extras.plateEpitaph = (plateEpitaph || "").trim() || undefined;
-      extras.plateGraphicsIds = plateIds;
-      extras.plateGraphicsMeta = plateMeta;
-    }
-    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
-    setDraft(loadOrderDraft());
-  }, [extraBase, extraFlowerbed, extraPlate, plateSize, plateCustomSize, plateThickness, plateCustomThickness, plateOrientation, plateEpitaph, plateIds, plateMeta]);
+  const frontGraphicsWithThumbs = useMemo(() => {
+    return (allFrontGraphics || []).map((g: any) => ({
+      name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
+      qty: 1,
+      thumb: g.preview || g.url || null
+    }));
+  }, [allFrontGraphics]);
 
-  /* ===== Адаптив эскизов ===== */
-  const [oneCol, setOneCol] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(max-width: 600px)");
-    const update = () => setOneCol(!!mq.matches);
-    update();
-    if (mq.addEventListener) mq.addEventListener("change", update);
-    else (mq as any).addListener(update);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener("change", update);
-      else (mq as any).removeListener(update);
-    };
-  }, []);
+  const rearGraphicsWithThumbs = useMemo(() => {
+    return (rearUnique || []).map((g: any) => ({
+      name: g.name || g.id,
+      qty: rearCounts[g?.id || g?.url || g?.name] || 1,
+      thumb: g.url || null
+    }));
+  }, [rearUnique, rearCounts]);
+
+  const plateGraphicsWithThumbs = useMemo(() => {
+    return (chosenPlateList || []).map((g: any) => ({
+      name: g.name || g.id,
+      thumb: g.url || null
+    }));
+  }, [chosenPlateList]);
 
   /* ===== Инструменты для PDF ===== */
   async function urlToDataUrl(url?: string | null): Promise<string | null> {
@@ -793,16 +827,17 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const jsPDF = await ensureJsPdf();
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
     await ensureCenturyFonts(doc);
-    const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
+    const FONT_BASE = csFontReady ? "CenturySchoolbook" : "helvetica";
 
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const margin = 48;
     const contentW = pageW - margin * 2;
+    const contentH = pageH - margin * 2;
     let y = margin;
 
     const setFont = (style: "bold" | "bolditalic", size: number) => {
-      doc.setFont(FONT, style);
+      doc.setFont(FONT_BASE, style);
       doc.setFontSize(size);
     };
     const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
@@ -814,7 +849,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         doc.text(ln, margin, y); y += 34;
       }
     };
-    const addMetric = (t: string, sz = 22) => { // метрики (ФИО/даты/параметры): Bold
+    const addMetric = (t: string, sz = 22) => {
       setFont("bold", sz);
       const lh = Math.round(sz * 1.25);
       const lines = doc.splitTextToSize(t, contentW);
@@ -823,7 +858,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         doc.text(ln, margin, y); y += lh;
       }
     };
-    const addEpitaph = (t: string, sz = 22) => { // эпитафии: Bold Italic
+    const addEpitaph = (t: string, sz = 22) => {
       setFont("bolditalic", sz);
       const lh = Math.round(sz * 1.25);
       const lines = doc.splitTextToSize(t, contentW);
@@ -847,7 +882,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     async function addThumbList(title: string, list: { name: string; qty?: number; thumb?: string | null }[]) {
       addMetric(title, 24);
       if (!list.length) { addMetric("—"); return; }
-      const rowH = 76; // ~70 + отступ
+      const rowH = 76;
       for (const it of list) {
         if (y + rowH > pageH - margin) { doc.addPage(); y = margin; }
         let x = margin;
@@ -866,7 +901,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       }
     }
 
-    // Header
+    // Шапка + состав заказа (3 колонки), ЭСКИЗЫ — на той же странице
     addTitle(`Заказ № ${options.orderNo || "—"}`);
     addMetric(`${options.customerName || "—"} · ${options.customerPhone || "—"}`);
 
@@ -917,78 +952,50 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
     addHr();
 
-    // Эскизы
+    // Эскизы (на той же странице)
     addTitle("Эскизы");
     await addImageFitted(options.imgFront || null, 560);
     await addImageFitted(options.imgBack || null, 560);
 
+    // Прикреплённые фото — отдельные страницы
+    const photos = (options.frontPersons || []).map((p) => p.photo).filter(Boolean) as string[];
+    if (photos.length) {
+      for (let i = 0; i < photos.length; i++) {
+        doc.addPage();
+        y = margin;
+        addTitle(`Фото ${i + 1}`);
+        // Вписать по высоте контентной области
+        const data = await urlToDataUrl(photos[i]);
+        if (data) {
+          const fmt = /^data:image\/png/i.test(data) ? "PNG" : "JPEG";
+          const im = new Image();
+          await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+          const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+          if (iw && ih) {
+            const scale = Math.min(contentW / iw, (contentH - 20) / ih, 1);
+            const w = Math.round(iw * scale), h = Math.round(ih * scale);
+            const x = margin + Math.max(0, (contentW - w) / 2);
+            doc.addImage(data, fmt, x, y, w, h, undefined, "FAST");
+          }
+        } else {
+          addMetric("—");
+        }
+      }
+    }
+
     return doc.output("blob");
   }
 
-  async function sendPdfToServer(pdf: Blob, meta: any) {
-    try {
-      const fd = new FormData();
-      fd.append("pdf", pdf, `order-${meta?.orderNo || Date.now()}.pdf`);
-      fd.append("payload", JSON.stringify(meta || {}));
-      const res = await fetch("/api/send-order-pdf", { method: "POST", body: fd });
-      if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        throw new Error(`Не удалось отправить PDF: ${t || res.statusText}`);
-      }
-    } catch (e) {
-      console.warn(e);
-      alert("PDF сохранён локально. Отправка менеджеру недоступна (endpoint /api/send-order-pdf).");
-    }
-  }
-
-  /* ===== Списки для «Заказ списком» и PDF ===== */
-  const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-  const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-  const rearCounts: Record<string, number> = useMemo(() => {
-    const m: Record<string, number> = {};
-    (rearIds || []).forEach((id) => (m[id] = (m[id] || 0) + 1));
-    return m;
-  }, [rearIds]);
-  const rearUnique = useMemo(() => {
-    const ids = Array.from(new Set(rearIds || []));
-    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "" });
-  }, [rearIds, rearMeta]);
-  const rearEpitaphs: string[] = useMemo(() => ((((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean)), [draft]);
-
-  const frontGraphicsWithThumbs = useMemo(() => {
-    return (allFrontGraphics || []).map((g: any) => ({
-      name: g.name || (g.url ? decodeURIComponent(g.url.split("/").pop() || "") : g.id || ""),
-      qty: 1,
-      thumb: g.preview || g.url || null
-    }));
-  }, [allFrontGraphics]);
-
-  const rearGraphicsWithThumbs = useMemo(() => {
-    return (rearUnique || []).map((g: any) => ({
-      name: g.name || g.id,
-      qty: rearCounts[g?.id || g?.url || g?.name] || 1,
-      thumb: g.url || null
-    }));
-  }, [rearUnique, rearCounts]);
-
-  const plateGraphicsWithThumbs = useMemo(() => {
-    return (chosenPlateList || []).map((g: any) => ({
-      name: g.name || g.id,
-      thumb: g.url || null
-    }));
-  }, [chosenPlateList]);
-
-  /* ===== Сохранение PDF ===== */
+  /* ===== UI: «Заказ списком» / Отправка / Сохранение ===== */
   const [simpleOpen, setSimpleOpen] = useState(false);
   const [sendingPdf, setSendingPdf] = useState(false);
+  const [sentModalOpen, setSentModalOpen] = useState(false);
   const [err, setErr] = useState<string>("");
 
-  async function onSavePdf() {
+  async function onSavePdfInternal() {
     try {
       setSendingPdf(true); setErr("");
-
-      // Дать оверлею отрендериться
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 120)); // дать дорисовать DOM
 
       const orderNo = String(introState.orderNumber || "").trim();
       const name = (loadIntroState().intro?.customerName || "").trim();
@@ -1031,7 +1038,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
 
-      // Отправить менеджеру (если endpoint есть)
+      // Отправить в админ-чат (бэкенд)
       await sendPdfToServer(pdfBlob, {
         orderNo,
         intro: loadIntroState().intro || {},
@@ -1042,8 +1049,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         }
       });
 
-      alert("PDF сохранён. Если сервер настроен, менеджеру отправлено.");
       setSimpleOpen(false);
+      setSentModalOpen(true);
     } catch (e: any) {
       console.error(e);
       setErr(e?.message || "Не удалось сформировать/отправить PDF.");
@@ -1052,43 +1059,20 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     }
   }
 
-  /* ===== Отправка заявки без PDF ===== */
+  function goNewOrder() {
+    // Очистка драфта/интро при необходимости:
+    // localStorage.removeItem('...') — по вашему ключу.
+    // Переход на начальную:
+    if (typeof window !== "undefined") {
+      window.location.href = "/"; // подстройте под ваш роутинг
+    }
+  }
+
+  /* ===== Отправка «Рассчитать стоимость» (без PDF) — переименовано ===== */
   const [busy, setBusy] = useState(false);
   async function handleSend() {
-    setBusy(true); setErr("");
-    const attachments: any = {
-      frontPreview: null,
-      backPreview: backSketchUrl || null,
-      itemUrl: null,
-      plateGraphics: chosenPlateList
-    };
-    const extras: Extras & {
-      base?: boolean; flowerbed?: boolean; headstonePlate?: boolean;
-      plateSize?: string; plateCustomSize?: string; plateThickness?: string; plateCustomThickness?: string; plateOrientation?: string; plateEpitaph?: string; plateGraphicsIds?: string[];
-      orderNo?: string; orderNotes?: string; attachments?: any;
-    } = {
-      base: extraBase,
-      flowerbed: extraFlowerbed,
-      headstonePlate: extraPlate,
-      plateSize: extraPlate ? plateSize : undefined,
-      plateCustomSize: extraPlate && plateSize === "Свой вариант" ? plateCustomSize : undefined,
-      plateThickness: extraPlate ? plateThickness : undefined,
-      plateCustomThickness: extraPlate && plateThickness === "Свой вариант" ? plateCustomThickness : undefined,
-      plateOrientation: extraPlate ? plateOrientation : undefined,
-      plateEpitaph: extraPlate ? (plateEpitaph || "").trim() || undefined : undefined,
-      plateGraphicsIds: extraPlate ? plateIds : undefined,
-      orderNo,
-      orderNotes: (orderNotes || "").trim() || undefined,
-      attachments
-    };
-    try {
-      await sendOrderEmailAndNotifyTg(extras);
-      const nm = (loadIntroState().intro?.customerName || "").trim() || "Заказчик";
-      alert(`${nm}, Ваш заказ принят. Мы свяжемся с вами.`);
-      onSend?.({ extras });
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка отправки. Попробуйте ещё раз.");
-    } finally { setBusy(false); }
+    // Теперь это тоже «Рассчитать стоимость»: генерим и отправляем PDF (как в «Заказ списком»)
+    await onSavePdfInternal();
   }
 
   return (
@@ -1097,7 +1081,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
       {/* Эскизы */}
       <section id="section-previews" style={{ ...glassPanelStyle(), padding: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: backSketchUrl && !oneCol ? "1fr 1fr" : "1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: backSketchUrl ? "1fr 1fr" : "1fr", gap: 12 }}>
           {/* Лицевая — SketchTemplate */}
           <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
             <div style={{ fontWeight: 700 }}>Лицевая</div>
@@ -1194,23 +1178,29 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       {/* Примечания */}
       <section style={{ ...glassPanelStyle(), padding: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Примечание к заказу</label>
-        <textarea id="order-notes" rows={3} value={orderNotes} onChange={(e) => { setOrderNotes(e.target.value); scheduleSaveOrderNotes(); }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
+        <textarea id="order-notes" rows={3} defaultValue={extras0.orderNotes || ""} onBlur={(e) => {
+          const prev = loadOrderDraft();
+          const extras: any = { ...(prev as any).extras, orderNotes: (e.target.value || "").trim() || undefined };
+          saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+          setDraft(loadOrderDraft());
+        }} placeholder="Любые замечания к заказу…" style={{ ...inputStyle(), resize: "vertical" }} />
       </section>
 
       {err && <div style={{ ...glassPanelStyle(), padding: 12, color: "#ffb4b4" }}>{err}</div>}
 
-      {/* Кнопки */}
+      {/* Кнопки — Переименовано в «Рассчитать стоимость» */}
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>Назад</button>
-        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{busy ? "Отправляем…" : "Оформить заказ"}</button>
-        <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим PDF…" : "Заказ списком"}</button>
+        <button type="button" onClick={handleSend} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf || sendingPdf}>{sendingPdf ? "Готовим…" : "Рассчитать стоимость"}</button>
+        <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим…" : "Заказ списком"}</button>
       </div>
 
       {/* Оверлей «Заказ списком» */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
-          onSave={onSavePdf}
+          onSavePdf={onSavePdfInternal}
+          onSendCost={onSavePdfInternal}
           orderNo={orderNo}
           name={(loadIntroState().intro?.customerName || "").trim()}
           phone={(loadIntroState().intro?.customerPhone || "").trim()}
@@ -1250,6 +1240,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           }}
           notes={(extras0.orderNotes || "").trim()}
           aspect={aspect}
+        />
+      )}
+
+      {/* Модалка «Отправлено» */}
+      {sentModalOpen && (
+        <SentModal
+          onClose={() => setSentModalOpen(false)}
+          onNew={goNewOrder}
         />
       )}
     </div>
