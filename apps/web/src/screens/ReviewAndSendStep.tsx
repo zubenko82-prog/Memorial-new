@@ -2,7 +2,7 @@
 // Обзор и подтверждение (без TopBar).
 //
 // Реализовано:
-// - Центрирование контента (max-width: 600px).
+// - Центрирование (max-width: 600px).
 // - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
 // - Адаптив: ≤600px — 1 столбец, иначе — 2 (если есть тыльная).
 // - Галерея графики (плита) — минимум 2 столбца.
@@ -74,10 +74,12 @@ function glassPanelStyle(): React.CSSProperties {
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
   const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
-    padding: map[size], borderRadius: 12,
+    padding: map[size],
+    borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
     background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
-    color: "#fff", cursor: disabled ? "not-allowed" : "pointer",
+    color: "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1
@@ -365,7 +367,7 @@ function PlateBlock(props: {
                   const setToggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
                   return (
                     <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={setToggle}>
-                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic} />
+                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
                       {(cat.children || []).map((sub: any, j: number) => (
                         <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
@@ -384,7 +386,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Оверлей «Заказ списком» (миниатюры 70×70, кнопка «Сохранить PDF») ===== */
+/* ===== Оверлей «Заказ списком» — миниатюры 70×70 и кнопка «Сохранить PDF» ===== */
 function PrintOverlay({
   onClose, onSave, orderNo, name, phone, frontSketch, previewBack,
   frontData, rearData, extras, plate, notes, aspect
@@ -467,7 +469,7 @@ function PrintOverlay({
                     {rearData.graphics.length ? rearData.graphics.map((g, i) => (
                       <div key={`rg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
                         {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                        <div>{g.name}{g.qty > 1 ? ` ×${г.qty}` : ""}</div>
+                        <div>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
                       </div>
                     )) : <div>—</div>}
                   </div>
