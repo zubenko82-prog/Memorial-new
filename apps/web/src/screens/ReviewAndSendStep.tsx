@@ -2,16 +2,16 @@
 // Обзор и подтверждение (без TopBar).
 //
 // Реализовано:
-// - Центрирование страницы, max-width: 600px.
+// - Центрирование контента (max-width: 600px).
 // - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
-// - Адаптив: ≤600px — 1 столбец эскизов, иначе — 2 (если есть тыльная).
-// - Галерея графики для плиты — минимум 2 столбца, адаптив.
-// - «Выбрано для плиты» — показываем только, если есть выбранные позиции.
-// - «Заказ списком»:
-//   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная),
-//   • кнопка «Сохранить PDF»: PDF 1512×2138 px (единицы px), корректная кириллица (Noto Sans из GitHub),
-//     все данные заказа + эскизы; на отдельных страницах — прикреплённые фото усопших,
-//     сохранение локально и отправка PDF в /api/send-order-pdf (Telegram + Email).
+// - Адаптив: ≤600px — 1 столбец, иначе — 2 (если есть тыльная).
+// - Галерея графики (плитa) — минимум 2 столбца.
+// - «Выбрано для плиты» — показываем только при наличии выбранных.
+// - «Заказ списком» (оверлей):
+//   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная);
+//   • «Сохранить PDF»: PDF 1512×2138 px, со встроенным шрифтом Noto Sans (Unicode, корректная кириллица),
+//     весь заказ целиком, эскизы, отдельные страницы с прикреплёнными фото усопших;
+//     скачиваем локально и отправляем в /api/send-order-pdf (менеджеру в Telegram и на email).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -30,10 +30,10 @@ async function ensureJsPdf(): Promise<any> {
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
   const CDN = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
   await new Promise<void>((res, rej) => {
-    const ex = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
-    if (ex) {
-      ex.addEventListener("load", () => res(), { once: true });
-      ex.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
+    const exist = document.querySelector<HTMLScriptElement>(`script[src="${CDN}"]`);
+    if (exist) {
+      exist.addEventListener("load", () => res(), { once: true });
+      exist.addEventListener("error", () => rej(new Error("jspdf load error")), { once: true });
       return;
     }
     const s = document.createElement("script");
@@ -118,7 +118,7 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== Шапка (номер заказа + контакты + ссылка) ===== */
+/* ===== Шапка (номер заказа + контакты + «Заказ списком») ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
   const intro = loadIntroState();
   const [name, setName] = useState<string>(intro.intro?.customerName || "");
@@ -433,7 +433,7 @@ function PrintOverlay({
                     {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
                     <div>
                       {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
-                      {p.fio2 && <div>{п.fio2}</div>}
+                      {p.fio2 && <div>{p.fio2}</div>}
                       {p.dates && <div>{p.dates}</div>}
                     </div>
                   </div>
@@ -824,8 +824,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       });
     } else addText("—");
     addText("Графика", 24, true);
-    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`));
-    else addText("—");
+    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`)); else addText("—");
     addText("Эпитафии", 24, true);
     if (options.frontEpitaphs.length) options.frontEpitaphs.forEach((t) => addText(t)); else addText("—");
 
@@ -964,7 +963,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 
-      // Отправить менеджеру (Telegram + Email)
+      // Отправить менеджеру
       await sendPdfToServer(pdfBlob, {
         orderNo,
         intro: loadIntroState().intro || {},
@@ -1082,7 +1081,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             </div>
           </div>
 
-          {/* Тыльная — превью + контур */}
+          {/* Тыльная — превью + контур изделия */}
           {backSketchUrl && (
             <div style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 6 }}>
               <div style={{ fontWeight: 700 }}>Тыльная</div>
