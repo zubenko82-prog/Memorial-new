@@ -1,15 +1,18 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
 //
-// Обновлено:
-// - Гарантированная синхронизация драфта и интро при ЛЮБОМ переходе/возврате/фокусе:
-//   слушаем: DRAFT_UPDATED_EVENT, 'memorial:orderDraftUpdated', 'storage', 'visibilitychange',
-//   'focus', 'pageshow', 'popstate', 'hashchange' и выполняем refreshAll().
-// - Интро (имя/телефон/примечание) теперь в state и тоже обновляется в refreshAll().
-// - При неактивном редактировании локальные поля синхронизируются из актуального draf/intros.
-// - После сохранений (saveAll/clear) форсим локальный бродкаст DRAFT_UPDATED_EVENT.
+// По задаче:
+// - В шапке (сверху) вместо номера показываем имя.
+// - Номер заказа показываем внутри раскрытой панели — под кнопками «Стиль» и «Редактировать».
+// - Внизу панели добавляем блок «Надгробная плита — выбрано» с элементами, выбранными на шаге ReviewAndSendStep.tsx.
+// - Гарантированная синхронизация драфта и интро (как было в вашей версии).
 //
-// Остальное — без изменений.
+// Примечание: блок плиты берёт данные из order.extras:
+//   • headstonePlate (boolean)
+//   • plateGraphicsIds: string[]
+//   • plateGraphicsMeta: Record<string, { id, name, url? }>
+//   • plateEpitaph: string
+//   • plateSize / plateThickness / plateOrientation — при наличии тоже показываем.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -242,7 +245,7 @@ function useCollapse(open: boolean, duration = 280) {
   return { ref, style };
 }
 
-/* ===== Форматтеры (ориентацию не выводим) ===== */
+/* ===== Форматтеры ===== */
 function mmToCm(mm?: number): number | undefined {
   if (typeof mm !== "number" || !isFinite(mm)) return undefined;
   return mm / 10;
@@ -259,14 +262,14 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
   const compact = useCompact(420);
 
-  // ВАЖНО: интро теперь тоже в state (обновляем на каждом refreshAll)
+  // Интро и номер (в state)
   const [introData, setIntroData] = useState(() => loadIntroState());
   const intro = introData.intro;
   const orderNumber = introData.orderNumber || "—";
 
   const [order, setOrder] = useState<OrderDraft>(() => loadOrderDraft());
 
-  // Поля редактирования (редактируем «на месте»)
+  // Поля редактирования
   const [name, setName] = useState(intro?.customerName || "");
   const [phone, setPhone] = useState(intro?.customerPhone || "");
   const [contactNotes, setContactNotes] = useState(intro?.customerNotes || "");
@@ -282,12 +285,10 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
   // Единая синхронизация драфта/интро
   const refreshAll = React.useCallback((opts?: { force?: boolean }) => {
-    // Загружаем актуальные данные из стора
     const freshOrder = loadOrderDraft();
     const freshIntroState = loadIntroState();
 
     setOrder((prev) => {
-      // Обновляем state всегда, если объект изменился или принудительно
       if (opts?.force || JSON.stringify(prev) !== JSON.stringify(freshOrder)) {
         return freshOrder;
       }
@@ -301,7 +302,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       return prev;
     });
 
-    // Если не редактируем — синхронизируем локальные поля с актуальными данными
     if (!editing) {
       const i = freshIntroState.intro || {};
       setName(i.customerName || "");
@@ -320,7 +320,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     }
   }, [editing]);
 
-  // Подписки на ВСЕ ключевые сигналы: любое переключение шага/фокус/возврат ивентами
   useEffect(() => {
     const onAny = () => refreshAll();
     const onVisible = () => { if (document.visibilityState === "visible") refreshAll(); };
@@ -328,21 +327,18 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     window.addEventListener("storage", onAny);
     window.addEventListener("memorial:orderDraftUpdated", onAny as any);
     window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
-
     window.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onAny);
     window.addEventListener("pageshow", onAny as any);
     window.addEventListener("popstate", onAny);
     window.addEventListener("hashchange", onAny);
 
-    // Первичный принудительный рефреш (на всякий случай — после монтирования)
     refreshAll({ force: true });
 
     return () => {
       window.removeEventListener("storage", onAny);
       window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
       window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
-
       window.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onAny);
       window.removeEventListener("pageshow", onAny as any);
@@ -351,22 +347,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     };
   }, [refreshAll]);
 
-  // Подтянуть стор при раскрытии панели
   useEffect(() => {
-    if (open) {
-      refreshAll({ force: true });
-    }
+    if (open) refreshAll({ force: true });
   }, [open, refreshAll]);
 
-  // Контакты в одну строку (отображение)
-  const contactLine = useMemo(() => {
-    const a = (editing ? name : intro?.customerName) || "";
+  // Линия контактная: теперь только телефон (чтобы в шапке не дублировать имя)
+  const phoneLine = useMemo(() => {
     const b = (editing ? phone : intro?.customerPhone) || "";
-    if (!a && !b) return "";
-    if (!a) return b;
-    if (!b) return a;
-    return `${a} • ${b}`;
-  }, [editing, name, phone, intro?.customerName, intro?.customerPhone]);
+    return b;
+  }, [editing, phone, intro?.customerPhone]);
 
   // Графика (лицевая)
   const frontGraphics = (order.graphics || []) as any[];
@@ -416,7 +405,22 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     (rearEpitaphs && rearEpitaphs.length > 0) ||
     (backWishes && backWishes.trim().length > 0);
 
-  // Сохранение: глубокий merge + явная защита persons
+  // Данные по надгробной плите из extras (ReviewAndSendStep)
+  const extras: any = (order as any)?.extras || {};
+  const plateEnabled: boolean = !!extras.headstonePlate;
+  const plateIds: string[] = (extras.plateGraphicsIds as string[]) || [];
+  const plateMeta: Record<string, any> = (extras.plateGraphicsMeta as Record<string, any>) || {};
+  const plateEpitaph: string = (extras.plateEpitaph as string) || "";
+  const plateSize = extras.plateSize as string | undefined;
+  const plateThickness = extras.plateThickness as string | undefined;
+  const plateOrientation = extras.plateOrientation as string | undefined;
+
+  const plateChosen = useMemo(() => {
+    const uniq = Array.from(new Set(plateIds || []));
+    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
+  }, [plateIds, plateMeta]);
+
+  // Сохранение
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
     const introNext: Intro = {
@@ -444,7 +448,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     const stored = saveOrderDraft(next);
     setOrder(stored);
 
-    // Форсируем локальный бродкаст, чтобы все шаги немедленно подтянулись
     try {
       window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
       window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
@@ -492,37 +495,24 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           <span style={{ fontSize: compact ? 18 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
         </div>
 
-        {/* Справа — № + строка контактов */}
+        {/* Справа — ИМЯ + телефон (вместо номера) */}
         <div style={{ display: "grid", gap: 3, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
-          <div style={{ fontSize: compact ? 12 : 13, opacity: 0.98, whiteSpace: "nowrap" }}>№ {orderNumber}</div>
-          {!compact && (contactLine && !editing) && (
+          <div style={{ fontSize: compact ? 14 : 16, fontWeight: 700, whiteSpace: "nowrap", maxWidth: "56vw", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {(editing ? name : intro?.customerName) || "—"}
+          </div>
+          {phoneLine && (
             <div
               style={{
-                fontSize: 13,
+                fontSize: compact ? 12 : 13,
                 opacity: 0.92,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                maxWidth: "50vw"
+                maxWidth: compact ? "56vw" : "50vw"
               }}
-              title={contactLine}
+              title={phoneLine}
             >
-              {contactLine}
-            </div>
-          )}
-          {compact && (contactLine && !editing) && (
-            <div
-              style={{
-                fontSize: 12,
-                opacity: 0.92,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: "56vw"
-              }}
-              title={contactLine}
-            >
-              {contactLine}
+              {phoneLine}
             </div>
           )}
         </div>
@@ -551,6 +541,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               {editing ? "Сохранить" : "Редактировать"}
             </button>
           </div>
+
+          {/* Номер заказа — под кнопками (когда панель раскрыта) */}
+          <div style={{ fontSize: 13, opacity: 0.9 }}>№ {orderNumber}</div>
 
           {/* Контакты */}
           {(editing || contactNotes.trim() || compact) && (
@@ -813,7 +806,51 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </section>
           )}
 
-          {/* Низ панели: действие «Очистить всё» */}
+          {/* Низ панели: НАДГРОБНАЯ ПЛИТА — выбранные элементы (из ReviewAndSendStep extras) */}
+          {plateEnabled && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита — выбрано</div>
+
+              {/* Параметры плиты */}
+              {(plateSize || plateThickness || plateOrientation) && (
+                <div style={{ marginBottom: 8, opacity: 0.95 }}>
+                  {plateSize && <div>Размер: {plateSize}</div>}
+                  {plateThickness && <div>Толщина: {plateThickness}</div>}
+                  {plateOrientation && <div>Ориентация: {plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
+                </div>
+              )}
+
+              {/* Графика плиты */}
+              <div style={{ display: "grid", gap: 8 }}>
+                {plateChosen.length > 0 ? (
+                  plateChosen.map((g: any, i: number) => (
+                    <div key={`plate-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                      <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                        {g.url ? (
+                          <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+                        ) : <div style={{ color: p.subText, fontSize: 11 }}>нет</div>}
+                      </div>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {g.name || g.id}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ color: p.subText }}>Графика не выбрана</div>
+                )}
+              </div>
+
+              {/* Эпитафии плиты */}
+              {plateEpitaph?.trim() && (
+                <div style={{ ...accentPanelStyle(theme), marginTop: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaph.trim()}</div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Действие «Очистить всё» */}
           <div style={{ marginTop: 2, paddingTop: 10, borderTop: p.divider, display: "flex", justifyContent: "center" }}>
             <button
               type="button"
@@ -829,7 +866,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 // сброс локальных полей
                 setName(""); setPhone(""); setContactNotes(""); setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
                 setFrontWishes(""); setBackWishes("");
-                // Сигнализируем всем шагам
                 try {
                   window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
                   window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
