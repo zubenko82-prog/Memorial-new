@@ -543,7 +543,7 @@ export default function GraphicsStep(props: any) {
 
   return (
     <div style={{ maxWidth: 600, margin: "0 auto", color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease" }}>
-      <TopBarWithIntro title="Memorial" />
+      <TopBarWithIntro title="Графика" />
 
       {/* Навигация — стиль EngravingStep */}
       <div

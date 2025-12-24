@@ -523,7 +523,7 @@ export default function EngravingStep({
       }}
     >
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
-        <TopBarWithIntro title="Memorial" />
+        <TopBarWithIntro title="Усопшие" />
 
         {/* Навигация (липкая, как раньше) */}
         <div

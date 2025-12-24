@@ -1681,7 +1681,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
-      <TopBarWithIntro title="Memorial" />
+      <TopBarWithIntro title="Тыл" />
 
       {/* Липкая навигация */}
       <div

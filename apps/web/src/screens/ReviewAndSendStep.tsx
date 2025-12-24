@@ -8,16 +8,14 @@
 // - Галерея графики (плита) — минимум 2 столбца (адаптив).
 // - «Выбрано для плиты» — показываем только при наличии выбранных.
 // - «Заказ списком» (оверлей):
-//   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная/плита — 3 колонки одинаково),
+//   • три колонки (Усопшие / Графика / Эпитафии) и миниатюры 70×70 для лицевой, тыльной и плиты;
 //   • «Сохранить PDF»: PDF 1512×2138 px, со встроенным Noto Sans (Unicode, корректная кириллица),
 //     весь заказ целиком, эскизы, отдельные страницы с прикреплёнными фото усопших;
 //     скачиваем локально и отправляем в /api/send-order-pdf (менеджеру в Telegram и на email).
 //
 // Исправлено:
-// - Ошибка ReferenceError из-за кириллических букв (п, г) вместо p, g.
-// - 404 шрифта: адреса NotoSans исправлены на /ofl/notosans/static/…
-//
-// ВАЖНО: Для миниатюр графики плиты в «Заказ списком» мы используем url из выбранных элементов.
+// - Ошибка ReferenceError из-за кириллических символов в коде (п, г) → заменены на латиницу.
+// - 404 у TTF из GitHub: теперь используем @fontsource (jsDelivr/unpkg), с фолбэком на helvetica (без кириллицы, но не падаем).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -50,28 +48,56 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание кириллического шрифта (Noto Sans STATIC) ===== */
-let fontReady = false;
+/* ===== Встраивание кириллического шрифта (Noto Sans @fontsource, с фолбэком) ===== */
+let fontReady = false; // true — шрифт добавлен и доступен как "NotoSans"
 async function ensureCyrillicFonts(doc: any) {
   if (fontReady) return;
-  // Статические файлы лежат в /ofl/notosans/static/
-  const REG = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/static/NotoSans-Regular.ttf";
-  const BLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/static/NotoSans-Bold.ttf";
-  async function fetchTtfToBase64(url: string): Promise<string> {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`Font fetch failed: ${url}`);
-    const ab = await r.arrayBuffer();
-    let binary = "";
-    const bytes = new Uint8Array(ab);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
+  // Несколько источников на случай падения одного
+  const REG_CAND = [
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans@5.0.8/files/noto-sans-cyrillic-400-normal.ttf",
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-cyrillic-400-normal.ttf",
+    "https://unpkg.com/@fontsource/noto-sans@5.0.8/files/noto-sans-cyrillic-400-normal.ttf",
+  ];
+  const BLD_CAND = [
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans@5.0.8/files/noto-sans-cyrillic-700-normal.ttf",
+    "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-cyrillic-700-normal.ttf",
+    "https://unpkg.com/@fontsource/noto-sans@5.0.8/files/noto-sans-cyrillic-700-normal.ttf",
+  ];
+  async function fetchTtfToBase64(url: string): Promise<string | null> {
+    try {
+      const r = await fetch(url, { mode: "cors" });
+      if (!r.ok) return null;
+      const ab = await r.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(ab);
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    } catch { return null; }
   }
-  const [regB64, bldB64] = await Promise.all([fetchTtfToBase64(REG), fetchTtfToBase64(BLD)]);
-  doc.addFileToVFS("NotoSans-Regular.ttf", regB64);
-  doc.addFileToVFS("NotoSans-Bold.ttf", bldB64);
-  doc.addFont("NotoSans-Regular.ttf", "NotoSans", "normal");
-  doc.addFont("NotoSans-Bold.ttf", "NotoSans", "bold");
-  fontReady = true;
+  async function firstOk(urls: string[]): Promise<string | null> {
+    for (const u of urls) {
+      const b64 = await fetchTtfToBase64(u);
+      if (b64) return b64;
+    }
+    return null;
+  }
+  try {
+    const [regB64, bldB64] = await Promise.all([firstOk(REG_CAND), firstOk(BLD_CAND)]);
+    if (regB64 && bldB64) {
+      doc.addFileToVFS("NotoSans-Regular.ttf", regB64);
+      doc.addFileToVFS("NotoSans-Bold.ttf", bldB64);
+      doc.addFont("NotoSans-Regular.ttf", "NotoSans", "normal");
+      doc.addFont("NotoSans-Bold.ttf", "NotoSans", "bold");
+      fontReady = true;
+    } else {
+      // Шрифты недоступны — работаем на helvetica (латиница), но не падаем.
+      fontReady = false;
+      console.warn("NotoSans fonts unavailable; fallback to helvetica (may break Cyrillic).");
+    }
+  } catch {
+    fontReady = false;
+    console.warn("Font embedding failed; fallback to helvetica.");
+  }
 }
 
 /* ===== UI helpers ===== */
@@ -96,7 +122,7 @@ function inputStyle(): React.CSSProperties {
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
 function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
-function grid3(): React.CSSProperties { return { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }; }
+function grid3(): React.CSSProperties { return { display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }; }
 
 /* ===== Utils ===== */
 function personLines(p: any): string[] {
@@ -756,6 +782,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const jsPDF = await ensureJsPdf();
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
     await ensureCyrillicFonts(doc);
+    const FONT = fontReady ? "NotoSans" : "helvetica";
 
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
@@ -763,7 +790,10 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const contentW = pageW - margin * 2;
     let y = margin;
 
-    const setFont = (bold = false, size = 24) => { doc.setFont("NotoSans", bold ? "bold" : "normal"); doc.setFontSize(size); };
+    const setFont = (bold = false, size = 24) => {
+      doc.setFont(FONT, bold ? "bold" : "normal");
+      doc.setFontSize(size);
+    };
     const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
     const addTitle = (t: string) => {
       setFont(true, 28);
@@ -817,8 +847,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       });
     } else addText("—");
     addText("Графика", 24, true);
-    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`));
-    else addText("—");
+    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`)); else addText("—");
     addText("Эпитафии", 24, true);
     if (options.frontEpitaphs.length) options.frontEpitaphs.forEach((t) => addText(t)); else addText("—");
 
@@ -831,13 +860,6 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     if (options.rearGraphics.length) options.rearGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`)); else addText("—");
     addText("Эпитафии", 24, true);
     if (options.rearEpitaphs.length) options.rearEpitaphs.forEach((t) => addText(t)); else addText("—");
-
-    addHr();
-
-    // Дополнительно
-    addTitle("Дополнительно");
-    addKV("Тумба", options.extras.base ? "да" : "нет");
-    addKV("Цветник", options.extras.flowerbed ? "да" : "нет");
 
     addHr();
 
@@ -1211,7 +1233,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             enabled: extraPlate,
             size: extraPlate ? plateSize : undefined,
             thickness: extraPlate ? plateThickness : undefined,
-            graphics: plateGraphicsWithThumbs, // миниатюры у плиты
+            graphics: plateGraphicsWithThumbs, // миниатюры для плиты
             epitaph: (plateEpitaph || "").trim()
           }}
           notes={(extras0.orderNotes || "").trim()}
