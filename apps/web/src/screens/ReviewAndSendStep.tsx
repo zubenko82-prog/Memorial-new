@@ -1,17 +1,23 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Реализовано:
+// Что есть:
 // - Центрирование (max-width: 600px).
 // - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
 // - Адаптив: ≤600px — 1 столбец, иначе — 2 (если есть тыльная).
-// - Галерея графики (плита) — минимум 2 столбца.
+// - Галерея графики (плита) — минимум 2 столбца (адаптив).
 // - «Выбрано для плиты» — показываем только при наличии выбранных.
 // - «Заказ списком» (оверлей):
-//   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная);
+//   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная/плита — 3 колонки одинаково),
 //   • «Сохранить PDF»: PDF 1512×2138 px, со встроенным Noto Sans (Unicode, корректная кириллица),
 //     весь заказ целиком, эскизы, отдельные страницы с прикреплёнными фото усопших;
 //     скачиваем локально и отправляем в /api/send-order-pdf (менеджеру в Telegram и на email).
+//
+// Исправлено:
+// - Ошибка ReferenceError из-за кириллических букв (п, г) вместо p, g.
+// - 404 шрифта: адреса NotoSans исправлены на /ofl/notosans/static/…
+//
+// ВАЖНО: Для миниатюр графики плиты в «Заказ списком» мы используем url из выбранных элементов.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -44,12 +50,13 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание кириллического шрифта (Noto Sans) ===== */
+/* ===== Встраивание кириллического шрифта (Noto Sans STATIC) ===== */
 let fontReady = false;
 async function ensureCyrillicFonts(doc: any) {
   if (fontReady) return;
-  const REG = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Regular.ttf";
-  const BLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Bold.ttf";
+  // Статические файлы лежат в /ofl/notosans/static/
+  const REG = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/static/NotoSans-Regular.ttf";
+  const BLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/static/NotoSans-Bold.ttf";
   async function fetchTtfToBase64(url: string): Promise<string> {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`Font fetch failed: ${url}`);
@@ -74,12 +81,10 @@ function glassPanelStyle(): React.CSSProperties {
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
   const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
-    padding: map[size],
-    borderRadius: 12,
+    padding: map[size], borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
     background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
-    color: "#fff",
-    cursor: disabled ? "not-allowed" : "pointer",
+    color: "#fff", cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1
@@ -91,6 +96,7 @@ function inputStyle(): React.CSSProperties {
 const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
 function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
+function grid3(): React.CSSProperties { return { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }; }
 
 /* ===== Utils ===== */
 function personLines(p: any): string[] {
@@ -367,7 +373,7 @@ function PlateBlock(props: {
                   const setToggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
                   return (
                     <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={setToggle}>
-                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic} />
                       {(cat.children || []).map((sub: any, j: number) => (
                         <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
@@ -386,7 +392,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Оверлей «Заказ списком» — миниатюры 70×70 и кнопка «Сохранить PDF» ===== */
+/* ===== Оверлей «Заказ списком» — миниатюры 70×70, 3 колонки (лицевая/тыльная/плита) ===== */
 function PrintOverlay({
   onClose, onSave, orderNo, name, phone, frontSketch, previewBack,
   frontData, rearData, extras, plate, notes, aspect
@@ -398,7 +404,7 @@ function PrintOverlay({
   frontData: { persons: { id?: string; fio1: string; fio2: string; dates: string; photo?: string }[]; graphics: { name: string; qty: number; thumb?: string }[]; epitaphs: string[]; };
   rearData: { graphics: { name: string; qty: number; thumb?: string }[]; epitaphs: string[] } | null;
   extras: { base: boolean; flowerbed: boolean };
-  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string }[]; epitaph?: string };
+  plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string; thumb?: string }[]; epitaph?: string };
   notes?: string;
   aspect?: string;
 }) {
@@ -416,11 +422,10 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
-          {/* Лицевая */}
+          {/* Лицевая — 3 колонки */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Лицевая</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
-              {/* Усопшие — миниатюры 70×70 */}
+            <div style={grid3()}>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div>
                 {frontData.persons.length ? frontData.persons.map((p, i) => (
@@ -434,8 +439,6 @@ function PrintOverlay({
                   </div>
                 )) : <div>—</div>}
               </div>
-
-              {/* Графика — миниатюры 70×70, если есть */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
                 {frontData.graphics.length ? frontData.graphics.map((g, i) => (
@@ -445,8 +448,6 @@ function PrintOverlay({
                   </div>
                 )) : <div>—</div>}
               </div>
-
-              {/* Эпитафии */}
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
                 {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
@@ -456,14 +457,13 @@ function PrintOverlay({
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
-          {/* Тыльная */}
+          {/* Тыльная — 3 колонки */}
           {rearData && (
             <>
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Тыльная</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
+                <div style={grid3()}>
                   <div><div style={{ fontWeight: 600, marginBottom: 4 }}>Усопшие</div><div>—</div></div>
-
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
                     {rearData.graphics.length ? rearData.graphics.map((g, i) => (
@@ -473,7 +473,6 @@ function PrintOverlay({
                       </div>
                     )) : <div>—</div>}
                   </div>
-
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
                     {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
@@ -485,30 +484,29 @@ function PrintOverlay({
             </>
           )}
 
-          {/* Дополнительно */}
-          <div style={{ marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Дополнительно</div>
-            <div>Тумба: {extras.base ? "да" : "нет"}; Цветник: {extras.flowerbed ? "да" : "нет"}</div>
-          </div>
-
-          <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
-
-          {/* Плита */}
+          {/* Плита — 3 колонки с миниатюрами */}
           <div style={{ marginBottom: 6 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Надгробная плита</div>
-            <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}; Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
-            {plate.graphics.length > 0 && (
-              <div style={{ marginTop: 4 }}>
+            <div style={grid3()}>
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Параметры</div>
+                <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}</div>
+                <div>Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
+              </div>
+              <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
-                {plate.graphics.map((g, i) => <div key={`pg-${i}`}>{g.name}</div>)}
+                {plate.enabled && plate.graphics.length ? plate.graphics.map((g, i) => (
+                  <div key={`pg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                    {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
+                    <div>{g.name}</div>
+                  </div>
+                )) : <div>—</div>}
               </div>
-            )}
-            {plate.epitaph && (
-              <div style={{ marginTop: 4 }}>
+              <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div>
+                {plate.enabled && plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>}
               </div>
-            )}
+            </div>
           </div>
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
@@ -819,7 +817,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       });
     } else addText("—");
     addText("Графика", 24, true);
-    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`)); else addText("—");
+    if (options.frontGraphics.length) options.frontGraphics.forEach((g) => addText(`${g.name}${g.qty > 1 ? ` ×${g.qty}` : ""}`));
+    else addText("—");
     addText("Эпитафии", 24, true);
     if (options.frontEpitaphs.length) options.frontEpitaphs.forEach((t) => addText(t)); else addText("—");
 
@@ -1051,6 +1050,12 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       thumb: g.url || ""
     }));
   }, [rearUnique, rearCounts]);
+  const plateGraphicsWithThumbs = useMemo(() => {
+    return (chosenPlateList || []).map((g: any) => ({
+      name: g.name || g.id,
+      thumb: g.url || ""
+    }));
+  }, [chosenPlateList]);
 
   return (
     <div style={{ width: "100%", maxWidth: 600, margin: "0 auto" }}>
@@ -1206,7 +1211,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
             enabled: extraPlate,
             size: extraPlate ? plateSize : undefined,
             thickness: extraPlate ? plateThickness : undefined,
-            graphics: chosenPlateList.map((g) => ({ name: g.name || g.id })),
+            graphics: plateGraphicsWithThumbs, // миниатюры у плиты
             epitaph: (plateEpitaph || "").trim()
           }}
           notes={(extras0.orderNotes || "").trim()}
