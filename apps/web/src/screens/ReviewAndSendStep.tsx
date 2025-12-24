@@ -5,11 +5,11 @@
 // - Центрирование контента (max-width: 600px).
 // - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
 // - Адаптив: ≤600px — 1 столбец, иначе — 2 (если есть тыльная).
-// - Галерея графики (плитa) — минимум 2 столбца.
+// - Галерея графики (плита) — минимум 2 столбца.
 // - «Выбрано для плиты» — показываем только при наличии выбранных.
 // - «Заказ списком» (оверлей):
 //   • миниатюры 70×70 у усопших и у графики (лицевая/тыльная);
-//   • «Сохранить PDF»: PDF 1512×2138 px, со встроенным шрифтом Noto Sans (Unicode, корректная кириллица),
+//   • «Сохранить PDF»: PDF 1512×2138 px, со встроенным Noto Sans (Unicode, корректная кириллица),
 //     весь заказ целиком, эскизы, отдельные страницы с прикреплёнными фото усопших;
 //     скачиваем локально и отправляем в /api/send-order-pdf (менеджеру в Telegram и на email).
 
@@ -22,9 +22,7 @@ import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
 /* ===== jsPDF с CDN (PDF) ===== */
-declare global {
-  interface Window { jspdf?: any }
-}
+declare global { interface Window { jspdf?: any } }
 async function ensureJsPdf(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
@@ -37,8 +35,7 @@ async function ensureJsPdf(): Promise<any> {
       return;
     }
     const s = document.createElement("script");
-    s.src = CDN;
-    s.async = true;
+    s.src = CDN; s.async = true;
     s.onload = () => res();
     s.onerror = () => rej(new Error("jspdf load error"));
     document.head.appendChild(s);
@@ -77,12 +74,10 @@ function glassPanelStyle(): React.CSSProperties {
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
   const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
-    padding: map[size],
-    borderRadius: 12,
+    padding: map[size], borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
     background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
-    color: "#fff",
-    cursor: disabled ? "not-allowed" : "pointer",
+    color: "#fff", cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1
@@ -163,8 +158,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   return (
     <div style={{ ...glassPanelStyle(), padding: 0, borderWidth: 2, borderColor: "rgba(138,180,255,0.35)" }}>
       <button type="button" onClick={onToggle} style={{ width: "100%", textAlign: "left", padding: "12px 14px", background: "rgba(255,255,255,0.06)", border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 15, fontWeight: 700 }}>
-        <span>{title}</span>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
+        <span>{title}</span><span aria-hidden>{open ? "▾" : "▸"}</span>
       </button>
       <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
         <div ref={ref} style={{ padding: 12 }}>{children}</div>
@@ -178,8 +172,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
   useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
+    const el = rootRef.current; if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
       setCols(Math.max(2, Math.floor(w / 160)));
@@ -372,7 +365,7 @@ function PlateBlock(props: {
                   const setToggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
                   return (
                     <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={setToggle}>
-                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                      <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic} />
                       {(cat.children || []).map((sub: any, j: number) => (
                         <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
@@ -474,7 +467,7 @@ function PrintOverlay({
                     {rearData.graphics.length ? rearData.graphics.map((g, i) => (
                       <div key={`rg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
                         {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                        <div>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
+                        <div>{g.name}{g.qty > 1 ? ` ×${г.qty}` : ""}</div>
                       </div>
                     )) : <div>—</div>}
                   </div>
@@ -551,7 +544,7 @@ function PrintOverlay({
   );
 }
 
-/* ===== Основной компонент ===== */
+/* ===== Основной компонент (страница) ===== */
 type Props = { onBack?: () => void; onSend?: (payload?: any) => void };
 export default function ReviewAndSendStep({ onBack, onSend }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
@@ -584,7 +577,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Лицевая
+  // Лицевая — данные
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
     id: p.id || `p-${i}`,
@@ -658,7 +651,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
   }, [cats]);
 
-  // Выбранная графика плиты
+  // Выбранная графика плиты (мета)
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
