@@ -1,13 +1,25 @@
 // src/screens/ReviewAndSendStep.tsx
 // Обзор и подтверждение (без TopBar).
 //
-// Исправления по вашим ошибкам:
-// 1) Кириллица в PDF: подключаем DejaVu Sans (Unicode) из jsDelivr (стабильно, CORS OK). Больше не 404 и не CORS.
-// 2) Эскиз лицевой стороны: рендерим его в оверлее и конвертируем DOM в PNG через html-to-image (CDN), затем вставляем в PDF.
-// 3) Миниатюры в PDF: добавляем превью у графики на лицевой/тыльной и у плиты (70×70), рядом с названием.
-// 4) /api/send-order-pdf возвращает 404 — теперь это не ломает сохранение PDF (PDF скачивается локально, а ошибка отправки показывается отдельно).
+// Что реализовано:
+// - Центрирование (max-width: 600px).
+// - Эскизы «вписаны»: лицевая — SketchTemplate; тыльная — превью + контур изделия.
+// - Адаптив: ≤600px — 1 столбец, иначе — 2 (если есть тыльная).
+// - Галерея графики (плита) — минимум 2 столбца (адаптив).
+// - «Выбрано для плиты» — показываем только при наличии выбранных.
+// - «Заказ списком» (оверлей):
+//   • три колонки (Усопшие / Графика / Эпитафии) и миниатюры 70×70 для лицевой, тыльной и плиты,
+//   • кнопка «Сохранить PDF»: PDF 1512×2138 px, шрифт Century Schoolbook:
+//       - Bold — для метрик (ФИО, даты, параметры, названия),
+//       - Bold Italic — для эпитафий,
+//     весь заказ целиком, эскизы (лицевая — через DOM->PNG), отдельные страницы с фото усопших (при необходимости);
+//     PDF скачивается локально и отправляется на /api/send-order-pdf (если настроен сервер).
 //
-// Также: убраны случайные кириллические символы в коде переменных (p, g и т. п.).
+// Важно по шрифтам:
+// - Положите файлы шрифтов в /public/fonts/:
+//   /public/fonts/CenturySchoolbook-Bold.ttf
+//   /public/fonts/CenturySchoolbook-BoldItalic.ttf
+// - Если шрифты недоступны, будет fallback на helvetica (латиница).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -17,7 +29,7 @@ import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import SketchTemplate from "../components/SketchTemplate";
 
-/* ===== html-to-image (для DOM -> PNG эскиза лицевой) ===== */
+/* ===== html-to-image для DOM->PNG (эскиз лицевой) ===== */
 declare global { interface Window { htmlToImage?: any; jspdf?: any } }
 async function ensureHtmlToImage(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
@@ -62,28 +74,47 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Встраивание Unicode-шрифта (DejaVu Sans с jsDelivr) ===== */
-let fontReady = false;
-async function ensureCyrillicFonts(doc: any) {
-  if (fontReady) return;
-  // Надёжные ссылки с CORS:
-  const REG = "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@version_2_37/ttf/DejaVuSans.ttf";
-  const BLD = "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@version_2_37/ttf/DejaVuSans-Bold.ttf";
-  async function fetchTtfToBase64(url: string): Promise<string> {
-    const r = await fetch(url, { mode: "cors" });
-    if (!r.ok) throw new Error(`Font fetch failed: ${url}`);
-    const ab = await r.arrayBuffer();
-    let binary = "";
-    const bytes = new Uint8Array(ab);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
+/* ===== Встраивание Century Schoolbook (Bold, BoldItalic) ===== */
+let csFontReady = false;
+async function ensureCenturyFonts(doc: any) {
+  if (csFontReady) return;
+  const REG_CAND = [
+    "/fonts/CenturySchoolbook-Bold.ttf"
+  ];
+  const IT_CAND = [
+    "/fonts/CenturySchoolbook-BoldItalic.ttf"
+  ];
+  async function fetchTtfToBase64(url: string): Promise<string | null> {
+    try {
+      const r = await fetch(url, { mode: "cors" });
+      if (!r.ok) return null;
+      const ab = await r.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(ab);
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    } catch { return null; }
   }
-  const [regB64, bldB64] = await Promise.all([fetchTtfToBase64(REG), fetchTtfToBase64(BLD)]);
-  doc.addFileToVFS("DejaVuSans.ttf", regB64);
-  doc.addFileToVFS("DejaVuSans-Bold.ttf", bldB64);
-  doc.addFont("DejaVuSans.ttf", "DejaVuSans", "normal");
-  doc.addFont("DejaVuSans-Bold.ttf", "DejaVuSans", "bold");
-  fontReady = true;
+  async function firstOk(urls: string[]): Promise<string | null> {
+    for (const u of urls) {
+      const b64 = await fetchTtfToBase64(u);
+      if (b64) return b64;
+    }
+    return null;
+  }
+  const [boldB64, boldItB64] = await Promise.all([firstOk(REG_CAND), firstOk(IT_CAND)]);
+  if (boldB64) {
+    doc.addFileToVFS("CenturySchoolbook-Bold.ttf", boldB64);
+    doc.addFont("CenturySchoolbook-Bold.ttf", "CenturySchoolbook", "bold");
+  }
+  if (boldItB64) {
+    doc.addFileToVFS("CenturySchoolbook-BoldItalic.ttf", boldItB64);
+    doc.addFont("CenturySchoolbook-BoldItalic.ttf", "CenturySchoolbook", "bolditalic");
+  }
+  csFontReady = !!(boldB64 && boldItB64);
+  if (!csFontReady) {
+    console.warn("Century Schoolbook TTF не найден в /public/fonts. Fallback на helvetica.");
+  }
 }
 
 /* ===== UI helpers ===== */
@@ -133,7 +164,7 @@ const Thumb = ({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   </div>
 );
 
-/* ===== Раздел шапки ===== */
+/* ===== Шапка (номер заказа + контакты + «Заказ списком») ===== */
 function EditableOrderSummary({ orderNo, onOpenSimple }: { orderNo: string; onOpenSimple: () => void }) {
   const intro = loadIntroState();
   const [name, setName] = useState<string>(intro.intro?.customerName || "");
@@ -428,7 +459,7 @@ function PrintOverlay({
           <button type="button" onClick={onSave} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #999", background: "#e6f2ff", cursor: "pointer" }}>Сохранить PDF</button>
         </div>
 
-        <div style={{ fontFamily: "system-ui,-apple-system, Segoe UI, Roboto, Arial, sans-serif", fontSize: 11, lineHeight: 1.25 }}>
+        <div style={{ fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif", fontSize: 11, lineHeight: 1.25 }}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>заказ № {orderNo || "—"}</div>
           <div style={{ marginBottom: 6 }}>{name || "—"} · {phone || "—"}</div>
 
@@ -444,9 +475,9 @@ function PrintOverlay({
                   <div key={p.id || `fp-${i}`} style={{ display: "grid", gridTemplateColumns: p.photo ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
                     {p.photo && <img src={p.photo} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6 }} />}
                     <div>
-                      {p.fio1 && <div style={{ fontWeight: 600 }}>{p.fio1}</div>}
-                      {p.fio2 && <div>{p.fio2}</div>}
-                      {p.dates && <div>{p.dates}</div>}
+                      {p.fio1 && <div style={{ fontWeight: 700 }}>{p.fio1}</div>}
+                      {p.fio2 && <div style={{ fontWeight: 700 }}>{p.fio2}</div>}
+                      {p.dates && <div style={{ fontWeight: 700 }}>{p.dates}</div>}
                     </div>
                   </div>
                 )) : <div>—</div>}
@@ -456,13 +487,13 @@ function PrintOverlay({
                 {frontData.graphics.length ? frontData.graphics.map((g, i) => (
                   <div key={`fg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
                     {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                    <div>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
+                    <div style={{ fontWeight: 700 }}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
                   </div>
                 )) : <div>—</div>}
               </div>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
+                {frontData.epitaphs.length ? frontData.epitaphs.map((t, i) => <div key={`fe-${i}`} style={{ whiteSpace: "pre-wrap", fontStyle: "italic", fontWeight: 700 }}>{t}</div>) : <div>—</div>}
               </div>
             </div>
           </div>
@@ -481,13 +512,13 @@ function PrintOverlay({
                     {rearData.graphics.length ? rearData.graphics.map((g, i) => (
                       <div key={`rg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
                         {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                        <div>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
+                        <div style={{ fontWeight: 700 }}>{g.name}{g.qty > 1 ? ` ×${g.qty}` : ""}</div>
                       </div>
                     )) : <div>—</div>}
                   </div>
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                    {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap" }}>{t}</div>) : <div>—</div>}
+                    {rearData.epitaphs.length ? rearData.epitaphs.map((t, i) => <div key={`re-${i}`} style={{ whiteSpace: "pre-wrap", fontStyle: "italic", fontWeight: 700 }}>{t}</div>) : <div>—</div>}
                   </div>
                 </div>
               </div>
@@ -502,31 +533,31 @@ function PrintOverlay({
             <div style={grid3()}>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Параметры</div>
-                <div>Размер: {plate.enabled ? (plate.size || "—") : "нет"}</div>
-                <div>Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
+                <div style={{ fontWeight: 700 }}>Размер: {plate.enabled ? (plate.size || "—") : "нет"}</div>
+                <div style={{ fontWeight: 700 }}>Толщина: {plate.enabled ? (plate.thickness || "—") : "нет"}</div>
               </div>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Графика</div>
                 {plate.enabled && plate.graphics.length ? plate.graphics.map((g, i) => (
                   <div key={`pg-${i}`} style={{ display: "grid", gridTemplateColumns: g.thumb ? "70px 1fr" : "1fr", gap: 6, alignItems: "center", marginBottom: 6 }}>
                     {g.thumb && <img src={g.thumb} alt="" style={{ width: 70, height: 70, objectFit: "contain", borderRadius: 6, background: "#fafafa", border: "1px solid #eee" }} />}
-                    <div>{g.name}</div>
+                    <div style={{ fontWeight: 700 }}>{g.name}</div>
                   </div>
                 )) : <div>—</div>}
               </div>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                {plate.enabled && plate.epitaph ? <div style={{ whiteSpace: "pre-wrap" }}>{plate.epitaph}</div> : <div>—</div>}
+                {plate.enabled && plate.epitaph ? <div style={{ whiteSpace: "pre-wrap", fontStyle: "italic", fontWeight: 700 }}>{plate.epitaph}</div> : <div>—</div>}
               </div>
             </div>
           </div>
 
           <hr style={{ border: 0, height: 1, background: "#ddd", margin: "6px 0" }} />
 
+          {/* Эскизы (DOM контейнер для лицевой — id="pdf-front-sketch") */}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Эскизы</div>
             <div style={{ display: "grid", gridTemplateColumns: rearData ? "1fr 1fr" : "1fr", gap: 6 }}>
-              {/* ВАЖНО: этот контейнер нужен для захвата DOM -> PNG для PDF */}
               <div id="pdf-front-sketch" style={{ position: "relative", width: "100%", aspectRatio: aspect || "4 / 3", overflow: "hidden", background: "#fff" }}>
                 <div style={{ position: "absolute", inset: 0, padding: 0 }}>{frontSketch}</div>
               </div>
@@ -656,6 +687,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     });
   }, [cats]);
 
+  // Выбранная графика плиты (мета)
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
@@ -741,8 +773,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       const node = document.getElementById("pdf-front-sketch");
       if (!node) return null;
       const htmlToImage = await ensureHtmlToImage();
-      // Чтобы было белое дно, иначе прозрачный фон может дать черный в PDF
-      return await htmlToImage.toPng(node, { backgroundColor: "#ffffff", pixelRatio: 2 });
+      return await htmlToImage.toPng(node, { backgroundColor: "#ffffff", pixelRatio: 2, cacheBust: true });
     } catch { return null; }
   }
 
@@ -756,13 +787,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     rearEpitaphs: string[];
     plate: { enabled: boolean; size?: string; thickness?: string; graphics: { name: string; thumb?: string | null }[]; epitaph?: string };
     notes?: string;
-    imgFront?: string | null; // эскиз лицевой (PNG)
-    imgBack?: string | null;  // эскиз тыльной (PNG)
+    imgFront?: string | null; // PNG лицевой эскиз
+    imgBack?: string | null;  // PNG тыльный эскиз
   }): Promise<Blob> {
     const jsPDF = await ensureJsPdf();
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
-    await ensureCyrillicFonts(doc); // DejaVuSans
-    const FONT = fontReady ? "DejaVuSans" : "helvetica";
+    await ensureCenturyFonts(doc);
+    const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
 
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
@@ -770,18 +801,21 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     const contentW = pageW - margin * 2;
     let y = margin;
 
-    const setFont = (bold = false, size = 24) => { doc.setFont(FONT, bold ? "bold" : "normal"); doc.setFontSize(size); };
+    const setFont = (style: "bold" | "bolditalic", size: number) => {
+      doc.setFont(FONT, style);
+      doc.setFontSize(size);
+    };
     const addHr = (gap = 12) => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(margin, y, pageW - margin, y); y += gap; };
     const addTitle = (t: string) => {
-      setFont(true, 28);
+      setFont("bold", 28);
       const lines = doc.splitTextToSize(t, contentW);
       for (const ln of lines) {
         if (y + 34 > pageH - margin) { doc.addPage(); y = margin; }
         doc.text(ln, margin, y); y += 34;
       }
     };
-    const addText = (t: string, sz = 22, bold = false) => {
-      setFont(bold, sz);
+    const addMetric = (t: string, sz = 22) => { // метрики (ФИО/даты/параметры): Bold
+      setFont("bold", sz);
       const lh = Math.round(sz * 1.25);
       const lines = doc.splitTextToSize(t, contentW);
       for (const ln of lines) {
@@ -789,9 +823,16 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         doc.text(ln, margin, y); y += lh;
       }
     };
-    const addKV = (k: string, v: string) => addText(`${k}: ${v}`, 22, false);
-
-    async function addImageFitted(dataUrl: string | null | undefined, maxH = 560) {
+    const addEpitaph = (t: string, sz = 22) => { // эпитафии: Bold Italic
+      setFont("bolditalic", sz);
+      const lh = Math.round(sz * 1.25);
+      const lines = doc.splitTextToSize(t, contentW);
+      for (const ln of lines) {
+        if (y + lh > pageH - margin) { doc.addPage(); y = margin; }
+        doc.text(ln, margin, y); y += lh;
+      }
+    };
+    const addImageFitted = async (dataUrl: string | null | undefined, maxH = 560) => {
       if (!dataUrl) return;
       const fmt = /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG";
       const im = new Image();
@@ -802,16 +843,14 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       if (y + h > pageH - margin) { doc.addPage(); y = margin; }
       doc.addImage(dataUrl!, fmt, margin, y, w, h, undefined, "FAST");
       y += h + 12;
-    }
-
+    };
     async function addThumbList(title: string, list: { name: string; qty?: number; thumb?: string | null }[]) {
-      addText(title, 24, true);
-      if (!list.length) { addText("—"); return; }
+      addMetric(title, 24);
+      if (!list.length) { addMetric("—"); return; }
       const rowH = 76; // ~70 + отступ
       for (const it of list) {
         if (y + rowH > pageH - margin) { doc.addPage(); y = margin; }
         let x = margin;
-        // thumbnail
         if (it.thumb) {
           const data = await urlToDataUrl(it.thumb);
           if (data) {
@@ -819,8 +858,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
           }
         }
         x += 78;
-        setFont(false, 22);
         const text = `${it.name}${it.qty && it.qty > 1 ? ` ×${it.qty}` : ""}`;
+        setFont("bold", 22);
         const lines = doc.splitTextToSize(text, contentW - 78);
         doc.text(lines, x, y + 24);
         y += rowH;
@@ -829,52 +868,52 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
 
     // Header
     addTitle(`Заказ № ${options.orderNo || "—"}`);
-    addText(`${options.customerName || "—"} · ${options.customerPhone || "—"}`);
+    addMetric(`${options.customerName || "—"} · ${options.customerPhone || "—"}`);
 
     addHr();
 
     // Лицевая
     addTitle("Лицевая");
-    addText("Усопшие", 24, true);
+    addMetric("Усопшие", 24);
     if (options.frontPersons.length) {
       for (const p of options.frontPersons) {
         const fio = [p.fio1, p.fio2].filter(Boolean).join(" ");
         const line = [fio, p.dates].filter(Boolean).join(" · ");
-        addText(line);
+        addMetric(line);
       }
-    } else addText("—");
+    } else addMetric("—");
     await addThumbList("Графика", options.frontGraphics);
-    addText("Эпитафии", 24, true);
-    if (options.frontEpitaphs.length) { for (const t of options.frontEpitaphs) addText(t); } else addText("—");
+    addMetric("Эпитафии", 24);
+    if (options.frontEpitaphs.length) { for (const t of options.frontEpitaphs) addEpitaph(t); } else addMetric("—");
 
     addHr();
 
     // Тыльная
     addTitle("Тыльная");
-    addText("Усопшие", 24, true); addText("—");
+    addMetric("Усопшие", 24); addMetric("—");
     await addThumbList("Графика", options.rearGraphics);
-    addText("Эпитафии", 24, true);
-    if (options.rearEpitaphs.length) { for (const t of options.rearEpitaphs) addText(t); } else addText("—");
+    addMetric("Эпитафии", 24);
+    if (options.rearEpitaphs.length) { for (const t of options.rearEpitaphs) addEpitaph(t); } else addMetric("—");
 
     addHr();
 
     // Плита
     addTitle("Надгробная плита");
     if (options.plate.enabled) {
-      addKV("Размер", options.plate.size || "—");
-      addKV("Толщина", options.plate.thickness || "—");
+      addMetric(`Размер: ${options.plate.size || "—"}`);
+      addMetric(`Толщина: ${options.plate.thickness || "—"}`);
       await addThumbList("Графика", options.plate.graphics);
-      addText("Эпитафии", 24, true);
-      addText(options.plate.epitaph || "—");
+      addMetric("Эпитафии", 24);
+      if (options.plate.epitaph) addEpitaph(options.plate.epitaph); else addMetric("—");
     } else {
-      addText("нет");
+      addMetric("нет");
     }
 
     addHr();
 
     // Примечания
     addTitle("Примечания");
-    addText(options.notes || "—");
+    addMetric(options.notes || "—");
 
     addHr();
 
@@ -897,9 +936,8 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         throw new Error(`Не удалось отправить PDF: ${t || res.statusText}`);
       }
     } catch (e) {
-      // Не валим процесс — просто показываем ошибку
       console.warn(e);
-      alert("PDF сохранён локально. Отправка менеджеру недоступна (404).");
+      alert("PDF сохранён локально. Отправка менеджеру недоступна (endpoint /api/send-order-pdf).");
     }
   }
 
@@ -949,15 +987,16 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
     try {
       setSendingPdf(true); setErr("");
 
+      // Дать оверлею отрендериться
+      await new Promise((r) => setTimeout(r, 120));
+
       const orderNo = String(introState.orderNumber || "").trim();
       const name = (loadIntroState().intro?.customerName || "").trim();
       const phone = (loadIntroState().intro?.customerPhone || "").trim();
 
-      // 1) Пробуем взять готовые превью (тыльная) и DOM->PNG (лицевая)
       const frontPng = await captureFrontSketchPng();
       const backPng = await urlToDataUrl(backSketchUrl || null);
 
-      // 2) Собираем PDF
       const pdfBlob = await createPdfBlob({
         orderNo,
         customerName: name,
@@ -984,7 +1023,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         imgBack: backPng
       });
 
-      // 3) Скачиваем локально
+      // Сохранить локально
       const a = document.createElement("a");
       a.href = URL.createObjectURL(pdfBlob);
       a.download = `order-${orderNo || Date.now()}.pdf`;
@@ -992,18 +1031,13 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
 
-      // 4) Пытаемся отправить менеджеру (если эндпоинт есть)
+      // Отправить менеджеру (если endpoint есть)
       await sendPdfToServer(pdfBlob, {
         orderNo,
         intro: loadIntroState().intro || {},
         extras: {
-          base: extraBase,
-          flowerbed: extraFlowerbed,
-          headstonePlate: extraPlate,
-          plateSize,
-          plateThickness,
-          plateOrientation,
-          plateEpitaph,
+          base: extraBase, flowerbed: extraFlowerbed, headstonePlate: extraPlate,
+          plateSize, plateThickness, plateOrientation, plateEpitaph,
           plateGraphics: plateGraphicsWithThumbs.map(g => g.name)
         }
       });
@@ -1172,7 +1206,7 @@ export default function ReviewAndSendStep({ onBack, onSend }: Props) {
         <button type="button" onClick={() => setSimpleOpen(true)} style={glassButtonStyle("sm", busy || sendingPdf)} disabled={busy || sendingPdf}>{sendingPdf ? "Готовим PDF…" : "Заказ списком"}</button>
       </div>
 
-      {/* Оверлей «Заказ списком» (захват DOM для эскиза) */}
+      {/* Оверлей «Заказ списком» */}
       {simpleOpen && (
         <PrintOverlay
           onClose={() => setSimpleOpen(false)}
