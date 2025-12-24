@@ -227,6 +227,7 @@ export default function StepNav({
         aria-label="Навигация по шагам"
         style={{
           maxWidth: 600,
+          position: "relative",
           display: "grid",
           gridTemplateColumns: `repeat(${steps.length}, 1fr)`,
           alignItems: "center",
