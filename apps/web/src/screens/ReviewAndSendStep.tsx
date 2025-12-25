@@ -581,7 +581,7 @@ async function createPdfTwoColumns(sendAlso: boolean) {
     // Шрифты и интервалы (увеличены)
     const TITLE_SIZE = 36;
     const H2_SIZE = 30;
-    const BODY_SIZE = 24;
+    const BODY_SIZE = 34;
     const LINE_H_MULT = 1.4;           // межстрочный
     const SEC_SPACE = 22;              // межразделовый доп. интервал
 
