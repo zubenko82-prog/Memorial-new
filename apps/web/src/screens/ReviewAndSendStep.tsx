@@ -557,16 +557,17 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     }
   }
 
-  // Замените текущую функцию createPdfTwoColumns в src/screens/ReviewAndSendStep.tsx.
-// Новая версия:
-// - Всю информацию обязательно вмещает: сначала максимально сжимает межстрочные интервалы,
-//   уменьшает миниатюры и при необходимости понижает размер шрифта (до минимума), чтобы уместить контент в левую колонку.
-// - Жирным остаются только заголовки разделов: «Лицевая», «Тыльная», «Надгробная плита» (по центру).
-// - Подзаголовки «Усопшие / Графика / Эпитафии / Дополнительно / Примечания» — обычным (не жирным).
-// - Линии и рамки удалены.
-// - Под разделы «Лицевая» и «Надгробная плита» кладётся светло-серый фон.
-// - Миниатюры меньше, подписи по центру под миниатюрами; при нехватке места миниатюры автоматически уменьшаются ещё.
-// - Правая колонка: эскизы (лицевой/тыльный), как прежде. Фото — на отдельных страницах.
+  // Замените текущую функцию createPdfTwoColumns в src/screens/ReviewAndSendStep.tsx
+// Изменения:
+// - Серый фон на левой колонке:
+//   1) от верхней границы «Лицевая» до верхней границы «Тыльная»
+//   2) от верхней границы «Надгробная плита» до верхней границы «Дополнительно»
+// - Жирным только «Лицевая / Тыльная / Надгробная плита» (по центру).
+// - Подзаголовки («Усопшие / Графика / Эпитафии / Дополнительно / Примечания») — обычным (не жирным).
+// - Эпитафии размером 25 и не жирные.
+// - «Примечания» — по центру.
+// - На страницах с фотографиями вместо «Фото 1/2…» выводим метрику (ФИО + даты) в одну строку над фотографией.
+// - Если не влезает: сжимаем межстрочный, уменьшаем миниатюры, увеличиваем число колонок, затем уменьшаем кегль.
 
 async function createPdfTwoColumns(sendAlso: boolean) {
   try {
@@ -577,15 +578,13 @@ async function createPdfTwoColumns(sendAlso: boolean) {
     await ensureCenturyFonts(doc);
     const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
 
-    // Попытка подключить Regular (для обычного текста)
+    // Попытка добавить Regular для обычного текста
     let REG_READY = false;
     try {
-      const url = "/fonts/CenturySchoolbook-Regular.ttf";
-      const r = await fetch(url, { mode: "cors" });
+      const r = await fetch("/fonts/CenturySchoolbook-Regular.ttf", { mode: "cors" });
       if (r.ok) {
         const ab = await r.arrayBuffer();
-        let bin = "";
-        const bytes = new Uint8Array(ab);
+        let bin = ""; const bytes = new Uint8Array(ab);
         for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
         doc.addFileToVFS("CenturySchoolbook-Regular.ttf", btoa(bin));
         doc.addFont("CenturySchoolbook-Regular.ttf", "CenturySchoolbook", "normal");
@@ -593,7 +592,7 @@ async function createPdfTwoColumns(sendAlso: boolean) {
       }
     } catch {}
 
-    // Геометрия страницы
+    // Геометрия
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const margin = 48;
@@ -603,22 +602,19 @@ async function createPdfTwoColumns(sendAlso: boolean) {
     const rightW = Math.round(innerW * 0.40);
     const leftW = innerW - gapCols - rightW;
 
-    // Данные (берём из текущего драфта)
+    // Данные из текущего состояния
     const order = draft || loadOrderDraft();
     const nm = (loadIntroState().intro?.customerName || "").trim() || "—";
     const ph = (loadIntroState().intro?.customerPhone || "").trim() || "—";
     const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-    const persons = ((order.engraving?.persons as any[]) || []).filter(Boolean);
-    const frontPersonsData = persons.map((p: any) => ({
+
+    const frontPersonsData = (((order?.engraving?.persons as any[]) || []).filter(Boolean)).map((p: any) => ({
       photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null,
-      l1: (p.lastName || "").trim(),
-      l2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
-      l3: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ")
+      fio: [ (p.lastName || "").trim(), [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ") ].filter(Boolean).join(" "),
+      dates: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ")
     }));
-    const graphicsFront = ((order as any)?.graphics || []).map((g: any) => ({
-      name: g.name || g.id || "—",
-      url: g.preview || g.url || null
-    }));
+
+    const graphicsFront = ((order as any)?.graphics || []).map((g: any) => ({ name: g.name || g.id || "—", url: g.preview || g.url || null }));
 
     const rearIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
     const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
@@ -628,108 +624,95 @@ async function createPdfTwoColumns(sendAlso: boolean) {
 
     const frontEps = toParagraphs((order?.engraving as any)?.epitaphs ?? (order?.engraving as any)?.epitaphText);
     const rearEps = (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
+
     const plateEnabled = !!(order as any)?.extras?.headstonePlate;
     const plateSize = (order as any)?.extras?.plateSize || "—";
     const plateThick = (order as any)?.extras?.plateThickness || "—";
     const plateList: { id: string; name: string; url?: string }[] =
       Array.from(new Set(((order as any)?.extras?.plateGraphicsIds as string[]) || []))
-        .map((gid) => ((order as any)?.extras?.plateGraphicsMeta || {})[gid] || { id: gid, name: gid, url: "" });
+      .map((gid) => ((order as any)?.extras?.plateGraphicsMeta || {})[gid] || { id: gid, name: gid, url: "" });
     const plateEpBlocks = toParagraphs(((order as any)?.extras?.plateEpitaph || "").trim());
+
     const flowerbed = !!(order as any)?.extras?.flowerbed;
     const base = (order as any)?.extras?.base ?? false;
     const notes = String(((order as any)?.extras?.orderNotes || "")).trim();
 
-    // Эскизы (DOM -> PNG)
+    // Эскизы
     const frontNode = document.getElementById("pdf-front-sketch");
     const backNode = document.getElementById("pdf-back-sketch");
     const frontPng = frontNode ? await captureNodePng(frontNode) : null;
-    const backPng = backNode ? await captureNodePng(backNode) : await (async () => {
-      const u = (order as any)?.editorBack?.previewHiUrl || (order as any)?.editorBack?.previewUrl || null;
-      return await (async function toDataUrl(url?: string | null): Promise<string | null> {
-        try {
-          if (!url) return null;
-          if (url.startsWith("data:")) return url;
-          const res = await fetch(url, { mode: "cors" });
-          if (!res.ok) return null;
-          const blob = await res.blob();
-          return await new Promise<string>((resolve) => {
-            const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(blob);
-          });
-        } catch { return null; }
-      })(u);
-    })();
+    const backPng = backNode
+      ? await captureNodePng(backNode)
+      : await (async (u?: string | null) => {
+          try {
+            if (!u) return null;
+            if (u.startsWith("data:")) return u;
+            const res = await fetch(u, { mode: "cors" });
+            if (!res.ok) return null;
+            const b = await res.blob();
+            return await new Promise<string>((resolve) => {
+              const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(b);
+            });
+          } catch { return null; }
+        })((order as any)?.editorBack?.previewHiUrl || (order as any)?.editorBack?.previewUrl || null);
 
-    // Параметры наборов с начальных значений и пределами, будем подбирать
-    const fit = {
-      fontSize: 40,             // начальный
-      minFont: 18,              // минимум
-      lhFactor: 0.95,           // плотный межстрочный
-      minLhFactor: 0.90,
-      imgPortrait: 120,         // начальные высоты миниатюр (ещё уменьшены)
-      imgGraphic: 90,
-      imgPlate: 80,
-      minImg: 50,               // минимум высоты миниатюр
-      captionGap: 24,           // отступ от миниатюры до подписи (больше)
-      colGap: 14,               // меньше расстояние между карточками
-      rowGap: 14,
-      minColW: 260              // можно уменьшать, чтобы увеличить число колонок
-    };
+    // Параметры подбора
+    const EP_SIZE = 25;         // эпитафии — мелким
+    let fitFont = 40;           // начальный кегль
+    const minFont = 18;
+    let lhFactor = 0.95;        // плотная межстрочная
+    const minLh = 0.90;
 
-    // Утилиты текста/картинок
-    const setFont = (style: "bold" | "normal") => {
-      if (style === "bold") doc.setFont(FONT, "bold");
-      else if (REG_READY) doc.setFont("CenturySchoolbook", "normal");
-      else doc.setFont(FONT, "bold"); // fallback
-      doc.setFontSize(fit.fontSize);
+    let imgPortrait = 120;
+    let imgGraphic = 90;
+    let imgPlate = 80;
+    const minImg = 50;
+
+    let colGap = 14, rowGap = 14, minColW = 260;
+
+    // Хелперы шрифтов/текста
+    const setFont = (weight: "bold" | "normal", size?: number) => {
+      const fz = size ?? fitFont;
+      if (weight === "bold") doc.setFont(FONT, "bold");
+      else doc.setFont(REG_READY ? "CenturySchoolbook" : FONT, REG_READY ? "normal" : "bold");
+      doc.setFontSize(fz);
     };
-    function textLinesWidth(text: string, width: number) {
+    const splitText = (text: string, width: number, size?: number, weight: "bold" | "normal" = "normal") => {
+      setFont(weight, size);
       return doc.splitTextToSize(text, width);
-    }
-    function gridCols(availW: number, minColW: number, colGap: number) {
-      return Math.max(2, Math.floor((availW + colGap) / (minColW + colGap)));
-    }
+    };
+    const gridCols = (availW: number, minColW: number, gap: number) => Math.max(2, Math.floor((availW + gap) / (minColW + gap)));
 
-    // Измерение левого столбца (без рисования) с возвратом общих высот и границ фоновых блоков
-    const measureLeft = () => {
+    // Измерение левой колонки, с возвратом Y-границ для заливки
+    function measureLeft() {
       let y = margin;
-
-      const LH = Math.round(fit.fontSize * fit.lhFactor);
+      const LH = Math.round((fitFont) * lhFactor);
+      const EP_LH = Math.round(EP_SIZE * lhFactor);
 
       // Заголовок заказа
-      setFont("bold");
-      textLinesWidth(`Заказ № ${orderNoCur || "—"}`, leftW).forEach(() => { y += LH; });
-      setFont("normal");
-      textLinesWidth(`${nm} · ${ph}`, leftW).forEach(() => { y += LH; });
+      splitText(`Заказ № ${orderNoCur || "—"}`, leftW, fitFont, "bold").forEach(() => (y += LH));
+      splitText(`${nm} · ${ph}`, leftW, fitFont, "normal").forEach(() => (y += LH));
 
-      // — Лицевая (серый фон) —
-      const faceStart = y;
-      setFont("bold");
-      textLinesWidth("Лицевая", leftW).forEach(() => { y += LH; });
+      // Лицевая — верхняя граница фона
+      const faceFillStart = y;
+      // "Лицевая" (жирный, по центру)
+      splitText("Лицевая", leftW, fitFont, "bold").forEach(() => (y += LH));
 
-      // Усопшие (подзаголовок обычным)
-      setFont("normal");
-      textLinesWidth("Усопшие", leftW).forEach(() => { y += LH; });
-
-      const colsP = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_P = Math.floor((leftW - fit.colGap * (colsP - 1)) / colsP);
-      let rowMax = 0, col = 0;
-
+      // Усопшие
+      splitText("Усопшие", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsP = gridCols(leftW, minColW, colGap);
+      const eachW_P = Math.floor((leftW - colGap * (colsP - 1)) / colsP);
+      let col = 0, rowMax = 0;
       if (frontPersonsData.length) {
         for (let i = 0; i < frontPersonsData.length; i++) {
-          // img height
-          const imgH = fit.imgPortrait;
-          let cellH = imgH + fit.captionGap;
-          // l1, l2, l3
-          setFont("bold");
-          cellH += textLinesWidth(frontPersonsData[i].l1 || "", eachW_P).length * LH;
-          cellH += textLinesWidth(frontPersonsData[i].l2 || "", eachW_P).length * LH;
-          setFont("normal");
-          cellH += textLinesWidth(frontPersonsData[i].l3 || "—", eachW_P).length * LH;
-
+          let cellH = imgPortrait + 24; // image + gap до метрики
+          // метрика в одну строку (ФИО + даты)
+          const metric = [frontPersonsData[i].fio, frontPersonsData[i].dates].filter(Boolean).join(" · ");
+          cellH += splitText(metric, eachW_P, fitFont, "bold").length * LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsP || i === frontPersonsData.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
       } else {
@@ -737,396 +720,458 @@ async function createPdfTwoColumns(sendAlso: boolean) {
       }
 
       // Графика
-      setFont("normal");
-      textLinesWidth("Графика", leftW).forEach(() => { y += LH; });
-      const colsG = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_G = Math.floor((leftW - fit.colGap * (colsG - 1)) / colsG);
-      rowMax = 0; col = 0;
+      splitText("Графика", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsG = gridCols(leftW, minColW, colGap);
+      const eachW_G = Math.floor((leftW - colGap * (colsG - 1)) / colsG);
+      col = 0; rowMax = 0;
       if (graphicsFront.length) {
         for (let i = 0; i < graphicsFront.length; i++) {
-          const imgH = fit.imgGraphic;
-          let cellH = imgH + fit.captionGap;
-          setFont("bold");
-          cellH += textLinesWidth(graphicsFront[i].name, eachW_G).length * LH;
+          let cellH = imgGraphic + 24;
+          cellH += splitText(graphicsFront[i].name, eachW_G, fitFont, "bold").length * LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsG || i === graphicsFront.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
-      } else {
-        y += LH;
-      }
+      } else y += LH;
 
-      // Эпитафии
-      setFont("normal");
-      textLinesWidth("Эпитафии", leftW).forEach(() => { y += LH; });
-      const colsE = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_E = Math.floor((leftW - fit.colGap * (colsE - 1)) / colsE);
-      rowMax = 0; col = 0;
+      // Эпитафии (мелким 25)
+      splitText("Эпитафии", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsE = gridCols(leftW, minColW, colGap);
+      const eachW_E = Math.floor((leftW - colGap * (colsE - 1)) / colsE);
+      col = 0; rowMax = 0;
       if (frontEps.length) {
         for (let i = 0; i < frontEps.length; i++) {
-          let cellH = textLinesWidth(frontEps[i], eachW_E).length * LH;
+          let cellH = splitText(frontEps[i], eachW_E, EP_SIZE, "normal").length * EP_LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsE || i === frontEps.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
-      } else {
-        y += LH;
-      }
-      const faceEnd = y;
+      } else y += LH;
 
-      // — Тыльная —
-      setFont("bold");
-      textLinesWidth("Тыльная", leftW).forEach(() => { y += LH; });
+      const faceFillEnd_beforeRearTitle = y; // до «Тыльная»
 
-      setFont("normal");
-      textLinesWidth("Усопшие", leftW).forEach(() => { y += LH; });
+      // Тыльная
+      const rearTitleTop = y;
+      splitText("Тыльная", leftW, fitFont, "bold").forEach(() => (y += LH));
+      splitText("Усопшие", leftW, fitFont, "normal").forEach(() => (y += LH));
       y += LH; // «—»
 
-      textLinesWidth("Графика", leftW).forEach(() => { y += LH; });
-      const colsRG = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_RG = Math.floor((leftW - fit.colGap * (colsRG - 1)) / colsRG);
-      rowMax = 0; col = 0;
+      splitText("Графика", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsRG = gridCols(leftW, minColW, colGap);
+      const eachW_RG = Math.floor((leftW - colGap * (colsRG - 1)) / colsRG);
+      col = 0; rowMax = 0;
       if (rearUnique.length) {
         for (let i = 0; i < rearUnique.length; i++) {
-          const imgH = fit.imgGraphic;
-          let cellH = imgH + fit.captionGap;
-          setFont("bold");
-          const nm = `${rearUnique[i].name || "—"}${(rearCounts[rearUnique[i].id || ""] || 1) > 1 ? ` ×${rearCounts[rearUnique[i].id || ""]}` : ""}`;
-          cellH += textLinesWidth(nm, eachW_RG).length * LH;
+          let cellH = imgGraphic + 24;
+          const nmG = `${rearUnique[i].name || "—"}${(rearCounts[rearUnique[i].id || ""] || 1) > 1 ? ` ×${rearCounts[rearUnique[i].id || ""]}` : ""}`;
+          cellH += splitText(nmG, eachW_RG, fitFont, "bold").length * LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsRG || i === rearUnique.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
-      } else {
-        y += LH;
-      }
+      } else y += LH;
 
-      setFont("normal");
-      textLinesWidth("Эпитафии", leftW).forEach(() => { y += LH; });
-      const colsRE = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_RE = Math.floor((leftW - fit.colGap * (colsRE - 1)) / colsRE);
-      rowMax = 0; col = 0;
+      splitText("Эпитафии", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsRE = gridCols(leftW, minColW, colGap);
+      const eachW_RE = Math.floor((leftW - colGap * (colsRE - 1)) / colsRE);
+      col = 0; rowMax = 0;
       if (rearEps.length) {
         for (let i = 0; i < rearEps.length; i++) {
-          let cellH = textLinesWidth(rearEps[i], eachW_RE).length * LH;
+          let cellH = splitText(rearEps[i], eachW_RE, EP_SIZE, "normal").length * EP_LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsRE || i === rearEps.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
-      } else {
-        y += LH;
-      }
+      } else y += LH;
 
-      // — Надгробная плита (серый фон) —
-      const plateStart = y;
-      setFont("bold");
-      textLinesWidth("Надгробная плита", leftW).forEach(() => { y += LH; });
+      // Надгробная плита — начало второго фона
+      const plateFillStart = y;
+      splitText("Надгробная плита", leftW, fitFont, "bold").forEach(() => (y += LH));
 
-      setFont("normal");
-      textLinesWidth(`Размер: ${plateEnabled ? plateSize : "—"}`, leftW).forEach(() => { y += LH; });
-      textLinesWidth(`Толщина: ${plateEnabled ? plateThick : "—"}`, leftW).forEach(() => { y += LH; });
+      splitText(`Размер: ${plateEnabled ? plateSize : "—"}`, leftW, fitFont, "normal").forEach(() => (y += LH));
+      splitText(`Толщина: ${plateEnabled ? plateThick : "—"}`, leftW, fitFont, "normal").forEach(() => (y += LH));
 
-      textLinesWidth("Графика", leftW).forEach(() => { y += LH; });
-      const colsPG = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_PG = Math.floor((leftW - fit.colGap * (colsPG - 1)) / colsPG);
-      rowMax = 0; col = 0;
+      splitText("Графика", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsPG = gridCols(leftW, minColW, colGap);
+      const eachW_PG = Math.floor((leftW - colGap * (colsPG - 1)) / colsPG);
+      col = 0; rowMax = 0;
       if (plateEnabled && plateList.length) {
         for (let i = 0; i < plateList.length; i++) {
-          const imgH = fit.imgPlate;
-          let cellH = imgH + fit.captionGap;
-          setFont("bold");
-          cellH += textLinesWidth(plateList[i].name || "—", eachW_PG).length * LH;
+          let cellH = imgPlate + 24;
+          cellH += splitText(plateList[i].name || "—", eachW_PG, fitFont, "bold").length * LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsPG || i === plateList.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
-      } else {
-        y += LH;
-      }
+      } else y += LH;
 
-      setFont("normal");
-      textLinesWidth("Эпитафии", leftW).forEach(() => { y += LH; });
-      const colsPE = gridCols(leftW, fit.minColW, fit.colGap);
-      const eachW_PE = Math.floor((leftW - fit.colGap * (colsPE - 1)) / colsPE);
-      rowMax = 0; col = 0;
+      splitText("Эпитафии", leftW, fitFont, "normal").forEach(() => (y += LH));
+      const colsPE = gridCols(leftW, minColW, colGap);
+      const eachW_PE = Math.floor((leftW - colGap * (colsPE - 1)) / colsPE);
+      col = 0; rowMax = 0;
       if (plateEnabled && plateEpBlocks.length) {
         for (let i = 0; i < plateEpBlocks.length; i++) {
-          let cellH = textLinesWidth(plateEpBlocks[i], eachW_PE).length * LH;
+          let cellH = splitText(plateEpBlocks[i], eachW_PE, EP_SIZE, "normal").length * EP_LH;
           rowMax = Math.max(rowMax, cellH);
           col++;
           if (col >= colsPE || i === plateEpBlocks.length - 1) {
-            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+            y += rowMax + rowGap; rowMax = 0; col = 0;
           }
         }
-      } else {
-        y += LH;
-      }
+      } else y += LH;
 
-      // Дополнительно: Цветник/Тумба
-      textLinesWidth("Дополнительно", leftW).forEach(() => { y += LH; });
-      textLinesWidth(`Цветник: ${flowerbed ? "да" : "нет"}`, leftW).forEach(() => { y += LH; });
-      textLinesWidth(`Тумба: ${base ? "да" : "нет"}`, leftW).forEach(() => { y += LH; });
+      // Дополнительно — верхняя граница конца фона плиты
+      const extraTitleTop = y;
+      splitText("Дополнительно", leftW, fitFont, "normal").forEach(() => (y += LH));
+      splitText(`Цветник: ${flowerbed ? "да" : "нет"}`, leftW, fitFont, "normal").forEach(() => (y += LH));
+      splitText(`Тумба: ${base ? "да" : "нет"}`, leftW, fitFont, "normal").forEach(() => (y += LH));
 
-      const plateEnd = y;
+      // Примечания (заголовок по центру)
+      splitText("Примечания", leftW, fitFont, "normal").forEach(() => (y += LH));
+      splitText(notes || "—", leftW, fitFont, "normal").forEach(() => (y += LH));
 
-      // Примечания
-      textLinesWidth("Примечания", leftW).forEach(() => { y += LH; });
-      textLinesWidth(notes || "—", leftW).forEach(() => { y += LH; });
+      return {
+        total: y - margin,
+        LH,
+        EP_LH,
+        faceFillStart,
+        faceFillEndBeforeRearTitle: rearTitleTop,
+        plateFillStart,
+        plateFillEndBeforeExtra: extraTitleTop
+      };
+    }
 
-      return { total: y - margin, faceStart, faceEnd, plateStart, plateEnd, LH };
-    };
-
-    // Подбор параметров, чтобы влезло
-    let meas = measureLeft();
-    while (meas.total > innerH) {
+    // Подбираем, чтобы вместилось
+    let m = measureLeft();
+    while (m.total > innerH) {
       let changed = false;
-      // 1) уменьшаем высоты картинок
-      if (fit.imgPortrait > fit.minImg || fit.imgGraphic > fit.minImg || fit.imgPlate > fit.minImg) {
-        fit.imgPortrait = Math.max(fit.minImg, Math.round(fit.imgPortrait * 0.9));
-        fit.imgGraphic  = Math.max(fit.minImg, Math.round(fit.imgGraphic  * 0.9));
-        fit.imgPlate    = Math.max(fit.minImg, Math.round(fit.imgPlate    * 0.9));
+      if (imgPortrait > minImg || imgGraphic > minImg || imgPlate > minImg) {
+        imgPortrait = Math.max(minImg, Math.round(imgPortrait * 0.9));
+        imgGraphic = Math.max(minImg, Math.round(imgGraphic * 0.9));
+        imgPlate = Math.max(minImg, Math.round(imgPlate * 0.9));
         changed = true;
-      } else if (fit.lhFactor > fit.minLhFactor) {
-        // 2) сжимаем межстрочный
-        fit.lhFactor = Math.max(fit.minLhFactor, +(fit.lhFactor - 0.02).toFixed(2));
+      } else if (lhFactor > minLh) {
+        lhFactor = Math.max(minLh, +(lhFactor - 0.02).toFixed(2));
         changed = true;
-      } else if (fit.minColW > 200) {
-        // 3) увеличиваем число колонок
-        fit.minColW = Math.max(200, fit.minColW - 20);
+      } else if (minColW > 200) {
+        minColW = Math.max(200, minColW - 20);
         changed = true;
-      } else if (fit.fontSize > fit.minFont) {
-        // 4) уменьшаем шрифт
-        fit.fontSize = Math.max(fit.minFont, fit.fontSize - 2);
+      } else if (fitFont > minFont) {
+        fitFont = Math.max(minFont, fitFont - 2);
         changed = true;
       }
       if (!changed) break;
-      meas = measureLeft();
+      m = measureLeft();
     }
 
-    // Рендер: фоны (серые) под Лицевой и Плитой
-    doc.setFillColor(242, 242, 242); // светло-серый
-    const facePad = 8;
-    doc.rect(margin - facePad, meas.faceStart - facePad, leftW + facePad * 2, (meas.faceEnd - meas.faceStart) + facePad * 2, "F");
-    const platePad = 8;
-    doc.rect(margin - platePad, meas.plateStart - platePad, leftW + platePad * 2, (meas.plateEnd - meas.plateStart) + platePad * 2, "F");
+    // Фон (заливка) по измеренным границам
+    doc.setFillColor(242, 242, 242);
+    doc.rect(margin, m.faceFillStart, leftW, Math.max(0, m.faceFillEndBeforeRearTitle - m.faceFillStart), "F");
+    doc.rect(margin, m.plateFillStart, leftW, Math.max(0, m.plateFillEndBeforeExtra - m.plateFillStart), "F");
 
-    // Функции отрисовки
-    const LH_RENDER = meas.LH;
-    const drawText = (style: "bold" | "normal", text: string, x: number, y: number, opts?: { align?: "center" | "left"; maxW?: number }) => {
-      setFont(style);
-      if (opts?.align === "center") doc.text(text, x, y, { align: "center", maxWidth: opts?.maxW ?? leftW });
+    // Рендер левой колонки
+    let yL = margin;
+    const drawText = (weight: "bold" | "normal", text: string, x: number, y: number, opts?: { center?: boolean; size?: number; maxW?: number }) => {
+      setFont(weight, opts?.size ?? fitFont);
+      if (opts?.center) doc.text(text, x, y, { align: "center", maxWidth: opts?.maxW ?? leftW });
       else doc.text(text, x, y, { maxWidth: opts?.maxW ?? leftW });
     };
-    async function toDataUrl(url?: string | null): Promise<string | null> {
-      try {
-        if (!url) return null;
-        if (url.startsWith("data:")) return url;
-        const res = await fetch(url, { mode: "cors" });
-        if (!res.ok) return null;
-        const blob = await res.blob();
-        return await new Promise<string>((resolve) => {
-          const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(blob);
-        });
-      } catch { return null; }
-    }
-    async function addImageCentered(dataUrl?: string | null, colX = 0, y = 0, colW = 100, maxH = 100) {
-      if (!dataUrl) return { w: 0, h: 0 };
-      const im = new Image();
-      await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl; });
-      const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
-      if (!iw || !ih) return { w: 0, h: 0 };
-      const s = Math.min(colW / iw, maxH / ih, 1);
-      const w = Math.round(iw * s), h = Math.round(ih * s);
-      const x = colX + Math.round((colW - w) / 2);
-      doc.addImage(dataUrl, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
-      return { w, h };
-    }
 
-    // Рисуем левую колонку по измеренному плану
-    let xL = margin, yL = margin;
+    // Заголовок заказа
+    drawText("bold", `Заказ № ${orderNoCur || "—"}`, margin + leftW / 2, yL, { center: true }); yL += m.LH;
+    drawText("normal", `${nm} · ${ph}`, margin, yL); yL += m.LH;
 
-    // Заголовок заказа (обычным)
-    drawText("bold", `Заказ № ${orderNoCur || "—"}`, xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
-    drawText("normal", `${nm} · ${ph}`, xL, yL); yL += LH_RENDER;
+    // Лицевая
+    drawText("bold", "Лицевая", margin + leftW / 2, yL, { center: true }); yL += m.LH;
 
-    // — Лицевая —
-    drawText("bold", "Лицевая", xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
+    drawText("normal", "Усопшие", margin, yL); yL += m.LH;
 
-    drawText("normal", "Усопшие", xL, yL); yL += LH_RENDER;
-
-    const colsP = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_P = Math.floor((leftW - fit.colGap * (colsP - 1)) / colsP);
     let col = 0, rowMax = 0;
+    let cols = gridCols(leftW, minColW, colGap);
+    let eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     if (frontPersonsData.length) {
       for (let i = 0; i < frontPersonsData.length; i++) {
-        const cx = xL + col * (eachW_P + fit.colGap);
+        const cx = margin + col * (eachW + colGap);
         let yCell = yL;
 
-        const data = await toDataUrl(frontPersonsData[i].photo);
-        const img = await addImageCentered(data, cx, yCell, eachW_P, fit.imgPortrait);
-        yCell += img.h + fit.captionGap;
+        // метрика в одну строку (над фотографией)
+        const metric = [frontPersonsData[i].fio, frontPersonsData[i].dates].filter(Boolean).join(" · ");
+        drawText("bold", metric || "—", cx + eachW / 2, yCell, { center: true, maxW: eachW }); yCell += m.LH;
 
-        drawText("bold", frontPersonsData[i].l1 || "", cx + eachW_P / 2, yCell, { align: "center", maxW: eachW_P }); yCell += LH_RENDER;
-        drawText("bold", frontPersonsData[i].l2 || "", cx + eachW_P / 2, yCell, { align: "center", maxW: eachW_P }); yCell += LH_RENDER;
-        drawText("normal", frontPersonsData[i].l3 || "—", cx + eachW_P / 2, yCell, { align: "center", maxW: eachW_P }); yCell += LH_RENDER;
+        // фото
+        const data = frontPersonsData[i].photo ? await (async (u?: string | null) => {
+          try {
+            if (!u) return null;
+            if (u.startsWith("data:")) return u;
+            const res = await fetch(u, { mode: "cors" });
+            if (!res.ok) return null;
+            const b = await res.blob();
+            return await new Promise<string>((resolve) => {
+              const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(b);
+            });
+          } catch { return null; }
+        })(frontPersonsData[i].photo) : null;
+
+        if (data) {
+          const im = new Image();
+          await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+          const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+          if (iw && ih) {
+            const s = Math.min(eachW / iw, imgPortrait / ih, 1);
+            const w = Math.round(iw * s), h = Math.round(ih * s);
+            const x = cx + Math.round((eachW - w) / 2);
+            doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, yCell, w, h, undefined, "FAST");
+            yCell += h + 24;
+          }
+        } else {
+          yCell += 24; // если нет фото — только отступ
+        }
 
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsP || i === frontPersonsData.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === frontPersonsData.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    drawText("normal", "Графика", xL, yL); yL += LH_RENDER;
-
-    const colsG = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_G = Math.floor((leftW - fit.colGap * (colsG - 1)) / colsG);
+    // Графика
+    drawText("normal", "Графика", margin, yL); yL += m.LH;
+    cols = gridCols(leftW, minColW, colGap);
+    eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     col = 0; rowMax = 0;
     if (graphicsFront.length) {
       for (let i = 0; i < graphicsFront.length; i++) {
-        const cx = xL + col * (eachW_G + fit.colGap);
+        const cx = margin + col * (eachW + colGap);
         let yCell = yL;
-        const data = await toDataUrl(graphicsFront[i].url);
-        const img = await addImageCentered(data, cx, yCell, eachW_G, fit.imgGraphic);
-        yCell += img.h + fit.captionGap;
 
-        drawText("bold", graphicsFront[i].name, cx + eachW_G / 2, yCell, { align: "center", maxW: eachW_G }); yCell += LH_RENDER;
+        // миниатюра
+        const data = graphicsFront[i].url ? await (async (u?: string | null) => {
+          try {
+            if (!u) return null;
+            if (u.startsWith("data:")) return u;
+            const res = await fetch(u, { mode: "cors" });
+            if (!res.ok) return null;
+            const b = await res.blob();
+            return await new Promise<string>((resolve) => {
+              const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(b);
+            });
+          } catch { return null; }
+        })(graphicsFront[i].url) : null;
+
+        if (data) {
+          const im = new Image();
+          await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+          const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+          if (iw && ih) {
+            const s = Math.min(eachW / iw, imgGraphic / ih, 1);
+            const w = Math.round(iw * s), h = Math.round(ih * s);
+            const x = cx + Math.round((eachW - w) / 2);
+            doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, yCell, w, h, undefined, "FAST");
+            yCell += h + 24;
+          }
+        } else {
+          yCell += 24;
+        }
+
+        // подпись
+        const lines = splitText(graphicsFront[i].name, eachW, fitFont, "bold");
+        for (const ln of lines) { drawText("bold", ln, cx + eachW / 2, yCell, { center: true, maxW: eachW }); yCell += m.LH; }
 
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsG || i === graphicsFront.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === graphicsFront.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    drawText("normal", "Эпитафии", xL, yL); yL += LH_RENDER;
-
-    const colsE = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_E = Math.floor((leftW - fit.colGap * (colsE - 1)) / colsE);
+    // Эпитафии (не жирным, размер 25)
+    drawText("normal", "Эпитафии", margin, yL); yL += m.LH;
+    cols = gridCols(leftW, minColW, colGap);
+    eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     col = 0; rowMax = 0;
     if (frontEps.length) {
       for (let i = 0; i < frontEps.length; i++) {
-        const cx = xL + col * (eachW_E + fit.colGap);
+        const cx = margin + col * (eachW + colGap);
         let yCell = yL;
-        for (const ln of textLinesWidth(frontEps[i], eachW_E)) { drawText("normal", ln, cx, yCell); yCell += LH_RENDER; }
+        const lines = splitText(frontEps[i], eachW, EP_SIZE, "normal");
+        for (const ln of lines) { drawText("normal", ln, cx, yCell, { size: EP_SIZE, maxW: eachW }); yCell += m.EP_LH; }
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsE || i === frontEps.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === frontEps.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    // — Тыльная —
-    drawText("bold", "Тыльная", xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
+    // Тыльная
+    drawText("bold", "Тыльная", margin + leftW / 2, yL, { center: true }); yL += m.LH;
 
-    drawText("normal", "Усопшие", xL, yL); yL += LH_RENDER;
-    drawText("normal", "—", xL, yL); yL += LH_RENDER;
+    drawText("normal", "Усопшие", margin, yL); yL += m.LH;
+    drawText("normal", "—", margin, yL); yL += m.LH;
 
-    drawText("normal", "Графика", xL, yL); yL += LH_RENDER;
-    const colsRG = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_RG = Math.floor((leftW - fit.colGap * (colsRG - 1)) / colsRG);
+    // Графика
+    drawText("normal", "Графика", margin, yL); yL += m.LH;
+    cols = gridCols(leftW, minColW, colGap);
+    eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     col = 0; rowMax = 0;
     if (rearUnique.length) {
       for (let i = 0; i < rearUnique.length; i++) {
-        const cx = xL + col * (eachW_RG + fit.colGap);
+        const cx = margin + col * (eachW + colGap);
         let yCell = yL;
-        const data = await toDataUrl(rearUnique[i].url || null);
-        const img = await addImageCentered(data, cx, yCell, eachW_RG, fit.imgGraphic);
-        yCell += img.h + fit.captionGap;
+
+        const data = rearUnique[i].url ? await (async (u?: string | null) => {
+          try {
+            if (!u) return null;
+            if (u.startsWith("data:")) return u;
+            const res = await fetch(u, { mode: "cors" });
+            if (!res.ok) return null;
+            const b = await res.blob();
+            return await new Promise<string>((resolve) => {
+              const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(b);
+            });
+          } catch { return null; }
+        })(rearUnique[i].url) : null;
+
+        if (data) {
+          const im = new Image();
+          await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+          const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+          if (iw && ih) {
+            const s = Math.min(eachW / iw, imgGraphic / ih, 1);
+            const w = Math.round(iw * s), h = Math.round(ih * s);
+            const x = cx + Math.round((eachW - w) / 2);
+            doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, yCell, w, h, undefined, "FAST");
+            yCell += h + 24;
+          }
+        } else {
+          yCell += 24;
+        }
 
         const nmG = `${rearUnique[i].name || "—"}${(rearCounts[rearUnique[i].id || ""] || 1) > 1 ? ` ×${rearCounts[rearUnique[i].id || ""]}` : ""}`;
-        for (const ln of textLinesWidth(nmG, eachW_RG)) { drawText("bold", ln, cx + eachW_RG / 2, yCell, { align: "center", maxW: eachW_RG }); yCell += LH_RENDER; }
+        const lines = splitText(nmG, eachW, fitFont, "bold");
+        for (const ln of lines) { drawText("bold", ln, cx + eachW / 2, yCell, { center: true, maxW: eachW }); yCell += m.LH; }
 
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsRG || i === rearUnique.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === rearUnique.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    drawText("normal", "Эпитафии", xL, yL); yL += LH_RENDER;
-    const colsRE = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_RE = Math.floor((leftW - fit.colGap * (colsRE - 1)) / colsRE);
+    // Эпитафии
+    drawText("normal", "Эпитафии", margin, yL); yL += m.LH;
+    cols = gridCols(leftW, minColW, colGap);
+    eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     col = 0; rowMax = 0;
     if (rearEps.length) {
       for (let i = 0; i < rearEps.length; i++) {
-        const cx = xL + col * (eachW_RE + fit.colGap); let yCell = yL;
-        for (const ln of textLinesWidth(rearEps[i], eachW_RE)) { drawText("normal", ln, cx, yCell); yCell += LH_RENDER; }
+        const cx = margin + col * (eachW + colGap);
+        let yCell = yL;
+        const lines = splitText(rearEps[i], eachW, EP_SIZE, "normal");
+        for (const ln of lines) { drawText("normal", ln, cx, yCell, { size: EP_SIZE, maxW: eachW }); yCell += m.EP_LH; }
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsRE || i === rearEps.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === rearEps.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    // — Надгробная плита —
-    drawText("bold", "Надгробная плита", xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
+    // Надгробная плита
+    drawText("bold", "Надгробная плита", margin + leftW / 2, yL, { center: true }); yL += m.LH;
 
-    drawText("normal", `Размер: ${plateEnabled ? plateSize : "—"}`, xL, yL); yL += LH_RENDER;
-    drawText("normal", `Толщина: ${plateEnabled ? plateThick : "—"}`, xL, yL); yL += LH_RENDER;
+    drawText("normal", `Размер: ${plateEnabled ? plateSize : "—"}`, margin, yL); yL += m.LH;
+    drawText("normal", `Толщина: ${plateEnabled ? plateThick : "—"}`, margin, yL); yL += m.LH;
 
-    drawText("normal", "Графика", xL, yL); yL += LH_RENDER;
-
-    const colsPG = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_PG = Math.floor((leftW - fit.colGap * (colsPG - 1)) / colsPG);
+    // Графика
+    drawText("normal", "Графика", margin, yL); yL += m.LH;
+    cols = gridCols(leftW, minColW, colGap);
+    eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     col = 0; rowMax = 0;
     if (plateEnabled && plateList.length) {
       for (let i = 0; i < plateList.length; i++) {
-        const cx = xL + col * (eachW_PG + fit.colGap);
+        const cx = margin + col * (eachW + colGap);
         let yCell = yL;
-        const data = await toDataUrl(plateList[i].url || null);
-        const img = await addImageCentered(data, cx, yCell, eachW_PG, fit.imgPlate);
-        yCell += img.h + fit.captionGap;
 
-        for (const ln of textLinesWidth(plateList[i].name || "—", eachW_PG)) { drawText("bold", ln, cx + eachW_PG / 2, yCell, { align: "center", maxW: eachW_PG }); yCell += LH_RENDER; }
+        const data = plateList[i].url ? await (async (u?: string | null) => {
+          try {
+            if (!u) return null;
+            if (u.startsWith("data:")) return u;
+            const res = await fetch(u, { mode: "cors" });
+            if (!res.ok) return null;
+            const b = await res.blob();
+            return await new Promise<string>((resolve) => {
+              const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(b);
+            });
+          } catch { return null; }
+        })(plateList[i].url) : null;
+
+        if (data) {
+          const im = new Image();
+          await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+          const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+          if (iw && ih) {
+            const s = Math.min(eachW / iw, imgPlate / ih, 1);
+            const w = Math.round(iw * s), h = Math.round(ih * s);
+            const x = cx + Math.round((eachW - w) / 2);
+            doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, yCell, w, h, undefined, "FAST");
+            yCell += h + 24;
+          }
+        } else yCell += 24;
+
+        const lines = splitText(plateList[i].name || "—", eachW, fitFont, "bold");
+        for (const ln of lines) { drawText("bold", ln, cx + eachW / 2, yCell, { center: true, maxW: eachW }); yCell += m.LH; }
 
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsPG || i === plateList.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === plateList.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    drawText("normal", "Эпитафии", xL, yL); yL += LH_RENDER;
-    const colsPE = gridCols(leftW, fit.minColW, fit.colGap);
-    const eachW_PE = Math.floor((leftW - fit.colGap * (colsPE - 1)) / colsPE);
+    // Эпитафии
+    drawText("normal", "Эпитафии", margin, yL); yL += m.LH;
+    cols = gridCols(leftW, minColW, colGap);
+    eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
     col = 0; rowMax = 0;
     if (plateEnabled && plateEpBlocks.length) {
       for (let i = 0; i < plateEpBlocks.length; i++) {
-        const cx = xL + col * (eachW_PE + fit.colGap); let yCell = yL;
-        for (const ln of textLinesWidth(plateEpBlocks[i], eachW_PE)) { drawText("normal", ln, cx, yCell); yCell += LH_RENDER; }
+        const cx = margin + col * (eachW + colGap);
+        let yCell = yL;
+        const lines = splitText(plateEpBlocks[i], eachW, EP_SIZE, "normal");
+        for (const ln of lines) { drawText("normal", ln, cx, yCell, { size: EP_SIZE, maxW: eachW }); yCell += m.EP_LH; }
         rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= colsPE || i === plateEpBlocks.length - 1) {
-          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        if (col >= cols || i === plateEpBlocks.length - 1) {
+          yL += rowMax + rowGap; rowMax = 0; col = 0;
         }
       }
-    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
+    } else { drawText("normal", "—", margin, yL); yL += m.LH; }
 
-    drawText("normal", "Дополнительно", xL, yL); yL += LH_RENDER;
-    drawText("normal", `Цветник: ${flowerbed ? "да" : "нет"}`, xL, yL); yL += LH_RENDER;
-    drawText("normal", `Тумба: ${base ? "да" : "нет"}`, xL, yL); yL += LH_RENDER;
+    // Дополнительно
+    drawText("normal", "Дополнительно", margin, yL); yL += m.LH;
+    drawText("normal", `Цветник: ${flowerbed ? "да" : "нет"}`, margin, yL); yL += m.LH;
+    drawText("normal", `Тумба: ${base ? "да" : "нет"}`, margin, yL); yL += m.LH;
 
-    drawText("normal", "Примечания", xL, yL); yL += LH_RENDER;
-    for (const ln of textLinesWidth(notes || "—", leftW)) { drawText("normal", ln, xL, yL); yL += LH_RENDER; }
+    // Примечания (по центру)
+    drawText("normal", "Примечания", margin + leftW / 2, yL, { center: true }); yL += m.LH;
+    for (const ln of splitText(notes || "—", leftW, fitFont, "normal")) { drawText("normal", ln, margin, yL); yL += m.LH; }
 
-    // Правая колонка — эскизы (по центру)
+    // Правая колонка — эскизы
     let xR = margin + leftW + gapCols, yR = margin;
     async function placeRight(dataUrl: string | null | undefined, maxH: number) {
       if (!dataUrl) return;
@@ -1143,23 +1188,50 @@ async function createPdfTwoColumns(sendAlso: boolean) {
     await placeRight(frontPng, Math.floor(innerH / 2) - 8);
     await placeRight(backPng, innerH - (yR - margin));
 
-    // Фото — отдельные страницы
-    const photos: string[] = frontPersonsData.map((p) => p.photo).filter(Boolean) as string[];
+    // Фото — отдельные страницы: метрика (ФИО + даты) в одну строку над фото
+    const photos: { data?: string | null; metric: string }[] = await (async () => {
+      const arr: { data?: string | null; metric: string }[] = [];
+      for (const p of frontPersonsData) {
+        const metric = [p.fio, p.dates].filter(Boolean).join(" · ") || "—";
+        let data: string | null = null;
+        try {
+          const u = p.photo;
+          if (u) {
+            if (u.startsWith("data:")) data = u;
+            else {
+              const res = await fetch(u, { mode: "cors" });
+              if (res.ok) {
+                const b = await res.blob();
+                data = await new Promise<string>((resolve) => {
+                  const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(b);
+                });
+              }
+            }
+          }
+        } catch {}
+        if (data) arr.push({ data, metric });
+      }
+      return arr;
+    })();
+
     for (let i = 0; i < photos.length; i++) {
       doc.addPage();
       let y = margin;
-      drawText("bold", `Фото ${i + 1}`, margin, y); y += LH_RENDER + 8;
-      const data = await toDataUrl(photos[i]);
-      if (data) {
+      // метрика по центру
+      drawText("bold", photos[i].metric, margin + (pageW - margin * 2) / 2, y, { center: true, maxW: pageW - margin * 2 });
+      y += Math.round(fitFont * lhFactor) + 8;
+
+      const d = photos[i].data;
+      if (d) {
         const im = new Image();
-        await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+        await new Promise<void>((res) => { im.onload = () => res(); im.src = d!; });
         const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
         if (iw && ih) {
           const availW = pageW - margin * 2, availH = pageH - margin - y;
           const s = Math.min(availW / iw, availH / ih, 1);
           const w = Math.round(iw * s), h = Math.round(ih * s);
           const x = margin + Math.max(0, (availW - w) / 2);
-          doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
+          doc.addImage(d!, /^data:image\/png/i.test(d!) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
         }
       } else {
         drawText("normal", "Фото недоступно", margin, y);
