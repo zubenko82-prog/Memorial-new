@@ -557,59 +557,376 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     }
   }
 
-  async function createPdfTwoColumns(sendAlso: boolean) {
+  // Замените текущую функцию createPdfTwoColumns в src/screens/ReviewAndSendStep.tsx.
+// Новая версия:
+// - Всю информацию обязательно вмещает: сначала максимально сжимает межстрочные интервалы,
+//   уменьшает миниатюры и при необходимости понижает размер шрифта (до минимума), чтобы уместить контент в левую колонку.
+// - Жирным остаются только заголовки разделов: «Лицевая», «Тыльная», «Надгробная плита» (по центру).
+// - Подзаголовки «Усопшие / Графика / Эпитафии / Дополнительно / Примечания» — обычным (не жирным).
+// - Линии и рамки удалены.
+// - Под разделы «Лицевая» и «Надгробная плита» кладётся светло-серый фон.
+// - Миниатюры меньше, подписи по центру под миниатюрами; при нехватке места миниатюры автоматически уменьшаются ещё.
+// - Правая колонка: эскизы (лицевой/тыльный), как прежде. Фото — на отдельных страницах.
+
+async function createPdfTwoColumns(sendAlso: boolean) {
   try {
-    await new Promise(r => setTimeout(r, 160));
+    await new Promise((r) => setTimeout(r, 120));
 
     const jsPDF = await ensureJsPdf();
     const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
     await ensureCenturyFonts(doc);
     const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
 
-    // Попытка подключить Regular для «не жирного» текста (если файла нет — будет fallback)
+    // Попытка подключить Regular (для обычного текста)
     let REG_READY = false;
     try {
-      const REG_URL = "/fonts/CenturySchoolbook-Regular.ttf";
-      const r = await fetch(REG_URL, { mode: "cors" });
+      const url = "/fonts/CenturySchoolbook-Regular.ttf";
+      const r = await fetch(url, { mode: "cors" });
       if (r.ok) {
         const ab = await r.arrayBuffer();
-        let binary = ""; const bytes = new Uint8Array(ab);
-        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-        const b64 = btoa(binary);
-        doc.addFileToVFS("CenturySchoolbook-Regular.ttf", b64);
+        let bin = "";
+        const bytes = new Uint8Array(ab);
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        doc.addFileToVFS("CenturySchoolbook-Regular.ttf", btoa(bin));
         doc.addFont("CenturySchoolbook-Regular.ttf", "CenturySchoolbook", "normal");
         REG_READY = true;
       }
     } catch {}
 
-    // Геометрия
+    // Геометрия страницы
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const margin = 48;
     const innerW = pageW - margin * 2;
     const innerH = pageH - margin * 2;
-    const gapCols = 32;
+    const gapCols = 28;
     const rightW = Math.round(innerW * 0.40);
     const leftW = innerW - gapCols - rightW;
 
-    // Типографика
-    const SIZE = 40;
-    const LH = Math.round(SIZE * 1.10);   // меньше межстрочный
-    const SEC_SPACE = 18;                 // меньше отступ после разделов
-    const TITLE_SPACE = 8;                // меньше отступ после заголовка
-    const HR_SPACE = 10;                  // меньше отступ после полосы
+    // Данные (берём из текущего драфта)
+    const order = draft || loadOrderDraft();
+    const nm = (loadIntroState().intro?.customerName || "").trim() || "—";
+    const ph = (loadIntroState().intro?.customerPhone || "").trim() || "—";
+    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+    const persons = ((order.engraving?.persons as any[]) || []).filter(Boolean);
+    const frontPersonsData = persons.map((p: any) => ({
+      photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null,
+      l1: (p.lastName || "").trim(),
+      l2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
+      l3: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ")
+    }));
+    const graphicsFront = ((order as any)?.graphics || []).map((g: any) => ({
+      name: g.name || g.id || "—",
+      url: g.preview || g.url || null
+    }));
 
-    const setBase = (style: "bold" | "bolditalic" | "normal") => {
-      if (style === "bolditalic") doc.setFont(FONT, "bolditalic");
-      else if (style === "bold") doc.setFont(FONT, "bold");
-      else {
-        if (REG_READY) doc.setFont("CenturySchoolbook", "normal");
-        else doc.setFont(FONT, "bold"); // fallback, если Regular недоступен
-      }
-      doc.setFontSize(SIZE);
+    const rearIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+    const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+    const rearCounts: Record<string, number> = {};
+    (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
+    const rearUnique = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+
+    const frontEps = toParagraphs((order?.engraving as any)?.epitaphs ?? (order?.engraving as any)?.epitaphText);
+    const rearEps = (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
+    const plateEnabled = !!(order as any)?.extras?.headstonePlate;
+    const plateSize = (order as any)?.extras?.plateSize || "—";
+    const plateThick = (order as any)?.extras?.plateThickness || "—";
+    const plateList: { id: string; name: string; url?: string }[] =
+      Array.from(new Set(((order as any)?.extras?.plateGraphicsIds as string[]) || []))
+        .map((gid) => ((order as any)?.extras?.plateGraphicsMeta || {})[gid] || { id: gid, name: gid, url: "" });
+    const plateEpBlocks = toParagraphs(((order as any)?.extras?.plateEpitaph || "").trim());
+    const flowerbed = !!(order as any)?.extras?.flowerbed;
+    const base = (order as any)?.extras?.base ?? false;
+    const notes = String(((order as any)?.extras?.orderNotes || "")).trim();
+
+    // Эскизы (DOM -> PNG)
+    const frontNode = document.getElementById("pdf-front-sketch");
+    const backNode = document.getElementById("pdf-back-sketch");
+    const frontPng = frontNode ? await captureNodePng(frontNode) : null;
+    const backPng = backNode ? await captureNodePng(backNode) : await (async () => {
+      const u = (order as any)?.editorBack?.previewHiUrl || (order as any)?.editorBack?.previewUrl || null;
+      return await (async function toDataUrl(url?: string | null): Promise<string | null> {
+        try {
+          if (!url) return null;
+          if (url.startsWith("data:")) return url;
+          const res = await fetch(url, { mode: "cors" });
+          if (!res.ok) return null;
+          const blob = await res.blob();
+          return await new Promise<string>((resolve) => {
+            const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || "")); fr.readAsDataURL(blob);
+          });
+        } catch { return null; }
+      })(u);
+    })();
+
+    // Параметры наборов с начальных значений и пределами, будем подбирать
+    const fit = {
+      fontSize: 40,             // начальный
+      minFont: 18,              // минимум
+      lhFactor: 0.95,           // плотный межстрочный
+      minLhFactor: 0.90,
+      imgPortrait: 120,         // начальные высоты миниатюр (ещё уменьшены)
+      imgGraphic: 90,
+      imgPlate: 80,
+      minImg: 50,               // минимум высоты миниатюр
+      captionGap: 24,           // отступ от миниатюры до подписи (больше)
+      colGap: 14,               // меньше расстояние между карточками
+      rowGap: 14,
+      minColW: 260              // можно уменьшать, чтобы увеличить число колонок
     };
 
-    // Картинки
+    // Утилиты текста/картинок
+    const setFont = (style: "bold" | "normal") => {
+      if (style === "bold") doc.setFont(FONT, "bold");
+      else if (REG_READY) doc.setFont("CenturySchoolbook", "normal");
+      else doc.setFont(FONT, "bold"); // fallback
+      doc.setFontSize(fit.fontSize);
+    };
+    function textLinesWidth(text: string, width: number) {
+      return doc.splitTextToSize(text, width);
+    }
+    function gridCols(availW: number, minColW: number, colGap: number) {
+      return Math.max(2, Math.floor((availW + colGap) / (minColW + colGap)));
+    }
+
+    // Измерение левого столбца (без рисования) с возвратом общих высот и границ фоновых блоков
+    const measureLeft = () => {
+      let y = margin;
+
+      const LH = Math.round(fit.fontSize * fit.lhFactor);
+
+      // Заголовок заказа
+      setFont("bold");
+      textLinesWidth(`Заказ № ${orderNoCur || "—"}`, leftW).forEach(() => { y += LH; });
+      setFont("normal");
+      textLinesWidth(`${nm} · ${ph}`, leftW).forEach(() => { y += LH; });
+
+      // — Лицевая (серый фон) —
+      const faceStart = y;
+      setFont("bold");
+      textLinesWidth("Лицевая", leftW).forEach(() => { y += LH; });
+
+      // Усопшие (подзаголовок обычным)
+      setFont("normal");
+      textLinesWidth("Усопшие", leftW).forEach(() => { y += LH; });
+
+      const colsP = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_P = Math.floor((leftW - fit.colGap * (colsP - 1)) / colsP);
+      let rowMax = 0, col = 0;
+
+      if (frontPersonsData.length) {
+        for (let i = 0; i < frontPersonsData.length; i++) {
+          // img height
+          const imgH = fit.imgPortrait;
+          let cellH = imgH + fit.captionGap;
+          // l1, l2, l3
+          setFont("bold");
+          cellH += textLinesWidth(frontPersonsData[i].l1 || "", eachW_P).length * LH;
+          cellH += textLinesWidth(frontPersonsData[i].l2 || "", eachW_P).length * LH;
+          setFont("normal");
+          cellH += textLinesWidth(frontPersonsData[i].l3 || "—", eachW_P).length * LH;
+
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsP || i === frontPersonsData.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+
+      // Графика
+      setFont("normal");
+      textLinesWidth("Графика", leftW).forEach(() => { y += LH; });
+      const colsG = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_G = Math.floor((leftW - fit.colGap * (colsG - 1)) / colsG);
+      rowMax = 0; col = 0;
+      if (graphicsFront.length) {
+        for (let i = 0; i < graphicsFront.length; i++) {
+          const imgH = fit.imgGraphic;
+          let cellH = imgH + fit.captionGap;
+          setFont("bold");
+          cellH += textLinesWidth(graphicsFront[i].name, eachW_G).length * LH;
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsG || i === graphicsFront.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+
+      // Эпитафии
+      setFont("normal");
+      textLinesWidth("Эпитафии", leftW).forEach(() => { y += LH; });
+      const colsE = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_E = Math.floor((leftW - fit.colGap * (colsE - 1)) / colsE);
+      rowMax = 0; col = 0;
+      if (frontEps.length) {
+        for (let i = 0; i < frontEps.length; i++) {
+          let cellH = textLinesWidth(frontEps[i], eachW_E).length * LH;
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsE || i === frontEps.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+      const faceEnd = y;
+
+      // — Тыльная —
+      setFont("bold");
+      textLinesWidth("Тыльная", leftW).forEach(() => { y += LH; });
+
+      setFont("normal");
+      textLinesWidth("Усопшие", leftW).forEach(() => { y += LH; });
+      y += LH; // «—»
+
+      textLinesWidth("Графика", leftW).forEach(() => { y += LH; });
+      const colsRG = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_RG = Math.floor((leftW - fit.colGap * (colsRG - 1)) / colsRG);
+      rowMax = 0; col = 0;
+      if (rearUnique.length) {
+        for (let i = 0; i < rearUnique.length; i++) {
+          const imgH = fit.imgGraphic;
+          let cellH = imgH + fit.captionGap;
+          setFont("bold");
+          const nm = `${rearUnique[i].name || "—"}${(rearCounts[rearUnique[i].id || ""] || 1) > 1 ? ` ×${rearCounts[rearUnique[i].id || ""]}` : ""}`;
+          cellH += textLinesWidth(nm, eachW_RG).length * LH;
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsRG || i === rearUnique.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+
+      setFont("normal");
+      textLinesWidth("Эпитафии", leftW).forEach(() => { y += LH; });
+      const colsRE = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_RE = Math.floor((leftW - fit.colGap * (colsRE - 1)) / colsRE);
+      rowMax = 0; col = 0;
+      if (rearEps.length) {
+        for (let i = 0; i < rearEps.length; i++) {
+          let cellH = textLinesWidth(rearEps[i], eachW_RE).length * LH;
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsRE || i === rearEps.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+
+      // — Надгробная плита (серый фон) —
+      const plateStart = y;
+      setFont("bold");
+      textLinesWidth("Надгробная плита", leftW).forEach(() => { y += LH; });
+
+      setFont("normal");
+      textLinesWidth(`Размер: ${plateEnabled ? plateSize : "—"}`, leftW).forEach(() => { y += LH; });
+      textLinesWidth(`Толщина: ${plateEnabled ? plateThick : "—"}`, leftW).forEach(() => { y += LH; });
+
+      textLinesWidth("Графика", leftW).forEach(() => { y += LH; });
+      const colsPG = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_PG = Math.floor((leftW - fit.colGap * (colsPG - 1)) / colsPG);
+      rowMax = 0; col = 0;
+      if (plateEnabled && plateList.length) {
+        for (let i = 0; i < plateList.length; i++) {
+          const imgH = fit.imgPlate;
+          let cellH = imgH + fit.captionGap;
+          setFont("bold");
+          cellH += textLinesWidth(plateList[i].name || "—", eachW_PG).length * LH;
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsPG || i === plateList.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+
+      setFont("normal");
+      textLinesWidth("Эпитафии", leftW).forEach(() => { y += LH; });
+      const colsPE = gridCols(leftW, fit.minColW, fit.colGap);
+      const eachW_PE = Math.floor((leftW - fit.colGap * (colsPE - 1)) / colsPE);
+      rowMax = 0; col = 0;
+      if (plateEnabled && plateEpBlocks.length) {
+        for (let i = 0; i < plateEpBlocks.length; i++) {
+          let cellH = textLinesWidth(plateEpBlocks[i], eachW_PE).length * LH;
+          rowMax = Math.max(rowMax, cellH);
+          col++;
+          if (col >= colsPE || i === plateEpBlocks.length - 1) {
+            y += rowMax + fit.rowGap; rowMax = 0; col = 0;
+          }
+        }
+      } else {
+        y += LH;
+      }
+
+      // Дополнительно: Цветник/Тумба
+      textLinesWidth("Дополнительно", leftW).forEach(() => { y += LH; });
+      textLinesWidth(`Цветник: ${flowerbed ? "да" : "нет"}`, leftW).forEach(() => { y += LH; });
+      textLinesWidth(`Тумба: ${base ? "да" : "нет"}`, leftW).forEach(() => { y += LH; });
+
+      const plateEnd = y;
+
+      // Примечания
+      textLinesWidth("Примечания", leftW).forEach(() => { y += LH; });
+      textLinesWidth(notes || "—", leftW).forEach(() => { y += LH; });
+
+      return { total: y - margin, faceStart, faceEnd, plateStart, plateEnd, LH };
+    };
+
+    // Подбор параметров, чтобы влезло
+    let meas = measureLeft();
+    while (meas.total > innerH) {
+      let changed = false;
+      // 1) уменьшаем высоты картинок
+      if (fit.imgPortrait > fit.minImg || fit.imgGraphic > fit.minImg || fit.imgPlate > fit.minImg) {
+        fit.imgPortrait = Math.max(fit.minImg, Math.round(fit.imgPortrait * 0.9));
+        fit.imgGraphic  = Math.max(fit.minImg, Math.round(fit.imgGraphic  * 0.9));
+        fit.imgPlate    = Math.max(fit.minImg, Math.round(fit.imgPlate    * 0.9));
+        changed = true;
+      } else if (fit.lhFactor > fit.minLhFactor) {
+        // 2) сжимаем межстрочный
+        fit.lhFactor = Math.max(fit.minLhFactor, +(fit.lhFactor - 0.02).toFixed(2));
+        changed = true;
+      } else if (fit.minColW > 200) {
+        // 3) увеличиваем число колонок
+        fit.minColW = Math.max(200, fit.minColW - 20);
+        changed = true;
+      } else if (fit.fontSize > fit.minFont) {
+        // 4) уменьшаем шрифт
+        fit.fontSize = Math.max(fit.minFont, fit.fontSize - 2);
+        changed = true;
+      }
+      if (!changed) break;
+      meas = measureLeft();
+    }
+
+    // Рендер: фоны (серые) под Лицевой и Плитой
+    doc.setFillColor(242, 242, 242); // светло-серый
+    const facePad = 8;
+    doc.rect(margin - facePad, meas.faceStart - facePad, leftW + facePad * 2, (meas.faceEnd - meas.faceStart) + facePad * 2, "F");
+    const platePad = 8;
+    doc.rect(margin - platePad, meas.plateStart - platePad, leftW + platePad * 2, (meas.plateEnd - meas.plateStart) + platePad * 2, "F");
+
+    // Функции отрисовки
+    const LH_RENDER = meas.LH;
+    const drawText = (style: "bold" | "normal", text: string, x: number, y: number, opts?: { align?: "center" | "left"; maxW?: number }) => {
+      setFont(style);
+      if (opts?.align === "center") doc.text(text, x, y, { align: "center", maxWidth: opts?.maxW ?? leftW });
+      else doc.text(text, x, y, { maxWidth: opts?.maxW ?? leftW });
+    };
     async function toDataUrl(url?: string | null): Promise<string | null> {
       try {
         if (!url) return null;
@@ -622,394 +939,246 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         });
       } catch { return null; }
     }
-    async function imageMeta(dataUrl: string): Promise<{ w: number; h: number } | null> {
-      try {
-        const im = new Image();
-        await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl; });
-        const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
-        if (!w || !h) return null;
-        return { w, h };
-      } catch { return null; }
-    }
-    async function addImageCentered(
-      dataUrl?: string | null,
-      colX = 0,
-      y = 0,
-      colW = 100,
-      maxH = 100
-    ): Promise<{ w: number; h: number; x: number; y: number } | null> {
-      if (!dataUrl) return null;
-      const meta = await imageMeta(dataUrl);
-      if (!meta) return null;
-      const s = Math.min(colW / meta.w, maxH / meta.h, 1);
-      const w = Math.round(meta.w * s), h = Math.round(meta.h * s);
+    async function addImageCentered(dataUrl?: string | null, colX = 0, y = 0, colW = 100, maxH = 100) {
+      if (!dataUrl) return { w: 0, h: 0 };
+      const im = new Image();
+      await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl; });
+      const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+      if (!iw || !ih) return { w: 0, h: 0 };
+      const s = Math.min(colW / iw, maxH / ih, 1);
+      const w = Math.round(iw * s), h = Math.round(ih * s);
       const x = colX + Math.round((colW - w) / 2);
-      try {
-        doc.addImage(dataUrl, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
-        return { w, h, x, y };
-      } catch { return null; }
+      doc.addImage(dataUrl, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
+      return { w, h };
     }
 
-    // Эскизы (DOM -> PNG)
-    const frontNode = document.getElementById("pdf-front-sketch");
-    const backNode = document.getElementById("pdf-back-sketch");
-    const frontPng = frontNode ? await captureNodePng(frontNode) : null;
-    const backPng = backNode ? await captureNodePng(backNode) : await toDataUrl(backSketchUrl || null);
-
-    // Левая колонка
+    // Рисуем левую колонку по измеренному плану
     let xL = margin, yL = margin;
 
-    // Заголовок раздела (по центру)
-    function sectionTitle(text: string) {
-      setBase("bold");
-      const lines = doc.splitTextToSize(text, leftW);
-      lines.forEach((ln: string) => { doc.text(ln, xL + leftW / 2, yL, { align: "center", maxWidth: leftW }); yL += LH; });
-      yL += TITLE_SPACE;
-    }
-    // Подзаголовок раздела (жирный, не курсив)
-    function subTitle(text: string) {
-      setBase("bold");
-      const lines = doc.splitTextToSize(text, leftW);
-      lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += LH; });
-    }
-    // Горизонтальная линия
-    function hr(space = HR_SPACE) {
-      doc.setDrawColor(180);
-      doc.setLineWidth(1.5);
-      doc.line(xL, yL, xL + leftW, yL);
-      yL += space;
-    }
+    // Заголовок заказа (обычным)
+    drawText("bold", `Заказ № ${orderNoCur || "—"}`, xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
+    drawText("normal", `${nm} · ${ph}`, xL, yL); yL += LH_RENDER;
 
-    // Грид (столбцами), подписи и миниатюры по центру
-    async function renderGrid<T>(
-      items: T[],
-      renderCell: (x: number, y: number, colW: number, idx: number, imgScale: number) => Promise<number>,
-      opts?: { minColW?: number; colGap?: number; rowGap?: number; baseImgH?: number }
-    ) {
-      const minColW = Math.max(260, opts?.minColW ?? 280);
-      const colGap = opts?.colGap ?? 16;  // меньше между блоками
-      const rowGap = opts?.rowGap ?? 18;  // меньше между блоками
-      const cols = Math.max(2, Math.floor((leftW + colGap) / (minColW + colGap)));
-      const eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
+    // — Лицевая —
+    drawText("bold", "Лицевая", xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
 
-      // Эвристика: если много элементов и кажется, что не поместятся — уменьшаем масштаб миниатюр
-      let imgScale = 1;
-      const rows = Math.ceil(items.length / cols);
-      const estimateRowH = (opts?.baseImgH ?? 140) + 28 + LH * 2; // img + gap + 2 строки
-      const estimated = yL + rows * (estimateRowH + rowGap);
-      if (estimated > (pageH - margin)) {
-        imgScale = Math.max(0.65, (pageH - margin - yL) / estimated); // грубо уменьшаем
-      }
+    drawText("normal", "Усопшие", xL, yL); yL += LH_RENDER;
 
-      let col = 0;
-      let rowMaxH = 0;
+    const colsP = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_P = Math.floor((leftW - fit.colGap * (colsP - 1)) / colsP);
+    let col = 0, rowMax = 0;
+    if (frontPersonsData.length) {
+      for (let i = 0; i < frontPersonsData.length; i++) {
+        const cx = xL + col * (eachW_P + fit.colGap);
+        let yCell = yL;
 
-      for (let i = 0; i < items.length; i++) {
-        const x = xL + col * (eachW + colGap);
-        const y = yL;
-        const h = await renderCell(x, y, eachW, i, imgScale);
-        rowMaxH = Math.max(rowMaxH, h);
+        const data = await toDataUrl(frontPersonsData[i].photo);
+        const img = await addImageCentered(data, cx, yCell, eachW_P, fit.imgPortrait);
+        yCell += img.h + fit.captionGap;
 
+        drawText("bold", frontPersonsData[i].l1 || "", cx + eachW_P / 2, yCell, { align: "center", maxW: eachW_P }); yCell += LH_RENDER;
+        drawText("bold", frontPersonsData[i].l2 || "", cx + eachW_P / 2, yCell, { align: "center", maxW: eachW_P }); yCell += LH_RENDER;
+        drawText("normal", frontPersonsData[i].l3 || "—", cx + eachW_P / 2, yCell, { align: "center", maxW: eachW_P }); yCell += LH_RENDER;
+
+        rowMax = Math.max(rowMax, yCell - yL);
         col++;
-        if (col >= cols || i === items.length - 1) {
-          yL += rowMaxH + rowGap;
-          col = 0;
-          rowMaxH = 0;
+        if (col >= colsP || i === frontPersonsData.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
         }
       }
-      yL += Math.round(LH * 0.15);
-    }
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-    // Рамка «лёгкого фона» для крупного блока: рисуем перед контентом приблизительно
-    function drawSectionFrame(startY: number, approxHeight: number) {
-      const pad = 10;
-      doc.setDrawColor(230);
-      doc.setLineWidth(1);
-      // рамка без заливки (имитация лёгкого фона)
-      doc.roundedRect(xL - pad, startY - pad, leftW + pad * 2, approxHeight + pad * 2, 10, 10, "S");
-    }
+    drawText("normal", "Графика", xL, yL); yL += LH_RENDER;
 
-    // Данные
-    const nm = (loadIntroState().intro?.customerName || "").trim() || "—";
-    const ph = (loadIntroState().intro?.customerPhone || "").trim() || "—";
-    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-
-    // Шапка
-    sectionTitle(`Заказ № ${orderNoCur || "—"}`);
-    setBase("normal"); doc.text(`${nm} · ${ph}`, xL, yL); yL += LH + Math.round(LH * 0.2);
-    hr();
-
-    // ————— ЛИЦЕВАЯ (с лёгким фоном рамкой) —————
-    const faceStartY = yL;
-    // Приблизительная высота: 3 подблока
-    let faceApproxH = 0;
-
-    sectionTitle("Лицевая");
-
-    subTitle("Усопшие");
-    const portraitsFront = frontPersons.map((p: any) => ({
-      photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null,
-      l1: (p.lastName || "").trim(),
-      l2: [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
-      l3: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ")
-    }));
-    const CAPTION_GAP_BIG = 28;
-    const IMG_H_PORTRAIT = 140;
-    const yBeforePortraits = yL;
-
-    if (portraitsFront.length) {
-      await renderGrid(portraitsFront, async (x, y, colW, idx, imgScale) => {
-        let yCur = y;
-        const imgData = await toDataUrl(portraitsFront[idx].photo);
-        const img = await addImageCentered(imgData, x, yCur, colW, Math.round(IMG_H_PORTRAIT * imgScale));
-        yCur += (img?.h || 0) + CAPTION_GAP_BIG;
-
-        const cx = x + Math.round(colW / 2);
-        setBase("bold"); // ФИО — жирным (уточнено «важное жирным»)
-        if (portraitsFront[idx].l1) { doc.text(portraitsFront[idx].l1, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; }
-        if (portraitsFront[idx].l2) { doc.text(portraitsFront[idx].l2, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; }
-        setBase("normal"); // даты — обычным
-        const dates = portraitsFront[idx].l3 || "—";
-        doc.text(dates, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH;
-
-        return (yCur - y);
-      }, { minColW: 300, colGap: 16, rowGap: 16, baseImgH: IMG_H_PORTRAIT });
-    } else {
-      setBase("normal"); doc.text("—", xL, yL); yL += LH;
-    }
-    faceApproxH += (yL - yBeforePortraits) + 8;
-
-    subTitle("Графика");
-    const graphicsFront = (allFrontGraphics || []).map((g: any) => ({ name: g.name || g.id || "—", url: g.preview || g.url || null }));
-    const IMG_H_GRAPHIC = 110;
-    const yBeforeGfx = yL;
-
+    const colsG = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_G = Math.floor((leftW - fit.colGap * (colsG - 1)) / colsG);
+    col = 0; rowMax = 0;
     if (graphicsFront.length) {
-      await renderGrid(graphicsFront, async (x, y, colW, idx, imgScale) => {
-        let yCur = y;
-        const imgData = await toDataUrl(graphicsFront[idx].url);
-        const img = await addImageCentered(imgData, x, yCur, colW, Math.round(IMG_H_GRAPHIC * imgScale));
-        yCur += (img?.h || 0) + CAPTION_GAP_BIG;
+      for (let i = 0; i < graphicsFront.length; i++) {
+        const cx = xL + col * (eachW_G + fit.colGap);
+        let yCell = yL;
+        const data = await toDataUrl(graphicsFront[i].url);
+        const img = await addImageCentered(data, cx, yCell, eachW_G, fit.imgGraphic);
+        yCell += img.h + fit.captionGap;
 
-        const cx = x + Math.round(colW / 2);
-        setBase("bold"); // название — жирным
-        const lines = doc.splitTextToSize(graphicsFront[idx].name, colW);
-        lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
+        drawText("bold", graphicsFront[i].name, cx + eachW_G / 2, yCell, { align: "center", maxW: eachW_G }); yCell += LH_RENDER;
 
-        return (yCur - y);
-      }, { minColW: 280, colGap: 16, rowGap: 16, baseImgH: IMG_H_GRAPHIC });
-    } else {
-      setBase("normal"); doc.text("—", xL, yL); yL += LH;
-    }
-    faceApproxH += (yL - yBeforeGfx) + 8;
+        rowMax = Math.max(rowMax, yCell - yL);
+        col++;
+        if (col >= colsG || i === graphicsFront.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        }
+      }
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-    subTitle("Эпитафии");
-    const frontEps = toParagraphs((draft?.engraving as any)?.epitaphs ?? (draft?.engraving as any)?.epitaphText);
-    const yBeforeEps = yL;
+    drawText("normal", "Эпитафии", xL, yL); yL += LH_RENDER;
+
+    const colsE = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_E = Math.floor((leftW - fit.colGap * (colsE - 1)) / colsE);
+    col = 0; rowMax = 0;
     if (frontEps.length) {
-      await renderGrid(frontEps, async (x, y, colW, idx) => {
-        const cx = x + Math.round(colW / 2);
-        setBase("normal");
-        const lines = doc.splitTextToSize(frontEps[idx], colW);
-        let yCur = y;
-        lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
-        return (yCur - y);
-      }, { minColW: 320, colGap: 16, rowGap: 14 });
-    } else {
-      setBase("normal"); doc.text("—", xL, yL); yL += LH;
-    }
-    faceApproxH += (yL - yBeforeEps);
+      for (let i = 0; i < frontEps.length; i++) {
+        const cx = xL + col * (eachW_E + fit.colGap);
+        let yCell = yL;
+        for (const ln of textLinesWidth(frontEps[i], eachW_E)) { drawText("normal", ln, cx, yCell); yCell += LH_RENDER; }
+        rowMax = Math.max(rowMax, yCell - yL);
+        col++;
+        if (col >= colsE || i === frontEps.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        }
+      }
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-    // Рамка лёгкого фона для «Лицевая»
-    drawSectionFrame(faceStartY, faceApproxH + LH);
+    // — Тыльная —
+    drawText("bold", "Тыльная", xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
 
-    yL += SEC_SPACE;
-    hr();
+    drawText("normal", "Усопшие", xL, yL); yL += LH_RENDER;
+    drawText("normal", "—", xL, yL); yL += LH_RENDER;
 
-    // ————— ТЫЛЬНАЯ —————
-    sectionTitle("Тыльная");
-
-    subTitle("Усопшие");
-    setBase("normal"); doc.text("—", xL, yL); yL += LH + 6;
-
-    subTitle("Графика");
-    const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-    const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-    const rearCounts: Record<string, number> = {};
-    (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
-    const rearUnique = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+    drawText("normal", "Графика", xL, yL); yL += LH_RENDER;
+    const colsRG = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_RG = Math.floor((leftW - fit.colGap * (colsRG - 1)) / colsRG);
+    col = 0; rowMax = 0;
     if (rearUnique.length) {
-      await renderGrid(rearUnique, async (x, y, colW, idx, imgScale) => {
-        let yCur = y;
-        const imgData = await toDataUrl(rearUnique[idx].url || null);
-        const img = await addImageCentered(imgData, x, yCur, colW, Math.round(IMG_H_GRAPHIC * imgScale));
-        yCur += (img?.h || 0) + CAPTION_GAP_BIG;
+      for (let i = 0; i < rearUnique.length; i++) {
+        const cx = xL + col * (eachW_RG + fit.colGap);
+        let yCell = yL;
+        const data = await toDataUrl(rearUnique[i].url || null);
+        const img = await addImageCentered(data, cx, yCell, eachW_RG, fit.imgGraphic);
+        yCell += img.h + fit.captionGap;
 
-        const cx = x + Math.round(colW / 2);
-        setBase("bold");
-        const nm = `${rearUnique[idx].name || "—"}${(rearCounts[rearUnique[idx].id || ""] || 1) > 1 ? ` ×${rearCounts[rearUnique[idx].id || ""]}` : ""}`;
-        const lines = doc.splitTextToSize(nm, colW);
-        lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
+        const nmG = `${rearUnique[i].name || "—"}${(rearCounts[rearUnique[i].id || ""] || 1) > 1 ? ` ×${rearCounts[rearUnique[i].id || ""]}` : ""}`;
+        for (const ln of textLinesWidth(nmG, eachW_RG)) { drawText("bold", ln, cx + eachW_RG / 2, yCell, { align: "center", maxW: eachW_RG }); yCell += LH_RENDER; }
 
-        return (yCur - y);
-      }, { minColW: 280, colGap: 16, rowGap: 16, baseImgH: IMG_H_GRAPHIC });
-    } else {
-      setBase("normal"); doc.text("—", xL, yL); yL += LH;
-    }
+        rowMax = Math.max(rowMax, yCell - yL);
+        col++;
+        if (col >= colsRG || i === rearUnique.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        }
+      }
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-    subTitle("Эпитафии");
-    const rearEps = (((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
+    drawText("normal", "Эпитафии", xL, yL); yL += LH_RENDER;
+    const colsRE = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_RE = Math.floor((leftW - fit.colGap * (colsRE - 1)) / colsRE);
+    col = 0; rowMax = 0;
     if (rearEps.length) {
-      await renderGrid(rearEps, async (x, y, colW, idx) => {
-        const cx = x + Math.round(colW / 2);
-        setBase("normal");
-        const lines = doc.splitTextToSize(rearEps[idx], colW);
-        let yCur = y;
-        lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
-        return (yCur - y);
-      }, { minColW: 320, colGap: 16, rowGap: 14 });
-    } else {
-      setBase("normal"); doc.text("—", xL, yL); yL += LH;
-    }
-
-    yL += SEC_SPACE;
-    hr();
-
-    // ————— НАДГРОБНАЯ ПЛИТА (с лёгким фоном рамкой) —————
-    const plateStartY = yL;
-    let plateApproxH = 0;
-
-    sectionTitle("Надгробная плита");
-
-    const plateEnabled = !!(draft as any)?.extras?.headstonePlate;
-    if (plateEnabled) {
-      setBase("normal"); 
-      doc.text(`Размер: ${(draft as any)?.extras?.plateSize || "—"}`, xL, yL); yL += LH;
-      doc.text(`Толщина: ${(draft as any)?.extras?.plateThickness || "—"}`, xL, yL); yL += LH + 6;
-
-      subTitle("Графика");
-      const chosenPlateList: { id: string; name: string; url?: string }[] =
-        Array.from(new Set(((draft as any)?.extras?.plateGraphicsIds as string[]) || []))
-        .map((gid) => ((draft as any)?.extras?.plateGraphicsMeta || {})[gid] || { id: gid, name: gid, url: "" });
-
-      const IMG_H_PLATE = 100;
-      const yBeforePlateGraphics = yL;
-
-      if (chosenPlateList.length) {
-        await renderGrid(chosenPlateList, async (x, y, colW, idx, imgScale) => {
-          let yCur = y;
-          const imgData = await toDataUrl(chosenPlateList[idx].url || null);
-          const img = await addImageCentered(imgData, x, yCur, colW, Math.round(IMG_H_PLATE * imgScale));
-          yCur += (img?.h || 0) + CAPTION_GAP_BIG;
-
-          const cx = x + Math.round(colW / 2);
-          setBase("bold");
-          const lines = doc.splitTextToSize(chosenPlateList[idx].name || "—", colW);
-          lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
-
-          return (yCur - y);
-        }, { minColW: 280, colGap: 16, rowGap: 16, baseImgH: IMG_H_PLATE });
-      } else {
-        setBase("normal"); doc.text("—", xL, yL); yL += LH;
+      for (let i = 0; i < rearEps.length; i++) {
+        const cx = xL + col * (eachW_RE + fit.colGap); let yCell = yL;
+        for (const ln of textLinesWidth(rearEps[i], eachW_RE)) { drawText("normal", ln, cx, yCell); yCell += LH_RENDER; }
+        rowMax = Math.max(rowMax, yCell - yL);
+        col++;
+        if (col >= colsRE || i === rearEps.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        }
       }
-      plateApproxH += (yL - yBeforePlateGraphics) + 6;
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-      subTitle("Эпитафии");
-      const plateEp = String((draft as any)?.extras?.plateEpitaph || "").trim();
-      const epBlocks = toParagraphs(plateEp);
-      const yBeforePlateEp = yL;
+    // — Надгробная плита —
+    drawText("bold", "Надгробная плита", xL + leftW / 2, yL, { align: "center", maxW: leftW }); yL += LH_RENDER;
 
-      if (epBlocks.length) {
-        await renderGrid(epBlocks, async (x, y, colW, idx) => {
-          const cx = x + Math.round(colW / 2);
-          setBase("normal");
-          const lines = doc.splitTextToSize(epBlocks[idx], colW);
-          let yCur = y;
-          lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
-          return (yCur - y);
-        }, { minColW: 320, colGap: 16, rowGap: 14 });
-      } else {
-        setBase("normal"); doc.text("—", xL, yL); yL += LH;
+    drawText("normal", `Размер: ${plateEnabled ? plateSize : "—"}`, xL, yL); yL += LH_RENDER;
+    drawText("normal", `Толщина: ${plateEnabled ? plateThick : "—"}`, xL, yL); yL += LH_RENDER;
+
+    drawText("normal", "Графика", xL, yL); yL += LH_RENDER;
+
+    const colsPG = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_PG = Math.floor((leftW - fit.colGap * (colsPG - 1)) / colsPG);
+    col = 0; rowMax = 0;
+    if (plateEnabled && plateList.length) {
+      for (let i = 0; i < plateList.length; i++) {
+        const cx = xL + col * (eachW_PG + fit.colGap);
+        let yCell = yL;
+        const data = await toDataUrl(plateList[i].url || null);
+        const img = await addImageCentered(data, cx, yCell, eachW_PG, fit.imgPlate);
+        yCell += img.h + fit.captionGap;
+
+        for (const ln of textLinesWidth(plateList[i].name || "—", eachW_PG)) { drawText("bold", ln, cx + eachW_PG / 2, yCell, { align: "center", maxW: eachW_PG }); yCell += LH_RENDER; }
+
+        rowMax = Math.max(rowMax, yCell - yL);
+        col++;
+        if (col >= colsPG || i === plateList.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        }
       }
-      plateApproxH += (yL - yBeforePlateEp);
-    } else {
-      setBase("normal"); doc.text("нет", xL, yL); yL += LH;
-      plateApproxH += LH;
-    }
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-    // Добавить «Дополнительно»: Цветник / Тумба
-    const flowerbed = !!(draft as any)?.extras?.flowerbed;
-    const base = (draft as any)?.extras?.base ?? false;
-    yL += 6;
-    subTitle("Дополнительно");
-    setBase("normal");
-    doc.text(`Цветник: ${flowerbed ? "да" : "нет"}`, xL, yL); yL += LH;
-    doc.text(`Тумба: ${base ? "да" : "нет"}`, xL, yL); yL += LH;
-    plateApproxH += LH * 2 + 6;
+    drawText("normal", "Эпитафии", xL, yL); yL += LH_RENDER;
+    const colsPE = gridCols(leftW, fit.minColW, fit.colGap);
+    const eachW_PE = Math.floor((leftW - fit.colGap * (colsPE - 1)) / colsPE);
+    col = 0; rowMax = 0;
+    if (plateEnabled && plateEpBlocks.length) {
+      for (let i = 0; i < plateEpBlocks.length; i++) {
+        const cx = xL + col * (eachW_PE + fit.colGap); let yCell = yL;
+        for (const ln of textLinesWidth(plateEpBlocks[i], eachW_PE)) { drawText("normal", ln, cx, yCell); yCell += LH_RENDER; }
+        rowMax = Math.max(rowMax, yCell - yL);
+        col++;
+        if (col >= colsPE || i === plateEpBlocks.length - 1) {
+          yL += rowMax + fit.rowGap; rowMax = 0; col = 0;
+        }
+      }
+    } else { drawText("normal", "—", xL, yL); yL += LH_RENDER; }
 
-    // Рамка «лёгкого фона» для блока плиты
-    drawSectionFrame(plateStartY, plateApproxH + LH);
+    drawText("normal", "Дополнительно", xL, yL); yL += LH_RENDER;
+    drawText("normal", `Цветник: ${flowerbed ? "да" : "нет"}`, xL, yL); yL += LH_RENDER;
+    drawText("normal", `Тумба: ${base ? "да" : "нет"}`, xL, yL); yL += LH_RENDER;
 
-    yL += SEC_SPACE;
-    hr();
-
-    // ————— ПРИМЕЧАНИЯ —————
-    sectionTitle("Примечания");
-    setBase("normal");
-    doc.text((extras0.orderNotes || "").trim() || "—", xL, yL);
-    yL += LH + SEC_SPACE;
+    drawText("normal", "Примечания", xL, yL); yL += LH_RENDER;
+    for (const ln of textLinesWidth(notes || "—", leftW)) { drawText("normal", ln, xL, yL); yL += LH_RENDER; }
 
     // Правая колонка — эскизы (по центру)
-    let xR = margin + leftW + gapCols;
-    let yR = margin;
-
+    let xR = margin + leftW + gapCols, yR = margin;
     async function placeRight(dataUrl: string | null | undefined, maxH: number) {
-      if (!dataUrl) return 0;
-      const meta = await imageMeta(dataUrl);
-      if (!meta) return 0;
-      const s = Math.min(rightW / meta.w, maxH / meta.h, 1);
-      const w = Math.round(meta.w * s), h = Math.round(meta.h * s);
+      if (!dataUrl) return;
+      const im = new Image();
+      await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl!; });
+      const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+      if (!iw || !ih) return;
+      const s = Math.min(rightW / iw, maxH / ih, 1);
+      const w = Math.round(iw * s), h = Math.round(ih * s);
       const x = xR + Math.round((rightW - w) / 2);
       doc.addImage(dataUrl!, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", x, yR, w, h, undefined, "FAST");
-      yR += h + 24;
-      return h;
+      yR += h + 16;
     }
-    await placeRight(frontPng, Math.floor(innerH / 2) - 12);
+    await placeRight(frontPng, Math.floor(innerH / 2) - 8);
     await placeRight(backPng, innerH - (yR - margin));
 
     // Фото — отдельные страницы
-    const photos: string[] = frontPersons.map((p) => p.photo).filter(Boolean) as string[];
+    const photos: string[] = frontPersonsData.map((p) => p.photo).filter(Boolean) as string[];
     for (let i = 0; i < photos.length; i++) {
       doc.addPage();
       let y = margin;
-      setBase("bold");
-      doc.text(`Фото ${i + 1}`, margin, y);
-      y += LH + TITLE_SPACE;
-
+      drawText("bold", `Фото ${i + 1}`, margin, y); y += LH_RENDER + 8;
       const data = await toDataUrl(photos[i]);
       if (data) {
-        const meta = await imageMeta(data);
-        if (meta) {
-          const availW = pageW - margin * 2;
-          const availH = pageH - margin - y;
-          const s = Math.min(availW / meta.w, availH / meta.h, 1);
-          const w = Math.round(meta.w * s), h = Math.round(meta.h * s);
+        const im = new Image();
+        await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+        const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+        if (iw && ih) {
+          const availW = pageW - margin * 2, availH = pageH - margin - y;
+          const s = Math.min(availW / iw, availH / ih, 1);
+          const w = Math.round(iw * s), h = Math.round(ih * s);
           const x = margin + Math.max(0, (availW - w) / 2);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
         }
       } else {
-        setBase("normal"); doc.text("Фото недоступно", margin, y);
+        drawText("normal", "Фото недоступно", margin, y);
       }
     }
 
     const blob = doc.output("blob");
     if (sendAlso) {
-      await sendPdfToServer(blob, {
-        orderNo: orderNoCur,
-        intro: loadIntroState().intro || {},
-        extras: (loadOrderDraft() as any)?.extras || {}
-      });
-      setConfirmOpen(false);
+      const meta = { orderNo: orderNoCur, intro: loadIntroState().intro || {}, extras: (loadOrderDraft() as any)?.extras || {} };
+      const fd = new FormData();
+      fd.append("pdf", blob, `order-${orderNoCur || Date.now()}.pdf`);
+      fd.append("payload", JSON.stringify(meta));
+      const res = await fetch("/api/send-order-pdf", { method: "POST", body: fd });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        alert(`Не удалось отправить PDF: ${t || res.statusText}`);
+      } else {
+        setConfirmOpen(false);
+      }
     } else {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -1023,6 +1192,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     alert(e?.message || "Не удалось сформировать PDF.");
   }
 }
+
 
   return (
     <div style={safeRoot()}>
