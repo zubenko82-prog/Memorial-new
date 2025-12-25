@@ -557,188 +557,303 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     }
   }
 
-  async function createPdfTwoColumns(sendAlso: boolean) {
-    try {
-      await new Promise(r => setTimeout(r, 160));
-      const jsPDF = await ensureJsPdf();
-      const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
-      await ensureCenturyFonts(doc);
-      const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
+  
+async function createPdfTwoColumns(sendAlso: boolean) {
+  try {
+    // Дать DOM дорисоваться (эскизы)
+    await new Promise(r => setTimeout(r, 160));
 
-      const pageW = doc.internal.pageSize.getWidth();
-      const pageH = doc.internal.pageSize.getHeight();
-      const margin = 48;
-      const innerW = pageW - margin * 2;
-      const innerH = pageH - margin * 2;
-      const gap = 24;
-      const rightW = Math.round(innerW * 0.40);
-      const leftW = innerW - gap - rightW;
+    const jsPDF = await ensureJsPdf();
+    const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
+    await ensureCenturyFonts(doc);
+    const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
 
-      const frontNode = document.getElementById("pdf-front-sketch");
-      const backNode = document.getElementById("pdf-back-sketch");
-      const frontPng = frontNode ? await captureNodePng(frontNode) : null;
-      const backPng = backNode ? await captureNodePng(backNode) : await urlToDataUrlPDF(backSketchUrl || null);
+    // Геометрия страницы
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 48;
+    const innerW = pageW - margin * 2;
+    const innerH = pageH - margin * 2;
+    const gap = 28;           // больше зазор между колонками
+    const rightW = Math.round(innerW * 0.40);
+    const leftW = innerW - gap - rightW;
 
-      // Левая колонка
-      let xL = margin, yL = margin;
-      const setFont = (style: "bold" | "bolditalic", size: number) => { doc.setFont(FONT, style); doc.setFontSize(size); };
-      const addTitle = (text: string) => { setFont("bold", 28); const lines = doc.splitTextToSize(text, leftW); lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 34; }); };
-      const addHr = () => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(xL, yL, xL + leftW, yL); yL += 12; };
-      async function addThumbRowLeft(text: string, thumbUrl?: string | null, qty?: number) {
-        const imgSize = 55, rowH = 62, pad = 8;
-        if (thumbUrl) {
-          const data = await urlToDataUrlPDF(thumbUrl);
-          if (data) { try { doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", xL, yL, imgSize, imgSize, undefined, "FAST"); } catch {} }
-        }
-        setFont("bold", 22);
-        const content = `${text}${qty && qty > 1 ? ` ×${qty}` : ""}`;
-        const textX = xL + (thumbUrl ? imgSize + pad : 0);
-        const textW = leftW - (thumbUrl ? imgSize + pad : 0);
-        const lines = doc.splitTextToSize(content, textW);
-        doc.text(lines, textX, yL + 24);
-        yL += rowH;
-      }
+    // Шрифты и интервалы (увеличены)
+    const TITLE_SIZE = 36;
+    const H2_SIZE = 30;
+    const BODY_SIZE = 24;
+    const LINE_H_MULT = 1.4;           // межстрочный
+    const SEC_SPACE = 22;              // межразделовый доп. интервал
 
-      const nm = (loadIntroState().intro?.customerName || "").trim() || "—";
-      const ph = (loadIntroState().intro?.customerPhone || "").trim() || "—";
-      const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-      addTitle(`Заказ № ${orderNoCur || "—"}`);
-      setFont("bold", 22); doc.text(`${nm} · ${ph}`, xL, yL); yL += 28;
-      addHr();
+    const bodyLH = Math.round(BODY_SIZE * LINE_H_MULT);
+    const h2LH = Math.round(H2_SIZE * LINE_H_MULT);
+    const titleLH = Math.round(TITLE_SIZE * LINE_H_MULT);
 
-      // Лицевая
-      addTitle("Лицевая");
-      setFont("bold", 24); doc.text("Усопшие", xL, yL); yL += 28;
-      if (frontPersons.length) {
-        for (const p of frontPersons) {
-          const fio = [(p.lastName || "").trim(), [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ")].filter(Boolean).join(" ");
-          const dates = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
-          await addThumbRowLeft([fio, dates].filter(Boolean).join(" · "), p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null);
-        }
-      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
+    const setFont = (style: "bold" | "bolditalic", size: number) => { doc.setFont(FONT, style); doc.setFontSize(size); };
 
-      setFont("bold", 24); doc.text("Графика", xL, yL); yL += 28;
-      if (allFrontGraphics.length) {
-        for (const g of allFrontGraphics) await addThumbRowLeft(g.name || g.id || "—", g.preview || g.url || null);
-      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
-
-      setFont("bold", 24); doc.text("Эпитафии", xL, yL); yL += 28;
-      const frontEps = toParagraphs((draft?.engraving as any)?.epitaphs ?? (draft?.engraving as any)?.epitaphText);
-      if (frontEps.length) {
-        setFont("bolditalic", 22);
-        const lines = frontEps.flatMap((t) => doc.splitTextToSize(t, leftW));
-        lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 28; });
-      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
-      addHr();
-
-      // Тыльная
-      addTitle("Тыльная");
-      setFont("bold", 24); doc.text("Усопшие", xL, yL); yL += 28;
-      setFont("bold", 22); doc.text("—", xL, yL); yL += 26;
-
-      setFont("bold", 24); doc.text("Графика", xL, yL); yL += 28;
-      const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-      const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
-      const rearCounts: Record<string, number> = {};
-      (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
-      const rearUnique = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id] || { id, name: id, url: "" });
-      if (rearUnique.length) {
-        for (const g of rearUnique) await addThumbRowLeft(g.name || g.id || "—", g.url || null, rearCounts[g?.id || ""] || 1);
-      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
-
-      setFont("bold", 24); doc.text("Эпитафии", xL, yL); yL += 28;
-      const rearEps = (((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
-      if (rearEps.length) {
-        setFont("bolditalic", 22);
-        const lines = rearEps.flatMap((t) => doc.splitTextToSize(t, leftW));
-        lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 28; });
-      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
-      addHr();
-
-      // Плита
-      addTitle("Надгробная плита");
-      if (extraPlate) {
-        setFont("bold", 22); doc.text(`Размер: ${plateSize || "—"}`, xL, yL); yL += 26;
-        setFont("bold", 22); doc.text(`Толщина: ${plateThickness || "—"}`, xL, yL); yL += 26;
-        setFont("bold", 24); doc.text("Графика", xL, yL); yL += 28;
-        if (chosenPlateList.length) {
-          for (const g of chosenPlateList) await addThumbRowLeft(g.name || g.id || "—", g.url || null);
-        } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
-        setFont("bold", 24); doc.text("Эпитафии", xL, yL); yL += 28;
-        if ((plateEpitaph || "").trim()) {
-          setFont("bolditalic", 22);
-          const lines = doc.splitTextToSize((plateEpitaph || "").trim(), leftW);
-          lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 28; });
-        } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
-      } else {
-        setFont("bold", 22); doc.text("нет", xL, yL); yL += 26;
-      }
-      addHr();
-
-      // Примечания
-      addTitle("Примечания");
-      setFont("bold", 22); doc.text((extras0.orderNotes || "").trim() || "—", xL, yL); yL += 26;
-
-      // Правая колонка — эскизы
-      let xR = margin + leftW + gap;
-      let yR = margin;
-      async function placeRight(dataUrl: string | null | undefined, maxH: number) {
-        if (!dataUrl) return;
-        const im = new Image();
-        await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl!; });
-        const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
-        if (!iw || !ih) return;
-        const scale = Math.min(rightW / iw, maxH / ih, 1);
-        const w = Math.round(iw * scale), h = Math.round(ih * scale);
-        doc.addImage(dataUrl!, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", xR, yR, w, h, undefined, "FAST");
-        yR += h + 12;
-      }
-      await placeRight(frontPng, Math.floor(innerH / 2) - 6);
-      await placeRight(backPng, innerH - (yR - margin));
-
-      // Фото усопших
-      const photos: string[] = frontPersons.map((p) => p.photo).filter(Boolean) as string[];
-      for (let i = 0; i < photos.length; i++) {
-        doc.addPage();
-        let y = margin;
-        setFont("bold", 28); doc.text(`Фото ${i + 1}`, margin, y); y += 34;
-        const data = await urlToDataUrlPDF(photos[i]);
-        if (data) {
-          const im = new Image();
-          await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
-          const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
-          if (iw && ih) {
-            const scale = Math.min((pageW - margin * 2) / iw, (pageH - margin - y) / ih, 1);
-            const w = Math.round(iw * scale), h = Math.round(ih * scale);
-            const x = margin + Math.max(0, ((pageW - margin * 2) - w) / 2);
-            doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
-          }
-        } else {
-          setFont("bold", 22); doc.text("Фото недоступно", margin, y);
-        }
-      }
-
-      const blob = doc.output("blob");
-      if (sendAlso) {
-        await sendPdfToServer(blob, {
-          orderNo: orderNoCur,
-          intro: loadIntroState().intro || {},
-          extras: (loadOrderDraft() as any)?.extras || {}
-        });
-        setConfirmOpen(false);
-      } else {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = `order-${orderNoCur || Date.now()}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
-      }
-    } catch (e: any) {
-      console.error(e);
-      alert(e?.message || "Не удалось сформировать PDF.");
+    function addTitle(t: string) {
+      setFont("bold", TITLE_SIZE);
+      const lines = doc.splitTextToSize(t, leftW);
+      lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += titleLH; });
+      yL += SEC_SPACE; // дополнительный отступ после заголовка
     }
+    function addH2(t: string) {
+      setFont("bold", H2_SIZE);
+      const lines = doc.splitTextToSize(t, leftW);
+      lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += h2LH; });
+      // без SEC_SPACE, чтобы блоки были плотнее, добавим ниже вручную при необходимости
+    }
+    function addBody(t: string) {
+      setFont("bold", BODY_SIZE);
+      const lines = doc.splitTextToSize(t, leftW);
+      lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += bodyLH; });
+    }
+    function addItalic(t: string) {
+      setFont("bolditalic", BODY_SIZE);
+      const lines = doc.splitTextToSize(t, leftW);
+      lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += bodyLH; });
+    }
+    function addHr(spaceBelow = SEC_SPACE) {
+      doc.setDrawColor(190);
+      doc.setLineWidth(1.2);
+      doc.line(xL, yL, xL + leftW, yL);
+      yL += spaceBelow;
+    }
+
+    // Эскизы: подготовка DOM -> PNG
+    const frontNode = document.getElementById("pdf-front-sketch");
+    const backNode = document.getElementById("pdf-back-sketch");
+    const frontPng = frontNode ? await captureNodePng(frontNode) : null;
+    const backPng = backNode ? await captureNodePng(backNode) : await urlToDataUrlPDF(backSketchUrl || null);
+
+    // Левая колонка — состав
+    let xL = margin, yL = margin;
+
+    // Строка с миниатюрой (увеличены и сохранение пропорций)
+    async function addThumbRowLeft(text: string, thumbUrl?: string | null, qty?: number) {
+      // bounding box под миниатюру
+      const BOX = 90;       // увеличено с ~55 до 90
+      const PAD = 12;       // отступ между миниатюрой и текстом
+      const rowH = BOX + 16; // дополнительное пространство под строкой
+
+      // Отрисовать миниатюру (с сохранением пропорций)
+      if (thumbUrl) {
+        const data = await urlToDataUrlPDF(thumbUrl);
+        if (data) {
+          try {
+            const im = new Image();
+            await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+            const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+            if (iw && ih) {
+              const scale = Math.min(BOX / iw, BOX / ih, 1);
+              const w = Math.round(iw * scale);
+              const h = Math.round(ih * scale);
+              const yTop = yL + Math.round((BOX - h) / 2);
+              doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", xL, yTop, w, h, undefined, "FAST");
+            }
+          } catch {}
+        }
+      }
+
+      // Текст справа от миниатюры
+      const textX = xL + (thumbUrl ? BOX + PAD : 0);
+      const textW = leftW - (thumbUrl ? BOX + PAD : 0);
+      const line = `${text}${qty && qty > 1 ? ` ×${qty}` : ""}`;
+      setFont("bold", BODY_SIZE);
+      const lines = doc.splitTextToSize(line, textW);
+      let ty = yL + Math.round(BODY_SIZE + (rowH - BODY_SIZE) / 4); // немного ниже верхней границы
+      // Рисуем строки текста с заданным межстрочным интервалом
+      lines.forEach((ln: string, idx: number) => {
+        doc.text(ln, textX, yL + BODY_SIZE + idx * bodyLH);
+      });
+
+      yL += rowH;
+    }
+
+    // Шапка — заказчик
+    const nm = (loadIntroState().intro?.customerName || "").trim() || "—";
+    const ph = (loadIntroState().intro?.customerPhone || "").trim() || "—";
+    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+
+    addTitle(`Заказ № ${orderNoCur || "—"}`);
+    addBody(`${nm} · ${ph}`);
+    yL += Math.round(BODY_SIZE * 0.6);
+    addHr();
+
+    // Лицевая
+    addTitle("Лицевая");
+
+    addH2("Усопшие");
+    yL += 6;
+    if (frontPersons.length) {
+      for (const p of frontPersons) {
+        const fio = [(p.lastName || "").trim(), [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ")].filter(Boolean).join(" ");
+        const dates = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
+        await addThumbRowLeft([fio, dates].filter(Boolean).join(" · "), p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null);
+      }
+    } else {
+      addBody("—");
+    }
+    yL += SEC_SPACE;
+
+    addH2("Графика");
+    yL += 6;
+    if (allFrontGraphics.length) {
+      for (const g of allFrontGraphics) {
+        await addThumbRowLeft(g.name || g.id || "—", g.preview || g.url || null);
+      }
+    } else {
+      addBody("—");
+    }
+    yL += SEC_SPACE;
+
+    addH2("Эпитафии");
+    yL += 6;
+    const frontEps = toParagraphs((draft?.engraving as any)?.epitaphs ?? (draft?.engraving as any)?.epitaphText);
+    if (frontEps.length) frontEps.forEach((t) => addItalic(t)); else addBody("—");
+
+    yL += SEC_SPACE;
+    addHr();
+
+    // Тыльная
+    addTitle("Тыльная");
+
+    addH2("Усопшие");
+    yL += 6;
+    addBody("—");
+    yL += SEC_SPACE;
+
+    addH2("Графика");
+    yL += 6;
+    const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+    const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+    const rearCounts: Record<string, number> = {};
+    (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
+    const rearUnique = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+    if (rearUnique.length) {
+      for (const g of rearUnique) {
+        await addThumbRowLeft(g.name || g.id || "—", g.url || null, rearCounts[g?.id || ""] || 1);
+      }
+    } else {
+      addBody("—");
+    }
+    yL += SEC_SPACE;
+
+    addH2("Эпитафии");
+    yL += 6;
+    const rearEps = (((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
+    if (rearEps.length) rearEps.forEach((t) => addItalic(t)); else addBody("—");
+
+    yL += SEC_SPACE;
+    addHr();
+
+    // Плита
+    addTitle("Надгробная плита");
+    if ((draft as any)?.extras?.headstonePlate) {
+      addBody(`Размер: ${(draft as any)?.extras?.plateSize || "—"}`);
+      addBody(`Толщина: ${(draft as any)?.extras?.plateThickness || "—"}`);
+      yL += SEC_SPACE;
+
+      addH2("Графика");
+      yL += 6;
+      const chosenPlateList = Array.from(new Set(((draft as any)?.extras?.plateGraphicsIds as string[]) || []))
+        .map((gid) => ((draft as any)?.extras?.plateGraphicsMeta || {})[gid] || { id: gid, name: gid, url: "" });
+      if (chosenPlateList.length) {
+        for (const g of chosenPlateList) await addThumbRowLeft(g.name || g.id || "—", g.url || null);
+      } else {
+        addBody("—");
+      }
+      yL += SEC_SPACE;
+
+      addH2("Эпитафии");
+      yL += 6;
+      const plateEp = String((draft as any)?.extras?.plateEpitaph || "").trim();
+      if (plateEp) addItalic(plateEp); else addBody("—");
+    } else {
+      addBody("нет");
+    }
+
+    yL += SEC_SPACE;
+    addHr();
+
+    // Примечания
+    addTitle("Примечания");
+    addBody((draft as any)?.extras?.orderNotes?.trim() || "—");
+
+    // Правая колонка — эскизы (над друг другом, крупнее; пропорции сохраняются)
+    let xR = margin + leftW + gap;
+    let yR = margin;
+
+    async function placeRight(dataUrl: string | null | undefined, maxH: number) {
+      if (!dataUrl) return 0;
+      const im = new Image();
+      await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl!; });
+      const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+      if (!iw || !ih) return 0;
+      // Немного увеличим высоту блока под каждый эскиз
+      const scale = Math.min(rightW / iw, maxH / ih, 1);
+      const w = Math.round(iw * scale), h = Math.round(ih * scale);
+      doc.addImage(dataUrl!, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", xR, yR, w, h, undefined, "FAST");
+      const used = h + 20; // увеличенный отступ между эскизами
+      yR += used;
+      return used;
+    }
+
+    // Первый (лицевой) — верх
+    await placeRight(frontPng, Math.floor(innerH / 2) - 10);
+    // Второй (тыльный) — ниже
+    await placeRight(backPng, innerH - (yR - margin));
+
+    // Фото усопших — отдельные страницы, крупнее
+    const photos: string[] = frontPersons.map((p) => p.photo).filter(Boolean) as string[];
+    for (let i = 0; i < photos.length; i++) {
+      doc.addPage();
+      let y = margin;
+      setFont("bold", TITLE_SIZE);
+      doc.text(`Фото ${i + 1}`, margin, y);
+      y += titleLH;
+
+      const data = await urlToDataUrlPDF(photos[i]);
+      if (data) {
+        const im = new Image();
+        await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
+        const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
+        if (iw && ih) {
+          const availW = pageW - margin * 2;
+          const availH = pageH - margin - y;
+          const scale = Math.min(availW / iw, availH / ih, 1);
+          const w = Math.round(iw * scale), h = Math.round(ih * scale);
+          const x = margin + Math.max(0, (availW - w) / 2);
+          doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
+        }
+      } else {
+        setFont("bold", BODY_SIZE);
+        doc.text("Фото недоступно", margin, y);
+      }
+    }
+
+    const blob = doc.output("blob");
+    if (sendAlso) {
+      await sendPdfToServer(blob, {
+        orderNo: orderNoCur,
+        intro: loadIntroState().intro || {},
+        extras: (loadOrderDraft() as any)?.extras || {}
+      });
+      setConfirmOpen(false);
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `order-${orderNoCur || Date.now()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+    }
+  } catch (e: any) {
+    console.error(e);
+    alert(e?.message || "Не удалось сформировать PDF.");
   }
+}
+
 
   return (
     <div style={safeRoot()}>
