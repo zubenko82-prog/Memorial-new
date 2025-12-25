@@ -723,7 +723,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <div style={{ width: "100%", maxWidth: 760, margin: "0 auto", ...rootPadSafe() }}>
+    <div style={{ width: "100%", maxWidth: 600, margin: "0 auto", ...rootPadSafe() }}>
       {/* Интегрированный топбар + ссылка */}
       <TopBarWithIntro title="Memorial" />
       <div style={{ display: "flex", justifyContent: "flex-start", margin: "8px 0 12px" }}>
