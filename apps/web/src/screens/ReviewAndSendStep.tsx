@@ -131,13 +131,7 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
     </div>
   );
 }
-function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
-  return (
-    <div style={{ marginBottom: 8 }}>
-      <button type="button" onClick={onOpenTop} style={linkLike()}>Посмотреть состав заказа</button>
-    </div>
-  );
-}
+
 function EditableOrderSummary({ orderNo }: { orderNo: string }) {
   const introInitial = loadIntroState().intro || {};
   const [name, setName] = useState<string>(introInitial.customerName || "");
@@ -747,7 +741,13 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       {/* Один линк для разворота TopBar */}
       <TopLink onOpenTop={openTopbar} />
       <TopBarWithIntro title="Memorial" />
-
+function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <button type="button" onClick={onOpenTop} style={linkLike()}>Посмотреть состав заказа</button>
+    </div>
+  );
+}
       {/* Контакты и № заказа */}
       <EditableOrderSummary orderNo={orderNo} />
 
