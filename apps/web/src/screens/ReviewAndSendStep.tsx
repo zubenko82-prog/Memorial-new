@@ -566,7 +566,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     await ensureCenturyFonts(doc);
     const FONT = csFontReady ? "CenturySchoolbook" : "helvetica";
 
-    // Геометрия
+    // Геометрия страницы
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const margin = 48;
@@ -576,11 +576,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     const rightW = Math.round(innerW * 0.40);
     const leftW = innerW - gapCols - rightW;
 
-    // Типографика (всё 40)
+    // Типографика (всё 40), межстрочный меньше
     const SIZE = 40;
-    const LH = Math.round(SIZE * 1.30);   // межстрочный
-    const SEC_SPACE = 24;                  // между разделами
-    const TITLE_SPACE = 14;                // после заголовка
+    const LH = Math.round(SIZE * 1.10); // МЕНЬШЕ, чем раньше
+    const SEC_SPACE = 24;
+    const TITLE_SPACE = 14;
 
     const setBase = (style: "bold" | "bolditalic" | "normal" = "bold") => {
       if (style === "bolditalic") doc.setFont(FONT, "bolditalic");
@@ -613,17 +613,22 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         return { w, h };
       } catch { return null; }
     }
-    async function addImageCentered(dataUrl?: string | null, colX=0, y=0, colW=100, maxH=100): Promise<{ w: number; h: number; x: number; y: number } | null> {
+    async function addImageCentered(
+      dataUrl?: string | null,
+      colX = 0,
+      y = 0,
+      colW = 100,
+      maxH = 100
+    ): Promise<{ w: number; h: number; x: number; y: number } | null> {
       if (!dataUrl) return null;
       const meta = await imageMeta(dataUrl);
       if (!meta) return null;
       const s = Math.min(colW / meta.w, maxH / meta.h, 1);
       const w = Math.round(meta.w * s), h = Math.round(meta.h * s);
       const x = colX + Math.round((colW - w) / 2);
-      const yTop = y;
       try {
-        doc.addImage(dataUrl, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", x, yTop, w, h, undefined, "FAST");
-        return { w, h, x, y: yTop };
+        doc.addImage(dataUrl, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
+        return { w, h, x, y };
       } catch { return null; }
     }
 
@@ -651,17 +656,16 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       yL += space;
     }
 
-    // Грид-рендер (столбцами, подписи по центру)
+    // Грид (столбцами), подписи и миниатюры по центру
     async function renderGrid<T>(
       items: T[],
       renderCell: (x: number, y: number, colW: number, idx: number) => Promise<number>,
       opts?: { minColW?: number; colGap?: number; rowGap?: number }
     ) {
-      const minColW = Math.max(260, opts?.minColW ?? 280); // шире, т.к. шрифт 40
+      const minColW = Math.max(260, opts?.minColW ?? 280);
       const colGap = opts?.colGap ?? 18;
       const rowGap = opts?.rowGap ?? 22;
       const cols = Math.max(2, Math.floor((leftW + colGap) / (minColW + colGap)));
-      const totalColsW = (cols * minColW) + (colGap * (cols - 1));
       const eachW = Math.floor((leftW - colGap * (cols - 1)) / cols);
 
       let col = 0;
@@ -690,14 +694,14 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
     // Шапка
     sectionTitle(`Заказ № ${orderNoCur || "—"}`);
-    setBase("bold"); doc.text(`${nm} · ${ph}`, xL, yL); yL += LH + Math.round(LH * 0.4);
+    setBase("bold"); doc.text(`${nm} · ${ph}`, xL, yL); yL += LH + Math.round(LH * 0.3);
     hr();
 
     // Лицевая
     sectionTitle("Лицевая");
 
-    // Усопшие — портрет сверху, подпись (ФИО/даты) по центру под миниатюрой
-    setBase("bolditalic"); doc.text("Усопшие", xL, yL); yL += LH + 8;
+    // Усопшие — миниатюры МЕНЬШЕ, отступ ОТ ИХ БОЛЬШЕ, текст по центру
+    setBase("bolditalic"); doc.text("Усопшие", xL, yL); yL += LH + 6;
 
     const portraitsFront = frontPersons.map((p: any) => ({
       photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null,
@@ -706,19 +710,18 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       l3: [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ")
     }));
 
+    // Настройки миниатюр и отступов обновлены
+    const CAPTION_GAP_BIG = 28;   // БОЛЬШЕ отступ от миниатюры до подписи
+    const IMG_H_PORTRAIT = 140;   // МЕНЬШЕ миниатюры
+
     if (portraitsFront.length) {
       await renderGrid(portraitsFront, async (x, y, colW, idx) => {
-        const CAPTION_GAP = 12;   // отступ между миниатюрой и подписью
-        const IMG_MAX_H = 220;
         let yCur = y;
 
-        // Фото по центру
         const imgData = await toDataUrl(portraitsFront[idx].photo);
-        const img = await addImageCentered(imgData, x, yCur, colW, IMG_MAX_H);
-        const usedImgH = img?.h || 0;
-        yCur += usedImgH + CAPTION_GAP;
+        const img = await addImageCentered(imgData, x, yCur, colW, IMG_H_PORTRAIT);
+        yCur += (img?.h || 0) + CAPTION_GAP_BIG;
 
-        // Подпись: ФИО жирным курсивом, по центру; даты — жирным, по центру
         const cx = x + Math.round(colW / 2);
         setBase("bolditalic");
         if (portraitsFront[idx].l1) { doc.text(portraitsFront[idx].l1, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; }
@@ -728,30 +731,30 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         doc.text(dates, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH;
 
         return (yCur - y);
-      }, { minColW: 300, colGap: 20, rowGap: 28 });
+      }, { minColW: 300, colGap: 20, rowGap: 26 });
     } else {
       setBase("bold"); doc.text("—", xL, yL); yL += LH;
     }
 
     yL += SEC_SPACE;
 
-    // Графика — миниатюра по центру, подпись по центру
-    setBase("bolditalic"); doc.text("Графика", xL, yL); yL += LH + 8;
+    // Графика — миниатюры МЕНЬШЕ, подписи по центру, отступ БОЛЬШЕ
+    setBase("bolditalic"); doc.text("Графика", xL, yL); yL += LH + 6;
 
     const graphicsFront = (allFrontGraphics || []).map((g: any) => ({
       name: g.name || g.id || "—",
       url: g.preview || g.url || null
     }));
 
+    const IMG_H_GRAPHIC = 120; // МЕНЬШЕ
+
     if (graphicsFront.length) {
       await renderGrid(graphicsFront, async (x, y, colW, idx) => {
-        const CAPTION_GAP = 12;
-        const IMG_MAX_H = 200;
         let yCur = y;
 
         const imgData = await toDataUrl(graphicsFront[idx].url);
-        const img = await addImageCentered(imgData, x, yCur, colW, IMG_MAX_H);
-        yCur += (img?.h || 0) + CAPTION_GAP;
+        const img = await addImageCentered(imgData, x, yCur, colW, IMG_H_GRAPHIC);
+        yCur += (img?.h || 0) + CAPTION_GAP_BIG;
 
         const cx = x + Math.round(colW / 2);
         setBase("bolditalic");
@@ -766,8 +769,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
     yL += SEC_SPACE;
 
-    // Эпитафии — текст по центру колонки
-    setBase("bolditalic"); doc.text("Эпитафии", xL, yL); yL += LH + 8;
+    // Эпитафии — межстрочный МЕНЬШЕ, выравнивание по центру
+    setBase("bolditalic"); doc.text("Эпитафии", xL, yL); yL += LH + 6;
 
     const frontEps = toParagraphs((draft?.engraving as any)?.epitaphs ?? (draft?.engraving as any)?.epitaphText);
     if (frontEps.length) {
@@ -778,7 +781,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         let yCur = y;
         lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
         return (yCur - y);
-      }, { minColW: 320, colGap: 20, rowGap: 24 });
+      }, { minColW: 320, colGap: 20, rowGap: 22 });
     } else {
       setBase("bold"); doc.text("—", xL, yL); yL += LH;
     }
@@ -789,10 +792,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     // Тыльная
     sectionTitle("Тыльная");
 
-    setBase("bolditalic"); doc.text("Усопшие", xL, yL); yL += LH + 8;
+    setBase("bolditalic"); doc.text("Усопшие", xL, yL); yL += LH + 6;
     setBase("bold"); doc.text("—", xL, yL); yL += LH + SEC_SPACE;
 
-    setBase("bolditalic"); doc.text("Графика", xL, yL); yL += LH + 8;
+    setBase("bolditalic"); doc.text("Графика", xL, yL); yL += LH + 6;
+
     const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
     const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
     const rearCounts: Record<string, number> = {};
@@ -801,13 +805,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
     if (rearUnique.length) {
       await renderGrid(rearUnique, async (x, y, colW, idx) => {
-        const CAPTION_GAP = 12;
-        const IMG_MAX_H = 200;
         let yCur = y;
 
         const imgData = await toDataUrl(rearUnique[idx].url || null);
-        const img = await addImageCentered(imgData, x, yCur, colW, IMG_MAX_H);
-        yCur += (img?.h || 0) + CAPTION_GAP;
+        const img = await addImageCentered(imgData, x, yCur, colW, IMG_H_GRAPHIC);
+        yCur += (img?.h || 0) + CAPTION_GAP_BIG;
 
         const cx = x + Math.round(colW / 2);
         setBase("bolditalic");
@@ -823,7 +825,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
     yL += SEC_SPACE;
 
-    setBase("bolditalic"); doc.text("Эпитафии", xL, yL); yL += LH + 8;
+    setBase("bolditalic"); doc.text("Эпитафии", xL, yL); yL += LH + 6;
     const rearEps = (((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
     if (rearEps.length) {
       await renderGrid(rearEps, async (x, y, colW, idx) => {
@@ -833,7 +835,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         let yCur = y;
         lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
         return (yCur - y);
-      }, { minColW: 320, colGap: 20, rowGap: 24 });
+      }, { minColW: 320, colGap: 20, rowGap: 22 });
     } else {
       setBase("bold"); doc.text("—", xL, yL); yL += LH;
     }
@@ -843,27 +845,27 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
     // Плита
     sectionTitle("Надгробная плита");
-
     const plateEnabled = !!(draft as any)?.extras?.headstonePlate;
-    if (plateEnabled) {
-      setBase("bold");
-      doc.text(`Размер: ${(draft as any)?.extras?.plateSize || "—"}`, xL, yL); yL += LH;
-      doc.text(`Толщина: ${(draft as any)?.extras?.plateThickness || "—"}`, xL, yL); yL += LH + SEC_SPACE;
 
-      setBase("bolditalic"); doc.text("Графика", xL, yL); yL += LH + 8;
+    if (plateEnabled) {
+      setBase("bold"); doc.text(`Размер: ${(draft as any)?.extras?.plateSize || "—"}`, xL, yL); yL += LH;
+      setBase("bold"); doc.text(`Толщина: ${(draft as any)?.extras?.plateThickness || "—"}`, xL, yL); yL += LH + SEC_SPACE;
+
+      setBase("bolditalic"); doc.text("Графика", xL, yL); yL += LH + 6;
+
       const chosenPlateList: { id: string; name: string; url?: string }[] =
         Array.from(new Set(((draft as any)?.extras?.plateGraphicsIds as string[]) || []))
           .map((gid) => ((draft as any)?.extras?.plateGraphicsMeta || {})[gid] || { id: gid, name: gid, url: "" });
 
+      const IMG_H_PLATE = 110; // ЕЩЁ ЧУТЬ МЕНЬШЕ
+
       if (chosenPlateList.length) {
         await renderGrid(chosenPlateList, async (x, y, colW, idx) => {
-          const CAPTION_GAP = 12;
-          const IMG_MAX_H = 180;
           let yCur = y;
 
           const imgData = await toDataUrl(chosenPlateList[idx].url || null);
-          const img = await addImageCentered(imgData, x, yCur, colW, IMG_MAX_H);
-          yCur += (img?.h || 0) + CAPTION_GAP;
+          const img = await addImageCentered(imgData, x, yCur, colW, IMG_H_PLATE);
+          yCur += (img?.h || 0) + CAPTION_GAP_BIG;
 
           const cx = x + Math.round(colW / 2);
           setBase("bolditalic");
@@ -878,17 +880,18 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
       yL += SEC_SPACE;
 
-      setBase("bolditalic"); doc.text("Эпитафии", xL, yL); yL += LH + 8;
+      setBase("bolditalic"); doc.text("Эпитафии", xL, yL); yL += LH + 6;
       const plateEp = String((draft as any)?.extras?.plateEpitaph || "").trim();
-      if (plateEp) {
-        await renderGrid(toParagraphs(plateEp), async (x, y, colW, idx) => {
+      const epBlocks = toParagraphs(plateEp);
+      if (epBlocks.length) {
+        await renderGrid(epBlocks, async (x, y, colW, idx) => {
           const cx = x + Math.round(colW / 2);
           setBase("bolditalic");
-          const lines = doc.splitTextToSize(toParagraphs(plateEp)[idx], colW);
+          const lines = doc.splitTextToSize(epBlocks[idx], colW);
           let yCur = y;
           lines.forEach((ln: string) => { doc.text(ln, cx, yCur, { align: "center", maxWidth: colW }); yCur += LH; });
           return (yCur - y);
-        }, { minColW: 320, colGap: 20, rowGap: 24 });
+        }, { minColW: 320, colGap: 20, rowGap: 22 });
       } else {
         setBase("bold"); doc.text("—", xL, yL); yL += LH;
       }
@@ -922,7 +925,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     await placeRight(frontPng, Math.floor(innerH / 2) - 12);
     await placeRight(backPng, innerH - (yR - margin));
 
-    // Фото — отдельные страницы (крупно, по центру)
+    // Фото — отдельные страницы (по центру)
     const photos: string[] = frontPersons.map((p) => p.photo).filter(Boolean) as string[];
     for (let i = 0; i < photos.length; i++) {
       doc.addPage();
