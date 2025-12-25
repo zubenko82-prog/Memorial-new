@@ -1,18 +1,13 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Что реализовано:
-// - Вверху одна ссылка «Посмотреть состав заказа» (разворачивает TopBarWithIntro).
-// - Страница ограничена max-width: 600px, с safe-area паддингами и overflow-x: hidden (ничего не уходит за край).
-// - Порядок блоков: ссылка -> TopBar -> Выбрано для плиты (если есть)
-//   -> Аккордеоны «Дополнительно / Надгробная плита» -> Эскизы лицевая/тыльная -> Комментарий/подсказка -> Кнопки.
-// - «Рассчитать стоимость» открывает bottom sheet с кнопками «Отправить / Сохранить PDF».
-// - PDF (1512×2138): слева — состав заказа (с миниатюрами!), справа — эскизы (лицевой над тыльным);
-//   далее — каждое прикреплённое фото на своей странице.
-// - В PDF добавлены имя, телефон и № заказа. Фото берём из p.photoPreview / p.photoDataUrl / p.photoUrl / p.photo (dataURL или с CORS).
-//
-// Важно: ошибки сборки из-за «duplicate symbol» и не совпадающих тегов исправлены — все функции/компоненты определены один раз,
-// JSX закрывается корректно.
+// Обновление:
+// - «Посмотреть состав заказа» перенесена напротив номера заказа (в одну строку справа).
+// - Боковые отступы сделаны минимальными (safe-area учтена).
+// - Остальное без изменений: max-width 600px, аккордеоны «Дополнительно / Надгробная плита», эскизы,
+//   комментарий, кнопки «Назад / Рассчитать стоимость», bottom sheet подтверждения.
+// - PDF (1512×2138): слева — состав заказа (с миниатюрами), справа — эскизы (лицевой над тыльным),
+//   далее — каждое прикреплённое фото отдельной страницей. Включены имя, телефон, № заказа.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -78,14 +73,15 @@ async function ensureCenturyFonts(doc: any) {
 
 /* ===== UI helpers ===== */
 function safeRoot(): React.CSSProperties {
+  // Минимальные боковые отступы + safe-area, чтобы контент не уходил за край
   return {
     width: "100%",
     maxWidth: 600,
     margin: "0 auto",
-    paddingTop: "12px",
-    paddingBottom: "calc(12px + env(safe-area-inset-bottom))",
-    paddingLeft: "calc(12px + env(safe-area-inset-left))",
-    paddingRight: "calc(12px + env(safe-area-inset-right))",
+    paddingTop: "10px",
+    paddingBottom: "calc(10px + env(safe-area-inset-bottom))",
+    paddingLeft: "calc(6px + env(safe-area-inset-left))",
+    paddingRight: "calc(6px + env(safe-area-inset-right))",
     boxSizing: "border-box",
     overflowX: "hidden"
   };
@@ -123,7 +119,7 @@ function toParagraphs(input?: string | string[] | null): string[] {
   return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
-/* ===== Простейшие элементы ===== */
+/* ===== Мини-компоненты ===== */
 function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) {
   return (
     <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
@@ -132,7 +128,8 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   );
 }
 
-function EditableOrderSummary({ orderNo }: { orderNo: string }) {
+/* ===== Заголовок: № заказа + линк справа ===== */
+function EditableOrderSummary({ orderNo, onOpenTop }: { orderNo: string; onOpenTop: () => void }) {
   const introInitial = loadIntroState().intro || {};
   const [name, setName] = useState<string>(introInitial.customerName || "");
   const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
@@ -141,9 +138,15 @@ function EditableOrderSummary({ orderNo }: { orderNo: string }) {
     const next: Intro = { customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined };
     saveIntro(next, { lock: false });
   };
+
   return (
-    <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
+    <section style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
+        <div style={{ marginLeft: "auto" }}>
+          <button type="button" onClick={onOpenTop} style={linkLike()}>Посмотреть состав заказа</button>
+        </div>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
         <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
@@ -176,7 +179,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   );
 }
 
-/* ===== Грид каталога ===== */
+/* ===== Грид каталога (для плиты) ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -214,7 +217,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Блок плиты/дополнительно ===== */
+/* ===== Блок плиты/дополнительно (аккордеоны) ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -338,22 +341,22 @@ function PlateBlock(props: {
               </LoudAccordion>
 
               <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
-                {catsLoading && <div>Загрузка каталога…</div>}
-                {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-                {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-                {!catsLoading && cats.length > 0 && (
+                {props.catsLoading && <div>Загрузка каталога…</div>}
+                {props.catsError && <div style={{ color: "#ffb4b4" }}>{props.catsError}</div>}
+                {!props.catsLoading && props.cats.length === 0 && !props.catsError && <div>Каталог пуст.</div>}
+                {!props.catsLoading && props.cats.length > 0 && (
                   <div style={{ display: "grid", gap: 12 }}>
-                    {cats.map((cat: any, idx: number) => {
+                    {props.cats.map((cat: any, idx: number) => {
                       const catKey = String(cat._id || cat.name || idx);
-                      const open = !!(catOpen || {})[catKey];
-                      const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
+                      const open = !!(props.catOpen || {})[catKey];
+                      const toggle = () => props.setCatOpen({ ...(props.catOpen || {}), [catKey]: !open });
                       return (
                         <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                          <CatGrid items={cat.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                          <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={plateIds} addGraphic={addPlateGraphic} removeGraphic={removePlateGraphic} />
+                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
                             </div>
                           ))}
                         </LoudAccordion>
@@ -418,7 +421,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Данные эскизов и плиты
+  // Эскизы и данные
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
@@ -447,6 +450,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
+  // Плита
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -470,7 +474,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     });
   };
 
-  // Каталог плиты
+  // Каталог для плиты
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -738,22 +742,15 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   return (
     <div style={safeRoot()}>
-      {/* Один линк для разворота TopBar */}
-      <TopLink onOpenTop={openTopbar} />
+      {/* TopBar */}
       <TopBarWithIntro title="Memorial" />
-function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
-  return (
-    <div style={{ marginBottom: 8 }}>
-      <button type="button" onClick={onOpenTop} style={linkLike()}>Посмотреть состав заказа</button>
-    </div>
-  );
-}
-      {/* Контакты и № заказа */}
-      <EditableOrderSummary orderNo={orderNo} />
+
+      {/* № заказа + линк справа */}
+      <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} />
 
       {/* Выбрано для плиты */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
-        <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
             {chosenPlateList.length > 0 && (
@@ -780,7 +777,7 @@ function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
       )}
 
       {/* Аккордеоны «Дополнительно / Надгробная плита» */}
-      <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
           extraPlate={extraPlate} setExtraPlate={setExtraPlate}
           plateSize={plateSize} setPlateSize={setPlateSize}
@@ -797,7 +794,7 @@ function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
       </section>
 
       {/* Эскизы */}
-      <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Эскиз — лицевая</div>
         <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
           <div id="pdf-front-sketch" style={{ position: "absolute", inset: 0 }}>
@@ -814,7 +811,7 @@ function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
       </section>
 
       {backSketchUrl && (
-        <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Эскиз — тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
             <img id="pdf-back-sketch" src={backSketchUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
@@ -823,7 +820,7 @@ function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
       )}
 
       {/* Комментарий и подсказка */}
-      <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
+      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Комментарий к заказу</label>
         <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
           Не беспокойтесь: даже при отсутствии нужного пункта финальное подтверждение — по телефону или лично.
@@ -844,7 +841,7 @@ function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
       </section>
 
       {/* Кнопки */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
         <button type="button" onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
         <button type="button" onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
       </div>
