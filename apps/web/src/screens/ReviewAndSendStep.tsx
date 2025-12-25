@@ -1,30 +1,27 @@
 // src/screens/ReviewAndSendStep.tsx
-// Обзор и подтверждение с интегрированным TopBar.
+// Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Требования выполнены:
-// - Вверху TopBarWithIntro + ссылка «Посмотреть состав заказа» (разворачивает топбар).
-// - Далее: «Выбрано для плиты» (если есть), аккордеоны «Дополнительно» и «Надгробная плита»,
-//   эскизы лицевая/тыльная (если есть), комментарий к заказу, кнопки «Назад / Рассчитать стоимость».
-// - При нажатии «Рассчитать стоимость» снизу всплывает подтверждение с кнопками Отправить / Сохранить PDF.
-// - Экран не «прилипает» к краям: учтены safe-area отступы (iOS).
-// - PDF: одна страница — слева состав заказа (Лицевая/Тыльная/Плита/Примечания, как на странице),
-//         справа — эскизы (лицевой над тыльным, друг над другом);
-//         затем каждая прикреплённая фотография — на отдельной странице.
-// - В PDF добавлены имя, телефон и № заказа.
-// - Фото берём из p.photoPreview / p.photoDataUrl / p.photoUrl / p.photo, конвертируем в dataURL.
-// - Секции/стили PDF соответствуют разделам на странице (заголовки и блоки).
-//
-// Важно: для вставки изображений из внешних URL в PDF источник должен отдавать CORS (или используйте data:URL).
+// Выполнено:
+// - Вверху страницы одна ссылка «Посмотреть состав заказа» (разворачивает TopBar).
+// - Макс. ширина страницы 600px + safe-area паддинги, контент не «прилипает» и не уходит за край (overflow-x hidden).
+// - Далее: блок «Выбрано для плиты» (если есть), аккордеоны «Дополнительно / Надгробная плита»,
+//   эскизы лицевая/тыльная, комментарий к заказу, кнопки «Назад / Рассчитать стоимость».
+// - Подтверждение снизу (bottom sheet) с кнопками «Отправить / Сохранить PDF».
+// - PDF: одна страница — слева состав заказа (Лицевая/Тыльная/Плита/Примечания) с миниатюрами!
+//         справа — эскизы (лицевой над тыльным, друг над другом).
+//         Далее — каждое прикреплённое фото усопшего на отдельной странице.
+// - В PDF включены имя, телефон и № заказа.
+// - Фото берём из p.photoPreview / p.photoDataUrl / p.photoUrl / p.photo; конвертируем в dataURL (CORS).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
+import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
-import SketchTemplate from "../components/SketchTemplate";
 
-/* ============ html-to-image для DOM -> PNG (эскизы) ============ */
+/* ===== html-to-image (DOM -> PNG) ===== */
 declare global { interface Window { htmlToImage?: any; jspdf?: any } }
 async function ensureHtmlToImage(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
@@ -41,7 +38,7 @@ async function ensureHtmlToImage(): Promise<any> {
   return window.htmlToImage;
 }
 
-/* ============ jsPDF + Century Schoolbook (Bold, BoldItalic) ============ */
+/* ===== jsPDF + Century Schoolbook ===== */
 async function ensureJsPdf(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
@@ -56,7 +53,6 @@ async function ensureJsPdf(): Promise<any> {
   if (!window.jspdf?.jsPDF) throw new Error("jspdf unavailable");
   return window.jspdf.jsPDF;
 }
-
 let csFontReady = false;
 async function ensureCenturyFonts(doc: any) {
   if (csFontReady) return;
@@ -79,24 +75,31 @@ async function ensureCenturyFonts(doc: any) {
   csFontReady = !!(b64 && bIt64);
 }
 
-/* ============ UI helpers ============ */
-function rootPadSafe(): React.CSSProperties {
+/* ===== UI helpers ===== */
+function safeRoot(): React.CSSProperties {
   return {
+    width: "100%",
+    maxWidth: 600,
+    margin: "0 auto",
     paddingTop: "12px",
     paddingBottom: "calc(12px + env(safe-area-inset-bottom))",
     paddingLeft: "calc(12px + env(safe-area-inset-left))",
-    paddingRight: "calc(12px + env(safe-area-inset-right))"
+    paddingRight: "calc(12px + env(safe-area-inset-right))",
+    boxSizing: "border-box",
+    overflowX: "hidden"
   };
 }
 function glassPanelStyle(): React.CSSProperties {
   return { background: "rgba(20,20,24,0.90)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, color: "#fff", boxSizing: "border-box" };
 }
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
-  const pad = size === "nano" ? "6px 10px" : size === "sm" ? "10px 14px" : "12px 18px";
+  const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
-    padding: pad, borderRadius: 12, border: "1px solid rgba(255,255,255,0.28)",
+    padding: map[size], borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.28)",
     background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
-    color: "#fff", cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+    color: "#fff", cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap",
     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1
   };
@@ -106,7 +109,7 @@ const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", 
 const hrStyle: React.CSSProperties = { border: 0, height: 1, background: "rgba(0,0,0,0.15)", margin: "8px 0" };
 function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
 
-/* ============ Utils ============ */
+/* ===== Utils ===== */
 function personLines(p: any): string[] {
   const l1 = (p?.lastName || "").trim();
   const l2 = [p?.firstName, p?.middleName].map((x) => (x || "").trim()).filter(Boolean).join(" ");
@@ -117,12 +120,11 @@ function toParagraphs(input?: string | string[] | null): string[] {
   if (Array.isArray(input)) return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
   if (!t) return [];
-  const splitByBlank = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
-  if (splitByBlank.length) return splitByBlank;
-  return t.split(/\n/g).map(s => s.trim()).filter(Boolean);
+  const blocks = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
+  return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
 
-/* ============ Элементы ============ */
+/* ===== Элементы ===== */
 function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) {
   return (
     <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
@@ -131,29 +133,25 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   );
 }
 
-/* ============ Заголовок с контактами ============ */
-function EditableOrderSummary({ orderNo, onOpenTop }: { orderNo: string; onOpenTop: () => void }) {
+/* ===== Верх: одна ссылка для разворота топбара ===== */
+function TopLink({ onOpenTop }: { onOpenTop: () => void }) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <button type="button" onClick={onOpenTop} style={linkLike()}>Посмотреть состав заказа</button>
+    </div>
+  );
+}
+
+/* ===== Заголовок с контактами (без ссылки внутри — удалили дубликат) ===== */
+function EditableOrderSummary({ orderNo }: { orderNo: string }) {
   const introInitial = loadIntroState().intro || {};
   const [name, setName] = useState<string>(introInitial.customerName || "");
   const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
   const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
-
-  const saveOnBlur = () => {
-    const next: Intro = {
-      customerName: (name || "").trim(),
-      customerPhone: (phone || "").trim(),
-      customerNotes: (contactNotes || "").trim() || undefined
-    };
-    saveIntro(next, { lock: false });
-  };
-
+  const saveOnBlur = () => saveIntro({ customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined }, { lock: false });
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button type="button" onClick={onOpenTop} style={linkLike()}>Посмотреть состав заказа</button>
-        <div style={{ flex: 1 }} />
-        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-      </div>
+      <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
         <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
@@ -163,14 +161,14 @@ function EditableOrderSummary({ orderNo, onOpenTop }: { orderNo: string; onOpenT
   );
 }
 
-/* ============ Accordion ============ */
+/* ===== Accordion ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
   useEffect(() => {
-    const measure = () => setH(ref.current?.scrollHeight || 0);
-    measure();
-    const ro = new (window as any).ResizeObserver?.(measure);
+    const m = () => setH(ref.current?.scrollHeight || 0);
+    m();
+    const ro = new (window as any).ResizeObserver?.(m);
     if (ref.current && ro) ro.observe(ref.current);
     return () => ro?.disconnect?.();
   }, [children]);
@@ -186,7 +184,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: string; ope
   );
 }
 
-/* ============ Сетка каталога ============ */
+/* ===== Грид каталога ===== */
 function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -224,7 +222,7 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ============ Блок плиты (настройки) ============ */
+/* ===== Блок плиты (аккордеоны) ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -249,13 +247,13 @@ function PlateBlock(props: {
     plateIds
   } = props;
 
-  const [accPlateOpen, setAccPlateOpen] = useState(true);
+  const [accMainOpen, setAccMainOpen] = useState(true);
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <LoudAccordion title="Дополнительно" open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
+      <LoudAccordion title="Дополнительно / Надгробная плита" open={accMainOpen} onToggle={() => setAccMainOpen(v => !v)}>
         <div style={{ display: "grid", gap: 12 }}>
           <div style={{ ...sectionBox }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
@@ -308,8 +306,7 @@ function PlateBlock(props: {
                 </div>
               </div>
 
-              {/* Эпитафии */}
-              <LoudAccordion title="Эпитафия на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
+              <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ ...sectionBox }}>
                     <div style={{ marginBottom: 6 }}>Свой вариант:</div>
@@ -348,7 +345,6 @@ function PlateBlock(props: {
                 </div>
               </LoudAccordion>
 
-              {/* Графика плиты */}
               <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
                 {props.catsLoading && <div>Загрузка каталога…</div>}
                 {props.catsError && <div style={{ color: "#ffb4b4" }}>{props.catsError}</div>}
@@ -368,7 +364,7 @@ function PlateBlock(props: {
                               <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
                             </div>
                           ))}
-                        </LoudAccordion>
+                        </div>
                       );
                     })}
                   </div>
@@ -382,7 +378,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ============ Модалка подтверждения (снизу) ============ */
+/* ===== Bottom sheet подтверждение ===== */
 function ConfirmBottomSheet({ onClose, onSend, onSave }: { onClose: () => void; onSend: () => void; onSave: () => void }) {
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onClick={onClose}>
@@ -409,7 +405,7 @@ function ConfirmBottomSheet({ onClose, onSend, onSave }: { onClose: () => void; 
   );
 }
 
-/* ============ Основной компонент шага ============ */
+/* ===== Основной компонент ===== */
 type Props = { onBack?: () => void };
 export default function ReviewAndSendStep({ onBack }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
@@ -423,14 +419,13 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const orderNo = String(introState.orderNumber || "").trim();
 
-  // Развернуть TopBar (программно кликнуть кнопку с aria-controls="order-panel")
   const openTopbar = () => {
     const btn = document.querySelector<HTMLButtonElement>('button[aria-controls="order-panel"]');
     if (btn && btn.getAttribute("aria-expanded") !== "true") btn.click();
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Данные для секций/превью
+  // Данные
   const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
@@ -457,7 +452,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита (выбранное)
   const extras0 = (draft as any)?.extras || {};
   const [extraBase, setExtraBase] = useState<boolean>(extras0.base ?? true);
   const [extraFlowerbed, setExtraFlowerbed] = useState<boolean>(!!extras0.flowerbed);
@@ -483,7 +477,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     });
   };
 
-  // Каталог для плиты
+  // Каталог
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -531,7 +525,10 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // ===== PDF: одна страница (слева состав, справа эскизы) + фото по страницам =====
+  // Bottom sheet
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // ===== PDF с миниатюрами в списке =====
   async function urlToDataUrlPDF(url?: string | null): Promise<string | null> {
     try {
       if (!url) return null;
@@ -565,7 +562,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   async function createPdfTwoColumns(sendAlso: boolean) {
     try {
-      // Готовим эскизы
       await new Promise(r => setTimeout(r, 160));
       const jsPDF = await ensureJsPdf();
       const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
@@ -594,85 +590,136 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         const lines = doc.splitTextToSize(text, leftW);
         for (const ln of lines) { doc.text(ln, xL, yL); yL += 34; }
       };
-      const addMetric = (text: string, sz = 22) => {
-        setFont("bold", sz);
-        const lh = Math.round(sz * 1.25);
-        const lines = doc.splitTextToSize(text, leftW);
-        for (const ln of lines) { doc.text(ln, xL, yL); yL += lh; }
-      };
-      const addItalic = (text: string, sz = 22) => {
-        setFont("bolditalic", sz);
-        const lh = Math.round(sz * 1.25);
-        const lines = doc.splitTextToSize(text, leftW);
-        for (const ln of lines) { doc.text(ln, xL, yL); yL += lh; }
-      };
       const addHr = () => { doc.setDrawColor(200); doc.setLineWidth(1); doc.line(xL, yL, xL + leftW, yL); yL += 12; };
 
+      // Ряд с миниатюрой (55px) слева, текст справа
+      async function addThumbRowLeft(text: string, thumbUrl?: string | null, qty?: number) {
+        const rowH = 60;
+        const imgSize = 55;
+        const pad = 6;
+        const textX = xL + (thumbUrl ? imgSize + pad : 0);
+        const textW = leftW - (thumbUrl ? imgSize + pad : 0);
+        // миниатюра
+        if (thumbUrl) {
+          const data = await urlToDataUrlPDF(thumbUrl);
+          if (data) {
+            try {
+              doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", xL, yL, imgSize, imgSize, undefined, "FAST");
+            } catch {}
+          }
+        }
+        // текст
+        setFont("bold", 22);
+        const t = `${text}${qty && qty > 1 ? ` ×${qty}` : ""}`;
+        const lines = doc.splitTextToSize(t, textW);
+        const lh = Math.round(22 * 1.25);
+        let ty = yL + Math.min(lh, imgSize); // первая строка
+        doc.text(lines, textX, yL + 24);
+        yL += rowH;
+      }
+
+      // Заголовок и заказчик
       const nm = (loadIntroState().intro?.customerName || "").trim() || "—";
       const ph = (loadIntroState().intro?.customerPhone || "").trim() || "—";
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-
       addTitle(`Заказ № ${orderNoCur || "—"}`);
-      addMetric(`${nm} · ${ph}`, 22);
+      setFont("bold", 22); doc.text(`${nm} · ${ph}`, xL, yL); yL += 28;
       addHr();
 
-      // Лицевая
+      // Лицевая — люди с миниатюрами фото
       addTitle("Лицевая");
-      addMetric("Усопшие", 24);
+      setFont("bold", 24); doc.text("Усопшие", xL, yL); yL += 28;
       if (frontPersons.length) {
-        frontPersons.forEach((p: any) => {
+        for (const p of frontPersons) {
           const fio = [(p.lastName || "").trim(), [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ")].filter(Boolean).join(" ");
           const dates = [p.birthDate?.trim(), p.deathDate?.trim()].filter(Boolean).join(" — ");
-          addMetric([fio, dates].filter(Boolean).join(" · "));
-        });
-      } else addMetric("—");
-      addMetric("Графика", 24);
-      if (allFrontGraphics.length) allFrontGraphics.forEach((g: any) => addMetric(g.name || g.id || "—")); else addMetric("—");
-      addMetric("Эпитафии", 24);
-      if (frontEpitaphs.length) frontEpitaphs.forEach((t) => addItalic(t)); else addMetric("—");
+          const line = [fio, dates].filter(Boolean).join(" · ");
+          await addThumbRowLeft(line, p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null);
+        }
+      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
+
+      // Графика (миниатюры)
+      setFont("bold", 24); doc.text("Графика", xL, yL); yL += 28;
+      if (allFrontGraphics.length) {
+        for (const g of allFrontGraphics) {
+          await addThumbRowLeft(g.name || g.id || "—", g.preview || g.url || null);
+        }
+      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
+
+      // Эпитафии
+      setFont("bold", 24); doc.text("Эпитафии", xL, yL); yL += 28;
+      if (frontEpitaphs.length) {
+        setFont("bolditalic", 22);
+        const lines = frontEpitaphs.flatMap((t) => doc.splitTextToSize(t, leftW));
+        lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 28; });
+      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
       addHr();
 
       // Тыльная
       addTitle("Тыльная");
-      addMetric("Усопшие", 24); addMetric("—");
-      addMetric("Графика", 24);
-      const rg = (draft as any)?.editorBack?.graphicsMeta ? Object.values((draft as any).editorBack.graphicsMeta as Record<string, any>) : [];
-      if (rg.length) (rg as any[]).forEach((g) => addMetric(g.name || g.id || "—")); else addMetric("—");
-      addMetric("Эпитафии", 24);
-      const rbEps = (((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
-      if (rbEps.length) rbEps.forEach((t) => addItalic(t)); else addMetric("—");
+      setFont("bold", 24); doc.text("Усопшие", xL, yL); yL += 28;
+      setFont("bold", 22); doc.text("—", xL, yL); yL += 26;
+      setFont("bold", 24); doc.text("Графика", xL, yL); yL += 28;
+      const rearIds: string[] = (((draft as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+      const rearMeta: Record<string, any> = (((draft as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+      const rearCounts: Record<string, number> = {};
+      (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
+      const rearUnique = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id] || { id, name: id, url: "" });
+      if (rearUnique.length) {
+        for (const g of rearUnique) {
+          const qty = rearCounts[g?.id || ""] || 1;
+          await addThumbRowLeft(g.name || g.id || "—", g.url || null, qty);
+        }
+      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
+
+      setFont("bold", 24); doc.text("Эпитафии", xL, yL); yL += 28;
+      const rearEps = (((draft as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean);
+      if (rearEps.length) {
+        setFont("bolditalic", 22);
+        const lines = rearEps.flatMap((t) => doc.splitTextToSize(t, leftW));
+        lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 28; });
+      } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
       addHr();
 
       // Плита
       addTitle("Надгробная плита");
       if (extraPlate) {
-        addMetric(`Размер: ${plateSize || "—"}`);
-        addMetric(`Толщина: ${plateThickness || "—"}`);
-        addMetric("Графика", 24);
-        if (chosenPlateList.length) chosenPlateList.forEach((g) => addMetric(g.name || g.id)); else addMetric("—");
-        addMetric("Эпитафии", 24);
-        if ((plateEpitaph || "").trim()) addItalic((plateEpitaph || "").trim()); else addMetric("—");
-      } else addMetric("нет");
+        setFont("bold", 22); doc.text(`Размер: ${plateSize || "—"}`, xL, yL); yL += 26;
+        setFont("bold", 22); doc.text(`Толщина: ${plateThickness || "—"}`, xL, yL); yL += 26;
+        setFont("bold", 24); doc.text("Графика", xL, yL); yL += 28;
+        if (chosenPlateList.length) {
+          for (const g of chosenPlateList) await addThumbRowLeft(g.name || g.id || "—", g.url || null);
+        } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
+        setFont("bold", 24); doc.text("Эпитафии", xL, yL); yL += 28;
+        if ((plateEpitaph || "").trim()) {
+          setFont("bolditalic", 22);
+          const lines = doc.splitTextToSize((plateEpitaph || "").trim(), leftW);
+          lines.forEach((ln: string) => { doc.text(ln, xL, yL); yL += 28; });
+        } else { setFont("bold", 22); doc.text("—", xL, yL); yL += 26; }
+      } else {
+        setFont("bold", 22); doc.text("нет", xL, yL); yL += 26;
+      }
       addHr();
 
       // Примечания
       addTitle("Примечания");
-      addMetric((extras0.orderNotes || "").trim() || "—");
+      setFont("bold", 22); doc.text((extras0.orderNotes || "").trim() || "—", xL, yL); yL += 26;
 
       // Правая колонка — эскизы
       let xR = margin + leftW + gap;
       let yR = margin;
-      const placeRight = async (dataUrl: string | null | undefined, maxH: number) => {
+      async function placeRight(dataUrl: string | null | undefined, maxH: number) {
         if (!dataUrl) return;
         const im = new Image();
         await new Promise<void>((res) => { im.onload = () => res(); im.src = dataUrl!; });
         const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
         if (!iw || !ih) return;
-        const scale = Math.min((innerW - leftW - gap) / iw, maxH / ih, 1);
+        const rightAvailW = rightW;
+        const scale = Math.min(rightAvailW / iw, maxH / ih, 1);
         const w = Math.round(iw * scale), h = Math.round(ih * scale);
         doc.addImage(dataUrl!, /^data:image\/png/i.test(dataUrl) ? "PNG" : "JPEG", xR, yR, w, h, undefined, "FAST");
         yR += h + 12;
-      };
+      }
       await placeRight(frontPng, Math.floor(innerH / 2) - 6);
       await placeRight(backPng, innerH - (yR - margin));
 
@@ -688,23 +735,19 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           await new Promise<void>((res) => { im.onload = () => res(); im.src = data; });
           const iw = im.naturalWidth || 0, ih = im.naturalHeight || 0;
           if (iw && ih) {
-            const scale = Math.min(innerW / iw, (innerH - (y - margin)) / ih, 1);
+            const scale = Math.min((pageW - margin * 2) / iw, (pageH - margin - y) / ih, 1);
             const w = Math.round(iw * scale), h = Math.round(ih * scale);
-            const x = margin + Math.max(0, (innerW - w) / 2);
+            const x = margin + Math.max(0, ((pageW - margin * 2) - w) / 2);
             doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", x, y, w, h, undefined, "FAST");
           }
         } else {
-          setFont("bold", 22); doc.text("—", margin, y);
+          setFont("bold", 22); doc.text("Фото недоступно", margin, y);
         }
       }
 
       const blob = doc.output("blob");
       if (sendAlso) {
-        await sendPdfToServer(blob, {
-          orderNo: orderNoCur,
-          intro: loadIntroState().intro || {},
-          extras: (loadOrderDraft() as any)?.extras || {}
-        });
+        await sendPdfToServer(blob, { orderNo: orderNoCur, intro: loadIntroState().intro || {}, extras: (loadOrderDraft() as any)?.extras || {} });
         setConfirmOpen(false);
       } else {
         const a = document.createElement("a");
@@ -720,20 +763,17 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     }
   }
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-
   return (
-    <div style={{ width: "100%", maxWidth: 600, margin: "0 auto", ...rootPadSafe() }}>
-      {/* Интегрированный топбар + ссылка */}
+    <div style={safeRoot()}>
+      {/* ОДНА ссылка для разворота топбара */}
+      <TopLink onOpenTop={openTopbar} />
+      {/* TopBar */}
       <TopBarWithIntro title="Memorial" />
-      <div style={{ display: "flex", justifyContent: "flex-start", margin: "8px 0 12px" }}>
-        <button type="button" onClick={openTopbar} style={linkLike()}>Посмотреть состав заказа</button>
-      </div>
 
-      {/* Заголовок/контакты */}
-      <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} />
+      {/* Контакты/заказ № */}
+      <EditableOrderSummary orderNo={orderNo} />
 
-      {/* Выбрано для плиты */}
+      {/* Выбрано для плиты (если есть) */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
         <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
           <div style={{ ...sectionBox }}>
@@ -804,7 +844,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </section>
       )}
 
-      {/* Комментарий */}
+      {/* Комментарий к заказу + подсказка */}
       <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 12 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Комментарий к заказу</label>
         <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
@@ -820,7 +860,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
             saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
             setDraft(loadOrderDraft());
           }}
-          placeholder="Добавьте комментарий к заказу…"
+          placeholder="Добавьте комментарий…"
           style={{ ...inputStyle(), resize: "vertical" }}
         />
       </section>
@@ -831,7 +871,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         <button type="button" onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
       </div>
 
-      {/* Подтверждение снизу */}
+      {/* Подтверждение (bottom sheet) */}
       {confirmOpen && (
         <ConfirmBottomSheet
           onClose={() => setConfirmOpen(false)}
