@@ -80,8 +80,8 @@ function safeRoot(): React.CSSProperties {
     margin: "0 auto",
     paddingTop: "10px",
     paddingBottom: "calc(10px + env(safe-area-inset-bottom))",
-    paddingLeft: "calc(8px + env(safe-area-inset-left))",
-    paddingRight: "calc(8px + env(safe-area-inset-right))",
+    paddingLeft: "calc(12px + env(safe-area-inset-left))",
+    paddingRight: "calc(12px + env(safe-area-inset-right))",
     boxSizing: "border-box",
     overflowX: "hidden"
   };
