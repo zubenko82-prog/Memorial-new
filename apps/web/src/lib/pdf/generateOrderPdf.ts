@@ -1,19 +1,22 @@
 // apps/web/src/lib/pdf/generateOrderPdf.ts
 // PDF «как TopBar»:
-// - Слева — компактная сводка по мотивам TopBar: Имя, Телефон, № заказа,
-//   «Резная работа» (миниатюра такого же размера, как и у графики), Люди (2 колонки),
-//   Графика (лицевая/тыльная), Эпитафии (обе стороны),
-//   Плита — выбранное (параметры, графика, эпитафии), Дополнительно (Цветник, Тумба), Примечания.
+// - Слева — компактная сводка: Имя, Телефон, № заказа,
+//   Резная работа (миниатюра того же размера, что и прочая графика),
+//   Люди (2 колонки), Графика (лицевая/тыльная), Эпитафии,
+//   Плита — выбранное (параметры, графика, эпитафии),
+//   Дополнительно (Цветник, Тумба), Примечания.
 // - Справа — эскизы (лицевой сверху, тыльный ниже).
+//
+// Доп. требования:
+// - Добавить отступы снизу под портретами и под миниатюрами (в карточках).
+// - Заголовки «Люди», «Графика», «Эпитафии», «Графика плиты», «Надгробная плита», «Примечания»
+//   — выравниваем по центру, делаем полужирными и подчёркнутыми.
 //
 // Экспорт:
 // - generateOrderPdf(args) -> Blob
 // - downloadBlob(blob, filename)
 // - sendPdfToServer(blob, meta)
-//
-// Шрифт: Noto Sans с CDN (Unicode, кириллица).
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
   interface Window { htmlToImage?: any; jspdf?: any }
 }
@@ -91,7 +94,6 @@ async function nodeToPng(node?: HTMLElement | null): Promise<string | null> {
   const hti = await ensureHtmlToImage();
   return await hti.toPng(node, { backgroundColor: "#ffffff", pixelRatio: 2, cacheBust: true });
 }
-
 async function urlToDataUrl(url?: string | null): Promise<string | null> {
   try {
     if (!url) return null;
@@ -106,13 +108,8 @@ async function urlToDataUrl(url?: string | null): Promise<string | null> {
     });
   } catch { return null; }
 }
-
-function splitToLines(doc: any, txt: string, maxW: number) {
-  return doc.splitTextToSize(txt, maxW);
-}
-
+function splitToLines(doc: any, txt: string, maxW: number) { return doc.splitTextToSize(txt, maxW); }
 function dl(text: string) { return (text || "").trim(); }
-
 function toParagraphsSafe(input?: string | string[] | null): string[] {
   if (Array.isArray(input)) return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
@@ -120,7 +117,6 @@ function toParagraphsSafe(input?: string | string[] | null): string[] {
   const blocks = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
   return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
-
 function fileNameFromUrl(url?: string): string {
   if (!url) return "";
   try {
@@ -148,7 +144,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
   await ensurePdfFonts(doc);
 
-  // Page geometry
+  // Grid
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 48;
@@ -158,17 +154,18 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const gapCols = 28;
   const leftW = innerW - gapCols - rightW;
 
-  // Typography (TopBar-compact)
+  // Typography
   let base = 30, lhK = 1.18;
   const minBase = 20, minLhK = 1.10;
   const TITLE = 28, FILE = 28, EP = 32;
 
-  // Miniature sizes (equal for carving and other graphics)
+  // Mini sizes and spacing (add extra bottom padding under images)
   const PEOPLE_COLS = 2, PEOPLE_IMG_W_FACTOR = 0.50;
   let photoH = 140, gfxH = 80, plateH = 80;
   const minImgH = 54;
+  const IMG_BOTTOM_PAD = 10; // отступ снизу под портретом и миниатюрами
 
-  // Grid
+  // Grid tune
   let minColW = 240, gapCol = 14, gapRow = 12, gapText = 12;
 
   // Safe font setter
@@ -189,7 +186,21 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const cols = (availW: number) => Math.max(2, Math.floor((availW + gapCol) / (minColW + gapCol)));
   const hr = (y: number) => { doc.setDrawColor(210); doc.setLineWidth(1.1); doc.line(margin, y, margin + leftW, y); };
 
-  // Data extract
+  // Centered bold underlined heading helper
+  const underlineOffset = 3;
+  function headingCentered(text: string, yPos: number, size = TITLE): number {
+    setFont(true, size);
+    const cx = margin + leftW / 2;
+    doc.text(text, cx, yPos, { align: "center", maxWidth: leftW });
+    // underline
+    const tw = doc.getTextWidth(text);
+    doc.setDrawColor(40);
+    doc.setLineWidth(0.9);
+    doc.line(cx - tw / 2, yPos + underlineOffset, cx + tw / 2, yPos + underlineOffset);
+    return yPos + lh(size);
+  }
+
+  // Data
   const custName = dl(intro?.intro?.customerName) || "—";
   const custPhone = dl(intro?.intro?.customerPhone) || "—";
   const orderNo = String(intro?.orderNumber || "—");
@@ -246,48 +257,44 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
     // Carving
     if (itemUrl || itemName) {
-      y += 6; split("Резная работа", leftW, TITLE, true).forEach(() => y += lh(TITLE));
+      y += 6;
       const c = cols(leftW), cellW = Math.floor((leftW - gapCol * (c - 1)) / c);
       const nameH = split(itemName || "—", cellW - Math.floor(cellW * 0.40) - gapText, FILE).length * lh(FILE);
-      y += Math.max(gfxH, nameH) + gapRow;
+      y += Math.max(gfxH + IMG_BOTTOM_PAD, nameH) + gapRow;
     }
 
     // People
     if (persons.length) {
-      y += 6; split("Люди", leftW, TITLE, true).forEach(() => y += lh(TITLE));
+      y += 6;
       y += measurePeople();
     }
 
     // Graphics
-    if (gfxFront.length) { y += 6; split("Графика (лицевая)", leftW, base).forEach(() => y += lh(base)); y += measureGraphics(gfxFront, gfxH); }
-    if (gfxRear.length)  { y += 6; split("Графика (тыльная)", leftW, base).forEach(() => y += lh(base)); y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); }
+    if (gfxFront.length) { y += 6; y += measureGraphics(gfxFront, gfxH); }
+    if (gfxRear.length)  { y += 6; y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); }
 
     // Epitaphs
     if (epsFront.length || epsRear.length) {
-      y += 6; split("Эпитафии", leftW, base).forEach(() => y += lh(base));
-      y += measureEpitaphs([...epsFront, ...epsRear]) + 10;
+      y += 6; y += measureEpitaphs([...epsFront, ...epsRear]) + 10;
     }
 
     // Plate
     if (plateOn) {
-      y += 10; split("Надгробная плита — выбрано", leftW, TITLE, true).forEach(() => y += lh(TITLE));
-      if (plateSize)  split(`Размер: ${plateSize}`, leftW, base).forEach(() => y += lh(base));
-      if (plateThick) split(`Толщина: ${plateThick}`, leftW, base).forEach(() => y += lh(base));
-      if (plateOrient) split(`Ориентация: ${plateOrient === "horizontal" ? "горизонтально" : "вертикально"}`, leftW, base).forEach(() => y += lh(base));
-      if (plateUnique.length) { y += 6; split("Графика плиты", leftW, base).forEach(() => y += lh(base)); y += measureGraphics(plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH); }
-      if (plateEps.length)   { y += 6; split("Эпитафии плиты", leftW, base).forEach(() => y += lh(base)); y += measureEpitaphs(plateEps) + 10; }
+      y += 10;
+      if (plateSize)  y += lh(base);
+      if (plateThick) y += lh(base);
+      if (plateOrient) y += lh(base);
+      if (plateUnique.length) { y += 6; y += measureGraphics(plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH); }
+      if (plateEps.length)    { y += 6; y += measureEpitaphs(plateEps) + 10; }
     }
 
     // Extras
-    y += 6; split("Дополнительно", leftW, base).forEach(() => y += lh(base));
-    split(`Цветник: ${flowerbed ? "да" : "нет"}`, leftW, base).forEach(() => y += lh(base));
-    split(`Тумба: ${baseOn ? "да" : "нет"}`, leftW, base).forEach(() => y += lh(base));
+    y += 6;
+    y += lh(base); // Цветник
+    y += lh(base); // Тумба
 
     // Notes
-    if (notes) {
-      y += 6; split("Примечания", leftW, base).forEach(() => y += lh(base));
-      y += split(notes, leftW, base).length * lh(base);
-    }
+    if (notes) { y += 6; y += split(notes, leftW, base).length * lh(base); }
 
     return { total: y - margin };
 
@@ -302,7 +309,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           split(persons[i].last || "—", txtW, base).length * lh(base) +
           split(persons[i].namePatr || "—", txtW, base).length * lh(base) +
           split(persons[i].dates || "—", txtW, base).length * lh(base);
-        rowMax = Math.max(rowMax, Math.max(photoH, textH));
+        rowMax = Math.max(rowMax, Math.max(photoH + IMG_BOTTOM_PAD, textH));
         if (++colI >= c || i === persons.length - 1) { used += rowMax + gapRow; colI = 0; rowMax = 0; }
       }
       return used;
@@ -316,7 +323,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       if (!list.length) return lh(base);
       for (let i = 0; i < list.length; i++) {
         const nameH = split(list[i].name || "—", txtW, FILE).length * lh(FILE);
-        rowMax = Math.max(rowMax, Math.max(imgH, nameH));
+        rowMax = Math.max(rowMax, Math.max(imgH + IMG_BOTTOM_PAD, nameH));
         if (++colI >= c || i === list.length - 1) { used += rowMax + gapRow; colI = 0; rowMax = 0; }
       }
       return used;
@@ -342,7 +349,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     let changed = false;
     if (photoH > minImgH || gfxH > minImgH || plateH > minImgH) {
       photoH = Math.max(minImgH, Math.round(photoH * 0.92));
-      gfxH   = Math.max(minImgH, Math.round(gfxH * 0.92));
+      gfxH   = Math.max(minImgH, Math.round(gfxH   * 0.92));
       plateH = Math.max(minImgH, Math.round(plateH * 0.92));
       changed = true;
     } else if (lhK > minLhK) {
@@ -359,7 +366,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     meas = measureLeft();
   }
 
-  /* ===== Render left (TopBar-like) ===== */
+  /* ===== Render left ===== */
   let y = margin;
   setFont(true, base);  doc.text(custName || "—", margin, y); y += lh(base);
   setFont(false, base); doc.text(custPhone || "—", margin, y); y += lh(base);
@@ -367,7 +374,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   y += 6; hr(y); y += 1;
 
-  // Carving (mini as graphics)
+  // Carving (left aligned title is ok; требование не включает этот заголовок)
   if (itemUrl || itemName) {
     setFont(true, TITLE); doc.text("Резная работа", margin, y); y += lh(TITLE);
     const c = cols(leftW);
@@ -386,7 +393,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, y, w, h, undefined, "FAST");
-          usedH = h;
+          usedH = h + IMG_BOTTOM_PAD;
         }
       }
     }
@@ -396,62 +403,59 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y = y + Math.max(usedH, yT - y) + gapRow;
   }
 
-  // People
-  if (persons.length) {
-    setFont(true, TITLE); doc.text("Люди", margin, y); y += lh(TITLE);
-    y = await drawPeople(y);
-  }
+  // Люди — центр/жир/подчеркнут
+  y = headingCentered("Люди", y);
+  y = await drawPeople(y);
 
-  // Graphics (front)
+  // Графика (лицевая) — центр/жир/подчеркнут
   if (gfxFront.length) {
-    setFont(false, base); doc.text("Графика (лицевая)", margin, y); y += lh(base);
+    y = headingCentered("Графика", y, base);
     y = await drawGraphics(y, gfxFront, gfxH);
   }
-  // Graphics (rear)
+  // Графика (тыльная) — центр/жир/подчеркнут
   if (gfxRear.length) {
-    setFont(false, base); doc.text("Графика (тыльная)", margin, y); y += lh(base);
+    y = headingCentered("Графика", y, base);
     y = await drawGraphics(y, gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH);
   }
 
-  // Epitaphs
+  // Эпитафии — центр/жир/подчеркнут
   if (epsFront.length || epsRear.length) {
-    setFont(false, base); doc.text("Эпитафии", margin, y); y += lh(base);
+    y = headingCentered("Эпитафии", y, base);
     y = drawEpitaphs(y, [...epsFront, ...epsRear]) + 10;
   }
 
-  // Plate chosen
+  // Плита — центр/жир/подчеркнут
   if (plateOn) {
-    y += 6; hr(y); y += 1;
-    setFont(true, TITLE); doc.text("Надгробная плита — выбрано", margin, y); y += lh(TITLE);
+    y = headingCentered("Надгробная плита", y);
     setFont(false, base);
-    if (plateSize)  { doc.text(`Размер: ${plateSize}`, margin, y); y += lh(base); }
-    if (plateThick) { doc.text(`Толщина: ${plateThick}`, margin, y); y += lh(base); }
-    if (plateOrient){ doc.text(`Ориентация: ${plateOrient === "horizontal" ? "горизонтально" : "вертикально"}`, margin, y); y += lh(base); }
+    if (plateSize)   { doc.text(`Размер: ${plateSize}`, margin, y); y += lh(base); }
+    if (plateThick)  { doc.text(`Толщина: ${plateThick}`, margin, y); y += lh(base); }
+    if (plateOrient) { doc.text(`Ориентация: ${plateOrient === "horizontal" ? "горизонтально" : "вертикально"}`, margin, y); y += lh(base); }
 
     if (plateUnique.length) {
-      doc.text("Графика плиты", margin, y); y += lh(base);
+      y = headingCentered("Графика плиты", y, base);
       y = await drawGraphics(y, plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH);
     }
     if (plateEps.length) {
-      doc.text("Эпитафии плиты", margin, y); y += lh(base);
+      y = headingCentered("Эпитафии", y, base);
       y = drawEpitaphs(y, plateEps) + 10;
     }
   }
 
-  // Extras
+  // Дополнительно (не из списка центровки — оставим как есть)
   setFont(false, base); doc.text("Дополнительно", margin, y); y += lh(base);
   doc.text(`Цветник: ${flowerbed ? "да" : "нет"}`, margin, y); y += lh(base);
   doc.text(`Тумба: ${baseOn ? "да" : "нет"}`, margin, y); y += lh(base);
 
-  // Notes
+  // Примечания — центр/жир/подчеркнут
   if (notes) {
-    y += 6; hr(y); y += 1;
-    doc.text("Примечания", margin + leftW / 2, y, { align: "center" }); y += lh(base);
+    y = headingCentered("Примечания", y, base);
+    setFont(false, base);
     for (const ln of split(notes, leftW, base)) { doc.text(ln, margin, y); y += lh(base); }
   }
 
   /* ===== Right column — sketches ===== */
-  let yR = margin + 80;
+  let yR = margin + 80; // опускаем верхний эскиз
   async function placeRight(dataUrl?: string | null, maxH?: number) {
     if (!dataUrl || !maxH) return;
     const im = new Image(); await new Promise<void>(rs => { im.onload = () => rs(); im.src = dataUrl!; });
@@ -466,7 +470,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   await placeRight(frontPng, Math.floor(innerH / 2) - 60);
   await placeRight(backPng, innerH - (yR - margin));
 
-  /* ===== Each person photo page ===== */
+  /* ===== Individual photo pages ===== */
   for (let i = 0; i < persons.length; i++) {
     const p = persons[i];
     if (!p.photo) continue;
@@ -491,7 +495,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   return doc.output("blob");
 
-  /* ===== Helpers (render) ===== */
+  /* ===== Draw helpers ===== */
   async function drawGraphics(yStart: number, list: Array<{ name: string; url?: string | null }>, imgH: number) {
     let yLoc = yStart;
     const c = cols(leftW);
@@ -515,7 +519,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, rowStartY, w, h, undefined, "FAST");
-          usedH = h;
+          usedH = h + IMG_BOTTOM_PAD; // добавили нижний отступ под миниатюрой
         }
       }
 
@@ -573,7 +577,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, rowStartY, w, h, undefined, "FAST");
-          usedH = h;
+          usedH = h + IMG_BOTTOM_PAD; // добавили нижний отступ под портретом
         }
       }
 
