@@ -1,16 +1,8 @@
 // apps/web/src/lib/pdf/generateOrderPdf.ts
-// Генерация PDF вынесена в отдельный модуль.
-//
-// Экспорт:
-// - generateOrderPdf(args) -> Blob (PDF)
+// Export:
+// - generateOrderPdf(args) -> Blob
 // - downloadBlob(blob, filename)
 // - sendPdfToServer(blob, meta)
-//
-// Правки по требованиям:
-// - Номер заказа вверху страницы по центру.
-// - Верхний правый эскиз опущен ниже.
-// - Усопшие: всегда 2 столбца, миниатюры крупнее, метрика в 3 строки; если людей больше — добавляются новые строки.
-// - Эпитафии: увеличен нижний отступ (между разделом эпитафий и следующим блоком).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global { interface Window { htmlToImage?: any; jspdf?: any } }
@@ -45,32 +37,61 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Century Schoolbook (bold + regular, если доступен) ===== */
+/* ===== Fonts (Unicode) =====
+   Place files to /public/fonts:
+   - CenturySchoolbook-Regular.ttf, CenturySchoolbook-Bold.ttf (optional)
+   - NotoSans-Regular.ttf, NotoSans-Bold.ttf (fallback, required if Century is absent)
+*/
 let fontsReady = false;
-let regularAvailable = false;
-async function ensureCenturyFonts(doc: any) {
-  if (fontsReady) return { regularAvailable };
-  try {
-    const bold = await fetch("/fonts/CenturySchoolbook-Bold.ttf", { mode: "cors" });
-    if (bold.ok) {
-      const ab = await bold.arrayBuffer();
-      const b64 = toBase64(ab);
-      doc.addFileToVFS("CenturySchoolbook-Bold.ttf", b64);
-      doc.addFont("CenturySchoolbook-Bold.ttf", "CenturySchoolbook", "bold");
+let activeFont = "NotoSans"; // will be set after ensure
+let haveRegular = false;
+let haveBold = false;
+
+async function ensurePdfFonts(doc: any) {
+  if (fontsReady) return { activeFont, haveRegular, haveBold };
+
+  async function addTtf(path: string, fam: string, style: "normal" | "bold") {
+    const r = await fetch(path, { mode: "cors" });
+    if (!r.ok) return false;
+    const ab = await r.arrayBuffer();
+    const b64 = toBase64(ab);
+    const vfsName = path.split("/").pop()!;
+    doc.addFileToVFS(vfsName, b64);
+    doc.addFont(vfsName, fam, style);
+    return true;
+  }
+
+  // Try Century first
+  let cReg = false, cBold = false;
+  try { cReg = await addTtf("/fonts/CenturySchoolbook-Regular.ttf", "CenturySchoolbook", "normal"); } catch {}
+  try { cBold = await addTtf("/fonts/CenturySchoolbook-Bold.ttf", "CenturySchoolbook", "bold"); } catch {}
+
+  if (cReg || cBold) {
+    activeFont = "CenturySchoolbook";
+    haveRegular = cReg;
+    haveBold = cBold;
+  }
+
+  // Fallback to NotoSans if needed
+  if (!haveRegular || !haveBold) {
+    let nReg = false, nBold = false;
+    try { nReg = await addTtf("/fonts/NotoSans-Regular.ttf", "NotoSans", "normal"); } catch {}
+    try { nBold = await addTtf("/fonts/NotoSans-Bold.ttf", "NotoSans", "bold"); } catch {}
+    if (nReg || nBold) {
+      activeFont = "NotoSans";
+      haveRegular = haveRegular || nReg;
+      haveBold = haveBold || nBold;
     }
-  } catch {}
-  try {
-    const reg = await fetch("/fonts/CenturySchoolbook-Regular.ttf", { mode: "cors" });
-    if (reg.ok) {
-      const ab = await reg.arrayBuffer();
-      const b64 = toBase64(ab);
-      doc.addFileToVFS("CenturySchoolbook-Regular.ttf", b64);
-      doc.addFont("CenturySchoolbook-Regular.ttf", "CenturySchoolbook", "normal");
-      regularAvailable = true;
-    }
-  } catch {}
+  }
+
+  // Final guard: if no regular at all, use bold as both
+  if (!haveRegular && haveBold) {
+    // jsPDF allows selecting "bold" while size same; for safety keep haveRegular=false,
+    // but we will still use bold when regular requested.
+  }
+
   fontsReady = true;
-  return { regularAvailable };
+  return { activeFont, haveRegular, haveBold };
 }
 function toBase64(ab: ArrayBuffer) {
   let binary = ""; const bytes = new Uint8Array(ab);
@@ -103,7 +124,7 @@ function lines(doc: any, txt: string, maxW: number) {
 }
 function dl(text: string) { return (text || "").trim(); }
 
-/* ===== Публичное API ===== */
+/* ===== Public API ===== */
 export type GeneratePdfArgs = {
   draft: any;
   intro: any;
@@ -119,9 +140,9 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   onProgress?.("init");
   const jsPDF = await ensureJsPdf();
   const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
-  const { regularAvailable } = await ensureCenturyFonts(doc);
+  await ensurePdfFonts(doc);
 
-  // Геометрия
+  // Geometry
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 48;
@@ -131,7 +152,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const rightW = Math.round(innerW * 0.40);
   const leftW = innerW - gapCols - rightW;
 
-  // Типографика
+  // Typography
   let base = 32;
   const minBase = 22;
   const SIZE_TITLE = 28;
@@ -140,22 +161,21 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   let lhK = 1.22;
   const minLhK = 1.14;
 
-  // Усопшие: 2 столбца, крупнее фото
+  // People block: 2 columns, larger photos
   const PEOPLE_COLS = 2;
-  const PEOPLE_IMG_W_FACTOR = 0.50; // 50% ширины ячейки займёт миниатюра
-  let photoH = 160;                 // крупнее
+  const PEOPLE_IMG_W_FACTOR = 0.50;
+  let photoH = 160;
   let gfxH = 90, plateH = 90;
   const minImgH = 56;
 
-  // Эпитафии: увеличенный нижний отступ
   const EP_BOTTOM_EXTRA = 24;
 
   let minColW = 255, gapCol = 16, gapRow = 16, gapText = 14;
 
-  const FONT = "CenturySchoolbook";
   const setFont = (bold = false, size = base) => {
-    if (bold) doc.setFont(FONT, "bold");
-    else doc.setFont(regularAvailable ? FONT : "helvetica", regularAvailable ? "normal" : undefined);
+    const style: "bold" | "normal" = bold ? "bold" : "normal";
+    // If regular missing, using bold for both is acceptable for Unicode support
+    doc.setFont(activeFont, (style === "normal" && !haveRegular && haveBold) ? "bold" : style);
     doc.setFontSize(size);
   };
   const lh = (size = base) => Math.ceil(size * lhK);
@@ -163,7 +183,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const cols = (availW: number) => Math.max(2, Math.floor((availW + gapCol) / (minColW + gapCol)));
   const hr = (y: number) => { doc.setDrawColor(180); doc.setLineWidth(1.2); doc.line(margin, y, margin + leftW, y); };
 
-  // Данные
+  // Data
   const custName = dl(intro?.intro?.customerName) || "—";
   const custPhone = dl(intro?.intro?.customerPhone) || "—";
   const orderNo = String(intro?.orderNumber || "—");
@@ -199,21 +219,21 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const baseOn = !!((draft as any)?.extras?.base);
   const notes = dl((draft as any)?.extras?.orderNotes);
 
-  // Снимки эскизов
+  // Right sketches images
   onProgress?.("capture-sketches");
   const frontPng = frontNode ? await nodeToPng(frontNode) : null;
   const backPng = backNode ? await nodeToPng(backNode) : await urlToDataUrl(backUrlFallback || (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl);
 
-  // Оценка высоты левой колонки (подгонка, чтобы не было наложений)
+  // Measure to fit
   function measureLeft(): number {
     let y = margin;
 
-    // № заказа — сверху по центру
+    // Order No — top center
     split(`Заказ № ${orderNo}`, leftW, base, true).forEach(() => y += lh(base));
-    // Имя и телефон — строкой ниже, слева
+    // Name+phone — below, left
     split(`${custName} · ${custPhone}`, leftW, base, false).forEach(() => y += lh(base));
 
-    // Лицевая
+    // Face
     y += 6; y += 1;
     split("Лицевая", leftW, SIZE_TITLE, true).forEach(() => y += lh(SIZE_TITLE));
 
@@ -226,7 +246,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y += 4; split("Эпитафии", leftW, base).forEach(() => y += lh(base));
     y += measureEpitaphs(epsFront) + EP_BOTTOM_EXTRA;
 
-    // Тыльная
+    // Rear
     y += 10; y += 1;
     split("Тыльная", leftW, SIZE_TITLE, true).forEach(() => y += lh(SIZE_TITLE));
     split("Усопшие", leftW, base).forEach(() => y += lh(base));
@@ -241,7 +261,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y += 4; split("Эпитафии", leftW, base).forEach(() => y += lh(base));
     y += measureEpitaphs(epsRear) + EP_BOTTOM_EXTRA;
 
-    // Плита
+    // Plate
     y += 10; y += 1;
     split("Надгробная плита", leftW, SIZE_TITLE, true).forEach(() => y += lh(SIZE_TITLE));
     split(`Размер: ${plateOn ? plateSize : "—"}`, leftW, base).forEach(() => y += lh(base));
@@ -253,21 +273,20 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y += 4; split("Эпитафии", leftW, base).forEach(() => y += lh(base));
     y += measureEpitaphs(plateOn ? plateEps : []) + EP_BOTTOM_EXTRA;
 
-    // Дополнительно
+    // Extra
     y += 10; split("Дополнительно", leftW, base).forEach(() => y += lh(base));
     split(`Цветник: ${flowerbed ? "да" : "нет"}`, leftW, base).forEach(() => y += lh(base));
     split(`Тумба: ${baseOn ? "да" : "нет"}`, leftW, base).forEach(() => y += lh(base));
 
-    // Примечания
+    // Notes
     y += 6; y += 1;
     split("Примечания", leftW, base).forEach(() => y += lh(base));
     split(notes || "—", leftW, base).forEach(() => y += lh(base));
 
     return y - margin;
 
-    // локальные измерители
     function measurePeople(): number {
-      const c = PEOPLE_COLS; // 2 колонки
+      const c = PEOPLE_COLS;
       const cellW = Math.floor((leftW - gapCol * (c - 1)) / c);
       const imgW = Math.floor(cellW * PEOPLE_IMG_W_FACTOR);
       const txtW = Math.max(40, cellW - imgW - gapText);
@@ -319,7 +338,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     }
   }
 
-  // Подгонка параметров до влезания
+  // Fit
   onProgress?.("fit");
   let total = measureLeft();
   while (total > innerH) {
@@ -343,18 +362,15 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     total = measureLeft();
   }
 
-  // Рендер левой колонки
+  // Render left
   onProgress?.("render-left");
   let y = margin;
 
-  // № заказа по центру (верх)
   setFont(true, base);
   doc.text(`Заказ № ${orderNo}`, margin + leftW / 2, y, { align: "center", maxWidth: leftW }); y += lh(base);
-  // Имя + телефон слева
   setFont(false, base);
   doc.text(`${custName} · ${custPhone}`, margin, y); y += lh(base);
 
-  // Лицевая
   y += 6; hr(y); y += 1;
   setFont(true, SIZE_TITLE); doc.text("Лицевая", margin + leftW / 2, y, { align: "center" }); y += lh(SIZE_TITLE);
 
@@ -367,7 +383,6 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   y += 4; setFont(false, base); doc.text("Эпитафии", margin, y); y += lh(base);
   y = drawEpitaphs(y, epsFront) + EP_BOTTOM_EXTRA;
 
-  // Тыльная
   y += 10; hr(y); y += 1;
   setFont(true, SIZE_TITLE); doc.text("Тыльная", margin + leftW / 2, y, { align: "center" }); y += lh(SIZE_TITLE);
 
@@ -384,7 +399,6 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   y += 4; setFont(false, base); doc.text("Эпитафии", margin, y); y += lh(base);
   y = drawEpitaphs(y, epsRear) + EP_BOTTOM_EXTRA;
 
-  // Плита
   y += 10; hr(y); y += 1;
   setFont(true, SIZE_TITLE); doc.text("Надгробная плита", margin + leftW / 2, y, { align: "center" }); y += lh(SIZE_TITLE);
 
@@ -397,23 +411,21 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   y += 4; setFont(false, base); doc.text("Эпитафии", margin, y); y += lh(base);
   y = drawEpitaphs(y, plateOn ? plateEps : []) + EP_BOTTOM_EXTRA;
 
-  // Дополнительно
   y += 10; setFont(false, base); doc.text("Дополнительно", margin, y); y += lh(base);
   doc.text(`Цветник: ${flowerbed ? "да" : "нет"}`, margin, y); y += lh(base);
   doc.text(`Тумба: ${baseOn ? "да" : "нет"}`, margin, y); y += lh(base);
 
-  // Примечания
   y += 6; hr(y); y += 1;
   setFont(false, base); doc.text("Примечания", margin + leftW / 2, y, { align: "center" }); y += lh(base);
   for (const ln of split(notes || "—", leftW, base)) { doc.text(ln, margin, y); y += lh(base); }
 
-  // Правая колонка — эскизы (верхний опускаем ниже)
+  // Right column: lower top offset for first sketch
   onProgress?.("render-right");
-  let yR = margin + 80; // опустить верхний эскиз ниже
+  let yR = margin + 80;
   await placeRight(frontPng, Math.floor(innerH / 2) - 60);
   await placeRight(backPng, innerH - (yR - margin));
 
-  // Фото — отдельные страницы
+  // Photos pages
   onProgress?.("photos");
   for (let i = 0; i < people.length; i++) {
     const p = people[i];
@@ -439,7 +451,6 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   return doc.output("blob");
 
-  // Вспомогательные рендер-функции (замыкают yR для правой колонки)
   async function drawGraphics(yStart: number, list: Array<{ name: string; url?: string | null }>, imgH: number) {
     let yLoc = yStart;
     const c = cols(leftW);
@@ -509,7 +520,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     for (let i = 0; i < people.length; i++) {
       const cx = margin + colI * (cellW + gapCol);
 
-      // Фото слева
+      // Photo
       let usedH = 0;
       const data = await urlToDataUrl(people[i].photo || null);
       if (data) {
@@ -523,7 +534,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           usedH = h;
         }
       }
-      // Метрика справа (3 строки)
+      // Metric (3 lines)
       let yTxt = rowStartY;
       const xTxt = cx + imgW + gapText;
       setFont(false, base);
@@ -571,7 +582,7 @@ export function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
 }
 
-/* ===== утил ===== */
+/* ===== Utils ===== */
 function toParagraphsSafe(input?: string | string[] | null): string[] {
   if (Array.isArray(input)) return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
