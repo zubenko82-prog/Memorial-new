@@ -1,7 +1,0 @@
-{
-  "version": 2,
-  "outputDirectory": ".",
-  "functions": {
-    "api/**/*.[jt]s": { "runtime": "nodejs20.x" }
-  }
-}
