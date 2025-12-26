@@ -1,22 +1,24 @@
 // apps/web/src/lib/pdf/generateOrderPdf.ts
 // PDF «как TopBar»:
 // - Слева — компактная сводка: Имя, Телефон, № заказа,
-//   Резная работа (миниатюра того же размера, что и прочая графика),
-//   Люди (2 колонки), Графика (лицевая/тыльная), Эпитафии,
-//   Плита — выбранное (параметры, графика, эпитафии),
+//   Резная работа (миниатюра равна по размеру остальным миниатюрам),
+//   Люди (2 колонки), Графика (лицевая/тыльная), Эпитафии (лицевая/тыльная),
+//   Надгробная плита — параметры + Графика (плита) + Эпитафии (плита),
 //   Дополнительно (Цветник, Тумба), Примечания.
 // - Справа — эскизы (лицевой сверху, тыльный ниже).
 //
 // Доп. требования:
-// - Добавить отступы снизу под портретами и под миниатюрами (в карточках).
-// - Заголовки «Люди», «Графика», «Эпитафии», «Графика плиты», «Надгробная плита», «Примечания»
-//   — выравниваем по центру, делаем полужирными и подчёркнутыми.
+// - Подписать и разделить стороны: «Графика (лицевая) / (тыльная) / (плита)»,
+//   «Эпитафии (лицевая) / (тыльная) / (плита)».
+// - Заголовки «Люди», «Графика (...)», «Эпитафии (...)», «Графика (плита)», «Надгробная плита», «Примечания» — по центру, полужирные и подчёркнутые.
+// - Добавить отступы снизу под портретами и под миниатюрами.
 //
 // Экспорт:
 // - generateOrderPdf(args) -> Blob
 // - downloadBlob(blob, filename)
 // - sendPdfToServer(blob, meta)
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
   interface Window { htmlToImage?: any; jspdf?: any }
 }
@@ -159,11 +161,11 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const minBase = 20, minLhK = 1.10;
   const TITLE = 28, FILE = 28, EP = 32;
 
-  // Mini sizes and spacing (add extra bottom padding under images)
+  // Mini sizes and spacing
   const PEOPLE_COLS = 2, PEOPLE_IMG_W_FACTOR = 0.50;
   let photoH = 140, gfxH = 80, plateH = 80;
   const minImgH = 54;
-  const IMG_BOTTOM_PAD = 10; // отступ снизу под портретом и миниатюрами
+  const IMG_BOTTOM_PAD = 10; // нижний отступ под портретами и миниатюрами
 
   // Grid tune
   let minColW = 240, gapCol = 14, gapRow = 12, gapText = 12;
@@ -186,7 +188,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const cols = (availW: number) => Math.max(2, Math.floor((availW + gapCol) / (minColW + gapCol)));
   const hr = (y: number) => { doc.setDrawColor(210); doc.setLineWidth(1.1); doc.line(margin, y, margin + leftW, y); };
 
-  // Centered bold underlined heading helper
+  // Centered bold underlined heading
   const underlineOffset = 3;
   function headingCentered(text: string, yPos: number, size = TITLE): number {
     setFont(true, size);
@@ -251,6 +253,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   function measureLeft() {
     let y = margin;
 
+    // Head
     split(custName || "—", leftW, base, true).forEach(() => y += lh(base));
     split(custPhone || "—", leftW, base).forEach(() => y += lh(base));
     split(`№ ${orderNo}`, leftW, 22).forEach(() => y += lh(22));
@@ -263,38 +266,35 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       y += Math.max(gfxH + IMG_BOTTOM_PAD, nameH) + gapRow;
     }
 
-    // People
-    if (persons.length) {
-      y += 6;
-      y += measurePeople();
-    }
+    // People (heading + grid)
+    y += lh(TITLE); // «Люди»
+    y += measurePeople();
 
-    // Graphics
-    if (gfxFront.length) { y += 6; y += measureGraphics(gfxFront, gfxH); }
-    if (gfxRear.length)  { y += 6; y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); }
+    // Graphics headings and blocks
+    if (gfxFront.length) { y += lh(base); y += measureGraphics(gfxFront, gfxH); } // «Графика (лицевая)»
+    if (gfxRear.length)  { y += lh(base); y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); } // «Графика (тыльная)»
 
-    // Epitaphs
-    if (epsFront.length || epsRear.length) {
-      y += 6; y += measureEpitaphs([...epsFront, ...epsRear]) + 10;
-    }
+    // Epitaphs headings and blocks
+    if (epsFront.length) { y += lh(base); y += measureEpitaphs(epsFront) + 10; } // «Эпитафии (лицевая)»
+    if (epsRear.length)  { y += lh(base); y += measureEpitaphs(epsRear) + 10; }  // «Эпитафии (тыльная)»
 
     // Plate
     if (plateOn) {
-      y += 10;
-      if (plateSize)  y += lh(base);
-      if (plateThick) y += lh(base);
+      y += lh(TITLE); // «Надгробная плита»
+      if (plateSize)   y += lh(base);
+      if (plateThick)  y += lh(base);
       if (plateOrient) y += lh(base);
-      if (plateUnique.length) { y += 6; y += measureGraphics(plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH); }
-      if (plateEps.length)    { y += 6; y += measureEpitaphs(plateEps) + 10; }
+      if (plateUnique.length) { y += lh(base); y += measureGraphics(plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH); } // «Графика (плита)»
+      if (plateEps.length)    { y += lh(base); y += measureEpitaphs(plateEps) + 10; }                                      // «Эпитафии (плита)»
     }
 
     // Extras
-    y += 6;
+    y += lh(base); // «Дополнительно» (обычный, не центрованный)
     y += lh(base); // Цветник
     y += lh(base); // Тумба
 
     // Notes
-    if (notes) { y += 6; y += split(notes, leftW, base).length * lh(base); }
+    if (notes) { y += lh(base); y += split(notes, leftW, base).length * lh(base); } // «Примечания»
 
     return { total: y - margin };
 
@@ -374,7 +374,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   y += 6; hr(y); y += 1;
 
-  // Carving (left aligned title is ok; требование не включает этот заголовок)
+  // Carving (plain title)
   if (itemUrl || itemName) {
     setFont(true, TITLE); doc.text("Резная работа", margin, y); y += lh(TITLE);
     const c = cols(leftW);
@@ -403,28 +403,35 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y = y + Math.max(usedH, yT - y) + gapRow;
   }
 
-  // Люди — центр/жир/подчеркнут
+  // Люди
   y = headingCentered("Люди", y);
   y = await drawPeople(y);
 
-  // Графика (лицевая) — центр/жир/подчеркнут
+  // Графика (лицевая)
   if (gfxFront.length) {
-    y = headingCentered("Графика", y, base);
+    y = headingCentered("Графика (лицевая)", y, base);
     y = await drawGraphics(y, gfxFront, gfxH);
   }
-  // Графика (тыльная) — центр/жир/подчеркнут
+
+  // Графика (тыльная)
   if (gfxRear.length) {
-    y = headingCentered("Графика", y, base);
+    y = headingCentered("Графика (тыльная)", y, base);
     y = await drawGraphics(y, gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH);
   }
 
-  // Эпитафии — центр/жир/подчеркнут
-  if (epsFront.length || epsRear.length) {
-    y = headingCentered("Эпитафии", y, base);
-    y = drawEpitaphs(y, [...epsFront, ...epsRear]) + 10;
+  // Эпитафии (лицевая)
+  if (epsFront.length) {
+    y = headingCentered("Эпитафии (лицевая)", y, base);
+    y = drawEpitaphs(y, epsFront) + 10;
   }
 
-  // Плита — центр/жир/подчеркнут
+  // Эпитафии (тыльная)
+  if (epsRear.length) {
+    y = headingCentered("Эпитафии (тыльная)", y, base);
+    y = drawEpitaphs(y, epsRear) + 10;
+  }
+
+  // Надгробная плита
   if (plateOn) {
     y = headingCentered("Надгробная плита", y);
     setFont(false, base);
@@ -433,21 +440,21 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     if (plateOrient) { doc.text(`Ориентация: ${plateOrient === "horizontal" ? "горизонтально" : "вертикально"}`, margin, y); y += lh(base); }
 
     if (plateUnique.length) {
-      y = headingCentered("Графика плиты", y, base);
+      y = headingCentered("Графика (плита)", y, base);
       y = await drawGraphics(y, plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH);
     }
     if (plateEps.length) {
-      y = headingCentered("Эпитафии", y, base);
+      y = headingCentered("Эпитафии (плита)", y, base);
       y = drawEpitaphs(y, plateEps) + 10;
     }
   }
 
-  // Дополнительно (не из списка центровки — оставим как есть)
+  // Дополнительно
   setFont(false, base); doc.text("Дополнительно", margin, y); y += lh(base);
   doc.text(`Цветник: ${flowerbed ? "да" : "нет"}`, margin, y); y += lh(base);
   doc.text(`Тумба: ${baseOn ? "да" : "нет"}`, margin, y); y += lh(base);
 
-  // Примечания — центр/жир/подчеркнут
+  // Примечания
   if (notes) {
     y = headingCentered("Примечания", y, base);
     setFont(false, base);
@@ -470,7 +477,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   await placeRight(frontPng, Math.floor(innerH / 2) - 60);
   await placeRight(backPng, innerH - (yR - margin));
 
-  /* ===== Individual photo pages ===== */
+  /* ===== Person photo pages ===== */
   for (let i = 0; i < persons.length; i++) {
     const p = persons[i];
     if (!p.photo) continue;
@@ -495,7 +502,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   return doc.output("blob");
 
-  /* ===== Draw helpers ===== */
+  /* ===== Render helpers ===== */
   async function drawGraphics(yStart: number, list: Array<{ name: string; url?: string | null }>, imgH: number) {
     let yLoc = yStart;
     const c = cols(leftW);
@@ -519,7 +526,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, rowStartY, w, h, undefined, "FAST");
-          usedH = h + IMG_BOTTOM_PAD; // добавили нижний отступ под миниатюрой
+          usedH = h + IMG_BOTTOM_PAD; // нижний отступ под миниатюрой
         }
       }
 
@@ -577,7 +584,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, rowStartY, w, h, undefined, "FAST");
-          usedH = h + IMG_BOTTOM_PAD; // добавили нижний отступ под портретом
+          usedH = h + IMG_BOTTOM_PAD; // нижний отступ под портретом
         }
       }
 
