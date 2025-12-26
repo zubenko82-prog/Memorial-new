@@ -163,6 +163,10 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
 
 /* ===== Блок плиты/дополнительно (аккордеоны) ===== */
 function PlateBlock(props: {
+  // Новые чекбоксы:
+  flowerbed: boolean; setFlowerbed: (v: boolean) => void;
+  baseOn: boolean; setBaseOn: (v: boolean) => void;
+
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
   plateCustomSize: string; setPlateCustomSize: (v: string) => void;
@@ -176,6 +180,7 @@ function PlateBlock(props: {
   plateIds: string[];
 }) {
   const {
+    flowerbed, setFlowerbed, baseOn, setBaseOn,
     extraPlate, setExtraPlate,
     plateSize, setPlateSize, plateCustomSize, setPlateCustomSize,
     plateThickness, setPlateThickness, plateCustomThickness, setPlateCustomThickness,
@@ -192,8 +197,23 @@ function PlateBlock(props: {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <LoudAccordion title="Дополнительно / Надгробная плита" open={accMainOpen} onToggle={() => setAccMainOpen(v => !v)}>
+      <LoudAccordion title="Дополнительно / Надгробная плита" open={accMainOpen} onToggle={() => setAccMainOpen((v) => !v)}>
         <div style={{ display: "grid", gap: 12 }}>
+          {/* Чекбоксы Цветник и Тумба */}
+          <div style={{ ...sectionBox }}>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={flowerbed} onChange={(e) => setFlowerbed(e.target.checked)} />
+                <span>Цветник</span>
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={baseOn} onChange={(e) => setBaseOn(e.target.checked)} />
+                <span>Тумба</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Переключатель плиты */}
           <div style={{ ...sectionBox }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
               <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
@@ -245,7 +265,7 @@ function PlateBlock(props: {
                 </div>
               </div>
 
-              <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
+              <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ ...sectionBox }}>
                     <div style={{ marginBottom: 6 }}>Свой вариант:</div>
@@ -284,7 +304,7 @@ function PlateBlock(props: {
                 </div>
               </LoudAccordion>
 
-              <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !в)}>
+              <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
                 {props.catsLoading && <div>Загрузка каталога…</div>}
                 {props.catsError && <div style={{ color: "#ffb4b4" }}>{props.catsError}</div>}
                 {!props.catsLoading && props.cats.length === 0 && !props.catsError && <div>Каталог пуст.</div>}
@@ -296,11 +316,11 @@ function PlateBlock(props: {
                       const toggle = () => props.setCatOpen({ ...(props.catOpen || {}), [catKey]: !open });
                       return (
                         <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                          <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                          <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
                             </div>
                           ))}
                         </LoudAccordion>
@@ -393,7 +413,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита
+  // Плита и «Дополнительно»
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -402,18 +422,39 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
   const [plateOrientation, setPlateOrientation] = useState<string>(extras0.plateOrientation || (((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")) ? "horizontal" : "vertical"));
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
+
+  // Новые чекбоксы «Цветник» и «Тумба»
+  const [flowerbed, setFlowerbed] = useState<boolean>(!!extras0.flowerbed);
+  const [baseOn, setBaseOn] = useState<boolean>(!!extras0.base);
+
+  // Сохранение чекбоксов в драфт
+  const persistExtras = (patch: Partial<any>) => {
+    const prev = loadOrderDraft();
+    const extras = { ...(prev as any).extras, ...patch };
+    saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+    setDraft(loadOrderDraft());
+  };
+  const setFlowerbedPersist = (v: boolean) => { setFlowerbed(v); persistExtras({ flowerbed: v }); };
+  const setBasePersist = (v: boolean) => { setBaseOn(v); persistExtras({ base: v }); };
+
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
-    setPlateIds((prev) => prev.concat(gid));
+    setPlateIds((prev) => {
+      const next = prev.concat(gid);
+      persistExtras({ plateGraphicsIds: next, plateGraphicsMeta: { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } } });
+      return next;
+    });
     setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } }));
   };
   const removePlateGraphic = (gid: string) => {
     setPlateIds((prev) => {
       const i = prev.findIndex((x) => x === gid);
       if (i === -1) return prev;
-      const next = prev.slice(); next.splice(i, 1); return next;
+      const next = prev.slice(); next.splice(i, 1);
+      persistExtras({ plateGraphicsIds: next });
+      return next;
     });
   };
 
@@ -543,13 +584,15 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       {/* Аккордеоны «Дополнительно / Надгробная плита» */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
-          extraPlate={extraPlate} setExtraPlate={setExtraPlate}
-          plateSize={plateSize} setPlateSize={setPlateSize}
-          plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
-          plateThickness={plateThickness} setPlateThickness={setPlateThickness}
-          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
-          plateOrientation={plateOrientation} setPlateOrientation={setPlateOrientation}
-          plateEpitaph={plateEpitaph} setPlateEpitaph={setPlateEpitaph}
+          flowerbed={flowerbed} setFlowerbed={setFlowerbedPersist}
+          baseOn={baseOn} setBaseOn={setBasePersist}
+          extraPlate={extraPlate} setExtraPlate={(v) => { setExtraPlate(v); persistExtras({ headstonePlate: v }); }}
+          plateSize={plateSize} setPlateSize={(v) => { setPlateSize(v); persistExtras({ plateSize: v }); }}
+          plateCustomSize={plateCustomSize} setPlateCustomSize={(v) => { setPlateCustomSize(v); persistExtras({ plateCustomSize: v }); }}
+          plateThickness={plateThickness} setPlateThickness={(v) => { setPlateThickness(v); persistExtras({ plateThickness: v }); }}
+          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={(v) => { setPlateCustomThickness(v); persistExtras({ plateCustomThickness: v }); }}
+          plateOrientation={plateOrientation} setPlateOrientation={(v) => { setPlateOrientation(v); persistExtras({ plateOrientation: v }); }}
+          plateEpitaph={plateEpitaph} setPlateEpitaph={(v) => { setPlateEpitaph(v); persistExtras({ plateEpitaph: v }); }}
           catsLoading={catsLoading} catsError={catsError} cats={cats}
           catOpen={catOpen} setCatOpen={setCatOpen}
           addPlateGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic}
