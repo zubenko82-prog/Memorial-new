@@ -1,22 +1,14 @@
 // apps/web/src/lib/pdf/generateOrderPdf.ts
-// PDF «как TopBar»:
-// - Слева — компактная сводка: Имя, Телефон, № заказа,
-//   Резная работа (миниатюра равна по размеру остальным миниатюрам),
+// PDF «как TopBar» с корректной кириллицей и отступами снизу под миниатюрами:
+// - Слева — сводка: Имя, Телефон, № заказа, Резная работа (миниатюра как у графики),
 //   Люди (2 колонки), Графика (лицевая/тыльная), Эпитафии (лицевая/тыльная),
 //   Надгробная плита — параметры + Графика (плита) + Эпитафии (плита),
 //   Дополнительно (Цветник, Тумба), Примечания.
-// - Справа — эскизы (лицевой сверху, тыльный ниже).
-//
-// Доп. требования:
-// - Подписать и разделить стороны: «Графика (лицевая) / (тыльная) / (плита)»,
-//   «Эпитафии (лицевая) / (тыльная) / (плита)».
-// - Заголовки «Люди», «Графика (...)», «Эпитафии (...)», «Графика (плита)», «Надгробная плита», «Примечания» — по центру, полужирные и подчёркнутые.
-// - Добавить отступы снизу под портретами и под миниатюрами.
-//
-// Экспорт:
-// - generateOrderPdf(args) -> Blob
-// - downloadBlob(blob, filename)
-// - sendPdfToServer(blob, meta)
+// - Справа — эскизы.
+// Правки:
+// - Добавлены отступы снизу под портретами и ВСЕМИ миниатюрами (IMG_BOTTOM_PAD).
+// - Заголовки «Люди», «Графика (лицевая/тыльная/плита)», «Эпитафии (лицевая/тыльная/плита)», «Надгробная плита», «Примечания» — центр, полужирные, подчёркнутые.
+// - Исправлена кириллица: надёжное подключение Noto Sans (Regular/Bold). Сначала локально (/public/fonts), затем CDN. Имена шрифтов = "NotoSans" (без префиксов), чтобы setFont не падал.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
@@ -54,32 +46,52 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Fonts (Noto Sans via CDN) ===== */
+/* ===== Unicode fonts (Noto Sans) — Local first, then CDN ===== */
 let fontsReady = false;
-let activeFont = "PDFNotoSans";
+let activeFont = "NotoSans";
 let haveRegular = false;
 let haveBold = false;
 
+/*
+Обязательно добавьте (желательно) локальные файлы шрифтов в /public/fonts:
+- /public/fonts/NotoSans-Regular.ttf
+- /public/fonts/NotoSans-Bold.ttf
+
+Если их нет — скачаем с CDN (googlefonts via jsDelivr).
+*/
 async function ensurePdfFonts(doc: any) {
   if (fontsReady) return { activeFont, haveRegular, haveBold };
-  const CDN_NOTO_REG = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-  const CDN_NOTO_BOLD = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Bold.ttf";
 
-  async function addTtf(url: string, fam: string, style: "normal" | "bold") {
+  const LOCAL_REG = "/fonts/NotoSans-Regular.ttf";
+  const LOCAL_BOLD = "/fonts/NotoSans-Bold.ttf";
+  const CDN_REG = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+  const CDN_BOLD = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Bold.ttf";
+
+  async function addFontFile(url: string, vfsName: string, fam: string, style: "normal" | "bold") {
     try {
-      const r = await fetch(url, { mode: "cors" });
+      const r = await fetch(url, { mode: "cors", cache: "no-store" });
       if (!r.ok) return false;
       const ab = await r.arrayBuffer();
       const b64 = toBase64(ab);
-      const vfs = `${fam}-${style}-${url.split("/").pop() || "font"}.ttf`;
-      doc.addFileToVFS(vfs, b64);
-      doc.addFont(vfs, fam, style);
+      doc.addFileToVFS(vfsName, b64);
+      doc.addFont(vfsName, fam, style);
       return true;
     } catch { return false; }
   }
 
-  haveRegular = await addTtf(CDN_NOTO_REG, "PDFNotoSans", "normal");
-  haveBold = await addTtf(CDN_NOTO_BOLD, "PDFNotoSans", "bold");
+  // Порядок: local → CDN
+  haveRegular =
+    (await addFontFile(LOCAL_REG, "NotoSans-Regular.ttf", "NotoSans", "normal")) ||
+    (await addFontFile(CDN_REG, "NotoSans-Regular.ttf", "NotoSans", "normal"));
+
+  haveBold =
+    (await addFontFile(LOCAL_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold")) ||
+    (await addFontFile(CDN_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold"));
+
+  // Если не получилось — финальная попытка CDN (рег/болд)
+  if (!haveRegular) haveRegular = await addFontFile(CDN_REG, "NotoSans-Regular.ttf", "NotoSans", "normal");
+  if (!haveBold) haveBold = await addFontFile(CDN_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold");
+
   fontsReady = true;
   return { activeFont, haveRegular, haveBold };
 }
@@ -146,7 +158,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
   await ensurePdfFonts(doc);
 
-  // Grid
+  // Геометрия
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 48;
@@ -156,31 +168,39 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const gapCols = 28;
   const leftW = innerW - gapCols - rightW;
 
-  // Typography
+  // Типографика
   let base = 30, lhK = 1.18;
   const minBase = 20, minLhK = 1.10;
   const TITLE = 28, FILE = 28, EP = 32;
 
-  // Mini sizes and spacing
+  // Миниатюры + отступ снизу
   const PEOPLE_COLS = 2, PEOPLE_IMG_W_FACTOR = 0.50;
   let photoH = 140, gfxH = 80, plateH = 80;
   const minImgH = 54;
   const IMG_BOTTOM_PAD = 10; // нижний отступ под портретами и миниатюрами
 
-  // Grid tune
+  // Грид
   let minColW = 240, gapCol = 14, gapRow = 12, gapText = 12;
 
-  // Safe font setter
+  // setFont: всегда пытаемся использовать NotoSans (bold/normal), а при отсутствии — любой доступный
   const setFont = (bold = false, size = base) => {
+    const fam = "NotoSans";
+    const style: "normal" | "bold" = bold ? "bold" : "normal";
     const list = (doc.getFontList && doc.getFontList()) || {};
-    const has = (fam: string, style: "normal" | "bold") => !!(list[fam] && (list[fam] as any)[style]);
-    let fam = activeFont; let style: "normal" | "bold" = bold ? "bold" : "normal";
-    if (!has(fam, style)) {
-      if (has(fam, style === "bold" ? "normal" : "bold")) style = style === "bold" ? "normal" : "bold";
-      else if (has("PDFNotoSans", "normal")) { fam = "PDFNotoSans"; style = "normal"; }
-      else if (has("times", "normal")) { fam = "times"; style = "normal"; }
+    const has = (f: string, s: "normal" | "bold") => !!(list[f] && (list[f] as any)[s]);
+
+    if (has(fam, style)) {
+      doc.setFont(fam, style);
+    } else if (has(fam, style === "bold" ? "normal" : "bold")) {
+      doc.setFont(fam, style === "bold" ? "normal" : "bold");
+    } else {
+      // fallback на любой первый доступный шрифт (как правило, Times),
+      // но кириллица может отобразиться некорректно — поэтому лучше положить TTF в /public/fonts.
+      const families = Object.keys(list);
+      const ff = families[0] || "times";
+      const styles = list[ff] ? Object.keys(list[ff]) : ["normal"];
+      doc.setFont(ff, (styles[0] as any) || "normal");
     }
-    doc.setFont(fam, style);
     doc.setFontSize(size);
   };
   const lh = (size = base) => Math.ceil(size * lhK);
@@ -188,21 +208,19 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const cols = (availW: number) => Math.max(2, Math.floor((availW + gapCol) / (minColW + gapCol)));
   const hr = (y: number) => { doc.setDrawColor(210); doc.setLineWidth(1.1); doc.line(margin, y, margin + leftW, y); };
 
-  // Centered bold underlined heading
+  // Центрированный полужирный подчёркнутый заголовок
   const underlineOffset = 3;
   function headingCentered(text: string, yPos: number, size = TITLE): number {
     setFont(true, size);
     const cx = margin + leftW / 2;
     doc.text(text, cx, yPos, { align: "center", maxWidth: leftW });
-    // underline
     const tw = doc.getTextWidth(text);
-    doc.setDrawColor(40);
-    doc.setLineWidth(0.9);
+    doc.setDrawColor(40); doc.setLineWidth(0.9);
     doc.line(cx - tw / 2, yPos + underlineOffset, cx + tw / 2, yPos + underlineOffset);
     return yPos + lh(size);
   }
 
-  // Data
+  // Данные
   const custName = dl(intro?.intro?.customerName) || "—";
   const custPhone = dl(intro?.intro?.customerPhone) || "—";
   const orderNo = String(intro?.orderNumber || "—");
@@ -244,21 +262,19 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const baseOn = !!((draft as any)?.extras?.base);
   const notes = dl((draft as any)?.extras?.orderNotes);
 
-  // Right sketches
+  // Эскизы (справа)
   onProgress?.("capture-sketches");
   const frontPng = frontNode ? await nodeToPng(frontNode) : null;
   const backPng = backNode ? await nodeToPng(backNode) : await urlToDataUrl(backUrlFallback || (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl);
 
-  /* ===== Measure left to fit ===== */
+  /* ===== Измерение (для подгонки) ===== */
   function measureLeft() {
     let y = margin;
-
-    // Head
     split(custName || "—", leftW, base, true).forEach(() => y += lh(base));
     split(custPhone || "—", leftW, base).forEach(() => y += lh(base));
     split(`№ ${orderNo}`, leftW, 22).forEach(() => y += lh(22));
 
-    // Carving
+    // Резная работа
     if (itemUrl || itemName) {
       y += 6;
       const c = cols(leftW), cellW = Math.floor((leftW - gapCol * (c - 1)) / c);
@@ -266,35 +282,35 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       y += Math.max(gfxH + IMG_BOTTOM_PAD, nameH) + gapRow;
     }
 
-    // People (heading + grid)
-    y += lh(TITLE); // «Люди»
+    // Люди
+    y += lh(TITLE);
     y += measurePeople();
 
-    // Graphics headings and blocks
-    if (gfxFront.length) { y += lh(base); y += measureGraphics(gfxFront, gfxH); } // «Графика (лицевая)»
-    if (gfxRear.length)  { y += lh(base); y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); } // «Графика (тыльная)»
+    // Графика (лицевая/тыльная)
+    if (gfxFront.length) { y += lh(base); y += measureGraphics(gfxFront, gfxH); }
+    if (gfxRear.length)  { y += lh(base); y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); }
 
-    // Epitaphs headings and blocks
-    if (epsFront.length) { y += lh(base); y += measureEpitaphs(epsFront) + 10; } // «Эпитафии (лицевая)»
-    if (epsRear.length)  { y += lh(base); y += measureEpitaphs(epsRear) + 10; }  // «Эпитафии (тыльная)»
+    // Эпитафии (лицевая/тыльная)
+    if (epsFront.length) { y += lh(base); y += measureEpitaphs(epsFront) + 10; }
+    if (epsRear.length)  { y += lh(base); y += measureEpitaphs(epsRear) + 10; }
 
-    // Plate
+    // Надгробная плита
     if (plateOn) {
-      y += lh(TITLE); // «Надгробная плита»
-      if (plateSize)   y += lh(base);
-      if (plateThick)  y += lh(base);
+      y += lh(TITLE);
+      if (plateSize)  y += lh(base);
+      if (plateThick) y += lh(base);
       if (plateOrient) y += lh(base);
-      if (plateUnique.length) { y += lh(base); y += measureGraphics(plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH); } // «Графика (плита)»
-      if (plateEps.length)    { y += lh(base); y += measureEpitaphs(plateEps) + 10; }                                      // «Эпитафии (плита)»
+      if (plateUnique.length) { y += lh(base); y += measureGraphics(plateUnique.map(p => ({ name: p.name || p.id || "—", url: p.url })), plateH); }
+      if (plateEps.length)    { y += lh(base); y += measureEpitaphs(plateEps) + 10; }
     }
 
-    // Extras
-    y += lh(base); // «Дополнительно» (обычный, не центрованный)
+    // Дополнительно
+    y += lh(base); // «Дополнительно»
     y += lh(base); // Цветник
     y += lh(base); // Тумба
 
-    // Notes
-    if (notes) { y += lh(base); y += split(notes, leftW, base).length * lh(base); } // «Примечания»
+    // Примечания
+    if (notes) { y += lh(base); y += split(notes, leftW, base).length * lh(base); }
 
     return { total: y - margin };
 
@@ -342,7 +358,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     }
   }
 
-  // Fit loop
+  // Подгонка
   onProgress?.("fit");
   let meas = measureLeft();
   while (meas.total > innerH) {
@@ -366,7 +382,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     meas = measureLeft();
   }
 
-  /* ===== Render left ===== */
+  /* ===== Рендер слева ===== */
   let y = margin;
   setFont(true, base);  doc.text(custName || "—", margin, y); y += lh(base);
   setFont(false, base); doc.text(custPhone || "—", margin, y); y += lh(base);
@@ -374,7 +390,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   y += 6; hr(y); y += 1;
 
-  // Carving (plain title)
+  // Резная работа (как у графики, с нижним паддингом)
   if (itemUrl || itemName) {
     setFont(true, TITLE); doc.text("Резная работа", margin, y); y += lh(TITLE);
     const c = cols(leftW);
@@ -412,7 +428,6 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y = headingCentered("Графика (лицевая)", y, base);
     y = await drawGraphics(y, gfxFront, gfxH);
   }
-
   // Графика (тыльная)
   if (gfxRear.length) {
     y = headingCentered("Графика (тыльная)", y, base);
@@ -424,7 +439,6 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y = headingCentered("Эпитафии (лицевая)", y, base);
     y = drawEpitaphs(y, epsFront) + 10;
   }
-
   // Эпитафии (тыльная)
   if (epsRear.length) {
     y = headingCentered("Эпитафии (тыльная)", y, base);
@@ -461,8 +475,8 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     for (const ln of split(notes, leftW, base)) { doc.text(ln, margin, y); y += lh(base); }
   }
 
-  /* ===== Right column — sketches ===== */
-  let yR = margin + 80; // опускаем верхний эскиз
+  /* ===== Правая колонка — эскизы ===== */
+  let yR = margin + 80;
   async function placeRight(dataUrl?: string | null, maxH?: number) {
     if (!dataUrl || !maxH) return;
     const im = new Image(); await new Promise<void>(rs => { im.onload = () => rs(); im.src = dataUrl!; });
@@ -477,7 +491,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   await placeRight(frontPng, Math.floor(innerH / 2) - 60);
   await placeRight(backPng, innerH - (yR - margin));
 
-  /* ===== Person photo pages ===== */
+  /* ===== Отдельные страницы с фото ===== */
   for (let i = 0; i < persons.length; i++) {
     const p = persons[i];
     if (!p.photo) continue;
