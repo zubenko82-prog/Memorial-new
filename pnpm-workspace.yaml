@@ -1,2 +1,4 @@
 packages:
-  - "apps/*"
+  - "apps/web"
+# если есть общие пакеты:
+#  - "packages/*"
