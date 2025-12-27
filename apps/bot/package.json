@@ -1,21 +1,9 @@
 {
-  "name": "@memorial/bot",
-  "version": "0.1.0",
-  "main": "dist/bot.js",
-  "license": "MIT",
-  "scripts": {
-    "dev": "nodemon --watch src --ext ts --exec ts-node src/bot.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/bot.js"
-  },
+  "name": "memorial-bot",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
   "dependencies": {
-    "dotenv": "^16.4.5",
     "telegraf": "^4.16.3"
-  },
-  "devDependencies": {
-    "@types/node": "^20.12.12",
-    "nodemon": "^3.0.3",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.4.5"
   }
 }
