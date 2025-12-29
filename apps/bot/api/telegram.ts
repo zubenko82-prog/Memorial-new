@@ -1,18 +1,17 @@
+// apps/bot/api/telegram.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { Telegraf } from 'telegraf';
-
-const bot = new Telegraf(process.env.BOT_TOKEN as string);
-
-bot.start((ctx) => ctx.reply('Здравствуйте!'));
-bot.on('message', (ctx) => ctx.reply('Принято'));
+import bot from '../src/bot';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') return res.status(200).json({ ok: true });
+  if (req.method !== 'POST') {
+    res.status(405).send('Method Not Allowed');
+    return;
+  }
   try {
     await bot.handleUpdate(req.body as any);
-    return res.status(200).send('ok');
-  } catch (e) {
-    console.error(e);
-    return res.status(200).send('ok');
+    res.status(200).send('OK');
+  } catch (err) {
+    console.error('[bot] handleUpdate error:', err);
+    res.status(500).send('ERROR');
   }
 }

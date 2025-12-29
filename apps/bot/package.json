@@ -1,9 +1,13 @@
 {
-  "engines": {
-    "node": "20.x"
+  "name": "bot",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "20.x" },
+  "scripts": {
+    "start": "node src/index.js"
   },
-  "packageManager": "pnpm@10.21.0",
   "dependencies": {
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "dotenv": "^16.4.5"
   }
 }
