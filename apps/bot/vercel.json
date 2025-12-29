@@ -1,6 +1,3 @@
 {
-  "version": 2,
-  "functions": {
-    "api/**/*.[jt]s": { "runtime": "nodejs20.x" }
-  }
+  "version": 2
 }

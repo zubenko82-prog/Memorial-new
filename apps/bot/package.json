@@ -1,9 +1,6 @@
 {
-  "name": "your-package",
-  "version": "1.0.0",
   "engines": {
     "node": "20.x",
     "pnpm": "9.x"
-  },
-  "packageManager": "pnpm@9.12.2"
+  }
 }

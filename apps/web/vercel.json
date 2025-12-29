@@ -1,7 +1,4 @@
 {
   "version": 2,
-  "outputDirectory": "dist",
-  "functions": {
-    "api/**/*.[jt]s": { "runtime": "nodejs20.x" }
-  }
+  "outputDirectory": "dist"
 }
