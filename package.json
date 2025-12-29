@@ -1,24 +1,9 @@
 {
-  "name": "memorial",
-  "private": true,
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "scripts": {
-    "dev": "concurrently -k -n \"server,web,bot,ngrok\" -c \"green,cyan,magenta,yellow\" \"npm:dev:server\" \"npm:dev:web\" \"npm:dev:bot\" \"pwsh ./scripts/start-ngrok.ps1 -Port 5173 -UpdateEnv\"",
-    "dev:server": "npm --workspace=@memorial/server run dev",
-    "dev:web": "npm --workspace=@memorial/web run dev",
-    "dev:bot": "npm --workspace=@memorial/bot run dev",
-    "prebuild": "npm run generate:carvings",
-    "build": "npm --workspace=@memorial/web run build",
-    "lint": "echo \"(lint placeholder)\"",
-    "generate:carvings": "node scripts/generate-carvings.mjs"
+  "name": "your-package",
+  "version": "1.0.0",
+  "engines": {
+    "node": "20.x",
+    "pnpm": "9.x"
   },
-  "devDependencies": {
-    "concurrently": "^9.0.0"
-  },
-  "dependencies": {
-    "lightgallery": "^2.9.0"
-  }
+  "packageManager": "pnpm@9.12.2"
 }

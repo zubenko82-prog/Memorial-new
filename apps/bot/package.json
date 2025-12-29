@@ -1,9 +1,9 @@
 {
-  "name": "memorial-bot",
-  "private": true,
-  "type": "module",
-  "engines": { "node": ">=20" },
-  "dependencies": {
-    "telegraf": "^4.16.3"
-  }
+  "name": "your-package",
+  "version": "1.0.0",
+  "engines": {
+    "node": "20.x",
+    "pnpm": "9.x"
+  },
+  "packageManager": "pnpm@9.12.2"
 }
