@@ -1,13 +1,29 @@
+// apps/web/api/catalogs/carvings.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).send('Method Not Allowed');
 
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '');
-  const proto = String(req.headers['x-forwarded-proto'] || 'https');
-  if (!host) return res.status(500).send('Host header missing');
+  // 1) Самый надёжный источник — текущий deployment URL
+  const deploymentUrl =
+    (req.headers['x-vercel-deployment-url'] as string) ||
+    process.env.VERCEL_URL ||
+    (req.headers['x-forwarded-host'] as string) ||
+    req.headers.host ||
+    '';
 
-  const url = `${proto}://${host}/catalogs/carvings.json`;
+  if (!deploymentUrl) return res.status(500).send('Deployment URL missing');
+
+  // 2) Протокол: https по умолчанию; http для локалки
+  const isLocal =
+    /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(deploymentUrl) ||
+    /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(String(req.headers.host || ''));
+  const proto =
+    (req.headers['x-forwarded-proto'] as string) ||
+    (isLocal ? 'http' : 'https');
+
+  const base = `${proto}://${deploymentUrl}`;
+  const url = new URL('/catalogs/carvings.json', base).toString();
 
   try {
     const r = await fetch(url, { cache: 'no-store' });

@@ -49,120 +49,6 @@
       ]
     },
     {
-      "name": "Голуби / Temp",
-      "slug": "golubi-temp",
-      "items": [
-        {
-          "id": "golubi-temp-12-900x900",
-          "name": "12 900x900",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/12-900x900.jpg",
-          "relPath": "graphics/Голуби/Temp/12-900x900.jpg"
-        },
-        {
-          "id": "golubi-temp-13-900x900",
-          "name": "13 900x900",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/13-900x900.jpg",
-          "relPath": "graphics/Голуби/Temp/13-900x900.jpg"
-        },
-        {
-          "id": "golubi-temp-17-900x900",
-          "name": "17 900x900",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/17-900x900.jpg",
-          "relPath": "graphics/Голуби/Temp/17-900x900.jpg"
-        },
-        {
-          "id": "golubi-temp-6-900x900",
-          "name": "6 900x900",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/6-900x900.jpg",
-          "relPath": "graphics/Голуби/Temp/6-900x900.jpg"
-        },
-        {
-          "id": "golubi-temp-clouds-texture2903",
-          "name": "Clouds Texture2903",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/clouds_texture2903.jpg",
-          "relPath": "graphics/Голуби/Temp/clouds_texture2903.jpg"
-        },
-        {
-          "id": "golubi-temp-cloud-004",
-          "name": "Cloud 004",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/cloud_004.png",
-          "relPath": "graphics/Голуби/Temp/cloud_004.png"
-        },
-        {
-          "id": "golubi-temp-cloud-006",
-          "name": "Cloud 006",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/cloud_006.png",
-          "relPath": "graphics/Голуби/Temp/cloud_006.png"
-        },
-        {
-          "id": "golubi-temp-cloud-011",
-          "name": "Cloud 011",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/cloud_011.png",
-          "relPath": "graphics/Голуби/Temp/cloud_011.png"
-        },
-        {
-          "id": "golubi-temp-desktopwallpapers-org-ua-11759",
-          "name": "Desktopwallpapers.org.ua 11759",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/desktopwallpapers.org.ua_11759.jpg",
-          "relPath": "graphics/Голуби/Temp/desktopwallpapers.org.ua_11759.jpg"
-        },
-        {
-          "id": "golubi-temp-golub-5",
-          "name": "Golub 5",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/Golub-5.jpg",
-          "relPath": "graphics/Голуби/Temp/Golub-5.jpg"
-        },
-        {
-          "id": "golubi-temp-golub-jpg-pagespeed-ce-foge-svu65",
-          "name": "Golub.jpg.pagespeed.ce.FOgE SvU65",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/golub.jpg.pagespeed.ce.FOgE-SvU65.jpg",
-          "relPath": "graphics/Голуби/Temp/golub.jpg.pagespeed.ce.FOgE-SvU65.jpg"
-        },
-        {
-          "id": "golubi-temp-para-golubey-parit-v-nebe",
-          "name": "Para Golubey Parit V Nebe",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/para-golubey-parit-v-nebe.jpg",
-          "relPath": "graphics/Голуби/Temp/para-golubey-parit-v-nebe.jpg"
-        },
-        {
-          "id": "golubi-temp-sun-001",
-          "name": "Sun 001",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/sun-001.png",
-          "relPath": "graphics/Голуби/Temp/sun-001.png"
-        },
-        {
-          "id": "golubi-temp-sun-010",
-          "name": "Sun 010",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/sun-010.png",
-          "relPath": "graphics/Голуби/Temp/sun-010.png"
-        },
-        {
-          "id": "golubi-temp-sun-014",
-          "name": "Sun 014",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/sun-014.png",
-          "relPath": "graphics/Голуби/Temp/sun-014.png"
-        },
-        {
-          "id": "golubi-temp-sun-clouds-blue-sky-14641020076am",
-          "name": "Sun Clouds Blue Sky 14641020076aM",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/sun-clouds-blue-sky-14641020076aM.jpg",
-          "relPath": "graphics/Голуби/Temp/sun-clouds-blue-sky-14641020076aM.jpg"
-        },
-        {
-          "id": "golubi-temp-sunshine30",
-          "name": "Sunshine30",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/sunshine30.jpg",
-          "relPath": "graphics/Голуби/Temp/sunshine30.jpg"
-        },
-        {
-          "id": "golubi-temp-golub-na-chernom-fone-100",
-          "name": "Голубь На Черном Фоне[100]",
-          "url": "/images/graphics/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D0%B8/Temp/%D0%93%D0%BE%D0%BB%D1%83%D0%B1%D1%8C%20%D0%BD%D0%B0%20%D1%87%D0%B5%D1%80%D0%BD%D0%BE%D0%BC%20%D1%84%D0%BE%D0%BD%D0%B5%5B100%5D.jpg",
-          "relPath": "graphics/Голуби/Temp/Голубь на черном фоне[100].jpg"
-        }
-      ]
-    },
-    {
       "name": "Иконы",
       "slug": "ikony",
       "items": [
@@ -463,126 +349,6 @@
       ]
     },
     {
-      "name": "Цветы",
-      "slug": "cvety",
-      "items": [
-        {
-          "id": "cvety-gvozd",
-          "name": "Гвозд",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%B3%D0%B2%D0%BE%D0%B7%D0%B4.png",
-          "relPath": "graphics/Цветы/гвозд.png"
-        },
-        {
-          "id": "cvety-gvozdiki-13",
-          "name": "Гвоздики 13",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8%2013.png",
-          "relPath": "graphics/Цветы/Гвоздики 13.png"
-        },
-        {
-          "id": "cvety-gvozdiki-13-4",
-          "name": "Гвоздики 13 4",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8%2013_4.png",
-          "relPath": "graphics/Цветы/Гвоздики 13_4.png"
-        },
-        {
-          "id": "cvety-gvozdiki-14",
-          "name": "Гвоздики 14",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8%2014.png",
-          "relPath": "graphics/Цветы/Гвоздики 14.png"
-        },
-        {
-          "id": "cvety-gvozdiki-15",
-          "name": "Гвоздики 15",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8%2015.png",
-          "relPath": "graphics/Цветы/Гвоздики 15.png"
-        },
-        {
-          "id": "cvety-gvozdiki-16",
-          "name": "Гвоздики 16",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8%2016.png",
-          "relPath": "graphics/Цветы/Гвоздики 16.png"
-        },
-        {
-          "id": "cvety-gvozdiki-48-62",
-          "name": "Гвоздики 48 62",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8%2048_62.png",
-          "relPath": "graphics/Цветы/Гвоздики 48_62.png"
-        },
-        {
-          "id": "cvety-kally-30",
-          "name": "Каллы 30",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9A%D0%B0%D0%BB%D0%BB%D1%8B%2030.png",
-          "relPath": "graphics/Цветы/Каллы 30.png"
-        },
-        {
-          "id": "cvety-kally-31",
-          "name": "Каллы 31",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9A%D0%B0%D0%BB%D0%BB%D1%8B%2031.png",
-          "relPath": "graphics/Цветы/Каллы 31.png"
-        },
-        {
-          "id": "cvety-kally",
-          "name": "Каллы",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9A%D0%B0%D0%BB%D0%BB%D1%8B.png",
-          "relPath": "graphics/Цветы/Каллы.png"
-        },
-        {
-          "id": "cvety-lilii-22",
-          "name": "Лилии 22",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8%2022.png",
-          "relPath": "graphics/Цветы/Лилии 22.png"
-        },
-        {
-          "id": "cvety-lilii-25",
-          "name": "Лилии 25",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8%2025.png",
-          "relPath": "graphics/Цветы/Лилии 25.png"
-        },
-        {
-          "id": "cvety-lilii-37",
-          "name": "Лилии 37",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8%2037.png",
-          "relPath": "graphics/Цветы/Лилии 37.png"
-        },
-        {
-          "id": "cvety-lilii-38",
-          "name": "Лилии 38",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8%2038.png",
-          "relPath": "graphics/Цветы/Лилии 38.png"
-        },
-        {
-          "id": "cvety-tyul-pany-buket",
-          "name": "Тюльпаны Букет",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%A2%D1%8E%D0%BB%D1%8C%D0%BF%D0%B0%D0%BD%D1%8B%20%20%D0%B1%D1%83%D0%BA%D0%B5%D1%82.png",
-          "relPath": "graphics/Цветы/Тюльпаны  букет.png"
-        },
-        {
-          "id": "cvety-tyul-pany-20",
-          "name": "Тюльпаны 20",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%A2%D1%8E%D0%BB%D1%8C%D0%BF%D0%B0%D0%BD%D1%8B%2020.png",
-          "relPath": "graphics/Цветы/Тюльпаны 20.png"
-        },
-        {
-          "id": "cvety-tyul-pany-32",
-          "name": "Тюльпаны 32",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%A2%D1%8E%D0%BB%D1%8C%D0%BF%D0%B0%D0%BD%D1%8B%2032.png",
-          "relPath": "graphics/Цветы/Тюльпаны 32.png"
-        },
-        {
-          "id": "cvety-tyul-pany-np",
-          "name": "Тюльпаны НП",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%A2%D1%8E%D0%BB%D1%8C%D0%BF%D0%B0%D0%BD%D1%8B%20%D0%9D%D0%9F.png",
-          "relPath": "graphics/Цветы/Тюльпаны НП.png"
-        },
-        {
-          "id": "cvety-tyul-pany",
-          "name": "Тюльпаны",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%A2%D1%8E%D0%BB%D1%8C%D0%BF%D0%B0%D0%BD%D1%8B.png",
-          "relPath": "graphics/Цветы/Тюльпаны.png"
-        }
-      ]
-    },
-    {
       "name": "Цветы / Гвоздики",
       "slug": "cvety-gvozdiki",
       "items": [
@@ -631,42 +397,6 @@
       ]
     },
     {
-      "name": "Цветы / Гвоздики / Temp",
-      "slug": "cvety-gvozdiki-temp",
-      "items": [
-        {
-          "id": "cvety-gvozdiki-temp-0-14f66d-a47d87-orig",
-          "name": "0 14f66d A47d87 Orig",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8/Temp/0_14f66d_a47d87_orig.png",
-          "relPath": "graphics/Цветы/Гвоздики/Temp/0_14f66d_a47d87_orig.png"
-        },
-        {
-          "id": "cvety-gvozdiki-temp-0-14f672-30bfc063-orig",
-          "name": "0 14f672 30bfc063 Orig",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8/Temp/0_14f672_30bfc063_orig.png",
-          "relPath": "graphics/Цветы/Гвоздики/Temp/0_14f672_30bfc063_orig.png"
-        },
-        {
-          "id": "cvety-gvozdiki-temp-carnation-75-960x1120",
-          "name": "Carnation 75 960x1120",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8/Temp/carnation%2075%20-960x1120.jpg",
-          "relPath": "graphics/Цветы/Гвоздики/Temp/carnation 75 -960x1120.jpg"
-        },
-        {
-          "id": "cvety-gvozdiki-temp-gvozd19",
-          "name": "Gvozd19",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8/Temp/gvozd19.png",
-          "relPath": "graphics/Цветы/Гвоздики/Temp/gvozd19.png"
-        },
-        {
-          "id": "cvety-gvozdiki-temp-gvozdika-cvetok-krupnyy-plan-1680x1050",
-          "name": "Gvozdika Cvetok Krupnyy Plan 1680x1050",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%93%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8%D0%BA%D0%B8/Temp/gvozdika_cvetok_krupnyy_plan_1680x1050.jpg",
-          "relPath": "graphics/Цветы/Гвоздики/Temp/gvozdika_cvetok_krupnyy_plan_1680x1050.jpg"
-        }
-      ]
-    },
-    {
       "name": "Цветы / Каллы",
       "slug": "cvety-kally",
       "items": [
@@ -687,18 +417,6 @@
           "name": "Каллы",
           "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9A%D0%B0%D0%BB%D0%BB%D1%8B/%D0%9A%D0%B0%D0%BB%D0%BB%D1%8B.png",
           "relPath": "graphics/Цветы/Каллы/Каллы.png"
-        }
-      ]
-    },
-    {
-      "name": "Цветы / Каллы / Temp",
-      "slug": "cvety-kally-temp",
-      "items": [
-        {
-          "id": "cvety-kally-temp-f14-261x348",
-          "name": "F14 261x348",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9A%D0%B0%D0%BB%D0%BB%D1%8B/Temp/f14-261x348.jpg",
-          "relPath": "graphics/Цветы/Каллы/Temp/f14-261x348.jpg"
         }
       ]
     },
@@ -729,18 +447,6 @@
           "name": "Лилии 38",
           "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8%2038.png",
           "relPath": "graphics/Цветы/Лилии/Лилии 38.png"
-        }
-      ]
-    },
-    {
-      "name": "Цветы / Лилии / Temp",
-      "slug": "cvety-lilii-temp",
-      "items": [
-        {
-          "id": "cvety-lilii-temp-6bbdd9e36e62124e4d381a2c8051e3f9",
-          "name": "6bbdd9e36e62124e4d381a2c8051e3f9",
-          "url": "/images/graphics/%D0%A6%D0%B2%D0%B5%D1%82%D1%8B/%D0%9B%D0%B8%D0%BB%D0%B8%D0%B8/Temp/6bbdd9e36e62124e4d381a2c8051e3f9.jpg",
-          "relPath": "graphics/Цветы/Лилии/Temp/6bbdd9e36e62124e4d381a2c8051e3f9.jpg"
         }
       ]
     },
@@ -915,78 +621,6 @@
           "name": "ШАХТА 94",
           "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/%D0%A8%D0%90%D0%A5%D0%A2%D0%90%2094.png",
           "relPath": "graphics/Шахта/ШАХТА 94.png"
-        }
-      ]
-    },
-    {
-      "name": "Шахта / Temp",
-      "slug": "shahta-temp",
-      "items": [
-        {
-          "id": "shahta-temp-2012-02-04-1-znaki-shax-slava-img-3125-768x576",
-          "name": "2012 02 04 1. Znaki Shax Slava IMG 3125 768x576",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/2012-02-04_1.%20Znaki%20Shax_slava_IMG_3125-768x576.jpg",
-          "relPath": "graphics/Шахта/Temp/2012-02-04_1. Znaki Shax_slava_IMG_3125-768x576.jpg"
-        },
-        {
-          "id": "shahta-temp-23849670-bol-shoj-kusok-uglya",
-          "name": "23849670 Большой Кусок Угля",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/23849670-%D0%B1%D0%BE%D0%BB%D1%8C%D1%88%D0%BE%D0%B9-%D0%BA%D1%83%D1%81%D0%BE%D0%BA-%D1%83%D0%B3%D0%BB%D1%8F.jpg",
-          "relPath": "graphics/Шахта/Temp/23849670-большой-кусок-угля.jpg"
-        },
-        {
-          "id": "shahta-temp-316px-pickaxe",
-          "name": "316px Pickaxe",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/316px-Pickaxe.jpg",
-          "relPath": "graphics/Шахта/Temp/316px-Pickaxe.jpg"
-        },
-        {
-          "id": "shahta-temp-76726120",
-          "name": "76726120",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/76726120.jpg",
-          "relPath": "graphics/Шахта/Temp/76726120.jpg"
-        },
-        {
-          "id": "shahta-temp-shahter-slava-1",
-          "name": "Shahter Slava 1",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/shahter_slava_1.png",
-          "relPath": "graphics/Шахта/Temp/shahter_slava_1.png"
-        },
-        {
-          "id": "shahta-temp-shahter-slava-2",
-          "name": "Shahter Slava 2",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/shahter_slava_2.png",
-          "relPath": "graphics/Шахта/Temp/shahter_slava_2.png"
-        },
-        {
-          "id": "shahta-temp-shahter-slava-3-3",
-          "name": "Shahter Slava 3 (3)",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/shahter_slava_3%20(3).png",
-          "relPath": "graphics/Шахта/Temp/shahter_slava_3 (3).png"
-        },
-        {
-          "id": "shahta-temp-shahter-slava-3",
-          "name": "Shahter Slava 3",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/shahter_slava_3.png",
-          "relPath": "graphics/Шахта/Temp/shahter_slava_3.png"
-        },
-        {
-          "id": "shahta-temp-shaxtslava1",
-          "name": "Shaxtslava1",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/shaxtslava1.jpg",
-          "relPath": "graphics/Шахта/Temp/shaxtslava1.jpg"
-        },
-        {
-          "id": "shahta-temp-shahterskaya-slava",
-          "name": "Шахтёрская Слава",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/%D0%A8%D0%B0%D1%85%D1%82%D1%91%D1%80%D1%81%D0%BA%D0%B0%D1%8F%20%D1%81%D0%BB%D0%B0%D0%B2%D0%B0.jpg",
-          "relPath": "graphics/Шахта/Temp/Шахтёрская слава.jpg"
-        },
-        {
-          "id": "shahta-temp-shahta-87",
-          "name": "Шахта 87",
-          "url": "/images/graphics/%D0%A8%D0%B0%D1%85%D1%82%D0%B0/Temp/%D0%A8%D0%B0%D1%85%D1%82%D0%B0%2087.jpg",
-          "relPath": "graphics/Шахта/Temp/Шахта 87.jpg"
         }
       ]
     }
