@@ -1,33 +1,34 @@
 // apps/bot/api/telegram.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-// ВАЖНО: поправьте путь импорта на ваш реальный экспорт бота.
-// Например, если вы экспортируете bot из apps/bot/src/bot.ts:
-import bot from '../src/bot.ts';
 
 const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    // Для GET/других методов отдаём 405, чтобы вы могли проверить, что маршрут существует
-    return res.status(405).send('Method Not Allowed');
-  }
+  if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // Проверка секретного токена из заголовка Telegram (если вы его зададите в setWebhook)
   if (SECRET) {
     const header = req.headers['x-telegram-bot-api-secret-token'];
-    if (header !== SECRET) {
-      return res.status(403).send('Forbidden');
-    }
+    if (header !== SECRET) return res.status(403).send('Forbidden');
+  }
+
+  let bot: any;
+  try {
+    ({ default: bot } = await import('../src/bot.js'));
+  } catch (e) {
+    console.error('[webhook] failed to import bot:', e);
+    return res.status(500).send('Bot import error');
+  }
+
+  if (!bot) {
+    console.error('[webhook] bot instance is null (missing TGBOT_TOKEN)');
+    return res.status(500).send('Bot not configured');
   }
 
   try {
     const update = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    await bot.handleUpdate(update as any);
-    // Важно отвечать 200 быстро, чтобы Telegram не ретраил
-    return res.status(200).send('OK');
-  } catch (err) {
-    console.error('[bot] handleUpdate error:', err);
-    // Всё равно 200, чтобы избежать ретраев от Telegram
-    return res.status(200).send('OK');
+    await bot.handleUpdate(update);
+  } catch (e) {
+    console.error('[webhook] handleUpdate error:', e);
   }
+  return res.status(200).send('OK');
 }
