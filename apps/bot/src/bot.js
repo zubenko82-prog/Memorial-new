@@ -24,7 +24,7 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
-const WEBAPP_URL = process.env.WEBAPP_URL || 'https://example.com'; // WebApp "Подобрать памятник"
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/'; // ваш WebApp
 const DEEPLINK_START = 'order'; // /start order
 const WEBAPP_HINT =
   'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
@@ -39,7 +39,7 @@ function getChannelId() {
 
 // ------------ Optional Redis (Upstash) для устойчивых сессий ------------
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
-const mem = new Map(); // фолбэк для локальной разработки (на серверлесс данные не сохранятся между вызовами)
+const mem = new Map(); // фолбэк для локальной разработки
 
 async function getRedis() {
   if (redisInstance !== undefined) return redisInstance;
@@ -118,24 +118,22 @@ async function sendOrderToManager(ctx, state) {
   }
 }
 
-// Сборка клавиатур
+// Сборка клавиатур для канала
 function buildInlineKbForChannel(username, useWebApp = true) {
   const row = [
     Markup.button.url('Заказать', `https://t.me/${username}?start=${DEEPLINK_START}`),
   ];
   if (useWebApp) {
-    // Важно: для web_app нужен /setdomain в @BotFather с доменом WEBAPP_URL
+    // Для web_app кнопки нужен /setdomain у @BotFather с доменом WEBAPP_URL (origin)
     row.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
   } else {
-    // Фолбэк — обычная ссылка (не откроет WebApp внутри Telegram, но точно отправится)
     row.push(Markup.button.url('Подобрать памятник', WEBAPP_URL));
   }
   return Markup.inlineKeyboard([row]);
 }
 
-// Безопасная отправка: пробуем с HTML и web_app, при ошибках — без HTML или с URL-кнопкой
+// Безопасная отправка в канал: HTML и web_app с фолбэками
 async function safeSendToChannel(ctx, sendKind, payload) {
-  // sendKind: 'text' | 'photo' | 'video' | 'document'
   const me = ctx.botInfo || (await ctx.telegram.getMe());
   const username = me.username;
   const chatId = getChannelId();
@@ -145,7 +143,6 @@ async function safeSendToChannel(ctx, sendKind, payload) {
   const caption = payload.caption || '';
   const fileId = payload.fileId;
 
-  // 1) Пытаемся: HTML + WebApp кнопка
   let kb = buildInlineKbForChannel(username, true);
   try {
     if (sendKind === 'text') {
@@ -187,7 +184,7 @@ async function safeSendToChannel(ctx, sendKind, payload) {
     }
   } catch (e) {
     const desc = e?.response?.description || e?.message || '';
-    // 2) Если проблема с HTML-разметкой — повторяем без parse_mode
+    // Повтор без HTML
     if (/parse entities|can't parse entities|entity|wrong entity/i.test(desc)) {
       try {
         if (sendKind === 'text') {
@@ -223,48 +220,43 @@ async function safeSendToChannel(ctx, sendKind, payload) {
           return msg;
         }
       } catch (e2) {
-        // пойдём дальше к фолбэку web_app → URL
         e = e2;
       }
     }
-    // 3) Если проблема с web_app кнопкой — повторяем с URL‑кнопкой
+    // Проблема с web_app — заменяем на URL
     if (/webapp|web_app|button.*invalid/i.test(desc)) {
       kb = buildInlineKbForChannel(username, false);
-      try {
-        if (sendKind === 'text') {
-          return await ctx.telegram.sendMessage(chatId, text, {
+      if (sendKind === 'text') {
+        return await ctx.telegram.sendMessage(chatId, text, {
+          reply_markup: kb.reply_markup,
+          disable_web_page_preview: true,
+        });
+      }
+      if (sendKind === 'photo') {
+        return await ctx.telegram.sendPhoto(chatId, fileId, {
+          caption: caption.slice(0, 1024),
+          reply_markup: kb.reply_markup,
+        });
+      }
+      if (sendKind === 'video') {
+        return await ctx.telegram.sendVideo(chatId, fileId, {
+          caption: caption.slice(0, 1024),
+          reply_markup: kb.reply_markup,
+        });
+      }
+      if (sendKind === 'document') {
+        const canCaption = caption.length <= 1024 ? caption : undefined;
+        const msg = await ctx.telegram.sendDocument(chatId, fileId, {
+          caption: canCaption,
+          reply_markup: kb.reply_markup,
+        });
+        if (!canCaption) {
+          await ctx.telegram.sendMessage(chatId, caption, {
             reply_markup: kb.reply_markup,
             disable_web_page_preview: true,
           });
         }
-        if (sendKind === 'photo') {
-          return await ctx.telegram.sendPhoto(chatId, fileId, {
-            caption: caption.slice(0, 1024),
-            reply_markup: kb.reply_markup,
-          });
-        }
-        if (sendKind === 'video') {
-          return await ctx.telegram.sendVideo(chatId, fileId, {
-            caption: caption.slice(0, 1024),
-            reply_markup: kb.reply_markup,
-          });
-        }
-        if (sendKind === 'document') {
-          const canCaption = caption.length <= 1024 ? caption : undefined;
-          const msg = await ctx.telegram.sendDocument(chatId, fileId, {
-            caption: canCaption,
-            reply_markup: kb.reply_markup,
-          });
-          if (!canCaption) {
-            await ctx.telegram.sendMessage(chatId, caption, {
-              reply_markup: kb.reply_markup,
-              disable_web_page_preview: true,
-            });
-          }
-          return msg;
-        }
-      } catch (e3) {
-        throw e3;
+        return msg;
       }
     }
     throw e;
@@ -289,22 +281,16 @@ if (token) {
     }
   });
 
-  // /start — приветствие + кнопки: Заказать (анкета в ЛС), Подобрать памятник (WebApp)
+  // /start — анкета запускается сразу (без лишних кликов). Отдельным сообщением дадим WebApp.
   bot.start(async (ctx) => {
-    const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ');
-    const kb = Markup.inlineKeyboard([
-      [
-        Markup.button.callback('Заказать', 'start_order'),
-        Markup.button.webApp('Подобрать памятник', WEBAPP_URL),
-      ],
-    ]);
-    await ctx.reply('Добро пожаловать в Memorial!', kb);
-    if (arg === DEEPLINK_START) {
-      return startOrder(ctx);
-    }
+    // Если deep-link /start order — начнём анкету, иначе тоже начнём для снижения трения.
+    await startOrder(ctx);
+    // Доп. сообщение: кнопка WebApp "Подобрать памятник"
+    const kb = Markup.inlineKeyboard([[Markup.button.webApp('Подобрать памятник', WEBAPP_URL)]]);
+    await ctx.reply('Или откройте каталог памятников в мини‑приложении:', kb);
   });
 
-  // Команды справки
+  // Команды
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
   bot.command('web', async (ctx) => {
     const kb = Markup.inlineKeyboard([[Markup.button.webApp('Подобрать памятник', WEBAPP_URL)]]);
@@ -335,7 +321,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост (текст или медиа по reply) с кнопками: Заказать + Подобрать памятник
+  // /post — пост в канал (текст или медиа по reply) с кнопками: Заказать + Подобрать памятник
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -379,11 +365,7 @@ if (token) {
     }
   });
 
-  // --------- Анкета в ЛС: callback-кнопки и шаги ---------
-  bot.action('start_order', async (ctx) => {
-    await ctx.answerCbQuery();
-    return startOrder(ctx);
-  });
+  // --------- Анкета: шаги и кнопки ---------
   bot.action('cancel_order', async (ctx) => {
     await ctx.answerCbQuery('Анкета отменена');
     return cancelOrder(ctx);
