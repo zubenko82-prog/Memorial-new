@@ -27,7 +27,7 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/'; // ваш WebApp
 const DEEPLINK_START = 'order'; // /start order
 const WEBAPP_HINT =
-  'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
+  'Заполните необходимые поля и приложите фото или нажмите «Подобрать памятник» — так мы быстрее согласуем детали и начнём изготовление.';
 
 // CHANNEL_ID может быть -100… (число) или @username (строка)
 function getChannelId() {
@@ -118,7 +118,7 @@ async function sendOrderToManager(ctx, state) {
   }
 }
 
-// Сборка клавиатур для канала
+// Сборка инлайн-клавиатуры для канала (под постом)
 function buildInlineKbForChannel(username, useWebApp = true) {
   const row = [
     Markup.button.url('Заказать', `https://t.me/${username}?start=${DEEPLINK_START}`),
@@ -130,6 +130,28 @@ function buildInlineKbForChannel(username, useWebApp = true) {
     row.push(Markup.button.url('Подобрать памятник', WEBAPP_URL));
   }
   return Markup.inlineKeyboard([row]);
+}
+
+// Reply-клавиатуры (над полем ввода) для анкеты
+function kbInput() {
+  return Markup.keyboard([
+    [Markup.button.webApp('Подобрать памятник', WEBAPP_URL), 'Отменить'],
+  ]).resize();
+}
+function kbPhotos() {
+  return Markup.keyboard([
+    ['Далее'],
+    [Markup.button.webApp('Подобрать памятник', WEBAPP_URL), 'Отменить'],
+  ]).resize();
+}
+function kbReview() {
+  return Markup.keyboard([
+    ['Отправить'],
+    [Markup.button.webApp('Подобрать памятник', WEBAPP_URL), 'Отменить'],
+  ]).resize();
+}
+function kbRemove() {
+  return Markup.removeKeyboard();
 }
 
 // Безопасная отправка в канал: HTML и web_app с фолбэками
@@ -281,21 +303,13 @@ if (token) {
     }
   });
 
-  // /start — анкета запускается сразу (без лишних кликов). Отдельным сообщением дадим WebApp.
+  // /start — сразу начинаем анкету, без дополнительных сообщений
   bot.start(async (ctx) => {
-    // Если deep-link /start order — начнём анкету, иначе тоже начнём для снижения трения.
     await startOrder(ctx);
-    // Доп. сообщение: кнопка WebApp "Подобрать памятник"
-    const kb = Markup.inlineKeyboard([[Markup.button.webApp('Подобрать памятник', WEBAPP_URL)]]);
-    await ctx.reply('Или откройте каталог памятников в мини‑приложении:', kb);
   });
 
   // Команды
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
-  bot.command('web', async (ctx) => {
-    const kb = Markup.inlineKeyboard([[Markup.button.webApp('Подобрать памятник', WEBAPP_URL)]]);
-    return ctx.reply('Откройте каталог памятников в мини‑приложении:', kb);
-  });
 
   // Диагностика
   bot.command('dump', async (ctx) => {
@@ -365,18 +379,15 @@ if (token) {
     }
   });
 
-  // --------- Анкета: шаги и кнопки ---------
-  bot.action('cancel_order', async (ctx) => {
-    await ctx.answerCbQuery('Анкета отменена');
-    return cancelOrder(ctx);
+  // --------- Анкета: кнопки-клавиши (hears) ---------
+  bot.hears('Отменить', async (ctx) => {
+    if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
-  bot.action('next_from_photos', async (ctx) => {
-    await ctx.answerCbQuery();
-    return stepReview(ctx);
+  bot.hears('Далее', async (ctx) => {
+    if (ctx.session?.order?.step === 'photos') return stepReview(ctx);
   });
-  bot.action('submit_order', async (ctx) => {
-    await ctx.answerCbQuery();
-    return submitOrder(ctx);
+  bot.hears('Отправить', async (ctx) => {
+    if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
   });
 
   // Обработка сообщений по текущему шагу анкеты
@@ -392,7 +403,7 @@ if (token) {
       }
       if (st === 'phone') {
         if (!phoneOk(text)) {
-          return ctx.reply('Введите корректный номер телефона (минимум 6 цифр, можно с +).');
+          return ctx.reply('Введите корректный номер телефона (минимум 6 цифр, можно с +).', kbInput());
         }
         ctx.session.order.phone = text;
         return stepFio(ctx);
@@ -413,7 +424,7 @@ if (token) {
       if (ctx.session?.order?.step === 'photos' && fileId) {
         ctx.session.order.photos = ctx.session.order.photos || [];
         ctx.session.order.photos.push(fileId);
-        return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».');
+        return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
       }
     }
   });
@@ -423,43 +434,35 @@ if (token) {
   console.error('[bot] Missing TGBOT_TOKEN in environment');
 }
 
-// ------------ Анкета: шаги ------------
+// ------------ Анкета: шаги (reply-клавиатуры над полем ввода) ------------
 async function startOrder(ctx) {
   ctx.session.order = { step: 'name', photos: [] };
-  const kb = Markup.inlineKeyboard([[Markup.button.callback('Отменить', 'cancel_order')]]);
   await ctx.reply(
     `${WEBAPP_HINT}\n\nШаг 1/5. Представьтесь (ФИО/имя):`,
-    kb
+    kbInput()
   );
 }
 
 async function stepPhone(ctx) {
   ctx.session.order.step = 'phone';
-  const kb = Markup.inlineKeyboard([[Markup.button.callback('Отменить', 'cancel_order')]]);
-  await ctx.reply('Шаг 2/5. Номер телефона:', kb);
+  await ctx.reply('Шаг 2/5. Номер телефона:', kbInput());
 }
 
 async function stepFio(ctx) {
   ctx.session.order.step = 'fio';
-  const kb = Markup.inlineKeyboard([[Markup.button.callback('Отменить', 'cancel_order')]]);
-  await ctx.reply('Шаг 3/5. Фамилия/Имя/Отчество усопшего:', kb);
+  await ctx.reply('Шаг 3/5. Фамилия/Имя/Отчество усопшего:', kbInput());
 }
 
 async function stepDates(ctx) {
   ctx.session.order.step = 'dates';
-  const kb = Markup.inlineKeyboard([[Markup.button.callback('Отменить', 'cancel_order')]]);
-  await ctx.reply('Шаг 4/5. Дата рождения — Дата смерти (в свободном формате):', kb);
+  await ctx.reply('Шаг 4/5. Дата рождения — Дата смерти (в свободном формате):', kbInput());
 }
 
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.callback('Далее', 'next_from_photos')],
-    [Markup.button.callback('Отменить', 'cancel_order')],
-  ]);
   await ctx.reply(
     'Шаг 5/5. Прикрепите фото (по одному или альбомом). Когда закончите — нажмите «Далее».',
-    kb
+    kbPhotos()
   );
 }
 
@@ -467,26 +470,23 @@ async function stepReview(ctx) {
   ctx.session.order.step = 'review';
   const s = ctx.session.order;
   const text = buildSummary(s);
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.callback('Отправить', 'submit_order')],
-    [Markup.button.callback('Отменить', 'cancel_order')],
-  ]);
-  await ctx.reply(text, kb);
+  await ctx.reply(text, kbReview());
 }
 
 async function submitOrder(ctx) {
   const s = ctx.session.order || {};
   if (!s.name || !s.phone || !phoneOk(s.phone)) {
     return ctx.reply(
-      'Обязательные поля не заполнены: «Представьтесь» и/или «Номер телефона». Вернитесь и исправьте.'
+      'Обязательные поля не заполнены: «Представьтесь» и/или «Номер телефона». Вернитесь и исправьте.',
+      kbInput()
     );
   }
   try {
     await sendOrderToManager(ctx, s);
-    await ctx.reply('Заявка отправлена. Спасибо! Наш менеджер свяжется с вами.');
+    await ctx.reply('Заявка отправлена. Спасибо! Наш менеджер свяжется с вами.', kbRemove());
   } catch (e) {
     console.error('submitOrder error', e);
-    await ctx.reply('Не удалось отправить заявку. Попробуйте позже.');
+    await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
   } finally {
     ctx.session.order = null;
   }
@@ -494,7 +494,7 @@ async function submitOrder(ctx) {
 
 async function cancelOrder(ctx, msg = 'Отменено.') {
   ctx.session.order = null;
-  return ctx.reply(msg);
+  return ctx.reply(msg, kbRemove());
 }
 
 // ------------ MODE ------------
