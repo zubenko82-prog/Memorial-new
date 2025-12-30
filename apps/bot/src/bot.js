@@ -17,18 +17,19 @@ if (!process.env.VERCEL) {
 // ---------------- ENV ----------------
 const token = process.env.TGBOT_TOKEN ?? '';
 const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : -1003021100938;
-const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
+const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username (для постинга через /post)
 const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
+
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 
 const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 
-// Подсказка, выводим отдельным сообщением перед первым вопросом анкеты
-const WEBAPP_HINT =
-  'Заполните необходимые поля и приложите фото или нажмите «Подобрать памятник» — так мы быстрее согласуем детали и начнём изготовление.';
+// Подсказка, отдельным сообщением перед первым шагом
+const HINT_TEXT =
+  'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
 
 // CHANNEL_ID может быть -100… (число) или @username (строка)
 function getChannelId() {
@@ -55,7 +56,7 @@ async function getRedis() {
     const mod = await import('@upstash/redis');
     redisInstance = new mod.Redis({ url, token });
   } catch (e) {
-    console.warn('[bot] Upstash Redis недоступен, будет использована in-memory сессия:', e?.message || e);
+    console.warn('[bot] Upstash Redis недоступен, используется in-memory:', e?.message || e);
     redisInstance = null;
   }
   return redisInstance;
@@ -78,7 +79,7 @@ async function saveSession(userId, data) {
   }
 }
 
-// Хранилище текста постов: ключ post:<absChatId>:<messageId> → исходный текст (без подсказки)
+// Хранилище текста постов: ключ post:<absChatId>:<messageId> → исходный текст поста (без подсказки)
 async function setPostText(chatId, messageId, text) {
   const abs = Math.abs(Number(chatId));
   const key = `post:${abs}:${messageId}`;
@@ -89,9 +90,8 @@ async function setPostText(chatId, messageId, text) {
     memPosts.set(key, text);
   }
 }
-async function getPostText(chatId, messageId) {
-  const abs = Math.abs(Number(chatId));
-  const key = `post:${abs}:${messageId}`;
+async function getPostTextByAbs(absChatId, messageId) {
+  const key = `post:${absChatId}:${messageId}`;
   const r = await getRedis();
   if (r) {
     return (await r.get(key)) || '';
@@ -117,7 +117,7 @@ function makeOrderNo(d = new Date()) {
   return `${DD}.${MM}.${YYYY}-${HH}.${mm}.${ss}`;
 }
 
-// Токен источника, который встраиваем в deep-link: p_<absChatId>_<messageId>
+// Токен источника (для deep-link): p_<absChatId>_<messageId>
 function makeSourceToken(chatId, messageId) {
   const abs = Math.abs(Number(chatId));
   return `p_${abs}_${messageId}`;
@@ -127,11 +127,19 @@ function parseSourceToken(token) {
   if (!m) return null;
   return { absChatId: m[1], messageId: Number(m[2]) };
 }
+function makePostLink(absChatId, messageId) {
+  // t.me/c/<internal>/<message_id>, где internal = absChatId без начальных "100"
+  const internal = String(absChatId).startsWith('100')
+    ? String(absChatId).slice(3)
+    : String(absChatId);
+  return `https://t.me/c/${internal}/${messageId}`;
+}
 
-function buildUserSummary(s, orderNo) {
+function buildUserSummary(s, orderNo, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
-  return [
+  const comment = s.comment?.trim();
+  const lines = [
     `Заявка №${orderNo}:`,
     '',
     `Представьтесь: ${s.name || '—'}`,
@@ -139,10 +147,18 @@ function buildUserSummary(s, orderNo) {
     `ФИО усопшего: ${fio}`,
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
-  ].join('\n');
+  ];
+  if (comment) lines.push(`Комментарий/связь: ${comment}`);
+  if (postText) {
+    lines.push('', 'Текст поста:', postText);
+  }
+  if (postLink) {
+    lines.push(`Ссылка на пост: ${postLink}`);
+  }
+  return lines.join('\n');
 }
 
-function buildManagerSummary(s, orderNo, userId, postText) {
+function buildManagerSummary(s, orderNo, userId, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
   const lines = [
@@ -155,14 +171,17 @@ function buildManagerSummary(s, orderNo, userId, postText) {
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
   ];
-  if (postText) {
-    lines.push('', 'Пост:', postText);
+  if (s.comment?.trim()) lines.push(`Комментарий/связь: ${s.comment.trim()}`);
+  if (postText || postLink) {
+    lines.push('');
+    if (postText) lines.push('Текст поста:', postText);
+    if (postLink) lines.push(`Ссылка на пост: ${postLink}`);
   }
   return lines.join('\n');
 }
 
-async function sendOrderToManager(ctx, state, orderNo, postText) {
-  const managerText = buildManagerSummary(state, orderNo, ctx.from?.id, postText);
+async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
+  const managerText = buildManagerSummary(state, orderNo, ctx.from?.id, postText, postLink);
   const photos = Array.isArray(state.photos) ? state.photos : [];
   if (photos.length > 0) {
     const media = photos.slice(0, 10).map((fileId, i) => ({
@@ -182,20 +201,14 @@ async function sendOrderToManager(ctx, state, orderNo, postText) {
   }
 }
 
-// Инлайн-клавиатура под постом канала: Заказать (в ЛС) + Подобрать памятник (WebApp)
-function channelPostKb(botUsername, sourceToken, useWebApp = true) {
+// Инлайн-клавиатура под постом канала: только «Заказать» (без WebApp кнопки)
+function channelPostKb(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   const row = [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)];
-  if (useWebApp) {
-    row.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
-  } else {
-    // фолбэк, если web_app не разрешён у бота (нет /setdomain)
-    row.push(Markup.button.url('Подобрать памятник', WEBAPP_URL));
-  }
   return Markup.inlineKeyboard([row]);
 }
 
-// Отправка поста в канал, добавление клавиатуры после отправки, сохранение текста поста
+// Отправка поста в канал, сохранение исходного текста поста (без подсказки), добавление клавиатуры
 async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
@@ -244,23 +257,16 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     }
   }
 
-  // 2) Сохраняем исходный текст поста (без подсказки) для заявки
+  // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем инлайн‑кнопки с deep-link и web_app
+  // 3) Добавляем инлайн‑кнопку «Заказать» (без WebApp)
   const token = makeSourceToken(msg.chat.id, msg.message_id);
-  let kb = channelPostKb(botUsername, token, true);
+  const kb = channelPostKb(botUsername, token);
   try {
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
-    const desc = e?.response?.description || e?.message || '';
-    if (/webapp|web_app|button.*invalid/i.test(desc)) {
-      // фолбэк: меняем web_app на обычную URL-кнопку
-      kb = channelPostKb(botUsername, token, false);
-      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
-    } else {
-      throw e;
-    }
+    console.error('[bot] editMessageReplyMarkup failed:', e?.response?.description || e?.message || e);
   }
 
   return { primary: msg };
@@ -284,7 +290,7 @@ if (token) {
     }
   });
 
-  // /start — показываем подсказку отдельным сообщением и сразу начинаем анкету
+  // /start — подсказка отдельным сообщением, затем сразу анкета.
   bot.start(async (ctx) => {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     let sourceToken = null;
@@ -294,7 +300,7 @@ if (token) {
         sourceToken = parts.slice(1).join('_');
       }
     }
-    await ctx.reply(WEBAPP_HINT);
+    await ctx.reply(HINT_TEXT);
     await startOrder(ctx, sourceToken || undefined);
   });
 
@@ -320,7 +326,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с кнопками: Заказать (ЛС) + Подобрать памятник (WebApp)
+  // /post — публикует в канал пост с клавиатурой: только «Заказать»
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -329,7 +335,7 @@ if (token) {
 
       const raw = ctx.message?.text || '';
       const base = raw.replace(/^\/post(@\S+)?\s*/i, '').trim(); // исходный текст поста (без подсказки)
-      const finalText = base ? `${base}\n\n${WEBAPP_HINT}` : WEBAPP_HINT;
+      const finalText = base ? `${base}\n\n${HINT_TEXT}` : HINT_TEXT;
 
       const r = ctx.message?.reply_to_message;
       if (r?.photo?.length) {
@@ -353,7 +359,7 @@ if (token) {
     } catch (e) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота и CHANNEL_ID, а для web_app — /setdomain у @BotFather.`);
+      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота и CHANNEL_ID.`);
     }
   });
 
@@ -362,7 +368,7 @@ if (token) {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
   bot.hears('Далее', async (ctx) => {
-    if (ctx.session?.order?.step === 'photos') return stepReview(ctx);
+    if (ctx.session?.order?.step === 'photos') return stepComment(ctx); // после фото идём на шаг 6 (комментарий)
   });
   bot.hears('Отправить', async (ctx) => {
     if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
@@ -393,6 +399,10 @@ if (token) {
       if (st === 'dates') {
         ctx.session.order.dates = text;
         return stepPhotos(ctx);
+      }
+      if (st === 'comment') {
+        ctx.session.order.comment = text;
+        return stepReview(ctx);
       }
     }
 
@@ -428,54 +438,82 @@ function kbRemove() {
 
 async function startOrder(ctx, sourceToken) {
   ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
-  // Сначала подсказка уже отправлена в /start. Здесь — первый вопрос.
-  await ctx.reply('Шаг 1/5. Представьтесь (ФИО/имя):', kbInput());
+  await ctx.reply('Шаг 1/6. Представьтесь (ФИО/имя):', kbInput());
 }
 async function stepPhone(ctx) {
   ctx.session.order.step = 'phone';
-  await ctx.reply('Шаг 2/5. Номер телефона:', kbInput());
+  await ctx.reply('Шаг 2/6. Номер телефона:', kbInput());
 }
 async function stepFio(ctx) {
   ctx.session.order.step = 'fio';
-  await ctx.reply('Шаг 3/5. Фамилия/Имя/Отчество усопшего:', kbInput());
+  await ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbInput());
 }
 async function stepDates(ctx) {
   ctx.session.order.step = 'dates';
-  await ctx.reply('Шаг 4/5. Дата рождения — Дата смерти (в свободном формате):', kbInput());
+  await ctx.reply('Шаг 4/6. Дата рождения — Дата смерти (в свободном формате):', kbInput());
 }
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
-  await ctx.reply('Шаг 5/5. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
+  await ctx.reply('Шаг 5/6. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
+}
+async function stepComment(ctx) {
+  ctx.session.order.step = 'comment';
+  await ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbInput());
 }
 async function stepReview(ctx) {
   ctx.session.order.step = 'review';
   const s = ctx.session.order;
-  const orderNo = makeOrderNo(); // номер уже пригодится и для подтверждения
+  // Номер заявки
+  const orderNo = makeOrderNo();
   ctx.session.order.orderNo = orderNo;
-  const text = buildUserSummary(s, orderNo);
+
+  // Текст и ссылка поста (если есть sourceToken)
+  let postText = '';
+  let postLink = '';
+  try {
+    if (s.sourceToken) {
+      const parsed = parseSourceToken(s.sourceToken);
+      if (parsed) {
+        postText = await getPostTextByAbs(parsed.absChatId, parsed.messageId);
+        postLink = makePostLink(parsed.absChatId, parsed.messageId);
+      }
+    }
+  } catch (e) {
+    console.error('[bot] get post content error:', e?.message || e);
+  }
+
+  const text = buildUserSummary(s, orderNo, postText, postLink);
   await ctx.reply(text, kbReview());
 }
+
 async function submitOrder(ctx) {
   const s = ctx.session.order || {};
   if (!s.name || !s.phone || !phoneOk(s.phone)) {
     return ctx.reply('Обязательные поля не заполнены: «Представьтесь» и/или «Номер телефона». Вернитесь и исправьте.', kbInput());
   }
   const orderNo = s.orderNo || makeOrderNo();
+
+  // Подготовим текст/ссылку поста для менеджера
   let postText = '';
+  let postLink = '';
   try {
     if (s.sourceToken) {
       const parsed = parseSourceToken(s.sourceToken);
       if (parsed) {
-        postText = await getPostText(parsed.absChatId, parsed.messageId);
+        postText = await getPostTextByAbs(parsed.absChatId, parsed.messageId);
+        postLink = makePostLink(parsed.absChatId, parsed.messageId);
       }
     }
   } catch (e) {
-    console.error('[bot] get post text error:', e?.message || e);
+    console.error('[bot] get post content error on submit:', e?.message || e);
   }
 
   try {
-    await sendOrderToManager(ctx, s, orderNo, postText);
-    await ctx.reply(`Заявка №${orderNo} отправлена. Спасибо! Наш менеджер свяжется с вами.`, kbRemove());
+    await sendOrderToManager(ctx, s, orderNo, postText, postLink);
+    await ctx.reply(
+      `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.`,
+      kbRemove()
+    );
   } catch (e) {
     console.error('submitOrder error', e);
     await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
