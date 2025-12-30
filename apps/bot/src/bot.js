@@ -17,14 +17,13 @@ if (!process.env.VERCEL) {
 // ---------------- ENV ----------------
 const token = process.env.TGBOT_TOKEN ?? '';
 const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : -1003021100938;
-const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username (для постинга через /post)
+const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
 const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
 
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
-
 const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 
 // Подсказка, отдельным сообщением перед первым шагом
@@ -129,9 +128,8 @@ function parseSourceToken(token) {
 }
 function makePostLink(absChatId, messageId) {
   // t.me/c/<internal>/<message_id>, где internal = absChatId без начальных "100"
-  const internal = String(absChatId).startsWith('100')
-    ? String(absChatId).slice(3)
-    : String(absChatId);
+  const s = String(absChatId);
+  const internal = s.startsWith('100') ? s.slice(3) : s;
   return `https://t.me/c/${internal}/${messageId}`;
 }
 
@@ -201,10 +199,16 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   }
 }
 
-// Инлайн-клавиатура под постом канала: только «Заказать» (без WebApp кнопки)
-function channelPostKb(botUsername, sourceToken) {
+// Инлайн-клавиатура под постом канала: Заказать (в ЛС) + Подобрать памятник (WebApp)
+function channelPostKb(botUsername, sourceToken, useWebApp = true) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   const row = [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)];
+  if (useWebApp) {
+    row.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
+  } else {
+    // фолбэк, если web_app не разрешён у бота (нет /setdomain)
+    row.push(Markup.button.url('Подобрать памятник', WEBAPP_URL));
+  }
   return Markup.inlineKeyboard([row]);
 }
 
@@ -260,13 +264,19 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем инлайн‑кнопку «Заказать» (без WebApp)
+  // 3) Добавляем инлайн‑кнопки «Заказать» + «Подобрать памятник» (WebApp с фолбэком)
   const token = makeSourceToken(msg.chat.id, msg.message_id);
-  const kb = channelPostKb(botUsername, token);
+  let kb = channelPostKb(botUsername, token, true);
   try {
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
-    console.error('[bot] editMessageReplyMarkup failed:', e?.response?.description || e?.message || e);
+    const desc = e?.response?.description || e?.message || '';
+    if (/webapp|web_app|button.*invalid/i.test(desc)) {
+      kb = channelPostKb(botUsername, token, false);
+      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
+    } else {
+      throw e;
+    }
   }
 
   return { primary: msg };
@@ -326,7 +336,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с клавиатурой: только «Заказать»
+  // /post — публикует в канал пост с клавиатурой: «Заказать» + «Подобрать памятник»
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -359,7 +369,7 @@ if (token) {
     } catch (e) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота и CHANNEL_ID.`);
+      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain для WebApp.`);
     }
   });
 
@@ -368,7 +378,7 @@ if (token) {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
   bot.hears('Далее', async (ctx) => {
-    if (ctx.session?.order?.step === 'photos') return stepComment(ctx); // после фото идём на шаг 6 (комментарий)
+    if (ctx.session?.order?.step === 'photos') return askCommentThenReview(ctx);
   });
   bot.hears('Отправить', async (ctx) => {
     if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
@@ -400,9 +410,10 @@ if (token) {
         ctx.session.order.dates = text;
         return stepPhotos(ctx);
       }
-      if (st === 'comment') {
+      // На этапе review пользователь может отправить комментарий одним сообщением (шаг 6 опционален)
+      if (st === 'review' && ctx.session.order?.allowComment && !['Отправить', 'Отменить'].includes(text)) {
         ctx.session.order.comment = text;
-        return stepReview(ctx);
+        return stepReview(ctx); // обновим сводку
       }
     }
 
@@ -437,7 +448,7 @@ function kbRemove() {
 }
 
 async function startOrder(ctx, sourceToken) {
-  ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
+  ctx.session.order = { step: 'name', photos: [], allowComment: false, ...(sourceToken ? { sourceToken } : {}) };
   await ctx.reply('Шаг 1/6. Представьтесь (ФИО/имя):', kbInput());
 }
 async function stepPhone(ctx) {
@@ -456,16 +467,20 @@ async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
   await ctx.reply('Шаг 5/6. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
 }
-async function stepComment(ctx) {
-  ctx.session.order.step = 'comment';
+// Шаг 6 опционален: показываем подсказку вот этим сообщением и сразу переходим к обзору.
+// Никакой кнопки «Продолжить» нет — только «Отправить»/«Отменить» на экране обзора.
+async function askCommentThenReview(ctx) {
+  const s = ctx.session.order;
+  s.allowComment = true;
   await ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbInput());
+  return stepReview(ctx);
 }
+
 async function stepReview(ctx) {
   ctx.session.order.step = 'review';
   const s = ctx.session.order;
   // Номер заявки
-  const orderNo = makeOrderNo();
-  ctx.session.order.orderNo = orderNo;
+  if (!s.orderNo) s.orderNo = makeOrderNo();
 
   // Текст и ссылка поста (если есть sourceToken)
   let postText = '';
@@ -482,7 +497,7 @@ async function stepReview(ctx) {
     console.error('[bot] get post content error:', e?.message || e);
   }
 
-  const text = buildUserSummary(s, orderNo, postText, postLink);
+  const text = buildUserSummary(s, s.orderNo, postText, postLink);
   await ctx.reply(text, kbReview());
 }
 
