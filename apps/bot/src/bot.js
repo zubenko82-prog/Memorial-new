@@ -22,11 +22,11 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 
-const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/'; // ваш WebApp
-const DEEPLINK_PREFIX = 'order'; // префикс параметра /start
+const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 
-// Подсказка в анкете
+// Подсказка, выводим отдельным сообщением перед первым вопросом анкеты
 const WEBAPP_HINT =
   'Заполните необходимые поля и приложите фото или нажмите «Подобрать памятник» — так мы быстрее согласуем детали и начнём изготовление.';
 
@@ -38,9 +38,10 @@ function getChannelId() {
   return Number.isFinite(n) ? n : null;
 }
 
-// ---------------- Optional Redis (Upstash) для устойчивых сессий ----------------
+// ---------------- Optional Redis (Upstash) для устойчивых сессий и хранения текста постов ----------------
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
-const mem = new Map(); // фолбэк для локальной разработки
+const mem = new Map(); // фолбэк для сессий
+const memPosts = new Map(); // фолбэк для текста постов
 
 async function getRedis() {
   if (redisInstance !== undefined) return redisInstance;
@@ -77,6 +78,27 @@ async function saveSession(userId, data) {
   }
 }
 
+// Хранилище текста постов: ключ post:<absChatId>:<messageId> → исходный текст (без подсказки)
+async function setPostText(chatId, messageId, text) {
+  const abs = Math.abs(Number(chatId));
+  const key = `post:${abs}:${messageId}`;
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, text, { ex: 60 * 60 * 24 * 14 }); // 14 дней
+  } else {
+    memPosts.set(key, text);
+  }
+}
+async function getPostText(chatId, messageId) {
+  const abs = Math.abs(Number(chatId));
+  const key = `post:${abs}:${messageId}`;
+  const r = await getRedis();
+  if (r) {
+    return (await r.get(key)) || '';
+  }
+  return memPosts.get(key) || '';
+}
+
 // ---------------- Helpers ----------------
 const phoneOk = (s) => {
   if (!s) return false;
@@ -84,41 +106,48 @@ const phoneOk = (s) => {
   return only.length >= 6 && /^[+]?[\d\s\-()]{6,}$/.test(String(s));
 };
 
-// Токен-источник, который встраиваем в deep-link и в callback (чтобы знать пост)
-function makeSourceToken(messageId) {
-  if (CHANNEL_ID_RAW.startsWith('@')) {
-    const uname = CHANNEL_ID_RAW.slice(1);
-    return `u_${uname}_${messageId}`;
-  }
-  const absId = String(Math.abs(Number(getChannelId() || 0)));
-  return `i_${absId}_${messageId}`;
+function makeOrderNo(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const DD = pad(d.getDate());
+  const MM = pad(d.getMonth() + 1);
+  const YYYY = d.getFullYear();
+  const HH = pad(d.getHours());
+  const mm = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${DD}.${MM}.${YYYY}-${HH}.${mm}.${ss}`;
 }
 
+// Токен источника, который встраиваем в deep-link: p_<absChatId>_<messageId>
+function makeSourceToken(chatId, messageId) {
+  const abs = Math.abs(Number(chatId));
+  return `p_${abs}_${messageId}`;
+}
 function parseSourceToken(token) {
-  // u_username_msgId  или  i_absId_msgId
-  const mU = /^u_([A-Za-z0-9_]{3,32})_(\d+)$/.exec(token);
-  if (mU) return { kind: 'u', username: mU[1], messageId: Number(mU[2]) };
-  const mI = /^i_(\d{6,})_(\d+)$/.exec(token);
-  if (mI) return { kind: 'i', absId: mI[1], messageId: Number(mI[2]) };
-  return null;
+  const m = /^p_(\d{6,})_(\d+)$/.exec(token);
+  if (!m) return null;
+  return { absChatId: m[1], messageId: Number(m[2]) };
 }
 
-function makePostLinkFromToken(token) {
-  const parsed = parseSourceToken(token);
-  if (!parsed) return null;
-  if (parsed.kind === 'u') {
-    return `https://t.me/${parsed.username}/${parsed.messageId}`;
-  }
-  // kind === 'i' → приватный/непубличный канал: t.me/c/<internal>/<message_id>, internal = absId без начальных "100"
-  const internal = parsed.absId.startsWith('100') ? parsed.absId.slice(3) : parsed.absId;
-  return `https://t.me/c/${internal}/${parsed.messageId}`;
+function buildUserSummary(s, orderNo) {
+  const fio = s.fio?.trim() || '-';
+  const dates = s.dates?.trim() || '-';
+  return [
+    `Заявка №${orderNo}:`,
+    '',
+    `Представьтесь: ${s.name || '—'}`,
+    `Телефон: ${s.phone || '—'}`,
+    `ФИО усопшего: ${fio}`,
+    `Даты: ${dates}`,
+    s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
+  ].join('\n');
 }
 
-function buildSummary(s) {
+function buildManagerSummary(s, orderNo, userId, postText) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
   const lines = [
-    'Новая заявка:',
+    `Новая заявка №${orderNo}`,
+    `ID клиента: ${userId}`,
     '',
     `Представьтесь: ${s.name || '—'}`,
     `Телефон: ${s.phone || '—'}`,
@@ -126,21 +155,20 @@ function buildSummary(s) {
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
   ];
-  if (s.sourceToken) {
-    const link = makePostLinkFromToken(s.sourceToken);
-    if (link) lines.push(`Источник поста: ${link}`);
+  if (postText) {
+    lines.push('', 'Пост:', postText);
   }
   return lines.join('\n');
 }
 
-async function sendOrderToManager(ctx, state) {
-  const text = buildSummary(state);
+async function sendOrderToManager(ctx, state, orderNo, postText) {
+  const managerText = buildManagerSummary(state, orderNo, ctx.from?.id, postText);
   const photos = Array.isArray(state.photos) ? state.photos : [];
   if (photos.length > 0) {
     const media = photos.slice(0, 10).map((fileId, i) => ({
       type: 'photo',
       media: fileId,
-      ...(i === 0 ? { caption: text } : {}),
+      ...(i === 0 ? { caption: managerText } : {}),
     }));
     await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
     if (photos.length > 10) {
@@ -150,107 +178,55 @@ async function sendOrderToManager(ctx, state) {
       );
     }
   } else {
-    await ctx.telegram.sendMessage(MANAGER_CHAT_ID, text);
+    await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
   }
 }
 
-// Инлайн-клавиатура "начальная" под постом канала: Заказать + Подобрать памятник (как callback)
-function initialChannelKb(botUsername, sourceToken) {
+// Инлайн-клавиатура под постом канала: Заказать (в ЛС) + Подобрать памятник (WebApp)
+function channelPostKb(botUsername, sourceToken, useWebApp = true) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
-      Markup.button.callback('Подобрать памятник', `catalog_options:${sourceToken}`),
-    ],
-  ]);
-}
-
-// Инлайн-клавиатура "варианты каталога": открыть в Telegram (web_app) или в браузере + Назад
-function catalogOptionsKb(sourceToken) {
-  const urlWithRef = addUrlParam(WEBAPP_URL, 'from', sourceToken);
-  return Markup.inlineKeyboard([
-    [Markup.button.webApp('Открыть в Telegram', urlWithRef)],
-    [Markup.button.url('Открыть в браузере', urlWithRef)],
-    [Markup.button.callback('◀️ Назад', `catalog_back:${sourceToken}`)],
-  ]);
-}
-
-function catalogOptionsKbFallback(sourceToken) {
-  const urlWithRef = addUrlParam(WEBAPP_URL, 'from', sourceToken);
-  return Markup.inlineKeyboard([
-    [Markup.button.url('Открыть в Telegram', urlWithRef)], // фолбэк: обычная ссылка
-    [Markup.button.url('Открыть в браузере', urlWithRef)],
-    [Markup.button.callback('◀️ Назад', `catalog_back:${sourceToken}`)],
-  ]);
-}
-
-function addUrlParam(url, key, value) {
-  try {
-    const u = new URL(url);
-    u.searchParams.set(key, value);
-    return u.toString();
-  } catch {
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+  const row = [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)];
+  if (useWebApp) {
+    row.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
+  } else {
+    // фолбэк, если web_app не разрешён у бота (нет /setdomain)
+    row.push(Markup.button.url('Подобрать памятник', WEBAPP_URL));
   }
+  return Markup.inlineKeyboard([row]);
 }
 
-// Отправка поста в канал (с добавлением клавиатуры ПОСЛЕ отправки, чтобы вложить message_id в deep-link)
-async function postToChannelWithKb(ctx, kind, payload) {
+// Отправка поста в канал, добавление клавиатуры после отправки, сохранение текста поста
+async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
   const me = ctx.botInfo || (await ctx.telegram.getMe());
   const botUsername = me.username;
 
-  const sendHtml = async () => {
+  // 1) Отправляем пост (с HTML, при ошибке — без HTML)
+  const trySend = async (useHtml) => {
     if (kind === 'text') {
       return await ctx.telegram.sendMessage(chatId, payload.text, {
-        parse_mode: 'HTML',
+        ...(useHtml ? { parse_mode: 'HTML' } : {}),
         disable_web_page_preview: true,
       });
     }
     if (kind === 'photo') {
       return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
         caption: (payload.caption || '').slice(0, 1024),
-        parse_mode: 'HTML',
+        ...(useHtml ? { parse_mode: 'HTML' } : {}),
       });
     }
     if (kind === 'video') {
       return await ctx.telegram.sendVideo(chatId, payload.fileId, {
         caption: (payload.caption || '').slice(0, 1024),
-        parse_mode: 'HTML',
+        ...(useHtml ? { parse_mode: 'HTML' } : {}),
       });
     }
     if (kind === 'document') {
       const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
       return await ctx.telegram.sendDocument(chatId, payload.fileId, {
         caption: canCaption,
-        parse_mode: 'HTML',
-      });
-    }
-    throw new Error('Unknown kind');
-  };
-
-  const sendPlain = async () => {
-    if (kind === 'text') {
-      return await ctx.telegram.sendMessage(chatId, payload.text, {
-        disable_web_page_preview: true,
-      });
-    }
-    if (kind === 'photo') {
-      return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
-        caption: (payload.caption || '').slice(0, 1024),
-      });
-    }
-    if (kind === 'video') {
-      return await ctx.telegram.sendVideo(chatId, payload.fileId, {
-        caption: (payload.caption || '').slice(0, 1024),
-      });
-    }
-    if (kind === 'document') {
-      const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
-      return await ctx.telegram.sendDocument(chatId, payload.fileId, {
-        caption: canCaption,
+        ...(useHtml ? { parse_mode: 'HTML' } : {}),
       });
     }
     throw new Error('Unknown kind');
@@ -258,32 +234,33 @@ async function postToChannelWithKb(ctx, kind, payload) {
 
   let msg;
   try {
-    msg = await sendHtml();
+    msg = await trySend(true);
   } catch (e) {
     const desc = e?.response?.description || e?.message || '';
     if (/parse entities|can't parse entities|entity|wrong entity/i.test(desc)) {
-      msg = await sendPlain();
+      msg = await trySend(false);
     } else {
       throw e;
     }
   }
 
-  // Добавляем инлайн-клавиатуру с deep-link, включающим message_id
-  const token = makeSourceToken(msg.message_id);
-  const kb = initialChannelKb(botUsername, token);
+  // 2) Сохраняем исходный текст поста (без подсказки) для заявки
+  await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
+
+  // 3) Добавляем инлайн‑кнопки с deep-link и web_app
+  const token = makeSourceToken(msg.chat.id, msg.message_id);
+  let kb = channelPostKb(botUsername, token, true);
   try {
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
-    console.error('[bot] editMessageReplyMarkup failed:', e?.response?.description || e?.message || e);
-  }
-
-  // Если у документа подпись была слишком длинной и мы отправляли текст отдельным сообщением — клавиатуру оставляем на основном (медиа) сообщении.
-  if (kind === 'document' && (payload.caption || '').length > 1024) {
-    const txt = await ctx.telegram.sendMessage(msg.chat.id, payload.caption, {
-      disable_web_page_preview: true,
-    });
-    // клавиатуру на дополнительный текст не добавляем, чтобы не дублировать кнопки
-    return { primary: msg, secondary: txt };
+    const desc = e?.response?.description || e?.message || '';
+    if (/webapp|web_app|button.*invalid/i.test(desc)) {
+      // фолбэк: меняем web_app на обычную URL-кнопку
+      kb = channelPostKb(botUsername, token, false);
+      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
+    } else {
+      throw e;
+    }
   }
 
   return { primary: msg };
@@ -307,17 +284,17 @@ if (token) {
     }
   });
 
-  // /start — начинаем анкету сразу; если есть deep-link с источником — запомним его
+  // /start — показываем подсказку отдельным сообщением и сразу начинаем анкету
   bot.start(async (ctx) => {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     let sourceToken = null;
-    // Ожидаем форматы: order, order_token
     if (arg.startsWith(DEEPLINK_PREFIX)) {
       const parts = arg.split('_');
       if (parts.length >= 2) {
-        sourceToken = parts.slice(1).join('_'); // всё после префикса
+        sourceToken = parts.slice(1).join('_');
       }
     }
+    await ctx.reply(WEBAPP_HINT);
     await startOrder(ctx, sourceToken || undefined);
   });
 
@@ -343,7 +320,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // Публикация постов в канал с кнопками
+  // /post — публикует в канал пост с кнопками: Заказать (ЛС) + Подобрать памятник (WebApp)
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -351,70 +328,36 @@ if (token) {
       if (!BOT_ADMINS.includes(ctx.from.id)) return ctx.reply('Недостаточно прав.');
 
       const raw = ctx.message?.text || '';
-      const base = raw.replace(/^\/post(@\S+)?\s*/i, '').trim();
+      const base = raw.replace(/^\/post(@\S+)?\s*/i, '').trim(); // исходный текст поста (без подсказки)
       const finalText = base ? `${base}\n\n${WEBAPP_HINT}` : WEBAPP_HINT;
 
       const r = ctx.message?.reply_to_message;
       if (r?.photo?.length) {
         const fileId = r.photo.at(-1).file_id;
-        await postToChannelWithKb(ctx, 'photo', { fileId, caption: finalText });
+        await postToChannelWithKb(ctx, 'photo', { fileId, caption: finalText }, base);
         return ctx.reply('Фото‑пост опубликован в канал.');
       }
       if (r?.video) {
-        await postToChannelWithKb(ctx, 'video', { fileId: r.video.file_id, caption: finalText });
+        await postToChannelWithKb(ctx, 'video', { fileId: r.video.file_id, caption: finalText }, base);
         return ctx.reply('Видео‑пост опубликован в канал.');
       }
       if (r?.document) {
-        await postToChannelWithKb(ctx, 'document', { fileId: r.document.file_id, caption: finalText });
+        await postToChannelWithKb(ctx, 'document', { fileId: r.document.file_id, caption: finalText }, base);
         return ctx.reply('Документ‑пост опубликован в канал.');
       }
       if (!base) {
         return ctx.reply('Добавьте текст после /post или ответьте командой /post на фото/видео/документ.');
       }
-      await postToChannelWithKb(ctx, 'text', { text: finalText });
+      await postToChannelWithKb(ctx, 'text', { text: finalText }, base);
       return ctx.reply('Текстовый пост опубликован в канал.');
     } catch (e) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота и CHANNEL_ID.`);
+      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота и CHANNEL_ID, а для web_app — /setdomain у @BotFather.`);
     }
   });
 
-  // --------- Кнопки под постом канала: варианты каталога ---------
-  bot.action(/^catalog_options:(.+)$/, async (ctx) => {
-    try {
-      await ctx.answerCbQuery();
-      const token = ctx.match[1];
-      // Пробуем с web_app
-      try {
-        await ctx.editMessageReplyMarkup(catalogOptionsKb(token).reply_markup);
-      } catch (e) {
-        const desc = e?.response?.description || e?.message || '';
-        if (/webapp|web_app|button.*invalid/i.test(desc)) {
-          // Фолбэк: обе ссылки обычные URL
-          await ctx.editMessageReplyMarkup(catalogOptionsKbFallback(token).reply_markup);
-        } else {
-          throw e;
-        }
-      }
-    } catch (e) {
-      console.error('[bot] catalog_options error:', e?.response?.description || e?.message || e);
-    }
-  });
-
-  bot.action(/^catalog_back:(.+)$/, async (ctx) => {
-    try {
-      await ctx.answerCbQuery();
-      const token = ctx.match[1];
-      const me = ctx.botInfo || (await ctx.telegram.getMe());
-      const kb = initialChannelKb(me.username, token);
-      await ctx.editMessageReplyMarkup(kb.reply_markup);
-    } catch (e) {
-      console.error('[bot] catalog_back error:', e?.response?.description || e?.message || e);
-    }
-  });
-
-  // --------- Анкета: действия-клавиши (reply-клавиатура) ---------
+  // --------- Анкета: клавиши (reply-клавиатура над полем ввода) ---------
   bot.hears('Отменить', async (ctx) => {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
@@ -469,7 +412,7 @@ if (token) {
   console.error('[bot] Missing TGBOT_TOKEN in environment');
 }
 
-// ---------------- Анкета: шаги (reply-клавиатура над полем ввода) ----------------
+// ---------------- Анкета: шаги и клавиатуры ----------------
 function kbInput() {
   return Markup.keyboard([['Отменить']]).resize();
 }
@@ -485,7 +428,8 @@ function kbRemove() {
 
 async function startOrder(ctx, sourceToken) {
   ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
-  await ctx.reply(`${WEBAPP_HINT}\n\nШаг 1/5. Представьтесь (ФИО/имя):`, kbInput());
+  // Сначала подсказка уже отправлена в /start. Здесь — первый вопрос.
+  await ctx.reply('Шаг 1/5. Представьтесь (ФИО/имя):', kbInput());
 }
 async function stepPhone(ctx) {
   ctx.session.order.step = 'phone';
@@ -501,12 +445,14 @@ async function stepDates(ctx) {
 }
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
-  await ctx.reply('Шаг 5/5. Прикрепите фото (по одному или альбомом). Когда закончите — нажмите «Далее».', kbPhotos());
+  await ctx.reply('Шаг 5/5. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
 }
 async function stepReview(ctx) {
   ctx.session.order.step = 'review';
   const s = ctx.session.order;
-  const text = buildSummary(s);
+  const orderNo = makeOrderNo(); // номер уже пригодится и для подтверждения
+  ctx.session.order.orderNo = orderNo;
+  const text = buildUserSummary(s, orderNo);
   await ctx.reply(text, kbReview());
 }
 async function submitOrder(ctx) {
@@ -514,9 +460,22 @@ async function submitOrder(ctx) {
   if (!s.name || !s.phone || !phoneOk(s.phone)) {
     return ctx.reply('Обязательные поля не заполнены: «Представьтесь» и/или «Номер телефона». Вернитесь и исправьте.', kbInput());
   }
+  const orderNo = s.orderNo || makeOrderNo();
+  let postText = '';
   try {
-    await sendOrderToManager(ctx, s);
-    await ctx.reply('Заявка отправлена. Спасибо! Наш менеджер свяжется с вами.', kbRemove());
+    if (s.sourceToken) {
+      const parsed = parseSourceToken(s.sourceToken);
+      if (parsed) {
+        postText = await getPostText(parsed.absChatId, parsed.messageId);
+      }
+    }
+  } catch (e) {
+    console.error('[bot] get post text error:', e?.message || e);
+  }
+
+  try {
+    await sendOrderToManager(ctx, s, orderNo, postText);
+    await ctx.reply(`Заявка №${orderNo} отправлена. Спасибо! Наш менеджер свяжется с вами.`, kbRemove());
   } catch (e) {
     console.error('submitOrder error', e);
     await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());

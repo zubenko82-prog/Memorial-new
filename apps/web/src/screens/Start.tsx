@@ -588,7 +588,7 @@ export default function Start({
       }}
     >
       {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
-      <TopBarWithIntro title="Memorial" />
+      <TopBarWithIntro title="Стела" />
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
