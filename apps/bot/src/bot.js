@@ -205,7 +205,7 @@ function channelPostKb(botUsername, sourceToken) {
   return Markup.inlineKeyboard([
     [
       Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
-      // ВАЖНО: это web_app кнопка — откроет mini app внутри Telegram, если /setdomain настроен у бота
+      // web_app кнопка — откроет mini app внутри Telegram, если /setdomain настроен у бота на origin WEBAPP_URL
       Markup.button.webApp('Подобрать памятник', WEBAPP_URL),
     ],
   ]);
@@ -267,13 +267,20 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const token = makeSourceToken(msg.chat.id, msg.message_id);
   const kb = channelPostKb(botUsername, token);
 
-  // Пробуем поставить web_app кнопку; если Telegram её не принимает — это из-за отсутствия /setdomain у бота.
-  // В таком случае вернётся ошибка BUTTON_WEB_APP_INVALID. Мы не делаем авто-фолбэк, чтобы сохранить именно web_app.
+  // Если Telegram не примет web_app (нет /setdomain), пост не ломаем: сообщим администратору, но сообщение останется в канале.
   try {
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
-    console.error('[bot] editMessageReplyMarkup(web_app) error:', e?.response?.description || e?.message || e);
-    throw e;
+    const desc = e?.response?.description || e?.message || String(e);
+    console.error('[bot] editMessageReplyMarkup(web_app) error:', desc);
+    try {
+      // Сообщим инициатору /post, что кнопка web_app не установлена
+      await ctx.reply(
+        `Пост отправлен, но не удалось добавить web_app кнопку «Подобрать памятник»: ${desc}\n` +
+          `Проверьте /setdomain у @BotFather — должен быть ${new URL(WEBAPP_URL).origin}`
+      );
+    } catch {}
+    // Не бросаем исключение — сам пост уже в канале.
   }
 
   return { primary: msg };
@@ -313,7 +320,7 @@ if (token) {
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
   bot.command('dump', async (ctx) => {
     const chat = ctx.chat || {};
-    the const from = ctx.from || {};
+    const from = ctx.from || {};
     const me = ctx.botInfo || (await ctx.telegram.getMe());
     const info = [
       `chat_id = ${chat.id}`,
@@ -365,7 +372,9 @@ if (token) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
       return ctx.reply(
-        `Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather (должен быть ${new URL(WEBAPP_URL).origin}).`
+        `Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather (должен быть ${new URL(
+          WEBAPP_URL
+        ).origin}).`
       );
     }
   });
