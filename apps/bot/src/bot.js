@@ -213,7 +213,7 @@ function channelPostKb(botUsername, sourceToken, includeWebApp = true) {
 async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
-  const me = ctx.botInfo || (await ctx.telegram.getMe()));
+  const me = ctx.botInfo || (await ctx.telegram.getMe());
   const botUsername = me.username;
 
   // 1) Отправляем пост (с HTML, при ошибке — без HTML)
