@@ -7,25 +7,26 @@ import { Telegraf, Markup } from 'telegraf';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = pathDirname(__filename);
 
-// Локально читаем .env; на Vercel переменные задаются в Settings
+// .env локально; на Vercel переменные задаются в Settings
 if (!process.env.VERCEL) {
   try {
     dotenv.config({ path: resolve(__dirname, '../../../.env') });
   } catch {}
 }
 
-// ------------ ENV ------------
+// ---------------- ENV ----------------
 const token = process.env.TGBOT_TOKEN ?? '';
-const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID
-  ? Number(process.env.MANAGER_CHAT_ID)
-  : -1003021100938; // чат менеджера
+const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : -1003021100938;
 const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
 const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
+
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/'; // ваш WebApp
-const DEEPLINK_START = 'order'; // /start order
+const DEEPLINK_PREFIX = 'order'; // префикс параметра /start
+
+// Подсказка в анкете
 const WEBAPP_HINT =
   'Заполните необходимые поля и приложите фото или нажмите «Подобрать памятник» — так мы быстрее согласуем детали и начнём изготовление.';
 
@@ -37,7 +38,7 @@ function getChannelId() {
   return Number.isFinite(n) ? n : null;
 }
 
-// ------------ Optional Redis (Upstash) для устойчивых сессий ------------
+// ---------------- Optional Redis (Upstash) для устойчивых сессий ----------------
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
 const mem = new Map(); // фолбэк для локальной разработки
 
@@ -76,17 +77,47 @@ async function saveSession(userId, data) {
   }
 }
 
-// ------------ Helpers ------------
+// ---------------- Helpers ----------------
 const phoneOk = (s) => {
   if (!s) return false;
   const only = String(s).replace(/[^\d+]/g, '');
   return only.length >= 6 && /^[+]?[\d\s\-()]{6,}$/.test(String(s));
 };
 
-const buildSummary = (s) => {
+// Токен-источник, который встраиваем в deep-link и в callback (чтобы знать пост)
+function makeSourceToken(messageId) {
+  if (CHANNEL_ID_RAW.startsWith('@')) {
+    const uname = CHANNEL_ID_RAW.slice(1);
+    return `u_${uname}_${messageId}`;
+  }
+  const absId = String(Math.abs(Number(getChannelId() || 0)));
+  return `i_${absId}_${messageId}`;
+}
+
+function parseSourceToken(token) {
+  // u_username_msgId  или  i_absId_msgId
+  const mU = /^u_([A-Za-z0-9_]{3,32})_(\d+)$/.exec(token);
+  if (mU) return { kind: 'u', username: mU[1], messageId: Number(mU[2]) };
+  const mI = /^i_(\d{6,})_(\d+)$/.exec(token);
+  if (mI) return { kind: 'i', absId: mI[1], messageId: Number(mI[2]) };
+  return null;
+}
+
+function makePostLinkFromToken(token) {
+  const parsed = parseSourceToken(token);
+  if (!parsed) return null;
+  if (parsed.kind === 'u') {
+    return `https://t.me/${parsed.username}/${parsed.messageId}`;
+  }
+  // kind === 'i' → приватный/непубличный канал: t.me/c/<internal>/<message_id>, internal = absId без начальных "100"
+  const internal = parsed.absId.startsWith('100') ? parsed.absId.slice(3) : parsed.absId;
+  return `https://t.me/c/${internal}/${parsed.messageId}`;
+}
+
+function buildSummary(s) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
-  return [
+  const lines = [
     'Новая заявка:',
     '',
     `Представьтесь: ${s.name || '—'}`,
@@ -94,8 +125,13 @@ const buildSummary = (s) => {
     `ФИО усопшего: ${fio}`,
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
-  ].join('\n');
-};
+  ];
+  if (s.sourceToken) {
+    const link = makePostLinkFromToken(s.sourceToken);
+    if (link) lines.push(`Источник поста: ${link}`);
+  }
+  return lines.join('\n');
+}
 
 async function sendOrderToManager(ctx, state) {
   const text = buildSummary(state);
@@ -118,174 +154,142 @@ async function sendOrderToManager(ctx, state) {
   }
 }
 
-// Сборка инлайн-клавиатуры для канала (под постом)
-function buildInlineKbForChannel(username, useWebApp = true) {
-  const row = [
-    Markup.button.url('Заказать', `https://t.me/${username}?start=${DEEPLINK_START}`),
-  ];
-  if (useWebApp) {
-    // Для web_app кнопки нужен /setdomain у @BotFather с доменом WEBAPP_URL (origin)
-    row.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
-  } else {
-    row.push(Markup.button.url('Подобрать памятник', WEBAPP_URL));
+// Инлайн-клавиатура "начальная" под постом канала: Заказать + Подобрать памятник (как callback)
+function initialChannelKb(botUsername, sourceToken) {
+  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
+      Markup.button.callback('Подобрать памятник', `catalog_options:${sourceToken}`),
+    ],
+  ]);
+}
+
+// Инлайн-клавиатура "варианты каталога": открыть в Telegram (web_app) или в браузере + Назад
+function catalogOptionsKb(sourceToken) {
+  const urlWithRef = addUrlParam(WEBAPP_URL, 'from', sourceToken);
+  return Markup.inlineKeyboard([
+    [Markup.button.webApp('Открыть в Telegram', urlWithRef)],
+    [Markup.button.url('Открыть в браузере', urlWithRef)],
+    [Markup.button.callback('◀️ Назад', `catalog_back:${sourceToken}`)],
+  ]);
+}
+
+function catalogOptionsKbFallback(sourceToken) {
+  const urlWithRef = addUrlParam(WEBAPP_URL, 'from', sourceToken);
+  return Markup.inlineKeyboard([
+    [Markup.button.url('Открыть в Telegram', urlWithRef)], // фолбэк: обычная ссылка
+    [Markup.button.url('Открыть в браузере', urlWithRef)],
+    [Markup.button.callback('◀️ Назад', `catalog_back:${sourceToken}`)],
+  ]);
+}
+
+function addUrlParam(url, key, value) {
+  try {
+    const u = new URL(url);
+    u.searchParams.set(key, value);
+    return u.toString();
+  } catch {
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
   }
-  return Markup.inlineKeyboard([row]);
 }
 
-// Reply-клавиатуры (над полем ввода) для анкеты
-function kbInput() {
-  return Markup.keyboard([
-    [Markup.button.webApp('Подобрать памятник', WEBAPP_URL), 'Отменить'],
-  ]).resize();
-}
-function kbPhotos() {
-  return Markup.keyboard([
-    ['Далее'],
-    [Markup.button.webApp('Подобрать памятник', WEBAPP_URL), 'Отменить'],
-  ]).resize();
-}
-function kbReview() {
-  return Markup.keyboard([
-    ['Отправить'],
-    [Markup.button.webApp('Подобрать памятник', WEBAPP_URL), 'Отменить'],
-  ]).resize();
-}
-function kbRemove() {
-  return Markup.removeKeyboard();
-}
-
-// Безопасная отправка в канал: HTML и web_app с фолбэками
-async function safeSendToChannel(ctx, sendKind, payload) {
-  const me = ctx.botInfo || (await ctx.telegram.getMe());
-  const username = me.username;
+// Отправка поста в канал (с добавлением клавиатуры ПОСЛЕ отправки, чтобы вложить message_id в deep-link)
+async function postToChannelWithKb(ctx, kind, payload) {
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
+  const me = ctx.botInfo || (await ctx.telegram.getMe());
+  const botUsername = me.username;
 
-  const text = payload.text || '';
-  const caption = payload.caption || '';
-  const fileId = payload.fileId;
-
-  let kb = buildInlineKbForChannel(username, true);
-  try {
-    if (sendKind === 'text') {
-      return await ctx.telegram.sendMessage(chatId, text, {
+  const sendHtml = async () => {
+    if (kind === 'text') {
+      return await ctx.telegram.sendMessage(chatId, payload.text, {
         parse_mode: 'HTML',
-        reply_markup: kb.reply_markup,
         disable_web_page_preview: true,
       });
     }
-    if (sendKind === 'photo') {
-      return await ctx.telegram.sendPhoto(chatId, fileId, {
-        caption: caption.slice(0, 1024),
+    if (kind === 'photo') {
+      return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
+        caption: (payload.caption || '').slice(0, 1024),
         parse_mode: 'HTML',
-        reply_markup: kb.reply_markup,
       });
     }
-    if (sendKind === 'video') {
-      return await ctx.telegram.sendVideo(chatId, fileId, {
-        caption: caption.slice(0, 1024),
+    if (kind === 'video') {
+      return await ctx.telegram.sendVideo(chatId, payload.fileId, {
+        caption: (payload.caption || '').slice(0, 1024),
         parse_mode: 'HTML',
-        reply_markup: kb.reply_markup,
       });
     }
-    if (sendKind === 'document') {
-      const canCaption = caption.length <= 1024 ? caption : undefined;
-      const msg = await ctx.telegram.sendDocument(chatId, fileId, {
+    if (kind === 'document') {
+      const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
+      return await ctx.telegram.sendDocument(chatId, payload.fileId, {
         caption: canCaption,
         parse_mode: 'HTML',
-        reply_markup: kb.reply_markup,
       });
-      if (!canCaption) {
-        await ctx.telegram.sendMessage(chatId, caption, {
-          parse_mode: 'HTML',
-          reply_markup: kb.reply_markup,
-          disable_web_page_preview: true,
-        });
-      }
-      return msg;
     }
+    throw new Error('Unknown kind');
+  };
+
+  const sendPlain = async () => {
+    if (kind === 'text') {
+      return await ctx.telegram.sendMessage(chatId, payload.text, {
+        disable_web_page_preview: true,
+      });
+    }
+    if (kind === 'photo') {
+      return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
+        caption: (payload.caption || '').slice(0, 1024),
+      });
+    }
+    if (kind === 'video') {
+      return await ctx.telegram.sendVideo(chatId, payload.fileId, {
+        caption: (payload.caption || '').slice(0, 1024),
+      });
+    }
+    if (kind === 'document') {
+      const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
+      return await ctx.telegram.sendDocument(chatId, payload.fileId, {
+        caption: canCaption,
+      });
+    }
+    throw new Error('Unknown kind');
+  };
+
+  let msg;
+  try {
+    msg = await sendHtml();
   } catch (e) {
     const desc = e?.response?.description || e?.message || '';
-    // Повтор без HTML
     if (/parse entities|can't parse entities|entity|wrong entity/i.test(desc)) {
-      try {
-        if (sendKind === 'text') {
-          return await ctx.telegram.sendMessage(chatId, text, {
-            reply_markup: kb.reply_markup,
-            disable_web_page_preview: true,
-          });
-        }
-        if (sendKind === 'photo') {
-          return await ctx.telegram.sendPhoto(chatId, fileId, {
-            caption: caption.slice(0, 1024),
-            reply_markup: kb.reply_markup,
-          });
-        }
-        if (sendKind === 'video') {
-          return await ctx.telegram.sendVideo(chatId, fileId, {
-            caption: caption.slice(0, 1024),
-            reply_markup: kb.reply_markup,
-          });
-        }
-        if (sendKind === 'document') {
-          const canCaption = caption.length <= 1024 ? caption : undefined;
-          const msg = await ctx.telegram.sendDocument(chatId, fileId, {
-            caption: canCaption,
-            reply_markup: kb.reply_markup,
-          });
-          if (!canCaption) {
-            await ctx.telegram.sendMessage(chatId, caption, {
-              reply_markup: kb.reply_markup,
-              disable_web_page_preview: true,
-            });
-          }
-          return msg;
-        }
-      } catch (e2) {
-        e = e2;
-      }
+      msg = await sendPlain();
+    } else {
+      throw e;
     }
-    // Проблема с web_app — заменяем на URL
-    if (/webapp|web_app|button.*invalid/i.test(desc)) {
-      kb = buildInlineKbForChannel(username, false);
-      if (sendKind === 'text') {
-        return await ctx.telegram.sendMessage(chatId, text, {
-          reply_markup: kb.reply_markup,
-          disable_web_page_preview: true,
-        });
-      }
-      if (sendKind === 'photo') {
-        return await ctx.telegram.sendPhoto(chatId, fileId, {
-          caption: caption.slice(0, 1024),
-          reply_markup: kb.reply_markup,
-        });
-      }
-      if (sendKind === 'video') {
-        return await ctx.telegram.sendVideo(chatId, fileId, {
-          caption: caption.slice(0, 1024),
-          reply_markup: kb.reply_markup,
-        });
-      }
-      if (sendKind === 'document') {
-        const canCaption = caption.length <= 1024 ? caption : undefined;
-        const msg = await ctx.telegram.sendDocument(chatId, fileId, {
-          caption: canCaption,
-          reply_markup: kb.reply_markup,
-        });
-        if (!canCaption) {
-          await ctx.telegram.sendMessage(chatId, caption, {
-            reply_markup: kb.reply_markup,
-            disable_web_page_preview: true,
-          });
-        }
-        return msg;
-      }
-    }
-    throw e;
   }
+
+  // Добавляем инлайн-клавиатуру с deep-link, включающим message_id
+  const token = makeSourceToken(msg.message_id);
+  const kb = initialChannelKb(botUsername, token);
+  try {
+    await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
+  } catch (e) {
+    console.error('[bot] editMessageReplyMarkup failed:', e?.response?.description || e?.message || e);
+  }
+
+  // Если у документа подпись была слишком длинной и мы отправляли текст отдельным сообщением — клавиатуру оставляем на основном (медиа) сообщении.
+  if (kind === 'document' && (payload.caption || '').length > 1024) {
+    const txt = await ctx.telegram.sendMessage(msg.chat.id, payload.caption, {
+      disable_web_page_preview: true,
+    });
+    // клавиатуру на дополнительный текст не добавляем, чтобы не дублировать кнопки
+    return { primary: msg, secondary: txt };
+  }
+
+  return { primary: msg };
 }
 
-// ------------ Bot ------------
+// ---------------- BOT ----------------
 let bot = null;
 
 if (token) {
@@ -303,15 +307,22 @@ if (token) {
     }
   });
 
-  // /start — сразу начинаем анкету, без дополнительных сообщений
+  // /start — начинаем анкету сразу; если есть deep-link с источником — запомним его
   bot.start(async (ctx) => {
-    await startOrder(ctx);
+    const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
+    let sourceToken = null;
+    // Ожидаем форматы: order, order_token
+    if (arg.startsWith(DEEPLINK_PREFIX)) {
+      const parts = arg.split('_');
+      if (parts.length >= 2) {
+        sourceToken = parts.slice(1).join('_'); // всё после префикса
+      }
+    }
+    await startOrder(ctx, sourceToken || undefined);
   });
 
-  // Команды
+  // Команды администрирования и диагностика
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
-
-  // Диагностика
   bot.command('dump', async (ctx) => {
     const chat = ctx.chat || {};
     const from = ctx.from || {};
@@ -324,18 +335,15 @@ if (token) {
     ].join('\n');
     return ctx.reply('DEBUG:\n' + info);
   });
-
   bot.command('id', async (ctx) => {
     const fwd = ctx.message?.forward_from_chat;
     if (fwd) {
-      return ctx.reply(
-        `CHANNEL_ID: ${fwd.id}\nusername: ${fwd.username || '—'}\ntitle: ${fwd.title || '—'}`
-      );
+      return ctx.reply(`CHANNEL_ID: ${fwd.id}\nusername: ${fwd.username || '—'}\ntitle: ${fwd.title || '—'}`);
     }
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — пост в канал (текст или медиа по reply) с кнопками: Заказать + Подобрать памятник
+  // Публикация постов в канал с кнопками
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -347,39 +355,66 @@ if (token) {
       const finalText = base ? `${base}\n\n${WEBAPP_HINT}` : WEBAPP_HINT;
 
       const r = ctx.message?.reply_to_message;
-
       if (r?.photo?.length) {
         const fileId = r.photo.at(-1).file_id;
-        await safeSendToChannel(ctx, 'photo', { fileId, caption: finalText });
+        await postToChannelWithKb(ctx, 'photo', { fileId, caption: finalText });
         return ctx.reply('Фото‑пост опубликован в канал.');
       }
-
       if (r?.video) {
-        await safeSendToChannel(ctx, 'video', { fileId: r.video.file_id, caption: finalText });
+        await postToChannelWithKb(ctx, 'video', { fileId: r.video.file_id, caption: finalText });
         return ctx.reply('Видео‑пост опубликован в канал.');
       }
-
       if (r?.document) {
-        await safeSendToChannel(ctx, 'document', { fileId: r.document.file_id, caption: finalText });
+        await postToChannelWithKb(ctx, 'document', { fileId: r.document.file_id, caption: finalText });
         return ctx.reply('Документ‑пост опубликован в канал.');
       }
-
       if (!base) {
-        return ctx.reply(
-          'Добавьте текст после /post или ответьте командой /post на фото/видео/документ.'
-        );
+        return ctx.reply('Добавьте текст после /post или ответьте командой /post на фото/видео/документ.');
       }
-
-      await safeSendToChannel(ctx, 'text', { text: finalText });
+      await postToChannelWithKb(ctx, 'text', { text: finalText });
       return ctx.reply('Текстовый пост опубликован в канал.');
     } catch (e) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather.`);
+      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота и CHANNEL_ID.`);
     }
   });
 
-  // --------- Анкета: кнопки-клавиши (hears) ---------
+  // --------- Кнопки под постом канала: варианты каталога ---------
+  bot.action(/^catalog_options:(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const token = ctx.match[1];
+      // Пробуем с web_app
+      try {
+        await ctx.editMessageReplyMarkup(catalogOptionsKb(token).reply_markup);
+      } catch (e) {
+        const desc = e?.response?.description || e?.message || '';
+        if (/webapp|web_app|button.*invalid/i.test(desc)) {
+          // Фолбэк: обе ссылки обычные URL
+          await ctx.editMessageReplyMarkup(catalogOptionsKbFallback(token).reply_markup);
+        } else {
+          throw e;
+        }
+      }
+    } catch (e) {
+      console.error('[bot] catalog_options error:', e?.response?.description || e?.message || e);
+    }
+  });
+
+  bot.action(/^catalog_back:(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const token = ctx.match[1];
+      const me = ctx.botInfo || (await ctx.telegram.getMe());
+      const kb = initialChannelKb(me.username, token);
+      await ctx.editMessageReplyMarkup(kb.reply_markup);
+    } catch (e) {
+      console.error('[bot] catalog_back error:', e?.response?.description || e?.message || e);
+    }
+  });
+
+  // --------- Анкета: действия-клавиши (reply-клавиатура) ---------
   bot.hears('Отменить', async (ctx) => {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
@@ -390,10 +425,10 @@ if (token) {
     if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
   });
 
-  // Обработка сообщений по текущему шагу анкеты
+  // Обработка сообщений по шагам анкеты
   bot.on('message', async (ctx) => {
     const st = ctx.session?.order?.step;
-    if (!st) return; // не в процессе анкеты
+    if (!st) return;
 
     if ('text' in ctx.message && ctx.message.text) {
       const text = ctx.message.text.trim();
@@ -419,7 +454,7 @@ if (token) {
     }
 
     if ('photo' in ctx.message && ctx.message.photo) {
-      const file = ctx.message.photo.at(-1); // самое большое
+      const file = ctx.message.photo.at(-1);
       const fileId = file?.file_id;
       if (ctx.session?.order?.step === 'photos' && fileId) {
         ctx.session.order.photos = ctx.session.order.photos || [];
@@ -434,52 +469,50 @@ if (token) {
   console.error('[bot] Missing TGBOT_TOKEN in environment');
 }
 
-// ------------ Анкета: шаги (reply-клавиатуры над полем ввода) ------------
-async function startOrder(ctx) {
-  ctx.session.order = { step: 'name', photos: [] };
-  await ctx.reply(
-    `${WEBAPP_HINT}\n\nШаг 1/5. Представьтесь (ФИО/имя):`,
-    kbInput()
-  );
+// ---------------- Анкета: шаги (reply-клавиатура над полем ввода) ----------------
+function kbInput() {
+  return Markup.keyboard([['Отменить']]).resize();
+}
+function kbPhotos() {
+  return Markup.keyboard([['Далее'], ['Отменить']]).resize();
+}
+function kbReview() {
+  return Markup.keyboard([['Отправить'], ['Отменить']]).resize();
+}
+function kbRemove() {
+  return Markup.removeKeyboard();
 }
 
+async function startOrder(ctx, sourceToken) {
+  ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
+  await ctx.reply(`${WEBAPP_HINT}\n\nШаг 1/5. Представьтесь (ФИО/имя):`, kbInput());
+}
 async function stepPhone(ctx) {
   ctx.session.order.step = 'phone';
   await ctx.reply('Шаг 2/5. Номер телефона:', kbInput());
 }
-
 async function stepFio(ctx) {
   ctx.session.order.step = 'fio';
   await ctx.reply('Шаг 3/5. Фамилия/Имя/Отчество усопшего:', kbInput());
 }
-
 async function stepDates(ctx) {
   ctx.session.order.step = 'dates';
   await ctx.reply('Шаг 4/5. Дата рождения — Дата смерти (в свободном формате):', kbInput());
 }
-
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
-  await ctx.reply(
-    'Шаг 5/5. Прикрепите фото (по одному или альбомом). Когда закончите — нажмите «Далее».',
-    kbPhotos()
-  );
+  await ctx.reply('Шаг 5/5. Прикрепите фото (по одному или альбомом). Когда закончите — нажмите «Далее».', kbPhotos());
 }
-
 async function stepReview(ctx) {
   ctx.session.order.step = 'review';
   const s = ctx.session.order;
   const text = buildSummary(s);
   await ctx.reply(text, kbReview());
 }
-
 async function submitOrder(ctx) {
   const s = ctx.session.order || {};
   if (!s.name || !s.phone || !phoneOk(s.phone)) {
-    return ctx.reply(
-      'Обязательные поля не заполнены: «Представьтесь» и/или «Номер телефона». Вернитесь и исправьте.',
-      kbInput()
-    );
+    return ctx.reply('Обязательные поля не заполнены: «Представьтесь» и/или «Номер телефона». Вернитесь и исправьте.', kbInput());
   }
   try {
     await sendOrderToManager(ctx, s);
@@ -491,13 +524,12 @@ async function submitOrder(ctx) {
     ctx.session.order = null;
   }
 }
-
 async function cancelOrder(ctx, msg = 'Отменено.') {
   ctx.session.order = null;
   return ctx.reply(msg, kbRemove());
 }
 
-// ------------ MODE ------------
+// ---------------- MODE ----------------
 const MODE = process.env.BOT_MODE ?? (process.env.VERCEL ? 'webhook' : 'polling');
 if (MODE === 'polling') {
   if (typeof bot?.launch === 'function') {
