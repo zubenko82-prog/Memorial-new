@@ -200,13 +200,15 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
 }
 
 // Инлайн-клавиатура под постом канала: «Заказать» (ЛС) + «Подобрать памятник» (WebApp)
-function channelPostKb(botUsername, sourceToken, includeWebApp = true) {
+function channelPostKb(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  const row = [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)];
-  if (includeWebApp) {
-    row.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
-  }
-  return Markup.inlineKeyboard([row]);
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
+      // ВАЖНО: это web_app кнопка — откроет mini app внутри Telegram, если /setdomain настроен у бота
+      Markup.button.webApp('Подобрать памятник', WEBAPP_URL),
+    ],
+  ]);
 }
 
 // Отправка поста в канал, сохранение исходного текста поста (без подсказки), добавление клавиатуры
@@ -261,20 +263,17 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем инлайн‑кнопки: «Заказать» и «Подобрать памятник» как WebApp (если запрещено — оставим только «Заказать»)
+  // 3) Добавляем инлайн‑кнопки: «Заказать» и «Подобрать памятник» как WebApp
   const token = makeSourceToken(msg.chat.id, msg.message_id);
-  let kb = channelPostKb(botUsername, token, true);
+  const kb = channelPostKb(botUsername, token);
+
+  // Пробуем поставить web_app кнопку; если Telegram её не принимает — это из-за отсутствия /setdomain у бота.
+  // В таком случае вернётся ошибка BUTTON_WEB_APP_INVALID. Мы не делаем авто-фолбэк, чтобы сохранить именно web_app.
   try {
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
-    const desc = e?.response?.description || e?.message || '';
-    if (/webapp|web_app|button.*invalid/i.test(desc)) {
-      // WebApp нельзя — оставляем только «Заказать»
-      kb = channelPostKb(botUsername, token, false);
-      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
-    } else {
-      throw e;
-    }
+    console.error('[bot] editMessageReplyMarkup(web_app) error:', e?.response?.description || e?.message || e);
+    throw e;
   }
 
   return { primary: msg };
@@ -314,7 +313,7 @@ if (token) {
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
   bot.command('dump', async (ctx) => {
     const chat = ctx.chat || {};
-    const from = ctx.from || {};
+    the const from = ctx.from || {};
     const me = ctx.botInfo || (await ctx.telegram.getMe());
     const info = [
       `chat_id = ${chat.id}`,
@@ -332,7 +331,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с клавиатурой: «Заказать» + «Подобрать памятник» (WebApp)
+  // /post — публикует в канал пост с web_app кнопкой «Подобрать памятник» + «Заказать»
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -365,7 +364,9 @@ if (token) {
     } catch (e) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain для WebApp.`);
+      return ctx.reply(
+        `Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather (должен быть ${new URL(WEBAPP_URL).origin}).`
+      );
     }
   });
 
@@ -504,7 +505,6 @@ async function submitOrder(ctx) {
   }
   const orderNo = s.orderNo || makeOrderNo();
 
-  // Подготовим текст/ссылку поста для менеджера
   let postText = '';
   let postLink = '';
   try {
