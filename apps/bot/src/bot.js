@@ -26,7 +26,7 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 
-// Подсказка, отдельным сообщением перед первым шагом
+// Подсказка, отдельным сообщением перед первым шагом (в ЛС)
 const HINT_TEXT =
   'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
 
@@ -78,7 +78,7 @@ async function saveSession(userId, data) {
   }
 }
 
-// Хранилище текста постов: ключ post:<absChatId>:<messageId> → исходный текст поста (без подсказки)
+// Хранилище текста постов: ключ post:<absChatId>:<messageId> → исходный текст поста (без подсказки канала)
 async function setPostText(chatId, messageId, text) {
   const abs = Math.abs(Number(chatId));
   const key = `post:${abs}:${messageId}`;
@@ -199,8 +199,7 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   }
 }
 
-// Инлайн-клавиатура под постом канала: Заказать (в ЛС) + Подобрать памятник (WebApp)
-// Если WebApp недоступен — оставляем только «Заказать».
+// Инлайн-клавиатура под постом канала: «Заказать» (ЛС) + «Подобрать памятник» (WebApp)
 function channelPostKb(botUsername, sourceToken, includeWebApp = true) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   const row = [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)];
@@ -214,7 +213,7 @@ function channelPostKb(botUsername, sourceToken, includeWebApp = true) {
 async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
-  const me = ctx.botInfo || (await ctx.telegram.getMe());
+  const me = ctx.botInfo || (await ctx.telegram.getMe()));
   const botUsername = me.username;
 
   // 1) Отправляем пост (с HTML, при ошибке — без HTML)
@@ -262,7 +261,7 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем инлайн‑кнопки: «Заказать» и (если возможно) «Подобрать памятник» как WebApp
+  // 3) Добавляем инлайн‑кнопки: «Заказать» и «Подобрать памятник» как WebApp (если запрещено — оставим только «Заказать»)
   const token = makeSourceToken(msg.chat.id, msg.message_id);
   let kb = channelPostKb(botUsername, token, true);
   try {
@@ -270,7 +269,7 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   } catch (e) {
     const desc = e?.response?.description || e?.message || '';
     if (/webapp|web_app|button.*invalid/i.test(desc)) {
-      // WebApp нельзя — оставляем только «Заказать», без второй кнопки
+      // WebApp нельзя — оставляем только «Заказать»
       kb = channelPostKb(botUsername, token, false);
       await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
     } else {
@@ -299,15 +298,13 @@ if (token) {
     }
   });
 
-  // /start — подсказка отдельным сообщением, затем сразу анкета.
+  // /start — подсказка отдельным сообщением, затем сразу анкета
   bot.start(async (ctx) => {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     let sourceToken = null;
     if (arg.startsWith(DEEPLINK_PREFIX)) {
       const parts = arg.split('_');
-      if (parts.length >= 2) {
-        sourceToken = parts.slice(1).join('_');
-      }
+      if (parts.length >= 2) sourceToken = parts.slice(1).join('_');
     }
     await ctx.reply(HINT_TEXT);
     await startOrder(ctx, sourceToken || undefined);
@@ -335,7 +332,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с клавиатурой: «Заказать» (+ WebApp, если доступно)
+  // /post — публикует в канал пост с клавиатурой: «Заказать» + «Подобрать памятник» (WebApp)
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -368,16 +365,19 @@ if (token) {
     } catch (e) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}\нПроверьте права бота, CHANNEL_ID и /setdomain для WebApp.`);
+      return ctx.reply(`Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain для WebApp.`);
     }
   });
 
-  // --------- Анкета: клавиши (reply-клавиатура над полем ввода) ---------
+  // --------- Анкета: клавиши (reply‑клавиатура) ---------
   bot.hears('Отменить', async (ctx) => {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
   bot.hears('Далее', async (ctx) => {
     if (ctx.session?.order?.step === 'photos') return stepComment(ctx);
+  });
+  bot.hears('Продолжить', async (ctx) => {
+    if (ctx.session?.order?.step === 'comment') return stepReview(ctx);
   });
   bot.hears('Отправить', async (ctx) => {
     if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
@@ -410,11 +410,10 @@ if (token) {
         return stepPhotos(ctx);
       }
       if (st === 'comment') {
-        // Шаг 6: комментарий опционален; "-" или "—" = пропустить
-        if (text !== '-' && text !== '—') {
+        if (text !== 'Продолжить' && text !== 'Отменить') {
           ctx.session.order.comment = text;
+          return ctx.reply('Комментарий получен. Нажмите «Продолжить», чтобы перейти к сводке.', kbComment());
         }
-        return stepReview(ctx); // Сводку показываем ТОЛЬКО после шага 6
       }
     }
 
@@ -440,6 +439,9 @@ function kbInput() {
 }
 function kbPhotos() {
   return Markup.keyboard([['Далее'], ['Отменить']]).resize();
+}
+function kbComment() {
+  return Markup.keyboard([['Продолжить'], ['Отменить']]).resize();
 }
 function kbReview() {
   return Markup.keyboard([['Отправить'], ['Отменить']]).resize();
@@ -470,16 +472,13 @@ async function stepPhotos(ctx) {
 }
 async function stepComment(ctx) {
   ctx.session.order.step = 'comment';
-  await ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию). Чтобы пропустить — отправьте «-».', kbInput());
+  await ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbComment());
 }
-
 async function stepReview(ctx) {
   ctx.session.order.step = 'review';
   const s = ctx.session.order;
-  // Номер заявки
   if (!s.orderNo) s.orderNo = makeOrderNo();
 
-  // Текст и ссылка поста (если есть sourceToken)
   let postText = '';
   let postLink = '';
   try {
