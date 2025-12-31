@@ -23,7 +23,7 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
 
-const WEBAPP_URL = process.env.WEBAPP_URL || 'memorial-web-five.vercel.app';
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 
 // Подсказка, отдельным сообщением перед первым шагом (в ЛС)
@@ -199,20 +199,42 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   }
 }
 
-// Инлайн-клавиатуры под постом: полная и фолбэк (только «Заказать»)
-function channelPostKb(botUsername, sourceToken) {
+// Построение ссылок для fallback открытия mini-app внутри Telegram
+function buildStartAppUrl(botUsername, payload) {
+  // Работают оба варианта; tg:// предпочтительнее в приложениях
+  const sp = encodeURIComponent(payload || '');
+  const tg = `tg://resolve?domain=${botUsername}&startapp=${sp}`;
+  // const https = `https://t.me/${botUsername}?startapp=${sp}`;
+  return tg;
+}
+
+// Инлайн-клавиатуры под постом: web_app и два фолбэка
+function channelPostKbWebApp(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   return Markup.inlineKeyboard([
     [
       Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
-      // web_app кнопка — откроет mini app внутри Telegram, если /setdomain настроен у бота на origin WEBAPP_URL
       Markup.button.webApp('Подобрать памятник', WEBAPP_URL),
+    ],
+  ]);
+}
+function channelPostKbStartAppUrl(botUsername, sourceToken) {
+  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  const payload = `from_${sourceToken}`;
+  const startAppUrl = buildStartAppUrl(botUsername, payload);
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
+      // Эта кнопка откроет мини‑приложение в Telegram через deep‑link
+      Markup.button.url('Подобрать памятник', startAppUrl),
     ],
   ]);
 }
 function channelPostKbOnlyOrder(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  return Markup.inlineKeyboard([[Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)]]);
+  return Markup.inlineKeyboard([
+    [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)],
+  ]);
 }
 
 // Отправка поста в канал, сохранение исходного текста поста (без подсказки), добавление клавиатуры
@@ -267,31 +289,41 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем инлайн‑кнопки: «Заказать» и «Подобрать памятник» как WebApp
+  // 3) Добавляем клавиатуру
   const token = makeSourceToken(msg.chat.id, msg.message_id);
-  const kb = channelPostKb(botUsername, token);
 
+  // 3.1. Пытаемся добавить web_app
   try {
+    const kb = channelPostKbWebApp(botUsername, token);
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
     const desc = e?.response?.description || e?.message || String(e);
     console.error('[bot] editMessageReplyMarkup(web_app) error:', desc);
 
-    // Всегда добавляем хотя бы кнопку «Заказать»
+    // 3.2. Фолбэк: кнопка, открывающая мини‑приложение через tg://resolve?startapp=...
     try {
-      const onlyOrder = channelPostKbOnlyOrder(botUsername, token);
-      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, onlyOrder.reply_markup);
-    } catch (e2) {
-      console.error('[bot] fallback order-only button error:', e2?.response?.description || e2?.message || e2);
-    }
-
-    // Сообщим инициатору /post о проблеме с web_app
-    try {
+      const kbStartApp = channelPostKbStartAppUrl(botUsername, token);
+      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kbStartApp.reply_markup);
+      // Сообщим администратору о фолбэке
       await ctx.reply(
-        `Пост отправлен, но не удалось добавить web_app кнопку «Подобрать памятник»: ${desc}\n` +
-          `Проверьте /setdomain у @BotFather — должен быть ${new URL(WEBAPP_URL).origin}`
+        'Пост отправлен. WebApp‑кнопка не принята платформой (BUTTON_TYPE_INVALID). ' +
+          'Поставлен фолбэк: «Подобрать памятник» открывает мини‑приложение через deep‑link startapp.'
       );
-    } catch {}
+    } catch (e2) {
+      console.error('[bot] fallback startapp button error:', e2?.response?.description || e2?.message || e2);
+      // 3.3. Минимальный фолбэк: оставим хотя бы «Заказать»
+      try {
+        const onlyOrder = channelPostKbOnlyOrder(botUsername, token);
+        await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, onlyOrder.reply_markup);
+      } catch (e3) {
+        console.error('[bot] fallback order-only button error:', e3?.response?.description || e3?.message || e3);
+      }
+      try {
+        await ctx.reply(
+          `Пост отправлен, но не удалось добавить кнопку для мини‑приложения. Причина: ${desc}`
+        );
+      } catch {}
+    }
   }
 
   return { primary: msg };
@@ -349,7 +381,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с web_app кнопкой «Подобрать памятник» + «Заказать»
+  // /post — публикует в канал пост с web_app кнопкой «Подобрать памятник» (или startapp фолбэком) + «Заказать»
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -383,9 +415,9 @@ if (token) {
       console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
       return ctx.reply(
-        `Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather (должен быть ${new URL(
+        `Ошибка публикации: ${desc}\nЕсли проблема в web_app кнопке — у @BotFather должен быть домен ${new URL(
           WEBAPP_URL
-        ).origin}).`
+        ).origin}. Иначе будет использован фолбэк через startapp.`
       );
     }
   });
