@@ -133,6 +133,66 @@ function makePostLink(absChatId, messageId) {
   return `https://t.me/c/${internal}/${messageId}`;
 }
 
+// ---------------- Даты: нормализация к формату "DD.MM.YYYY - DD.MM.YYYY" ----------------
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+function isValidYMD(y, m, d) {
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+function parseDateLoose(text) {
+  // Принимаем "DD.MM.YYYY", "D/M/YYYY", "D-M-YYYY", "D M YYYY"
+  const m = text
+    .trim()
+    .replace(/[^\d.\-\/\s]/g, ' ')
+    .match(/(\d{1,2})[.\-\/\s](\d{1,2})[.\-\/\s](\d{4})/);
+  if (!m) return null;
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  const y = Number(m[3]);
+  if (!isValidYMD(y, mo, d)) return null;
+  return { d, mo, y };
+}
+function extractTwoDates(input) {
+  // Заменяем длинные тире и прочее на дефис
+  const s = String(input).replace(/[—–]+/g, '-');
+  // Сначала пробуем разделение по дефису между датами
+  let [left, right] = s.split(/\s*-\s*/);
+  if (right === undefined) {
+    // Если нет явного дефиса между датами, попробуем найти две даты по шаблону
+    const all = [...s.matchAll(/(\d{1,2}[.\-\/\s]\d{1,2}[.\-\/\s]\d{4})/g)].map((m) => m[1]);
+    if (all.length >= 2) {
+      left = all[0];
+      right = all[1];
+    } else {
+      return null;
+    }
+  }
+  const a = parseDateLoose(left || '');
+  const b = parseDateLoose(right || '');
+  if (!a || !b) return null;
+  return {
+    a,
+    b,
+  };
+}
+function normalizeDatesText(input) {
+  const r = extractTwoDates(input);
+  if (!r) {
+    return {
+      ok: false,
+      error:
+        'Пожалуйста, укажите даты в формате DD.MM.YYYY - DD.MM.YYYY. Например: 12.03.1950 - 05.11.2020. ' +
+        'Можно вводить в любом виде (12/3/1950 — 5-11-2020) — я приведу к нужному формату.',
+    };
+  }
+  const d1 = `${pad2(r.a.d)}.${pad2(r.a.mo)}.${r.a.y}`;
+  const d2 = `${pad2(r.b.d)}.${pad2(r.b.mo)}.${r.b.y}`;
+  return { ok: true, value: `${d1} - ${d2}` };
+}
+
+// ---------------- Тексты заявок ----------------
 function buildUserSummary(s, orderNo, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -152,6 +212,11 @@ function buildUserSummary(s, orderNo, postText, postLink) {
   }
   if (postLink) {
     lines.push(`Ссылка на пост: ${postLink}`);
+    lines.push(''); // пустая строка перед напоминанием, как просили
+    lines.push('Не забудьте нажать кнопку Отправить.');
+  } else {
+    // Если нет ссылки — всё равно ненавязчиво напомним в конце
+    lines.push('', 'Не забудьте нажать кнопку Отправить.');
   }
   return lines.join('\n');
 }
@@ -199,16 +264,12 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   }
 }
 
-// Построение ссылок для fallback открытия mini-app внутри Telegram
+// ---------------- Кнопки под постом канала ----------------
 function buildStartAppUrl(botUsername, payload) {
-  // Работают оба варианта; tg:// предпочтительнее в приложениях
+  // Открытие мини‑приложения через deep‑link
   const sp = encodeURIComponent(payload || '');
-  const tg = `tg://resolve?domain=${botUsername}&startapp=${sp}`;
-  // const https = `https://t.me/${botUsername}?startapp=${sp}`;
-  return tg;
+  return `tg://resolve?domain=${botUsername}&startapp=${sp}`;
 }
-
-// Инлайн-клавиатуры под постом: web_app и два фолбэка
 function channelPostKbWebApp(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   return Markup.inlineKeyboard([
@@ -225,16 +286,13 @@ function channelPostKbStartAppUrl(botUsername, sourceToken) {
   return Markup.inlineKeyboard([
     [
       Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
-      // Эта кнопка откроет мини‑приложение в Telegram через deep‑link
       Markup.button.url('Подобрать памятник', startAppUrl),
     ],
   ]);
 }
 function channelPostKbOnlyOrder(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  return Markup.inlineKeyboard([
-    [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)],
-  ]);
+  return Markup.inlineKeyboard([[Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)]]);
 }
 
 // Отправка поста в канал, сохранение исходного текста поста (без подсказки), добавление клавиатуры
@@ -289,39 +347,19 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем клавиатуру
+  // 3) Добавляем клавиатуру: web_app → startapp → только «Заказать» (все фолбэки тихие)
   const token = makeSourceToken(msg.chat.id, msg.message_id);
-
-  // 3.1. Пытаемся добавить web_app
   try {
     const kb = channelPostKbWebApp(botUsername, token);
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
-  } catch (e) {
-    const desc = e?.response?.description || e?.message || String(e);
-    console.error('[bot] editMessageReplyMarkup(web_app) error:', desc);
-
-    // 3.2. Фолбэк: кнопка, открывающая мини‑приложение через tg://resolve?startapp=...
+  } catch {
     try {
       const kbStartApp = channelPostKbStartAppUrl(botUsername, token);
       await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kbStartApp.reply_markup);
-      // Сообщим администратору о фолбэке
-      await ctx.reply(
-        'Пост отправлен. WebApp‑кнопка не принята платформой (BUTTON_TYPE_INVALID). ' +
-          'Поставлен фолбэк: «Подобрать памятник» открывает мини‑приложение через deep‑link startapp.'
-      );
-    } catch (e2) {
-      console.error('[bot] fallback startapp button error:', e2?.response?.description || e2?.message || e2);
-      // 3.3. Минимальный фолбэк: оставим хотя бы «Заказать»
+    } catch {
       try {
         const onlyOrder = channelPostKbOnlyOrder(botUsername, token);
         await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, onlyOrder.reply_markup);
-      } catch (e3) {
-        console.error('[bot] fallback order-only button error:', e3?.response?.description || e3?.message || e3);
-      }
-      try {
-        await ctx.reply(
-          `Пост отправлен, но не удалось добавить кнопку для мини‑приложения. Причина: ${desc}`
-        );
       } catch {}
     }
   }
@@ -412,13 +450,8 @@ if (token) {
       await postToChannelWithKb(ctx, 'text', { text: finalText }, base);
       return ctx.reply('Текстовый пост опубликован в канал.');
     } catch (e) {
-      console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(
-        `Ошибка публикации: ${desc}\nЕсли проблема в web_app кнопке — у @BotFather должен быть домен ${new URL(
-          WEBAPP_URL
-        ).origin}. Иначе будет использован фолбэк через startapp.`
-      );
+      return ctx.reply(`Ошибка публикации: ${desc}`);
     }
   });
 
@@ -459,7 +492,11 @@ if (token) {
         return stepDates(ctx);
       }
       if (st === 'dates') {
-        ctx.session.order.dates = text;
+        const norm = normalizeDatesText(text);
+        if (!norm.ok) {
+          return ctx.reply(norm.error, kbInput());
+        }
+        ctx.session.order.dates = norm.value;
         return stepPhotos(ctx);
       }
       if (st === 'comment') {
@@ -477,7 +514,7 @@ if (token) {
         ctx.session.order.photos = ctx.session.order.photos || [];
         ctx.session.order.photos.push(fileId);
         return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
-      }
+        }
     }
   });
 
@@ -517,7 +554,11 @@ async function stepFio(ctx) {
 }
 async function stepDates(ctx) {
   ctx.session.order.step = 'dates';
-  await ctx.reply('Шаг 4/6. Дата рождения — Дата смерти (в свободном формате):', kbInput());
+  await ctx.reply(
+    'Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY).\n' +
+      'Можно вводить в любом виде — я приведу к нужному формату. Например: 12.03.1950 - 05.11.2020.',
+    kbInput()
+  );
 }
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
