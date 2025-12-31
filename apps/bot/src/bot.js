@@ -199,7 +199,7 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   }
 }
 
-// Инлайн-клавиатура под постом канала: «Заказать» (ЛС) + «Подобрать памятник» (WebApp)
+// Инлайн-клавиатуры под постом: полная и фолбэк (только «Заказать»)
 function channelPostKb(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   return Markup.inlineKeyboard([
@@ -209,6 +209,10 @@ function channelPostKb(botUsername, sourceToken) {
       Markup.button.webApp('Подобрать памятник', WEBAPP_URL),
     ],
   ]);
+}
+function channelPostKbOnlyOrder(botUsername, sourceToken) {
+  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  return Markup.inlineKeyboard([[Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)]]);
 }
 
 // Отправка поста в канал, сохранение исходного текста поста (без подсказки), добавление клавиатуры
@@ -267,20 +271,27 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const token = makeSourceToken(msg.chat.id, msg.message_id);
   const kb = channelPostKb(botUsername, token);
 
-  // Если Telegram не примет web_app (нет /setdomain), пост не ломаем: сообщим администратору, но сообщение останется в канале.
   try {
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
   } catch (e) {
     const desc = e?.response?.description || e?.message || String(e);
     console.error('[bot] editMessageReplyMarkup(web_app) error:', desc);
+
+    // Всегда добавляем хотя бы кнопку «Заказать»
     try {
-      // Сообщим инициатору /post, что кнопка web_app не установлена
+      const onlyOrder = channelPostKbOnlyOrder(botUsername, token);
+      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, onlyOrder.reply_markup);
+    } catch (e2) {
+      console.error('[bot] fallback order-only button error:', e2?.response?.description || e2?.message || e2);
+    }
+
+    // Сообщим инициатору /post о проблеме с web_app
+    try {
       await ctx.reply(
         `Пост отправлен, но не удалось добавить web_app кнопку «Подобрать памятник»: ${desc}\n` +
           `Проверьте /setdomain у @BotFather — должен быть ${new URL(WEBAPP_URL).origin}`
       );
     } catch {}
-    // Не бросаем исключение — сам пост уже в канале.
   }
 
   return { primary: msg };
