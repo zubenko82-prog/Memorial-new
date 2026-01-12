@@ -1,18 +1,20 @@
 // apps/web/src/lib/pdf/generateOrderPdf.ts
-// PDF «как TopBar» с корректной кириллицей и отступами снизу под миниатюрами:
-// - Слева — сводка: Имя, Телефон, № заказа, Резная работа (миниатюра как у графики),
-//   Люди (2 колонки), Графика (лицевая/тыльная), Эпитафии (лицевая/тыльная),
-//   Надгробная плита — параметры + Графика (плита) + Эпитафии (плита),
-//   Дополнительно (Цветник, Тумба), Примечания.
-// - Справа — эскизы.
-// Правки:
-// - Гарантированная кириллица: многоступенчатая загрузка шрифтов Noto Sans (Regular/Bold):
-//   1) локально из /public/fonts, 2) jsDelivr (googlefonts), 3) unpkg (@fontsource/noto-sans).
-//   Если Regular найден — включаем его по умолчанию для ВСЕГО документа.
-// - Явная инициализация шрифта сразу после ensurePdfFonts (до любых text/split).
-// - Отступы снизу под портретами/миниатюрами (IMG_BOTTOM_PAD) сохранены.
-// - Безопасная base64-конвертация (без переполнения стека, совместимо с WebView Telegram).
-/* eslint-disable @typescript-eslint/no-explicit-any */
+// Генерация PDF с гарантированной кириллицей (Noto Sans) и отступами под миниатюрами.
+// Главные изменения для исправления "ломаной" кириллицы:
+// 1) Жёсткая проверка загрузки TTF-шрифтов (Regular обязательно, Bold — опционально).
+// 2) Если Regular не загрузился — выбрасываем понятную ошибку и НЕ создаём PDF (чтобы не получить «кракозябры»).
+// 3) Многоуровневая загрузка шрифтов: локально (/public/fonts) → jsDelivr → unpkg (@fontsource).
+// 4) Сразу активируем NotoSans после загрузки, до любых операций splitText/text.
+//
+// ВАЖНО: положите файлы в репозиторий (лучший вариант для Telegram WebView):
+// - apps/web/public/fonts/NotoSans-Regular.ttf
+// - apps/web/public/fonts/NotoSans-Bold.ttf
+// И проверьте, что они доступны по URL:
+//   https://<ваш-домен>/fonts/NotoSans-Regular.ttf
+//   https://<ваш-домен>/fonts/NotoSans-Bold.ttf
+//
+// Если локальных файлов нет — код попытается скачать с CDN. При любом провале Regular — PDF не создаётся.
+
 declare global {
   interface Window { htmlToImage?: any; jspdf?: any }
 }
@@ -48,30 +50,75 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Unicode fonts (Noto Sans) — Local first, then multiple CDNs ===== */
+/* ===== Unicode fonts (Noto Sans) — Local → jsDelivr → unpkg (@fontsource) ===== */
 let fontsReady = false;
-let activeFont = "NotoSans";
 let haveRegular = false;
 let haveBold = false;
 
-/*
-Положите локально (всегда лучше и надёжнее для Telegram WebView):
-- /public/fonts/NotoSans-Regular.ttf
-- /public/fonts/NotoSans-Bold.ttf
-*/
+const DEBUG_FONTS = false; // включите при необходимости логов в консоли
+
 async function ensurePdfFonts(doc: any) {
-  if (fontsReady) return { activeFont, haveRegular, haveBold };
+  if (fontsReady) return { haveRegular, haveBold };
 
-  // Пути: локальные → CDN (googlefonts via jsDelivr) → @fontsource (unpkg)
-  const LOCAL_REG = "/fonts/NotoSans-Regular.ttf";
-  const LOCAL_BOLD = "/fonts/NotoSans-Bold.ttf";
+  const ORIGIN = window.location.origin;
+  const LOCAL_REG = `${ORIGIN}/fonts/NotoSans-Regular.ttf`;
+  const LOCAL_BOLD = `${ORIGIN}/fonts/NotoSans-Bold.ttf`;
 
+  // GoogleFonts (jsDelivr)
   const CDN_GF_REG = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
   const CDN_GF_BOLD = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Bold.ttf";
 
-  // @fontsource (гарантированная кириллица)
+  // @fontsource (unpkg) — гарантированная кириллица
   const CDN_FS_REG = "https://unpkg.com/@fontsource/noto-sans@5.0.11/files/noto-sans-cyrillic-400-normal.ttf";
   const CDN_FS_BOLD = "https://unpkg.com/@fontsource/noto-sans@5.0.11/files/noto-sans-cyrillic-700-normal.ttf";
+
+  const tryUrlsInOrder = async (urls: string[], vfsName: string, fam: string, style: "normal" | "bold") => {
+    for (const url of urls) {
+      const ok = await addFontFile(url, vfsName, fam, style);
+      if (DEBUG_FONTS) console.log(`[pdf] font ${style} try ${url} → ${ok ? "OK" : "fail"}`);
+      if (ok) return true;
+    }
+    return false;
+  };
+
+  haveRegular = await tryUrlsInOrder(
+    [LOCAL_REG, CDN_GF_REG, CDN_FS_REG],
+    "NotoSans-Regular.ttf",
+    "NotoSans",
+    "normal"
+  );
+
+  haveBold = await tryUrlsInOrder(
+    [LOCAL_BOLD, CDN_GF_BOLD, CDN_FS_BOLD],
+    "NotoSans-Bold.ttf",
+    "NotoSans",
+    "bold"
+  );
+
+  fontsReady = true;
+
+  // Критично: Regular обязателен
+  if (!haveRegular) {
+    throw new Error(
+      "Не удалось загрузить шрифт NotoSans-Regular.ttf. " +
+      "Положите файл в /public/fonts или проверьте доступ к CDN."
+    );
+  }
+
+  // Активируем шрифт сразу
+  try {
+    doc.setFont("NotoSans", "normal");
+  } catch (e) {
+    if (DEBUG_FONTS) console.warn("[pdf] setFont error:", e);
+  }
+
+  if (DEBUG_FONTS) {
+    try {
+      console.log("[pdf] fontList:", doc.getFontList && doc.getFontList());
+    } catch {}
+  }
+
+  return { haveRegular, haveBold };
 
   async function addFontFile(url: string, vfsName: string, fam: string, style: "normal" | "bold") {
     try {
@@ -80,46 +127,22 @@ async function ensurePdfFonts(doc: any) {
       const ab = await r.arrayBuffer();
       const b64 = toBase64Safe(ab);
       doc.addFileToVFS(vfsName, b64);
+      // addFont(postScriptName, fontName, fontStyle)
       doc.addFont(vfsName, fam, style);
       return true;
     } catch {
       return false;
     }
   }
-
-  // Порядок: local → googlefonts → fontsource
-  haveRegular =
-    (await addFontFile(LOCAL_REG, "NotoSans-Regular.ttf", "NotoSans", "normal")) ||
-    (await addFontFile(CDN_GF_REG, "NotoSans-Regular.ttf", "NotoSans", "normal")) ||
-    (await addFontFile(CDN_FS_REG, "NotoSans-Regular.ttf", "NotoSans", "normal"));
-
-  haveBold =
-    (await addFontFile(LOCAL_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold")) ||
-    (await addFontFile(CDN_GF_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold")) ||
-    (await addFontFile(CDN_FS_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold"));
-
-  fontsReady = true;
-
-  // Если Regular загружен — сразу активируем (важно для корректного splitText, text и т.д.)
-  try {
-    if (haveRegular) {
-      doc.setFont("NotoSans", "normal");
-    } else if (haveBold) {
-      doc.setFont("NotoSans", "bold");
-    }
-  } catch {}
-
-  return { activeFont, haveRegular, haveBold };
 }
 
-// Безопасная конвертация ArrayBuffer → base64 (порциями) — устойчиво в WebView Telegram/Safari
+// Безопасная конвертация ArrayBuffer → base64 (порционно), устойчива в WebView Telegram/Safari
 function toBase64Safe(ab: ArrayBuffer) {
   const bytes = new Uint8Array(ab);
   const chunk = 0x8000; // 32KB
   let binary = "";
   for (let i = 0; i < bytes.length; i += chunk) {
     const sub = bytes.subarray(i, i + chunk);
-    // Преобразуем порциями, чтобы не переполнить стек и не потерять байты
     binary += String.fromCharCode.apply(null, Array.from(sub) as unknown as number[]);
   }
   return btoa(binary);
@@ -180,12 +203,8 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const jsPDF = await ensureJsPdf();
   const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
 
-  // 1) Подключаем шрифты и сразу активируем NotoSans, если доступен
-  const fonts = await ensurePdfFonts(doc);
-  try {
-    if (fonts.haveRegular) doc.setFont("NotoSans", "normal");
-    else if (fonts.haveBold) doc.setFont("NotoSans", "bold");
-  } catch {}
+  // 1) ШРИФТЫ — критично для кириллицы
+  const { haveBold } = await ensurePdfFonts(doc);
 
   // Геометрия
   const pageW = doc.internal.pageSize.getWidth();
@@ -206,31 +225,17 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const PEOPLE_COLS = 2, PEOPLE_IMG_W_FACTOR = 0.50;
   let photoH = 140, gfxH = 80, plateH = 80;
   const minImgH = 54;
-  const IMG_BOTTOM_PAD = 10; // нижний отступ под портретами и миниатюрами
+  const IMG_BOTTOM_PAD = 10;
 
   // Грид
   let minColW = 240, gapCol = 14, gapRow = 12, gapText = 12;
 
-  // setFont: всегда используем NotoSans при наличии
+  // setFont: NotoSans всегда (bold — только если доступен)
   const setFont = (bold = false, size = base) => {
-    const fam = "NotoSans";
-    const style: "normal" | "bold" = bold ? "bold" : "normal";
-    const list = (doc.getFontList && doc.getFontList()) || {};
-    const has = (f: string, s: "normal" | "bold") => !!(list[f] && (list[f] as any)[s]);
     try {
-      if (has(fam, style)) {
-        doc.setFont(fam, style);
-      } else if (has(fam, style === "bold" ? "normal" : "bold")) {
-        doc.setFont(fam, style === "bold" ? "normal" : "bold");
-      } else {
-        // fallback (стандартный шрифт pdf): кириллица может отобразиться неверно
-        const families = Object.keys(list);
-        const ff = families[0] || "times";
-        const styles = list[ff] ? Object.keys(list[ff]) : ["normal"];
-        doc.setFont(ff, (styles[0] as any) || "normal");
-      }
+      doc.setFont("NotoSans", bold && haveBold ? "bold" : "normal");
     } catch {
-      // на всякий случай — стандартный
+      // на крайний случай — times (возможна ломанная кириллица; но мы сюда не должны попасть)
       doc.setFont("times", "normal");
     }
     doc.setFontSize(size);
@@ -384,7 +389,9 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       for (let i = 0; i < list.length; i++) {
         const hTxt = split(list[i], cellW, EP).length * lh(EP);
         rowMax = Math.max(rowMax, hTxt);
-        if (++colI >= c || i === list.length - 1) { used += rowMax + gapRow; colI = 0; rowMax = 0; }
+        if (++colI >= c || i === list.length - 1) {
+          used += rowMax + gapRow; colI = 0; rowMax = 0;
+        }
       }
       return used;
     }
@@ -414,7 +421,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     meas = measureLeft();
   }
 
-  /* ===== Рендер слева ===== */
+  /* ===== Рендер левой колонки ===== */
   let y = margin;
   setFont(true, base);  doc.text(custName || "—", margin, y); y += lh(base);
   setFont(false, base); doc.text(custPhone || "—", margin, y); y += lh(base);
@@ -422,7 +429,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   y += 6; hr(y); y += 1;
 
-  // Резная работа (как у графики, с нижним паддингом)
+  // Резная работа
   if (itemUrl || itemName) {
     setFont(true, TITLE); doc.text("Резная работа", margin, y); y += lh(TITLE);
     const c = cols(leftW);
@@ -466,18 +473,17 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     y = await drawGraphics(y, gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH);
   }
 
-  // Эпитафии (лицевая)
+  // Эпитафии
   if (epsFront.length) {
     y = headingCentered("Эпитафии (лицевая)", y, base);
     y = drawEpitaphs(y, epsFront) + 10;
   }
-  // Эпитафии (тыльная)
   if (epsRear.length) {
     y = headingCentered("Эпитафии (тыльная)", y, base);
     y = drawEpitaphs(y, epsRear) + 10;
   }
 
-  // Надгробная плита
+  // Плита
   if (plateOn) {
     y = headingCentered("Надгробная плита", y);
     setFont(false, base);
@@ -548,7 +554,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   return doc.output("blob");
 
-  /* ===== Render helpers ===== */
+  /* ===== Рендер‑помощники ===== */
   async function drawGraphics(yStart: number, list: Array<{ name: string; url?: string | null }>, imgH: number) {
     let yLoc = yStart;
     const c = cols(leftW);
@@ -572,7 +578,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, rowStartY, w, h, undefined, "FAST");
-          usedH = h + IMG_BOTTOM_PAD; // нижний отступ под миниатюрой
+          usedH = h + IMG_BOTTOM_PAD;
         }
       }
 
@@ -630,7 +636,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           const w = Math.min(imgW, Math.round(iw * s));
           const h = Math.round(ih * s);
           doc.addImage(data, /^data:image\/png/i.test(data) ? "PNG" : "JPEG", cx, rowStartY, w, h, undefined, "FAST");
-          usedH = h + IMG_BOTTOM_PAD; // нижний отступ под портретом
+          usedH = h + IMG_BOTTOM_PAD;
         }
       }
 
