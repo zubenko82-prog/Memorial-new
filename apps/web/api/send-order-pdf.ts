@@ -1,4 +1,4 @@
-// web/api/send-order-pdf.ts
+// pages/api/send-order-pdf.ts
 // Принимает PDF (multipart/form-data) и отправляет его в Telegram чат(ы) менеджеров.
 // Возвращает подробный ответ (message_id, chat.id), чтобы было видно, куда ушло.
 //
