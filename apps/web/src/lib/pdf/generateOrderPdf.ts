@@ -6,10 +6,12 @@
 //   Дополнительно (Цветник, Тумба), Примечания.
 // - Справа — эскизы.
 // Правки:
-// - Добавлены отступы снизу под портретами и ВСЕМИ миниатюрами (IMG_BOTTOM_PAD).
-// - Заголовки «Люди», «Графика (лицевая/тыльная/плита)», «Эпитафии (лицевая/тыльная/плита)», «Надгробная плита», «Примечания» — центр, полужирные, подчёркнутые.
-// - Исправлена кириллица: надёжное подключение Noto Sans (Regular/Bold). Сначала локально (/public/fonts), затем CDN. Имена шрифтов = "NotoSans" (без префиксов), чтобы setFont не падал.
-
+// - Гарантированная кириллица: многоступенчатая загрузка шрифтов Noto Sans (Regular/Bold):
+//   1) локально из /public/fonts, 2) jsDelivr (googlefonts), 3) unpkg (@fontsource/noto-sans).
+//   Если Regular найден — включаем его по умолчанию для ВСЕГО документа.
+// - Явная инициализация шрифта сразу после ensurePdfFonts (до любых text/split).
+// - Отступы снизу под портретами/миниатюрами (IMG_BOTTOM_PAD) сохранены.
+// - Безопасная base64-конвертация (без переполнения стека, совместимо с WebView Telegram).
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
   interface Window { htmlToImage?: any; jspdf?: any }
@@ -46,59 +48,80 @@ async function ensureJsPdf(): Promise<any> {
   return window.jspdf.jsPDF;
 }
 
-/* ===== Unicode fonts (Noto Sans) — Local first, then CDN ===== */
+/* ===== Unicode fonts (Noto Sans) — Local first, then multiple CDNs ===== */
 let fontsReady = false;
 let activeFont = "NotoSans";
 let haveRegular = false;
 let haveBold = false;
 
 /*
-Обязательно добавьте (желательно) локальные файлы шрифтов в /public/fonts:
+Положите локально (всегда лучше и надёжнее для Telegram WebView):
 - /public/fonts/NotoSans-Regular.ttf
 - /public/fonts/NotoSans-Bold.ttf
-
-Если их нет — скачаем с CDN (googlefonts via jsDelivr).
 */
 async function ensurePdfFonts(doc: any) {
   if (fontsReady) return { activeFont, haveRegular, haveBold };
 
+  // Пути: локальные → CDN (googlefonts via jsDelivr) → @fontsource (unpkg)
   const LOCAL_REG = "/fonts/NotoSans-Regular.ttf";
   const LOCAL_BOLD = "/fonts/NotoSans-Bold.ttf";
-  const CDN_REG = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-  const CDN_BOLD = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Bold.ttf";
+
+  const CDN_GF_REG = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+  const CDN_GF_BOLD = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Bold.ttf";
+
+  // @fontsource (гарантированная кириллица)
+  const CDN_FS_REG = "https://unpkg.com/@fontsource/noto-sans@5.0.11/files/noto-sans-cyrillic-400-normal.ttf";
+  const CDN_FS_BOLD = "https://unpkg.com/@fontsource/noto-sans@5.0.11/files/noto-sans-cyrillic-700-normal.ttf";
 
   async function addFontFile(url: string, vfsName: string, fam: string, style: "normal" | "bold") {
     try {
-      const r = await fetch(url, { mode: "cors", cache: "no-store" });
+      const r = await fetch(url, { cache: "no-store" });
       if (!r.ok) return false;
       const ab = await r.arrayBuffer();
-      const b64 = toBase64(ab);
+      const b64 = toBase64Safe(ab);
       doc.addFileToVFS(vfsName, b64);
       doc.addFont(vfsName, fam, style);
       return true;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
-  // Порядок: local → CDN
+  // Порядок: local → googlefonts → fontsource
   haveRegular =
     (await addFontFile(LOCAL_REG, "NotoSans-Regular.ttf", "NotoSans", "normal")) ||
-    (await addFontFile(CDN_REG, "NotoSans-Regular.ttf", "NotoSans", "normal"));
+    (await addFontFile(CDN_GF_REG, "NotoSans-Regular.ttf", "NotoSans", "normal")) ||
+    (await addFontFile(CDN_FS_REG, "NotoSans-Regular.ttf", "NotoSans", "normal"));
 
   haveBold =
     (await addFontFile(LOCAL_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold")) ||
-    (await addFontFile(CDN_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold"));
-
-  // Если не получилось — финальная попытка CDN (рег/болд)
-  if (!haveRegular) haveRegular = await addFontFile(CDN_REG, "NotoSans-Regular.ttf", "NotoSans", "normal");
-  if (!haveBold) haveBold = await addFontFile(CDN_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold");
+    (await addFontFile(CDN_GF_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold")) ||
+    (await addFontFile(CDN_FS_BOLD, "NotoSans-Bold.ttf", "NotoSans", "bold"));
 
   fontsReady = true;
+
+  // Если Regular загружен — сразу активируем (важно для корректного splitText, text и т.д.)
+  try {
+    if (haveRegular) {
+      doc.setFont("NotoSans", "normal");
+    } else if (haveBold) {
+      doc.setFont("NotoSans", "bold");
+    }
+  } catch {}
+
   return { activeFont, haveRegular, haveBold };
 }
 
-function toBase64(ab: ArrayBuffer) {
-  let binary = ""; const bytes = new Uint8Array(ab);
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+// Безопасная конвертация ArrayBuffer → base64 (порциями) — устойчиво в WebView Telegram/Safari
+function toBase64Safe(ab: ArrayBuffer) {
+  const bytes = new Uint8Array(ab);
+  const chunk = 0x8000; // 32KB
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const sub = bytes.subarray(i, i + chunk);
+    // Преобразуем порциями, чтобы не переполнить стек и не потерять байты
+    binary += String.fromCharCode.apply(null, Array.from(sub) as unknown as number[]);
+  }
   return btoa(binary);
 }
 
@@ -112,7 +135,7 @@ async function urlToDataUrl(url?: string | null): Promise<string | null> {
   try {
     if (!url) return null;
     if (url.startsWith("data:")) return url;
-    const res = await fetch(url, { mode: "cors" });
+    const res = await fetch(url);
     if (!res.ok) return null;
     const blob = await res.blob();
     return await new Promise<string>((resolve) => {
@@ -156,7 +179,13 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   onProgress?.("init");
   const jsPDF = await ensureJsPdf();
   const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
-  await ensurePdfFonts(doc);
+
+  // 1) Подключаем шрифты и сразу активируем NotoSans, если доступен
+  const fonts = await ensurePdfFonts(doc);
+  try {
+    if (fonts.haveRegular) doc.setFont("NotoSans", "normal");
+    else if (fonts.haveBold) doc.setFont("NotoSans", "bold");
+  } catch {}
 
   // Геометрия
   const pageW = doc.internal.pageSize.getWidth();
@@ -182,24 +211,27 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   // Грид
   let minColW = 240, gapCol = 14, gapRow = 12, gapText = 12;
 
-  // setFont: всегда пытаемся использовать NotoSans (bold/normal), а при отсутствии — любой доступный
+  // setFont: всегда используем NotoSans при наличии
   const setFont = (bold = false, size = base) => {
     const fam = "NotoSans";
     const style: "normal" | "bold" = bold ? "bold" : "normal";
     const list = (doc.getFontList && doc.getFontList()) || {};
     const has = (f: string, s: "normal" | "bold") => !!(list[f] && (list[f] as any)[s]);
-
-    if (has(fam, style)) {
-      doc.setFont(fam, style);
-    } else if (has(fam, style === "bold" ? "normal" : "bold")) {
-      doc.setFont(fam, style === "bold" ? "normal" : "bold");
-    } else {
-      // fallback на любой первый доступный шрифт (как правило, Times),
-      // но кириллица может отобразиться некорректно — поэтому лучше положить TTF в /public/fonts.
-      const families = Object.keys(list);
-      const ff = families[0] || "times";
-      const styles = list[ff] ? Object.keys(list[ff]) : ["normal"];
-      doc.setFont(ff, (styles[0] as any) || "normal");
+    try {
+      if (has(fam, style)) {
+        doc.setFont(fam, style);
+      } else if (has(fam, style === "bold" ? "normal" : "bold")) {
+        doc.setFont(fam, style === "bold" ? "normal" : "bold");
+      } else {
+        // fallback (стандартный шрифт pdf): кириллица может отобразиться неверно
+        const families = Object.keys(list);
+        const ff = families[0] || "times";
+        const styles = list[ff] ? Object.keys(list[ff]) : ["normal"];
+        doc.setFont(ff, (styles[0] as any) || "normal");
+      }
+    } catch {
+      // на всякий случай — стандартный
+      doc.setFont("times", "normal");
     }
     doc.setFontSize(size);
   };
