@@ -1,29 +1,18 @@
 // apps/web/src/pages/api/send-order-pdf.ts
-// API: принимает PDF из веб‑приложения и пересылает его(их) в чат(ы) менеджеров в Telegram.
-// Требуемые переменные окружения (в веб‑проекте, например Vercel → Project Settings → Environment Variables):
-// - TGBOT_TOKEN           — токен бота (например, от @SonetConstructor_bot)
-// - MANAGER_CHAT_ID       — один целевой чат/канал, например "-1003021100938"
-//   ИЛИ
-// - MANAGER_CHAT_IDS      — несколько chat_id через запятую: "-1003021100938,123456789"
-// Дополнительно (необязательно):
-// - ALLOW_ORIGIN          — для CORS, по умолчанию "*"
-//
-// Маршрут ожидает: POST multipart/form-data с полями:
-// - pdf: File (application/pdf)
-// - payload: JSON-строка с метаданными: { orderNo?: string, intro?: { customerName?: string, customerPhone?: string }, extras?: any }
-//
-// Примечания:
-// - Отвечает на OPTIONS (204) и HEAD (200) — удобно для предзапросов/проверок.
-// - GET вернёт 405 (Method Not Allowed).
+// Принимает PDF и шлёт в Telegram менеджерский чат. Возвращает детали ответа Telegram.
+// Env (в веб-проекте):
+// - TGBOT_TOKEN            — токен бота
+// - MANAGER_CHAT_ID        — один chat_id, например "-1003021100938"
+//   или MANAGER_CHAT_IDS   — несколько через запятую
+// - ALLOW_ORIGIN           — CORS (опционально, по умолчанию "*")
+// - DEBUG_TELEGRAM=1       — логировать подробности в логи функции
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable, { File as FormidableFile } from "formidable";
 import fs from "node:fs";
 import path from "node:path";
 
-export const config = {
-  api: { bodyParser: false }, // обязательнo: мы сами разбираем multipart через formidable
-};
+export const config = { api: { bodyParser: false } };
 
 function setCors(res: NextApiResponse) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -35,12 +24,24 @@ function parseForm(req: NextApiRequest): Promise<{ fields: formidable.Fields; fi
   const form = formidable({
     multiples: false,
     keepExtensions: true,
-    maxFileSize: 20 * 1024 * 1024, // 20 MB
+    maxFileSize: 20 * 1024 * 1024, // 20MB
   });
   return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => (err ? reject(err) : resolve({ fields, files })));
   });
 }
+
+type TgSendResult = {
+  ok: boolean;
+  result?: {
+    message_id: number;
+    date: number;
+    chat?: { id?: number | string; title?: string; type?: string; username?: string };
+    document?: { file_id?: string; file_name?: string; mime_type?: string; file_size?: number };
+    caption?: string;
+  };
+  description?: string;
+};
 
 async function sendToTelegramDocument(params: {
   botToken: string;
@@ -48,16 +49,13 @@ async function sendToTelegramDocument(params: {
   filePath: string;
   fileName: string;
   caption?: string;
-}) {
+}): Promise<TgSendResult> {
   const { botToken, chatId, filePath, fileName, caption } = params;
   const tgUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
 
-  // Читаем файл в память. Для больших файлов можно переделать на поток.
   const buf = await fs.promises.readFile(filePath);
   const blob = new Blob([buf], { type: "application/pdf" });
-
-  // В среде Node 18+ доступны глобальные FormData и File
-  // @ts-expect-error: В среде исполнения (Node 18+/Vercel) File доступен как глобальный класс
+  // @ts-expect-error Node 18+ имеет глобальный File
   const webFile = new File([blob], fileName, { type: "application/pdf" });
 
   const form = new FormData();
@@ -66,10 +64,19 @@ async function sendToTelegramDocument(params: {
   form.append("document", webFile);
 
   const resp = await fetch(tgUrl, { method: "POST", body: form as any });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Telegram error: ${resp.status} ${text}`);
+  const text = await resp.text().catch(() => "");
+  let json: TgSendResult | null = null;
+  try {
+    json = text ? (JSON.parse(text) as TgSendResult) : null;
+  } catch {
+    json = null;
   }
+
+  if (!resp.ok || !json?.ok) {
+    const details = json?.description || text || resp.statusText;
+    throw new Error(`Telegram error: ${resp.status} ${details}`);
+  }
+  return json!;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -94,30 +101,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).send("Server misconfigured: TGBOT_TOKEN and MANAGER_CHAT_ID(S) required");
   }
 
+  const DEBUG = process.env.DEBUG_TELEGRAM === "1";
+
   try {
     const { fields, files } = await parseForm(req);
 
-    // Достаём payload
+    // payload
     const metaRaw = typeof fields.payload === "string" ? fields.payload : Array.isArray(fields.payload) ? fields.payload[0] : "{}";
     let meta: any = {};
-    try {
-      meta = JSON.parse(String(metaRaw || "{}"));
-    } catch {
-      meta = {};
-    }
+    try { meta = JSON.parse(String(metaRaw || "{}")); } catch { meta = {}; }
 
-    // Достаём файл (учитываем возможный массив)
+    // файл
     const fAny = (files as any).pdf as FormidableFile | FormidableFile[] | undefined;
     const f: FormidableFile | undefined = Array.isArray(fAny) ? fAny[0] : fAny;
-    if (!f?.filepath) {
-      return res.status(400).send("No pdf");
-    }
+    if (!f?.filepath) return res.status(400).send("No pdf");
 
     const filePath = f.filepath;
     const originalName = f.originalFilename || f.newFilename || `order-${Date.now()}.pdf`;
     const safeBase = path.basename(originalName).replace(/[^\w.\-]+/g, "_");
 
-    // Формируем подпись
+    // подпись
     const orderNo = String(meta?.orderNo || "").trim();
     const intro = meta?.intro || {};
     const captionLines = [
@@ -127,25 +130,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ].filter(Boolean);
     const caption = captionLines.join("\n");
 
-    // Отправляем во все целевые чаты
+    // шлём во все чаты и собираем результаты
+    const results: Array<{ chatId: string; messageId?: number; chat?: any }> = [];
     for (const chatId of chats) {
-      await sendToTelegramDocument({
+      const r = await sendToTelegramDocument({
         botToken,
         chatId,
         filePath,
         fileName: safeBase,
         caption,
       });
+      const messageId = r?.result?.message_id;
+      const chatObj = r?.result?.chat || { id: chatId };
+      results.push({ chatId, messageId, chat: chatObj });
+      if (DEBUG) {
+        console.log("[send-order-pdf] sent:", {
+          chat_id: chatId,
+          message_id: messageId,
+          chat: chatObj,
+          file: safeBase,
+        });
+      }
     }
 
-    // Удаляем временный файл (formidable может сам очистить, но подстрахуемся)
-    try {
-      await fs.promises.unlink(filePath);
-    } catch {
-      // ignore
-    }
+    // чистим временный файл
+    try { await fs.promises.unlink(filePath); } catch {}
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, results });
   } catch (e: any) {
     console.error("/api/send-order-pdf error:", e);
     return res.status(500).send(e?.message || "Internal error");
