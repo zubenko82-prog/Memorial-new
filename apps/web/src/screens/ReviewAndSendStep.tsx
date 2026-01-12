@@ -2,11 +2,12 @@
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
 // Что изменили по вашему запросу:
-// - После «Отправить» теперь явно показываем окно-успех с кнопкой «Сохранить PDF».
-// - Параллельно подсказка с «Сохранить PDF» остаётся на странице (ниже), чтобы кнопка была доступна и после закрытия окна.
-// - Добавили тактильный отклик/попап Telegram (если доступно), чтобы было понятно, что заявка ушла.
-// - Для Telegram WebApp используем onPointerUp + маленькую задержку перед тяжёлыми операциями (PDF), чтобы кнопки «реагировали».
-// - Оверлеи «Отправляем заказ…» / «Формируем PDF…» показывают процесс, а по завершении появляется окно-успеха.
+// - После «Отправить» показываем окно-успех с кнопкой «Сохранить PDF».
+// - Подсказка с «Сохранить PDF» остаётся на странице ниже (дублируем кнопку).
+// - Убрали любые попапы/вибро Telegram.
+// - Тексты успеха: «Заявка отправлена» + «Спасибо, <имя>! Сохраните PDF заказа при необходимости.»
+// - Для Telegram WebApp используем onPointerUp + микрозадержку перед тяжёлыми операциями (PDF), чтобы кнопки реагировали.
+// - Оверлеи «Отправляем заказ…» / «Формируем PDF…» показывают процесс.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -178,7 +179,7 @@ function PlateBlock(props: {
   const {
     extraPlate, setExtraPlate,
     plateSize, setPlateSize, plateCustomSize, setPlateCustomSize,
-    plateThickness, setPlateThickness, setPlateCustomThickness,
+    plateThickness, setPlateThickness, plateCustomThickness, setPlateCustomThickness,
     plateOrientation, setPlateOrientation,
     plateEpitaph, setPlateEpitaph,
     catsLoading, catsError, cats, catOpen, setCatOpen,
@@ -331,12 +332,13 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
 }
 
 /* ===== Подсказка после отправки (кнопка "Сохранить PDF" здесь) ===== */
-function AfterSendHint({ onSavePdf, saving }: { onSavePdf: () => void; saving: boolean }) {
+function AfterSendHint({ customerName, onSavePdf, saving }: { customerName?: string; onSavePdf: () => void; saving: boolean }) {
+  const name = (customerName || "").trim();
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 10 }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
       <div style={{ opacity: 0.92, marginBottom: 10 }}>
-        Спасибо! Наш менеджер свяжется с вами по указанному номеру. Вы можете сохранить PDF заказ сейчас.
+        {`Спасибо${name ? `, ${name}` : ""}! Сохраните PDF заказа при необходимости.`}
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
@@ -351,15 +353,16 @@ function AfterSendHint({ onSavePdf, saving }: { onSavePdf: () => void; saving: b
         </button>
       </div>
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-        Примечание: генерация PDF может занять до 5–10 секунд в Telegram. Пожалуйста, подождите.
+        Примечание: генерация PDF может занять до 5–10 секунд. Пожалуйста, подождите.
       </div>
     </section>
   );
 }
 
 /* ===== Окно-успех после отправки (видно сразу) ===== */
-function SuccessBottomSheet({ onClose, onSave, saving }: { onClose: () => void; onSave: () => void; saving: boolean }) {
+function SuccessBottomSheet({ customerName, onClose, onSave, saving }: { customerName?: string; onClose: () => void; onSave: () => void; saving: boolean }) {
   const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
+  const name = (customerName || "").trim();
   return (
     <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 15000, background: "rgba(0,0,0,0.35)" }} onPointerUp={onClose}>
       <div
@@ -377,7 +380,9 @@ function SuccessBottomSheet({ onClose, onSave, saving }: { onClose: () => void; 
           <button onPointerUp={onClose} onClick={onClose} title="Закрыть" className="btn">×</button>
         </div>
         <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6, color: "#0a7f2e" }}>Заявка отправлена</div>
-        <div style={{ marginBottom: 12 }}>Спасибо! Сохраните PDF заказа при необходимости.</div>
+        <div style={{ marginBottom: 12 }}>
+          {`Спасибо${name ? `, ${name}` : ""}! Сохраните PDF заказа при необходимости.`}
+        </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
           <button className="btn" onPointerUp={onSave} onClick={onSave} disabled={saving} style={{ background: "#eef6ff", borderColor: "#9cc4ff" }}>
             {saving ? "Формируем PDF…" : "Сохранить PDF"}
@@ -415,7 +420,7 @@ function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void;
         </div>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам для просчёта стоимости?</div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
+          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99д199".replace('д','d') }}>
             {sending ? "Отправляем…" : "Отправить"}
           </button>
         </div>
@@ -437,6 +442,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   }, []);
 
   const orderNo = String(introState.orderNumber || "").trim();
+  const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
 
   const openTopbar = () => {
@@ -557,7 +563,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   async function handleSavePdf() {
     try {
       setIsSaving(true);
-      await new Promise((r) => setTimeout(r, 0)); // дать UI отрисоваться (важно для Telegram)
+      await new Promise((r) => setTimeout(r, 0));
       const blob = await generateOrderPdf({
         draft: loadOrderDraft(),
         intro: loadIntroState(),
@@ -578,7 +584,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     if (isSending) return;
     try {
       setIsSending(true);
-      await new Promise((r) => setTimeout(r, 0)); // дать UI отрисоваться
+      await new Promise((r) => setTimeout(r, 0));
       const blob = await generateOrderPdf({
         draft: loadOrderDraft(),
         intro: loadIntroState(),
@@ -601,16 +607,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       setTimeout(() => {
         afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 150);
-
-      // Telegram: попап/вибро (если доступно)
-      try {
-        (window as any).Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.("success");
-        (window as any).Telegram?.WebApp?.showPopup?.({
-          title: "Готово",
-          message: "Заявка отправлена. Вы можете сохранить PDF.",
-          buttons: [{ id: "ok", type: "ok", text: "ОК" }]
-        });
-      } catch {}
     } catch (e: any) {
       alert(e?.message || "Не удалось отправить PDF.");
     } finally {
@@ -627,7 +623,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} />
 
       {/* Подсказка после отправки (с кнопкой «Сохранить PDF») */}
-      <div ref={afterHintRef}>{sentOk && <AfterSendHint onSavePdf={handleSavePdf} saving={isSaving} />}</div>
+      <div ref={afterHintRef}>{sentOk && <AfterSendHint customerName={customerName} onSavePdf={handleSavePdf} saving={isSaving} />}</div>
 
       {/* Выбрано для плиты */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
@@ -700,7 +696,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </section>
       )}
 
-      {/* Комментарий и подсказка */}
+      {/* Комментарий */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Комментарий к заказу</label>
         <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
@@ -737,6 +733,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       )}
       {successOpen && (
         <SuccessBottomSheet
+          customerName={customerName}
           onClose={() => setSuccessOpen(false)}
           onSave={handleSavePdf}
           saving={isSaving}
