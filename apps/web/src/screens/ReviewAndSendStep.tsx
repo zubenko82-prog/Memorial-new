@@ -1,13 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Обновления:
-// - Кнопки «Отправить» и «Сохранить PDF» корректно работают в Telegram WebApp (добавлены pointer-события, блокировка двойных тапов).
-// - Кнопку «Сохранить PDF» убрали из окна подтверждения. Теперь она показывается в подсказке после успешной отправки.
-// - Во время генерации/отправки показывается индикатор «Идёт обработка…», чтобы в Telegram не казалось, что «кнопка не реагирует».
-// - Исправлена опечатка в onToggle (кириллическая «в») для аккордеона графики плиты.
-// - Генерация PDF запускается после короткого «тика» UI (микрозадержка), чтобы интерфейс успел отрисовать индикатор и клики не терялись в Telegram.
-// - Остальное без изменений: max-width 600px, аккордеоны «Дополнительно / Надгробная плита», эскизы, комментарий, «Назад / Рассчитать стоимость».
+// Что изменили по вашему запросу:
+// - После «Отправить» теперь явно показываем окно-успех с кнопкой «Сохранить PDF».
+// - Параллельно подсказка с «Сохранить PDF» остаётся на странице (ниже), чтобы кнопка была доступна и после закрытия окна.
+// - Добавили тактильный отклик/попап Telegram (если доступно), чтобы было понятно, что заявка ушла.
+// - Для Telegram WebApp используем onPointerUp + маленькую задержку перед тяжёлыми операциями (PDF), чтобы кнопки «реагировали».
+// - Оверлеи «Отправляем заказ…» / «Формируем PDF…» показывают процесс, а по завершении появляется окно-успеха.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -297,11 +296,11 @@ function PlateBlock(props: {
                       const toggle = () => props.setCatOpen({ ...(props.catOpen || {}), [catKey]: !open });
                       return (
                         <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                          <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                          <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removeGraphic={props.removePlateGraphic} />
+                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
                             </div>
                           ))}
                         </LoudAccordion>
@@ -331,13 +330,13 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
   );
 }
 
-/* ===== Подсказка после отправки (перенесли сюда кнопку "Сохранить PDF") ===== */
+/* ===== Подсказка после отправки (кнопка "Сохранить PDF" здесь) ===== */
 function AfterSendHint({ onSavePdf, saving }: { onSavePdf: () => void; saving: boolean }) {
   return (
     <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 10 }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
       <div style={{ opacity: 0.92, marginBottom: 10 }}>
-        Спасибо! Наш менеджер свяжется с вами по указанному номеру.
+        Спасибо! Наш менеджер свяжется с вами по указанному номеру. Вы можете сохранить PDF заказ сейчас.
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
@@ -358,11 +357,42 @@ function AfterSendHint({ onSavePdf, saving }: { onSavePdf: () => void; saving: b
   );
 }
 
-/* ===== Bottom sheet подтверждение ===== */
-/* Сохранить PDF убрали отсюда — осталась только кнопка «Отправить» */
+/* ===== Окно-успех после отправки (видно сразу) ===== */
+function SuccessBottomSheet({ onClose, onSave, saving }: { onClose: () => void; onSave: () => void; saving: boolean }) {
+  const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
+  return (
+    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 15000, background: "rgba(0,0,0,0.35)" }} onPointerUp={onClose}>
+      <div
+        onPointerUp={stop}
+        onClick={stop as any}
+        style={{
+          position: "absolute", left: 0, right: 0, bottom: 0, background: "#fff", color: "#111",
+          borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16,
+          boxShadow: "0 -20px 60px rgba(0,0,0,0.45)", transform: "translateY(8px)", opacity: 0,
+          animation: "sheetIn 180ms ease forwards"
+        }}
+      >
+        <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
+        <div style={{ position: "absolute", top: 8, right: 8 }}>
+          <button onPointerUp={onClose} onClick={onClose} title="Закрыть" className="btn">×</button>
+        </div>
+        <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6, color: "#0a7f2e" }}>Заявка отправлена</div>
+        <div style={{ marginBottom: 12 }}>Спасибо! Сохраните PDF заказа при необходимости.</div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button className="btn" onPointerUp={onSave} onClick={onSave} disabled={saving} style={{ background: "#eef6ff", borderColor: "#9cc4ff" }}>
+            {saving ? "Формируем PDF…" : "Сохранить PDF"}
+          </button>
+          <button className="btn" onPointerUp={onClose} onClick={onClose} style={{ background: "#f7f7f7" }}>Готово</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===== Окно подтверждения отправки ===== */
 function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void; onSend: () => void; sending: boolean }) {
   const onBackdropPointer = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (sending) return; // не закрываем во время отправки
+    if (sending) return;
     onClose();
   };
   const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
@@ -407,6 +437,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   }, []);
 
   const orderNo = String(introState.orderNumber || "").trim();
+  const afterHintRef = useRef<HTMLDivElement | null>(null);
 
   const openTopbar = () => {
     const btn = document.querySelector<HTMLButtonElement>('button[aria-controls="order-panel"]');
@@ -515,11 +546,12 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // Bottom sheet и статусы
+  // Bottom sheets и статусы
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [sentOk, setSentOk] = useState(false);
+  const [successOpen, setSuccessOpen] = useState(false);
 
   // ===== Генерация/сохранение PDF =====
   async function handleSavePdf() {
@@ -559,8 +591,26 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         intro: loadIntroState().intro || {},
         extras: (loadOrderDraft() as any)?.extras || {}
       });
+
+      // Успех: закрываем подтверждение, показываем окно-успех и подсказку ниже
       setConfirmOpen(false);
-      setSentOk(true); // показать подсказку с кнопкой «Сохранить PDF»
+      setSentOk(true);
+      setSuccessOpen(true);
+
+      // Скроллим к подсказке на странице (если окно закроют)
+      setTimeout(() => {
+        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
+
+      // Telegram: попап/вибро (если доступно)
+      try {
+        (window as any).Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.("success");
+        (window as any).Telegram?.WebApp?.showPopup?.({
+          title: "Готово",
+          message: "Заявка отправлена. Вы можете сохранить PDF.",
+          buttons: [{ id: "ok", type: "ok", text: "ОК" }]
+        });
+      } catch {}
     } catch (e: any) {
       alert(e?.message || "Не удалось отправить PDF.");
     } finally {
@@ -577,7 +627,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} />
 
       {/* Подсказка после отправки (с кнопкой «Сохранить PDF») */}
-      {sentOk && <AfterSendHint onSavePdf={handleSavePdf} saving={isSaving} />}
+      <div ref={afterHintRef}>{sentOk && <AfterSendHint onSavePdf={handleSavePdf} saving={isSaving} />}</div>
 
       {/* Выбрано для плиты */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
@@ -677,7 +727,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
       </div>
 
-      {/* Bottom sheet подтверждение */}
+      {/* Bottom sheet: подтверждение → успех */}
       {confirmOpen && (
         <ConfirmBottomSheet
           onClose={() => setConfirmOpen(false)}
@@ -685,10 +735,17 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           sending={isSending}
         />
       )}
+      {successOpen && (
+        <SuccessBottomSheet
+          onClose={() => setSuccessOpen(false)}
+          onSave={handleSavePdf}
+          saving={isSaving}
+        />
+      )}
 
-      {/* Общий оверлей занятости, если нужны дополнительные подсказки */}
-      {(isSending) && <BusyOverlay text="Отправляем заказ…" />}
-      {(isSaving) && <BusyOverlay text="Формируем PDF…" />}
+      {/* Оверлеи занятости */}
+      {isSending && <BusyOverlay text="Отправляем заказ…" />}
+      {isSaving && <BusyOverlay text="Формируем PDF…" />}
     </div>
   );
 }
