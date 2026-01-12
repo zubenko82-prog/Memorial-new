@@ -1,13 +1,15 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Что изменили по вашему запросу:
-// - После «Отправить» показываем окно-успех с кнопкой «Сохранить PDF».
-// - Подсказка с «Сохранить PDF» остаётся на странице ниже (дублируем кнопку).
-// - Убрали любые попапы/вибро Telegram.
-// - Тексты успеха: «Заявка отправлена» + «Спасибо, <имя>! Сохраните PDF заказа при необходимости.»
-// - Для Telegram WebApp используем onPointerUp + микрозадержку перед тяжёлыми операциями (PDF), чтобы кнопки реагировали.
-// - Оверлеи «Отправляем заказ…» / «Формируем PDF…» показывают процесс.
+// Изменения:
+// - Блок «Заявка отправлена … Примечание: …» перенесён в самый низ страницы.
+// - После удачной отправки скрываем кнопки «Назад» и «Рассчитать стоимость».
+// - Если после отправки вносятся изменения — кнопки снова показываются.
+// - Убраны любые Telegram‑попапы/вибро.
+//
+// Важно: для отправки PDF в чат менеджеров используется серверный API /api/send-order-pdf.
+// Убедитесь, что настроены переменные окружения на стороне web-приложения:
+// TGBOT_TOKEN, MANAGER_CHAT_ID (или MANAGER_CHAT_IDS).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -74,7 +76,7 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
 }
 
 /* ===== Заголовок: № заказа + линк справа ===== */
-function EditableOrderSummary({ orderNo, onOpenTop }: { orderNo: string; onOpenTop: () => void }) {
+function EditableOrderSummary({ orderNo, onOpenTop, onDirty }: { orderNo: string; onOpenTop: () => void; onDirty?: () => void }) {
   const introInitial = loadIntroState().intro || {};
   const [name, setName] = useState<string>(introInitial.customerName || "");
   const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
@@ -82,6 +84,7 @@ function EditableOrderSummary({ orderNo, onOpenTop }: { orderNo: string; onOpenT
   const saveOnBlur = () => {
     const next: Intro = { customerName: name.trim(), customerPhone: phone.trim(), customerNotes: contactNotes.trim() || undefined };
     saveIntro(next, { lock: false });
+    onDirty?.();
   };
 
   return (
@@ -175,6 +178,7 @@ function PlateBlock(props: {
   catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
   addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
   plateIds: string[];
+  onDirty?: () => void;
 }) {
   const {
     extraPlate, setExtraPlate,
@@ -184,12 +188,15 @@ function PlateBlock(props: {
     plateEpitaph, setPlateEpitaph,
     catsLoading, catsError, cats, catOpen, setCatOpen,
     addPlateGraphic, removePlateGraphic,
-    plateIds
+    plateIds,
+    onDirty
   } = props;
 
   const [accMainOpen, setAccMainOpen] = useState(true);
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
+
+  const markDirty = () => onDirty?.();
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -197,7 +204,7 @@ function PlateBlock(props: {
         <div style={{ display: "grid", gap: 12 }}>
           <div style={{ ...sectionBox }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input type="checkbox" checked={extraPlate} onChange={(e) => setExtraPlate(e.target.checked)} />
+              <input type="checkbox" checked={extraPlate} onChange={(e) => { setExtraPlate(e.target.checked); markDirty(); }} />
               <span style={{ fontWeight: 700 }}>Надгробная плита</span>
             </label>
           </div>
@@ -209,13 +216,13 @@ function PlateBlock(props: {
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {["100×50 см", "120×60 см", "140×70 см", "Свой вариант"].map((v) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => setPlateSize(v)} />
+                      <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => { setPlateSize(v); markDirty(); }} />
                       <span>{v}</span>
                     </label>
                   ))}
                 </div>
                 {plateSize === "Свой вариант" && (
-                  <input value={plateCustomSize} onChange={(e) => setPlateCustomSize(e.target.value)} placeholder="Укажите свой размер (например, 130×60 см)" style={inputStyle()} />
+                  <input value={plateCustomSize} onChange={(e) => { setPlateCustomSize(e.target.value); markDirty(); }} placeholder="Укажите свой размер (например, 130×60 см)" style={inputStyle()} />
                 )}
               </div>
 
@@ -224,13 +231,13 @@ function PlateBlock(props: {
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {["5 см", "8 см", "10 см", "Свой вариант"].map((v) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => setPlateThickness(v)} />
+                      <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => { setPlateThickness(v); markDirty(); }} />
                       <span>{v}</span>
                     </label>
                   ))}
                 </div>
                 {plateThickness === "Свой вариант" && (
-                  <input value={plateCustomThickness} onChange={(e) => setPlateCustomThickness(e.target.value)} placeholder="Укажите толщину (например, 7 см)" style={inputStyle()} />
+                  <input value={plateCustomThickness} onChange={(e) => { setPlateCustomThickness(e.target.value); markDirty(); }} placeholder="Укажите толщину (например, 7 см)" style={inputStyle()} />
                 )}
               </div>
 
@@ -239,7 +246,7 @@ function PlateBlock(props: {
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {[{ v: "vertical", t: "вертикально" }, { v: "horizontal", t: "горизонтально" }].map(({ v, t }) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => setPlateOrientation(v)} />
+                      <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => { setPlateOrientation(v); markDirty(); }} />
                       <span>{t}</span>
                     </label>
                   ))}
@@ -250,7 +257,7 @@ function PlateBlock(props: {
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ ...sectionBox }}>
                     <div style={{ marginBottom: 6 }}>Свой вариант:</div>
-                    <textarea rows={3} value={plateEpitaph} onChange={(e) => setPlateEpitaph(e.target.value)} placeholder="Введите текст…" style={{ ...inputStyle(), resize: "vertical" }} />
+                    <textarea rows={3} value={plateEpitaph} onChange={(e) => { setPlateEpitaph(e.target.value); markDirty(); }} placeholder="Введите текст…" style={{ ...inputStyle(), resize: "vertical" }} />
                   </div>
                   <div>
                     <div style={{ marginBottom: 8 }}>Быстрый выбор:</div>
@@ -261,24 +268,8 @@ function PlateBlock(props: {
                           const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
                           const exists = list.some((s) => norm(s) === norm(t));
                           const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
-                          setPlateEpitaph(next.join("\n\n"));
+                          setPlateEpitaph(next.join("\n\n")); markDirty();
                         }} style={glassButtonStyle("nano")} title={t}>{t}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ margin: "10px 0 6px" }}>Больше вариантов:</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
-                      {MORE_EPITAPHS.map((t, i) => (
-                        <button key={i} type="button" onClick={() => {
-                          const list = toParagraphs(plateEpitaph);
-                          const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
-                          const exists = list.some((s) => norm(s) === norm(t));
-                          const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
-                          setPlateEpitaph(next.join("\n\n"));
-                        }} style={{ ...glassPanelStyle(), borderRadius: 10, padding: 10, textAlign: "left", cursor: "pointer" }}>
-                          {t}
-                        </button>
                       ))}
                     </div>
                   </div>
@@ -297,11 +288,21 @@ function PlateBlock(props: {
                       const toggle = () => props.setCatOpen({ ...(props.catOpen || {}), [catKey]: !open });
                       return (
                         <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                          <CatGrid items={cat.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
+                          <CatGrid
+                            items={cat.items || []}
+                            plateIds={props.plateIds}
+                            addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
+                            removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                          />
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid items={sub.items || []} plateIds={props.plateIds} addGraphic={props.addPlateGraphic} removePlateGraphic={props.removePlateGraphic} />
+                              <CatGrid
+                                items={sub.items || []}
+                                plateIds={props.plateIds}
+                                addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
+                                removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                              />
                             </div>
                           ))}
                         </LoudAccordion>
@@ -331,11 +332,11 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
   );
 }
 
-/* ===== Подсказка после отправки (кнопка "Сохранить PDF" здесь) ===== */
+/* ===== Подсказка после отправки (в самый низ) ===== */
 function AfterSendHint({ customerName, onSavePdf, saving }: { customerName?: string; onSavePdf: () => void; saving: boolean }) {
   const name = (customerName || "").trim();
   return (
-    <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 10 }}>
+    <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
       <div style={{ opacity: 0.92, marginBottom: 10 }}>
         {`Спасибо${name ? `, ${name}` : ""}! Сохраните PDF заказа при необходимости.`}
@@ -359,7 +360,7 @@ function AfterSendHint({ customerName, onSavePdf, saving }: { customerName?: str
   );
 }
 
-/* ===== Окно-успех после отправки (видно сразу) ===== */
+/* ===== Окно-успех после отправки ===== */
 function SuccessBottomSheet({ customerName, onClose, onSave, saving }: { customerName?: string; onClose: () => void; onSave: () => void; saving: boolean }) {
   const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
   const name = (customerName || "").trim();
@@ -396,10 +397,7 @@ function SuccessBottomSheet({ customerName, onClose, onSave, saving }: { custome
 
 /* ===== Окно подтверждения отправки ===== */
 function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void; onSend: () => void; sending: boolean }) {
-  const onBackdropPointer = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (sending) return;
-    onClose();
-  };
+  const onBackdropPointer = () => { if (!sending) onClose(); };
   const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
 
   return (
@@ -420,7 +418,7 @@ function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void;
         </div>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам для просчёта стоимости?</div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99д199".replace('д','d') }}>
+          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
             {sending ? "Отправляем…" : "Отправить"}
           </button>
         </div>
@@ -434,11 +432,14 @@ type Props = { onBack?: () => void };
 export default function ReviewAndSendStep({ onBack }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
+  const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
+
   useEffect(() => {
     const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
-    window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+    const markDirtyOnDraft = () => { if (sentOk) setIsDirtyAfterSend(true); refresh(); };
+    window.addEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
     refresh();
-    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
   }, []);
 
   const orderNo = String(introState.orderNumber || "").trim();
@@ -480,7 +481,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита
+  // Плита (управление UI)
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -598,14 +599,15 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         extras: (loadOrderDraft() as any)?.extras || {}
       });
 
-      // Успех: закрываем подтверждение, показываем окно-успех и подсказку ниже
+      // Успех
       setConfirmOpen(false);
       setSentOk(true);
       setSuccessOpen(true);
+      setIsDirtyAfterSend(false);
 
-      // Скроллим к подсказке на странице (если окно закроют)
+      // Скролл к низу (блок подсказки внизу)
       setTimeout(() => {
-        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
       }, 150);
     } catch (e: any) {
       alert(e?.message || "Не удалось отправить PDF.");
@@ -614,16 +616,15 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     }
   }
 
+  const showBottomButtons = !sentOk || isDirtyAfterSend;
+
   return (
     <div style={safeRoot()}>
       {/* TopBar */}
       <TopBarWithIntro title="Memorial" />
 
       {/* № заказа + линк справа */}
-      <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} />
-
-      {/* Подсказка после отправки (с кнопкой «Сохранить PDF») */}
-      <div ref={afterHintRef}>{sentOk && <AfterSendHint customerName={customerName} onSavePdf={handleSavePdf} saving={isSaving} />}</div>
+      <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
 
       {/* Выбрано для плиты */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
@@ -656,17 +657,19 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       {/* Аккордеоны «Дополнительно / Надгробная плита» */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
-          extraPlate={extraPlate} setExtraPlate={setExtraPlate}
-          plateSize={plateSize} setPlateSize={setPlateSize}
-          plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
-          plateThickness={plateThickness} setPlateThickness={setPlateThickness}
-          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
-          plateOrientation={plateOrientation} setPlateOrientation={setPlateOrientation}
-          plateEpitaph={plateEpitaph} setPlateEpitaph={setPlateEpitaph}
+          extraPlate={extraPlate} setExtraPlate={(v) => { setExtraPlate(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          plateSize={plateSize} setPlateSize={(v) => { setPlateSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          plateCustomSize={plateCustomSize} setPlateCustomSize={(v) => { setPlateCustomSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          plateThickness={plateThickness} setPlateThickness={(v) => { setPlateThickness(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={(v) => { setPlateCustomThickness(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          plateOrientation={plateOrientation} setPlateOrientation={(v) => { setPlateOrientation(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          plateEpitaph={plateEpitaph} setPlateEpitaph={(v) => { setPlateEpitaph(v); if (sentOk) setIsDirtyAfterSend(true); }}
           catsLoading={catsLoading} catsError={catsError} cats={cats}
           catOpen={catOpen} setCatOpen={setCatOpen}
-          addPlateGraphic={addPlateGraphic} removePlateGraphic={removePlateGraphic}
+          addPlateGraphic={(g) => { addPlateGraphic(g); if (sentOk) setIsDirtyAfterSend(true); }}
+          removePlateGraphic={(gid) => { removePlateGraphic(gid); if (sentOk) setIsDirtyAfterSend(true); }}
           plateIds={plateIds}
+          onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
       </section>
 
@@ -711,17 +714,20 @@ export default function ReviewAndSendStep({ onBack }: Props) {
             const extras: any = { ...(prev as any).extras, orderNotes: (e.target.value || "").trim() || undefined };
             saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
             setDraft(loadOrderDraft());
+            if (sentOk) setIsDirtyAfterSend(true);
           }}
           placeholder="Добавьте комментарий…"
           style={{ ...inputStyle(), resize: "vertical" }}
         />
       </section>
 
-      {/* Кнопки (низ) */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
-        <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
-        <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
-      </div>
+      {/* Кнопки (низ) — скрываем после отправки, показываем при изменениях */}
+      {showBottomButtons && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
+          <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
+          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
+        </div>
+      )}
 
       {/* Bottom sheet: подтверждение → успех */}
       {confirmOpen && (
@@ -739,6 +745,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           saving={isSaving}
         />
       )}
+
+      {/* Блок «Заявка отправлена … Примечание …» — в самом низу */}
+      <div ref={afterHintRef}>{sentOk && <AfterSendHint customerName={customerName} onSavePdf={handleSavePdf} saving={isSaving} />}</div>
 
       {/* Оверлеи занятости */}
       {isSending && <BusyOverlay text="Отправляем заказ…" />}
