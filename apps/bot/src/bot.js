@@ -474,7 +474,7 @@ async function stepFio(ctx) {
 }
 async function stepDates(ctx) {
   ctx.session.order.step = 'dates';
-  await ctx.reply('Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020:', kbInput());
+  await ctx.reply('Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020', kbInput());
 }
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
