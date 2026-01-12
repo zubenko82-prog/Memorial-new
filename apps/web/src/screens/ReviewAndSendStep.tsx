@@ -1,12 +1,13 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Обновление:
-// - «Посмотреть состав заказа» перенесена напротив номера заказа (в одну строку справа).
-// - Боковые отступы сделаны минимальными (safe-area учтена).
-// - Остальное без изменений: max-width 600px, аккордеоны «Дополнительно / Надгробная плита», эскизы,
-//   комментарий, кнопки «Назад / Рассчитать стоимость», bottom sheet подтверждения.
-// - Генерация PDF вынесена в модуль ../lib/pdf/generateOrderPdf.
+// Обновления:
+// - Кнопки «Отправить» и «Сохранить PDF» корректно работают в Telegram WebApp (добавлены pointer-события, блокировка двойных тапов).
+// - Кнопку «Сохранить PDF» убрали из окна подтверждения. Теперь она показывается в подсказке после успешной отправки.
+// - Во время генерации/отправки показывается индикатор «Идёт обработка…», чтобы в Telegram не казалось, что «кнопка не реагирует».
+// - Исправлена опечатка в onToggle (кириллическая «в») для аккордеона графики плиты.
+// - Генерация PDF запускается после короткого «тика» UI (микрозадержка), чтобы интерфейс успел отрисовать индикатор и клики не терялись в Telegram.
+// - Остальное без изменений: max-width 600px, аккордеоны «Дополнительно / Надгробная плита», эскизы, комментарий, «Назад / Рассчитать стоимость».
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -178,7 +179,7 @@ function PlateBlock(props: {
   const {
     extraPlate, setExtraPlate,
     plateSize, setPlateSize, plateCustomSize, setPlateCustomSize,
-    plateThickness, setPlateThickness, plateCustomThickness, setPlateCustomThickness,
+    plateThickness, setPlateThickness, setPlateCustomThickness,
     plateOrientation, setPlateOrientation,
     plateEpitaph, setPlateEpitaph,
     catsLoading, catsError, cats, catOpen, setCatOpen,
@@ -284,7 +285,7 @@ function PlateBlock(props: {
                 </div>
               </LoudAccordion>
 
-              <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !в)}>
+              <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
                 {props.catsLoading && <div>Загрузка каталога…</div>}
                 {props.catsError && <div style={{ color: "#ffb4b4" }}>{props.catsError}</div>}
                 {!props.catsLoading && props.cats.length === 0 && !props.catsError && <div>Каталог пуст.</div>}
@@ -317,12 +318,60 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Bottom sheet подтверждение ===== */
-function ConfirmBottomSheet({ onClose, onSend, onSave }: { onClose: () => void; onSend: () => void; onSave: () => void }) {
+/* ===== Индикатор обработки (оверлей) ===== */
+function BusyOverlay({ text = "Идёт обработка…" }: { text?: string }) {
   return (
-    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 20000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#111", color: "#fff", padding: 16, borderRadius: 12, border: "1px solid rgba(255,255,255,0.2)", minWidth: 220, textAlign: "center", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
+        <div className="spinner" style={{ margin: "0 auto 10px", width: 28, height: 28, border: "3px solid rgba(255,255,255,0.35)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+        <div>{text}</div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      </div>
+    </div>
+  );
+}
+
+/* ===== Подсказка после отправки (перенесли сюда кнопку "Сохранить PDF") ===== */
+function AfterSendHint({ onSavePdf, saving }: { onSavePdf: () => void; saving: boolean }) {
+  return (
+    <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 10 }}>
+      <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
+      <div style={{ opacity: 0.92, marginBottom: 10 }}>
+        Спасибо! Наш менеджер свяжется с вами по указанному номеру.
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onPointerUp={onSavePdf}
+          onClick={onSavePdf}
+          disabled={saving}
+          style={glassButtonStyle("sm", saving)}
+          title="Сохранить PDF заказ"
+        >
+          {saving ? "Формируем PDF…" : "Сохранить PDF"}
+        </button>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+        Примечание: генерация PDF может занять до 5–10 секунд в Telegram. Пожалуйста, подождите.
+      </div>
+    </section>
+  );
+}
+
+/* ===== Bottom sheet подтверждение ===== */
+/* Сохранить PDF убрали отсюда — осталась только кнопка «Отправить» */
+function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void; onSend: () => void; sending: boolean }) {
+  const onBackdropPointer = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (sending) return; // не закрываем во время отправки
+    onClose();
+  };
+  const stop = (e: React.PointerEvent | React.MouseEvent) => e.stopPropagation();
+
+  return (
+    <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onPointerUp={onBackdropPointer}>
       <div
-        onClick={(e) => e.stopPropagation()}
+        onPointerUp={stop}
+        onClick={stop as any}
         style={{
           position: "absolute", left: 0, right: 0, bottom: 0, background: "#fff", color: "#111",
           borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16,
@@ -332,12 +381,13 @@ function ConfirmBottomSheet({ onClose, onSend, onSave }: { onClose: () => void; 
       >
         <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
         <div style={{ position: "absolute", top: 8, right: 8 }}>
-          <button onClick={onClose} title="Закрыть" className="btn">×</button>
+          <button onPointerUp={onClose} onClick={onClose} title="Закрыть" className="btn" disabled={sending}>×</button>
         </div>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам для просчёта стоимости?</div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn" onClick={onSave}>Сохранить PDF</button>
-          <button className="btn" onClick={onSend} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>Отправить</button>
+          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
+            {sending ? "Отправляем…" : "Отправить"}
+          </button>
         </div>
       </div>
     </div>
@@ -465,12 +515,17 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // Bottom sheet
+  // Bottom sheet и статусы
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [sentOk, setSentOk] = useState(false);
 
-  // ===== Генерация PDF (вынесена в отдельный модуль) =====
+  // ===== Генерация/сохранение PDF =====
   async function handleSavePdf() {
     try {
+      setIsSaving(true);
+      await new Promise((r) => setTimeout(r, 0)); // дать UI отрисоваться (важно для Telegram)
       const blob = await generateOrderPdf({
         draft: loadOrderDraft(),
         intro: loadIntroState(),
@@ -482,10 +537,16 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
     } catch (e: any) {
       alert(e?.message || "Не удалось сформировать PDF.");
+    } finally {
+      setIsSaving(false);
     }
   }
+
   async function handleSendPdf() {
+    if (isSending) return;
     try {
+      setIsSending(true);
+      await new Promise((r) => setTimeout(r, 0)); // дать UI отрисоваться
       const blob = await generateOrderPdf({
         draft: loadOrderDraft(),
         intro: loadIntroState(),
@@ -499,8 +560,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         extras: (loadOrderDraft() as any)?.extras || {}
       });
       setConfirmOpen(false);
+      setSentOk(true); // показать подсказку с кнопкой «Сохранить PDF»
     } catch (e: any) {
       alert(e?.message || "Не удалось отправить PDF.");
+    } finally {
+      setIsSending(false);
     }
   }
 
@@ -511,6 +575,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
       {/* № заказа + линк справа */}
       <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} />
+
+      {/* Подсказка после отправки (с кнопкой «Сохранить PDF») */}
+      {sentOk && <AfterSendHint onSavePdf={handleSavePdf} saving={isSaving} />}
 
       {/* Выбрано для плиты */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
@@ -604,20 +671,24 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         />
       </section>
 
-      {/* Кнопки */}
+      {/* Кнопки (низ) */}
       <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
-        <button type="button" onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
-        <button type="button" onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
+        <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
+        <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Рассчитать стоимость</button>
       </div>
 
       {/* Bottom sheet подтверждение */}
       {confirmOpen && (
         <ConfirmBottomSheet
           onClose={() => setConfirmOpen(false)}
-          onSave={handleSavePdf}
           onSend={handleSendPdf}
+          sending={isSending}
         />
       )}
+
+      {/* Общий оверлей занятости, если нужны дополнительные подсказки */}
+      {(isSending) && <BusyOverlay text="Отправляем заказ…" />}
+      {(isSaving) && <BusyOverlay text="Формируем PDF…" />}
     </div>
   );
 }
