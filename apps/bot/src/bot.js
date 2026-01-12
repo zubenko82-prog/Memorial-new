@@ -133,65 +133,6 @@ function makePostLink(absChatId, messageId) {
   return `https://t.me/c/${internal}/${messageId}`;
 }
 
-// ---------------- Даты: нормализация к формату "DD.MM.YYYY - DD.MM.YYYY" ----------------
-function pad2(n) {
-  return String(n).padStart(2, '0');
-}
-function isValidYMD(y, m, d) {
-  const dt = new Date(y, m - 1, d);
-  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
-}
-function parseDateLoose(text) {
-  // Принимаем "DD.MM.YYYY", "D/M/YYYY", "D-M-YYYY", "D M YYYY"
-  const m = text
-    .trim()
-    .replace(/[^\d.\-\/\s]/g, ' ')
-    .match(/(\d{1,2})[.\-\/\s](\d{1,2})[.\-\/\s](\d{4})/);
-  if (!m) return null;
-  const d = Number(m[1]);
-  const mo = Number(m[2]);
-  const y = Number(m[3]);
-  if (!isValidYMD(y, mo, d)) return null;
-  return { d, mo, y };
-}
-function extractTwoDates(input) {
-  // Заменяем длинные тире и прочее на дефис
-  const s = String(input).replace(/[—–]+/g, '-');
-  // Сначала пробуем разделение по дефису между датами
-  let [left, right] = s.split(/\s*-\s*/);
-  if (right === undefined) {
-    // Если нет явного дефиса между датами, попробуем найти две даты по шаблону
-    const all = [...s.matchAll(/(\d{1,2}[.\-\/\s]\d{1,2}[.\-\/\s]\d{4})/g)].map((m) => m[1]);
-    if (all.length >= 2) {
-      left = all[0];
-      right = all[1];
-    } else {
-      return null;
-    }
-  }
-  const a = parseDateLoose(left || '');
-  const b = parseDateLoose(right || '');
-  if (!a || !b) return null;
-  return {
-    a,
-    b,
-  };
-}
-function normalizeDatesText(input) {
-  const r = extractTwoDates(input);
-  if (!r) {
-    return {
-      ok: false,
-      error:
-        'Пожалуйста, укажите даты в формате DD.MM.YYYY - DD.MM.YYYY. Например: 12.03.1950 - 05.11.2020. '
-    };
-  }
-  const d1 = `${pad2(r.a.d)}.${pad2(r.a.mo)}.${r.a.y}`;
-  const d2 = `${pad2(r.b.d)}.${pad2(r.b.mo)}.${r.b.y}`;
-  return { ok: true, value: `${d1} - ${d2}` };
-}
-
-// ---------------- Тексты заявок ----------------
 function buildUserSummary(s, orderNo, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -211,11 +152,6 @@ function buildUserSummary(s, orderNo, postText, postLink) {
   }
   if (postLink) {
     lines.push(`Ссылка на пост: ${postLink}`);
-    lines.push(''); // пустая строка перед напоминанием, как просили
-    lines.push('Не забудьте нажать кнопку Отправить.');
-  } else {
-    // Если нет ссылки — всё равно ненавязчиво напомним в конце
-    lines.push('', 'Не забудьте нажать кнопку Отправить.');
   }
   return lines.join('\n');
 }
@@ -263,35 +199,16 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   }
 }
 
-// ---------------- Кнопки под постом канала ----------------
-function buildStartAppUrl(botUsername, payload) {
-  // Открытие мини‑приложения через deep‑link
-  const sp = encodeURIComponent(payload || '');
-  return `tg://resolve?domain=${botUsername}&startapp=${sp}`;
-}
-function channelPostKbWebApp(botUsername, sourceToken) {
+// Инлайн-клавиатура под постом канала: «Заказать» (ЛС) + «Подобрать памятник» (WebApp)
+function channelPostKb(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   return Markup.inlineKeyboard([
     [
       Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
+      // web_app кнопка — откроет mini app внутри Telegram, если /setdomain настроен у бота на origin WEBAPP_URL
       Markup.button.webApp('Подобрать памятник', WEBAPP_URL),
     ],
   ]);
-}
-function channelPostKbStartAppUrl(botUsername, sourceToken) {
-  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  const payload = `from_${sourceToken}`;
-  const startAppUrl = buildStartAppUrl(botUsername, payload);
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
-      Markup.button.url('Подобрать памятник', startAppUrl),
-    ],
-  ]);
-}
-function channelPostKbOnlyOrder(botUsername, sourceToken) {
-  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  return Markup.inlineKeyboard([[Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)]]);
 }
 
 // Отправка поста в канал, сохранение исходного текста поста (без подсказки), добавление клавиатуры
@@ -346,21 +263,24 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   // 2) Сохраняем исходный текст поста (без подсказки) для подстановки в заявку
   await setPostText(msg.chat.id, msg.message_id, baseTextNoHint || '');
 
-  // 3) Добавляем клавиатуру: web_app → startapp → только «Заказать» (все фолбэки тихие)
+  // 3) Добавляем инлайн‑кнопки: «Заказать» и «Подобрать памятник» как WebApp
   const token = makeSourceToken(msg.chat.id, msg.message_id);
+  const kb = channelPostKb(botUsername, token);
+
+  // Если Telegram не примет web_app (нет /setdomain), пост не ломаем: сообщим администратору, но сообщение останется в канале.
   try {
-    const kb = channelPostKbWebApp(botUsername, token);
     await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kb.reply_markup);
-  } catch {
+  } catch (e) {
+    const desc = e?.response?.description || e?.message || String(e);
+    console.error('[bot] editMessageReplyMarkup(web_app) error:', desc);
     try {
-      const kbStartApp = channelPostKbStartAppUrl(botUsername, token);
-      await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, kbStartApp.reply_markup);
-    } catch {
-      try {
-        const onlyOrder = channelPostKbOnlyOrder(botUsername, token);
-        await ctx.telegram.editMessageReplyMarkup(msg.chat.id, msg.message_id, undefined, onlyOrder.reply_markup);
-      } catch {}
-    }
+      // Сообщим инициатору /post, что кнопка web_app не установлена
+      await ctx.reply(
+        `Пост отправлен, но не удалось добавить web_app кнопку «Подобрать памятник»: ${desc}\n` +
+          `Проверьте /setdomain у @BotFather — должен быть ${new URL(WEBAPP_URL).origin}`
+      );
+    } catch {}
+    // Не бросаем исключение — сам пост уже в канале.
   }
 
   return { primary: msg };
@@ -418,7 +338,7 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с web_app кнопкой «Подобрать памятник» (или startapp фолбэком) + «Заказать»
+  // /post — публикует в канал пост с web_app кнопкой «Подобрать памятник» + «Заказать»
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -449,8 +369,13 @@ if (token) {
       await postToChannelWithKb(ctx, 'text', { text: finalText }, base);
       return ctx.reply('Текстовый пост опубликован в канал.');
     } catch (e) {
+      console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(`Ошибка публикации: ${desc}`);
+      return ctx.reply(
+        `Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather (должен быть ${new URL(
+          WEBAPP_URL
+        ).origin}).`
+      );
     }
   });
 
@@ -491,11 +416,7 @@ if (token) {
         return stepDates(ctx);
       }
       if (st === 'dates') {
-        const norm = normalizeDatesText(text);
-        if (!norm.ok) {
-          return ctx.reply(norm.error, kbInput());
-        }
-        ctx.session.order.dates = norm.value;
+        ctx.session.order.dates = text;
         return stepPhotos(ctx);
       }
       if (st === 'comment') {
@@ -513,7 +434,7 @@ if (token) {
         ctx.session.order.photos = ctx.session.order.photos || [];
         ctx.session.order.photos.push(fileId);
         return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
-        }
+      }
     }
   });
 
@@ -553,11 +474,7 @@ async function stepFio(ctx) {
 }
 async function stepDates(ctx) {
   ctx.session.order.step = 'dates';
-  await ctx.reply(
-    'Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY).\n' +
-      'Можно вводить в любом виде — я приведу к нужному формату. Например: 12.03.1950 - 05.11.2020.',
-    kbInput()
-  );
+  await ctx.reply('Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020:', kbInput());
 }
 async function stepPhotos(ctx) {
   ctx.session.order.step = 'photos';
