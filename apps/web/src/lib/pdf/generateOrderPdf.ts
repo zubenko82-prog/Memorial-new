@@ -1,20 +1,16 @@
 // apps/web/src/lib/pdf/generateOrderPdf.ts
-// Генерация PDF с гарантированной кириллицей (Noto Sans) и отступами под миниатюрами.
-// Главные изменения для исправления "ломаной" кириллицы:
-// 1) Жёсткая проверка загрузки TTF-шрифтов (Regular обязательно, Bold — опционально).
-// 2) Если Regular не загрузился — выбрасываем понятную ошибку и НЕ создаём PDF (чтобы не получить «кракозябры»).
-// 3) Многоуровневая загрузка шрифтов: локально (/public/fonts) → jsDelivr → unpkg (@fontsource).
-// 4) Сразу активируем NotoSans после загрузки, до любых операций splitText/text.
+// Генерация PDF без встраивания шрифтов: только стандартные PDF‑шрифты (Helvetica).
+// Чтобы кириллица не «ломалась» без встраивания шрифта — для строк с нелатиницей
+// используем безопасный фолбэк: рисуем текст на offscreen‑canvas и вставляем в PDF как PNG.
+// Итого:
+// - Никаких TTF, никаких addFont/addFileToVFS (только базовый Helvetica).
+// - Весь латиница/цифры/знаки — обычным текстом PDF (doc.text).
+// - Весь кириллический текст — как картинка (надёжно показывается в любом PDF‑ридере).
 //
-// ВАЖНО: положите файлы в репозиторий (лучший вариант для Telegram WebView):
-// - apps/web/public/fonts/NotoSans-Regular.ttf
-// - apps/web/public/fonts/NotoSans-Bold.ttf
-// И проверьте, что они доступны по URL:
-//   https://<ваш-домен>/fonts/NotoSans-Regular.ttf
-//   https://<ваш-домен>/fonts/NotoSans-Bold.ttf
-//
-// Если локальных файлов нет — код попытается скачать с CDN. При любом провале Regular — PDF не создаётся.
+// Важное следствие: кириллический текст нельзя «искать» в PDF (он растровый),
+// зато исчезают проблемы с кодировками и зависимостями от внешних шрифтов.
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
   interface Window { htmlToImage?: any; jspdf?: any }
 }
@@ -48,104 +44,6 @@ async function ensureJsPdf(): Promise<any> {
   });
   if (!window.jspdf?.jsPDF) throw new Error("jspdf unavailable");
   return window.jspdf.jsPDF;
-}
-
-/* ===== Unicode fonts (Noto Sans) — Local → jsDelivr → unpkg (@fontsource) ===== */
-let fontsReady = false;
-let haveRegular = false;
-let haveBold = false;
-
-const DEBUG_FONTS = false; // включите при необходимости логов в консоли
-
-async function ensurePdfFonts(doc: any) {
-  if (fontsReady) return { haveRegular, haveBold };
-
-  const ORIGIN = window.location.origin;
-  const LOCAL_REG = `${ORIGIN}/fonts/NotoSans-Regular.ttf`;
-  const LOCAL_BOLD = `${ORIGIN}/fonts/NotoSans-Bold.ttf`;
-
-  // GoogleFonts (jsDelivr)
-  const CDN_GF_REG = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-  const CDN_GF_BOLD = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSans/NotoSans-Bold.ttf";
-
-  // @fontsource (unpkg) — гарантированная кириллица
-  const CDN_FS_REG = "https://unpkg.com/@fontsource/noto-sans@5.0.11/files/noto-sans-cyrillic-400-normal.ttf";
-  const CDN_FS_BOLD = "https://unpkg.com/@fontsource/noto-sans@5.0.11/files/noto-sans-cyrillic-700-normal.ttf";
-
-  const tryUrlsInOrder = async (urls: string[], vfsName: string, fam: string, style: "normal" | "bold") => {
-    for (const url of urls) {
-      const ok = await addFontFile(url, vfsName, fam, style);
-      if (DEBUG_FONTS) console.log(`[pdf] font ${style} try ${url} → ${ok ? "OK" : "fail"}`);
-      if (ok) return true;
-    }
-    return false;
-  };
-
-  haveRegular = await tryUrlsInOrder(
-    [LOCAL_REG, CDN_GF_REG, CDN_FS_REG],
-    "NotoSans-Regular.ttf",
-    "NotoSans",
-    "normal"
-  );
-
-  haveBold = await tryUrlsInOrder(
-    [LOCAL_BOLD, CDN_GF_BOLD, CDN_FS_BOLD],
-    "NotoSans-Bold.ttf",
-    "NotoSans",
-    "bold"
-  );
-
-  fontsReady = true;
-
-  // Критично: Regular обязателен
-  if (!haveRegular) {
-    throw new Error(
-      "Не удалось загрузить шрифт NotoSans-Regular.ttf. " +
-      "Положите файл в /public/fonts или проверьте доступ к CDN."
-    );
-  }
-
-  // Активируем шрифт сразу
-  try {
-    doc.setFont("NotoSans", "normal");
-  } catch (e) {
-    if (DEBUG_FONTS) console.warn("[pdf] setFont error:", e);
-  }
-
-  if (DEBUG_FONTS) {
-    try {
-      console.log("[pdf] fontList:", doc.getFontList && doc.getFontList());
-    } catch {}
-  }
-
-  return { haveRegular, haveBold };
-
-  async function addFontFile(url: string, vfsName: string, fam: string, style: "normal" | "bold") {
-    try {
-      const r = await fetch(url, { cache: "no-store" });
-      if (!r.ok) return false;
-      const ab = await r.arrayBuffer();
-      const b64 = toBase64Safe(ab);
-      doc.addFileToVFS(vfsName, b64);
-      // addFont(postScriptName, fontName, fontStyle)
-      doc.addFont(vfsName, fam, style);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-// Безопасная конвертация ArrayBuffer → base64 (порционно), устойчива в WebView Telegram/Safari
-function toBase64Safe(ab: ArrayBuffer) {
-  const bytes = new Uint8Array(ab);
-  const chunk = 0x8000; // 32KB
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += chunk) {
-    const sub = bytes.subarray(i, i + chunk);
-    binary += String.fromCharCode.apply(null, Array.from(sub) as unknown as number[]);
-  }
-  return btoa(binary);
 }
 
 /* ===== Helpers ===== */
@@ -186,6 +84,65 @@ function fileNameFromUrl(url?: string): string {
   } catch { return url; }
 }
 
+/* ===== Fallback: рисуем нелатинские строки в canvas и вставляем в PDF как PNG ===== */
+function hasNonLatin(text: string): boolean {
+  // Всё что не ASCII — считаем «нелатиницей» (включая кириллицу)
+  return /[^\x00-\x7E]/.test(text);
+}
+type DrawLineOpts = { align?: "left" | "center" | "right" };
+function renderLineToPng(text: string, px: number, bold = false) {
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // ограничим до 2x
+  const font = `${bold ? "700" : "400"} ${px}px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,"Noto Sans",sans-serif`;
+
+  // Создадим маленький canvas для измерения, затем финальный
+  const c = document.createElement("canvas");
+  const ctx = c.getContext("2d")!;
+  ctx.font = font;
+  // Метрики строки
+  const m = ctx.measureText(text);
+  const ascent = Math.ceil((m.actualBoundingBoxAscent || px * 0.8));
+  const descent = Math.ceil((m.actualBoundingBoxDescent || px * 0.2));
+  const w = Math.ceil(m.width) + 2;
+  const h = ascent + descent + 2;
+
+  // Финальный canvas с масштабом
+  const cw = Math.max(1, Math.round(w * dpr));
+  const ch = Math.max(1, Math.round(h * dpr));
+  const can = document.createElement("canvas");
+  can.width = cw; can.height = ch;
+  const cx = can.getContext("2d")!;
+  cx.scale(dpr, dpr);
+  cx.font = font;
+  cx.textBaseline = "alphabetic";
+  cx.fillStyle = "#000";
+  // Рисуем так, чтобы базовая линия была на высоте ascent
+  cx.fillText(text, 1, 1 + ascent);
+  const dataUrl = can.toDataURL("image/png");
+  return { dataUrl, w, h, baseline: ascent };
+}
+
+/* Патч: переопределяем doc.text, чтобы строки с нелатиницей уходили в PNG */
+function patchDocTextForImages(doc: any, getState: () => { size: number; bold: boolean }) {
+  const origText = doc.text.bind(doc);
+  doc.__text_original = origText;
+  doc.text = (txt: any, x: number, y: number, opts?: any, transform?: any) => {
+    const s = Array.isArray(txt) ? String(txt.join(" ")) : String(txt);
+    if (!hasNonLatin(s)) {
+      return origText(txt, x, y, opts, transform);
+    }
+    const { size, bold } = getState();
+    const line = renderLineToPng(s, size, bold);
+    let drawX = x, drawY = y;
+    const align: DrawLineOpts["align"] = opts?.align || "left";
+    if (align === "center") drawX = x - line.w / 2;
+    else if (align === "right") drawX = x - line.w;
+    // doc.text рисует по базовой линии; картинку ставим так, чтобы её базовая линия совпала с y
+    drawY = y - line.baseline;
+    doc.addImage(line.dataUrl, "PNG", drawX, drawY, line.w, line.h, undefined, "FAST");
+    return doc;
+  };
+}
+
 /* ===== Public API ===== */
 export type GeneratePdfArgs = {
   draft: any;
@@ -203,8 +160,24 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const jsPDF = await ensureJsPdf();
   const doc = new jsPDF({ unit: "px", format: [1512, 2138] });
 
-  // 1) ШРИФТЫ — критично для кириллицы
-  const { haveBold } = await ensurePdfFonts(doc);
+  // БАЗОВЫЙ стандартный шрифт PDF — Helvetica (без встраивания TTF)
+  // Состояние текущего размера/жирности — нужно для канвас‑фолбэка
+  let curFontSize = 30;
+  let curFontBold = false;
+  const useFont = (bold = false, size = curFontSize) => {
+    curFontBold = !!bold;
+    curFontSize = size;
+    try {
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+    } catch {
+      // fallback к times, если вдруг helvetica не доступна (не должно случиться)
+      doc.setFont("times", bold ? "bold" : "normal");
+    }
+    doc.setFontSize(size);
+  };
+
+  // Патчим doc.text: все строки с нелатиницей рисуем как PNG
+  patchDocTextForImages(doc, () => ({ size: curFontSize, bold: curFontBold }));
 
   // Геометрия
   const pageW = doc.internal.pageSize.getWidth();
@@ -230,37 +203,27 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   // Грид
   let minColW = 240, gapCol = 14, gapRow = 12, gapText = 12;
 
-  // setFont: NotoSans всегда (bold — только если доступен)
-  const setFont = (bold = false, size = base) => {
-    try {
-      doc.setFont("NotoSans", bold && haveBold ? "bold" : "normal");
-    } catch {
-      // на крайний случай — times (возможна ломанная кириллица; но мы сюда не должны попасть)
-      doc.setFont("times", "normal");
-    }
-    doc.setFontSize(size);
-  };
   const lh = (size = base) => Math.ceil(size * lhK);
-  const split = (text: string, width: number, size = base, bold = false) => { setFont(bold, size); return splitToLines(doc, text, width); };
+  const split = (text: string, width: number, size = base, bold = false) => { useFont(bold, size); return splitToLines(doc, text, width); };
   const cols = (availW: number) => Math.max(2, Math.floor((availW + gapCol) / (minColW + gapCol)));
   const hr = (y: number) => { doc.setDrawColor(210); doc.setLineWidth(1.1); doc.line(margin, y, margin + leftW, y); };
 
-  // Центрированный полужирный подчёркнутый заголовок
+  // Центрированный подчёркнутый заголовок
   const underlineOffset = 3;
   function headingCentered(text: string, yPos: number, size = TITLE): number {
-    setFont(true, size);
+    useFont(true, size);
     const cx = margin + leftW / 2;
     doc.text(text, cx, yPos, { align: "center", maxWidth: leftW });
-    const tw = doc.getTextWidth(text);
+    const tw = doc.getTextWidth(text); // для нелатиницы это будет оценка, но линия всё равно декоративная
     doc.setDrawColor(40); doc.setLineWidth(0.9);
     doc.line(cx - tw / 2, yPos + underlineOffset, cx + tw / 2, yPos + underlineOffset);
     return yPos + lh(size);
   }
 
   // Данные
-  const custName = dl(intro?.intro?.customerName) || "—";
-  const custPhone = dl(intro?.intro?.customerPhone) || "—";
-  const orderNo = String(intro?.orderNumber || "—");
+  const custName = dl(args.intro?.intro?.customerName) || "—";
+  const custPhone = dl(args.intro?.intro?.customerPhone) || "—";
+  const orderNo = String(args.intro?.orderNumber || "—");
 
   const persons: Array<{ photo?: string | null; last: string; namePatr: string; dates: string }> =
     (((draft?.engraving?.persons as any[]) || []).filter(Boolean)).map((p: any) => ({
@@ -311,7 +274,6 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     split(custPhone || "—", leftW, base).forEach(() => y += lh(base));
     split(`№ ${orderNo}`, leftW, 22).forEach(() => y += lh(22));
 
-    // Резная работа
     if (itemUrl || itemName) {
       y += 6;
       const c = cols(leftW), cellW = Math.floor((leftW - gapCol * (c - 1)) / c);
@@ -319,19 +281,15 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       y += Math.max(gfxH + IMG_BOTTOM_PAD, nameH) + gapRow;
     }
 
-    // Люди
     y += lh(TITLE);
     y += measurePeople();
 
-    // Графика (лицевая/тыльная)
     if (gfxFront.length) { y += lh(base); y += measureGraphics(gfxFront, gfxH); }
     if (gfxRear.length)  { y += lh(base); y += measureGraphics(gfxRear.map(g => ({ name: `${g.name || "—"}${(rearCounts[g.id || ""] || 1) > 1 ? ` ×${rearCounts[g.id || ""]}` : ""}`, url: g.url })), gfxH); }
 
-    // Эпитафии (лицевая/тыльная)
     if (epsFront.length) { y += lh(base); y += measureEpitaphs(epsFront) + 10; }
     if (epsRear.length)  { y += lh(base); y += measureEpitaphs(epsRear) + 10; }
 
-    // Надгробная плита
     if (plateOn) {
       y += lh(TITLE);
       if (plateSize)  y += lh(base);
@@ -341,12 +299,10 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       if (plateEps.length)    { y += lh(base); y += measureEpitaphs(plateEps) + 10; }
     }
 
-    // Дополнительно
-    y += lh(base); // «Дополнительно»
-    y += lh(base); // Цветник
-    y += lh(base); // Тумба
+    y += lh(base);
+    y += lh(base);
+    y += lh(base);
 
-    // Примечания
     if (notes) { y += lh(base); y += split(notes, leftW, base).length * lh(base); }
 
     return { total: y - margin };
@@ -389,9 +345,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       for (let i = 0; i < list.length; i++) {
         const hTxt = split(list[i], cellW, EP).length * lh(EP);
         rowMax = Math.max(rowMax, hTxt);
-        if (++colI >= c || i === list.length - 1) {
-          used += rowMax + gapRow; colI = 0; rowMax = 0;
-        }
+        if (++colI >= c || i === list.length - 1) { used += rowMax + gapRow; colI = 0; rowMax = 0; }
       }
       return used;
     }
@@ -423,15 +377,15 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
 
   /* ===== Рендер левой колонки ===== */
   let y = margin;
-  setFont(true, base);  doc.text(custName || "—", margin, y); y += lh(base);
-  setFont(false, base); doc.text(custPhone || "—", margin, y); y += lh(base);
-  setFont(false, 22);   doc.text(`№ ${orderNo}`, margin, y); y += lh(22);
+  useFont(true, base);  doc.text(custName || "—", margin, y); y += lh(base);
+  useFont(false, base); doc.text(custPhone || "—", margin, y); y += lh(base);
+  useFont(false, 22);   doc.text(`№ ${orderNo}`, margin, y); y += lh(22);
 
   y += 6; hr(y); y += 1;
 
   // Резная работа
   if (itemUrl || itemName) {
-    setFont(true, TITLE); doc.text("Резная работа", margin, y); y += lh(TITLE);
+    useFont(true, TITLE); doc.text("Резная работа", margin, y); y += lh(TITLE);
     const c = cols(leftW);
     const cellW = Math.floor((leftW - gapCol * (c - 1)) / c);
     const imgW = Math.floor(cellW * 0.40);
@@ -452,7 +406,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
         }
       }
     }
-    setFont(false, FILE);
+    useFont(false, FILE);
     let yT = y; const xT = cx + imgW + gapText;
     for (const ln of split(itemName || "—", txtW, FILE)) { doc.text(ln, xT, yT); yT += lh(FILE); }
     y = y + Math.max(usedH, yT - y) + gapRow;
@@ -486,7 +440,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   // Плита
   if (plateOn) {
     y = headingCentered("Надгробная плита", y);
-    setFont(false, base);
+    useFont(false, base);
     if (plateSize)   { doc.text(`Размер: ${plateSize}`, margin, y); y += lh(base); }
     if (plateThick)  { doc.text(`Толщина: ${plateThick}`, margin, y); y += lh(base); }
     if (plateOrient) { doc.text(`Ориентация: ${plateOrient === "horizontal" ? "горизонтально" : "вертикально"}`, margin, y); y += lh(base); }
@@ -502,14 +456,14 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   }
 
   // Дополнительно
-  setFont(false, base); doc.text("Дополнительно", margin, y); y += lh(base);
+  useFont(false, base); doc.text("Дополнительно", margin, y); y += lh(base);
   doc.text(`Цветник: ${flowerbed ? "да" : "нет"}`, margin, y); y += lh(base);
   doc.text(`Тумба: ${baseOn ? "да" : "нет"}`, margin, y); y += lh(base);
 
   // Примечания
   if (notes) {
     y = headingCentered("Примечания", y, base);
-    setFont(false, base);
+    useFont(false, base);
     for (const ln of split(notes, leftW, base)) { doc.text(ln, margin, y); y += lh(base); }
   }
 
@@ -529,7 +483,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   await placeRight(frontPng, Math.floor(innerH / 2) - 60);
   await placeRight(backPng, innerH - (yR - margin));
 
-  /* ===== Отдельные страницы с фото ===== */
+  /* ===== Отдельные страницы с фото (портреты) ===== */
   for (let i = 0; i < persons.length; i++) {
     const p = persons[i];
     if (!p.photo) continue;
@@ -537,7 +491,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     if (!data) continue;
     doc.addPage();
     let yP = margin;
-    setFont(false, base);
+    useFont(false, base);
     for (const ln of split(p.last || "—", pageW - margin * 2, base))  { doc.text(ln, margin, yP); yP += lh(base); }
     for (const ln of split(p.namePatr || "—", pageW - margin * 2, base)) { doc.text(ln, margin, yP); yP += lh(base); }
     for (const ln of split(p.dates || "—", pageW - margin * 2, base))    { doc.text(ln, margin, yP); yP += lh(base) + 8; }
@@ -563,7 +517,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     const txtW = Math.max(40, cellW - imgW - gapText);
 
     let colI = 0, rowMax = 0, rowStartY = yLoc;
-    if (!list.length) { setFont(false, base); doc.text("—", margin, yLoc); yLoc += lh(base); return yLoc; }
+    if (!list.length) { useFont(false, base); doc.text("—", margin, yLoc); yLoc += lh(base); return yLoc; }
 
     for (let i = 0; i < list.length; i++) {
       const cx = margin + colI * (cellW + gapCol);
@@ -582,7 +536,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
         }
       }
 
-      setFont(false, FILE);
+      useFont(false, FILE);
       let yTxt = rowStartY; const xTxt = cx + imgW + gapText;
       for (const ln of doc.splitTextToSize(list[i].name || "—", txtW)) { doc.text(ln, xTxt, yTxt); yTxt += lh(FILE); }
 
@@ -599,11 +553,11 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     const c = cols(leftW);
     const cellW = Math.floor((leftW - gapCol * (c - 1)) / c);
     let colI = 0, rowMax = 0, rowStartY = yLoc;
-    if (!list.length) { setFont(false, base); doc.text("—", margin, yLoc); yLoc += lh(base); return yLoc; }
+    if (!list.length) { useFont(false, base); doc.text("—", margin, yLoc); yLoc += lh(base); return yLoc; }
 
     for (let i = 0; i < list.length; i++) {
       const cx = margin + colI * (cellW + gapCol);
-      let yC = rowStartY; setFont(false, EP);
+      let yC = rowStartY; useFont(false, EP);
       for (const ln of doc.splitTextToSize(list[i], cellW)) { doc.text(ln, cx, yC); yC += lh(EP); }
       rowMax = Math.max(rowMax, yC - rowStartY);
       if (++colI >= c || i === list.length - 1) {
@@ -621,7 +575,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
     const txtW = Math.max(40, cellW - imgW - gapText);
 
     let colI = 0, rowMax = 0, rowStartY = yLoc;
-    if (!persons.length) { setFont(false, base); doc.text("—", margin, yLoc); yLoc += lh(base); return yLoc; }
+    if (!persons.length) { useFont(false, base); doc.text("—", margin, yLoc); yLoc += lh(base); return yLoc; }
 
     for (let i = 0; i < persons.length; i++) {
       const cx = margin + colI * (cellW + gapCol);
@@ -641,7 +595,7 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
       }
 
       let yTxt = rowStartY; const xTxt = cx + imgW + gapText;
-      setFont(false, base);
+      useFont(false, base);
       for (const ln of split(persons[i].last || "—", txtW, base))  { doc.text(ln, xTxt, yTxt); yTxt += lh(base); }
       for (const ln of split(persons[i].namePatr || "—", txtW, base)) { doc.text(ln, xTxt, yTxt); yTxt += lh(base); }
       for (const ln of split(persons[i].dates || "—", txtW, base))    { doc.text(ln, xTxt, yTxt); yTxt += lh(base); }
