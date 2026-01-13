@@ -1,11 +1,10 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Изменения:
-// - Блок «Заявка отправлена … Примечание: …» перенесён в самый низ страницы.
-// - После удачной отправки скрываем кнопки «Назад» и «Рассчитать стоимость».
-// - Если после отправки вносятся изменения — кнопки снова показываются.
-// - Убраны любые Telegram‑попапы/вибро.
+// Изменения для «Дополнительно / Надгробная плита»:
+// - Добавлены чекбоксы «Тумба» (по умолчанию включён) и «Цветник».
+// - Значения сохраняются в черновик (extras.tumba и extras.flowerbed), чтобы попадали в PDF/сервер.
+// - Чекбоксы показываются внутри существующего аккордеона «Дополнительно / Надгробная плита» без дополнительного подзаголовка.
 //
 // Важно: для отправки PDF в чат менеджеров используется серверный API /api/send-order-pdf.
 // Убедитесь, что настроены переменные окружения на стороне web-приложения:
@@ -35,7 +34,13 @@ function safeRoot(): React.CSSProperties {
   };
 }
 function glassPanelStyle(): React.CSSProperties {
-  return { background: "rgba(20,20,24,0.90)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 12, color: "#fff", boxSizing: "border-box" };
+  return {
+    background: "rgba(20,20,24,0.90)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: 12,
+    color: "#fff",
+    boxSizing: "border-box"
+  };
 }
 function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
   const pad = size === "nano" ? "6px 10px" : size === "sm" ? "10px 14px" : "12px 18px";
@@ -47,9 +52,22 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     opacity: disabled ? 0.6 : 1
   };
 }
-function inputStyle(): React.CSSProperties { return { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none", boxSizing: "border-box" }; }
-const sectionBox: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: 10 };
-function linkLike(): React.CSSProperties { return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" }; }
+function inputStyle(): React.CSSProperties {
+  return {
+    width: "100%", padding: "8px 10px", borderRadius: 8,
+    border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)",
+    color: "#fff", outline: "none", boxSizing: "border-box"
+  };
+}
+const sectionBox: React.CSSProperties = {
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.10)",
+  borderRadius: 10,
+  padding: 10
+};
+function linkLike(): React.CSSProperties {
+  return { color: "#8ab4ff", textDecoration: "underline", cursor: "pointer", background: "transparent", border: "none", padding: 0, font: "inherit" };
+}
 
 /* ===== Utils ===== */
 function personLines(p: any): string[] {
@@ -178,6 +196,11 @@ function PlateBlock(props: {
   catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
   addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
   plateIds: string[];
+
+  // Новые чекбоксы (без отдельного подзаголовка): Тумба и Цветник
+  hasPedestal: boolean; setHasPedestal: (v: boolean) => void;
+  hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void;
+
   onDirty?: () => void;
 }) {
   const {
@@ -189,6 +212,8 @@ function PlateBlock(props: {
     catsLoading, catsError, cats, catOpen, setCatOpen,
     addPlateGraphic, removePlateGraphic,
     plateIds,
+    hasPedestal, setHasPedestal,
+    hasFlowerbed, setHasFlowerbed,
     onDirty
   } = props;
 
@@ -211,6 +236,28 @@ function PlateBlock(props: {
 
           {extraPlate && (
             <>
+              {/* Чекбоксы: Тумба и Цветник (без подзаголовка) */}
+              <div style={{ ...sectionBox }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={hasPedestal}
+                      onChange={(e) => { setHasPedestal(e.target.checked); markDirty(); }}
+                    />
+                    <span>Тумба</span>
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={hasFlowerbed}
+                      onChange={(e) => { setHasFlowerbed(e.target.checked); markDirty(); }}
+                    />
+                    <span>Цветник</span>
+                  </label>
+                </div>
+              </div>
+
               <div style={{ ...sectionBox }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -492,6 +539,20 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
+
+  // Новые чекбоксы (тумба и цветник). Тумба — включена по умолчанию.
+  const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
+  const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
+
+  // helper: сохраняем изменения в черновик (extras)
+  function persistExtras(patch: Record<string, any>) {
+    const prev = loadOrderDraft();
+    const nextExtras = { ...(prev as any).extras, ...patch };
+    saveOrderDraft({ ...prev, extras: nextExtras, updatedAt: Date.now() });
+    setDraft(loadOrderDraft());
+    if (sentOk) setIsDirtyAfterSend(true);
+  }
+
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
     setPlateIds((prev) => prev.concat(gid));
@@ -657,18 +718,40 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       {/* Аккордеоны «Дополнительно / Надгробная плита» */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
-          extraPlate={extraPlate} setExtraPlate={(v) => { setExtraPlate(v); if (sentOk) setIsDirtyAfterSend(true); }}
+          // плита + запись в extras
+          extraPlate={extraPlate}
+          setExtraPlate={(v) => {
+            setExtraPlate(v);
+            // При включении плиты сразу фиксируем текущие значения тумбы/цветника в extras
+            persistExtras({ headstonePlate: v, ...(v ? { tumba: hasPedestal, flowerbed: hasFlowerbed } : {}) });
+          }}
+
+          // размеры и пр.
           plateSize={plateSize} setPlateSize={(v) => { setPlateSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateCustomSize={plateCustomSize} setPlateCustomSize={(v) => { setPlateCustomSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateThickness={plateThickness} setPlateThickness={(v) => { setPlateThickness(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateCustomThickness={plateCustomThickness} setPlateCustomThickness={(v) => { setPlateCustomThickness(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateOrientation={plateOrientation} setPlateOrientation={(v) => { setPlateOrientation(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateEpitaph={plateEpitaph} setPlateEpitaph={(v) => { setPlateEpitaph(v); if (sentOk) setIsDirtyAfterSend(true); }}
+
           catsLoading={catsLoading} catsError={catsError} cats={cats}
           catOpen={catOpen} setCatOpen={setCatOpen}
           addPlateGraphic={(g) => { addPlateGraphic(g); if (sentOk) setIsDirtyAfterSend(true); }}
           removePlateGraphic={(gid) => { removePlateGraphic(gid); if (sentOk) setIsDirtyAfterSend(true); }}
           plateIds={plateIds}
+
+          // Чекбоксы: тумба/цветник + запись в extras
+          hasPedestal={hasPedestal}
+          setHasPedestal={(v) => {
+            setHasPedestal(v);
+            persistExtras({ tumba: v });
+          }}
+          hasFlowerbed={hasFlowerbed}
+          setHasFlowerbed={(v) => {
+            setHasFlowerbed(v);
+            persistExtras({ flowerbed: v });
+          }}
+
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
       </section>
