@@ -1,11 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Обновления:
-// - В аккордеоне «Дополнительно / Надгробная плита» добавлены чекбоксы «Тумба» (включён по умолчанию) и «Цветник».
-//   Их значения пишутся в черновик (extras.tumba и extras.flowerbed).
-// - Если тыльная сторона пустая — не показываем её эскиз и любые упоминания о ней, а в PDF ничего не добавляем.
-//
+// Изменения по задаче:
+// - В аккордеоне «Дополнительно / Надгробная плита» добавлены чекбоксы в ОДНУ строку: «Тумба» (включён по умолчанию), «Цветник», «Ваза».
+//   Они находятся в этом же аккордеоне, НЕ внутри блока с чекбоксом «Надгробная плита».
+//   Значения сохраняются в черновик: extras.tumba, extras.flowerbed, extras.vase.
+// - Если тыльная сторона «пустая», вообще не показываем её блок и не добавляем в PDF
+//   (проверяем фактическую загрузку изображения: naturalWidth/Height > 5).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -194,9 +195,10 @@ function PlateBlock(props: {
   addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
   plateIds: string[];
 
-  // Новые чекбоксы: Тумба и Цветник
+  // Новые чекбоксы в одну строку: Тумба, Цветник, Ваза
   hasPedestal: boolean; setHasPedestal: (v: boolean) => void;
   hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void;
+  hasVase: boolean; setHasVase: (v: boolean) => void;
 
   onDirty?: () => void;
 }) {
@@ -211,6 +213,7 @@ function PlateBlock(props: {
     plateIds,
     hasPedestal, setHasPedestal,
     hasFlowerbed, setHasFlowerbed,
+    hasVase, setHasVase,
     onDirty
   } = props;
 
@@ -224,6 +227,7 @@ function PlateBlock(props: {
     <div style={{ display: "grid", gap: 12 }}>
       <LoudAccordion title="Дополнительно / Надгробная плита" open={accMainOpen} onToggle={() => setAccMainOpen(v => !v)}>
         <div style={{ display: "grid", gap: 12 }}>
+          {/* Только чекбокс включения «Надгробная плита» */}
           <div style={{ ...sectionBox }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
               <input type="checkbox" checked={extraPlate} onChange={(e) => { setExtraPlate(e.target.checked); markDirty(); }} />
@@ -231,11 +235,12 @@ function PlateBlock(props: {
             </label>
           </div>
 
+          {/* Всё, что относится к плите, показываем только если плита включена */}
           {extraPlate && (
             <>
-              {/* Чекбоксы: Тумба и Цветник */}
+              {/* Новая строка чекбоксов: Тумба, Цветник, Ваза — отдельным блоком, НЕ внутри предыдущего */}
               <div style={{ ...sectionBox }}>
-                <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                     <input
                       type="checkbox"
@@ -251,6 +256,14 @@ function PlateBlock(props: {
                       onChange={(e) => { setHasFlowerbed(e.target.checked); markDirty(); }}
                     />
                     <span>Цветник</span>
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={hasVase}
+                      onChange={(e) => { setHasVase(e.target.checked); markDirty(); }}
+                    />
+                    <span>Ваза</span>
                   </label>
                 </div>
               </div>
@@ -321,31 +334,31 @@ function PlateBlock(props: {
               </LoudAccordion>
 
               <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
-                {props.catsLoading && <div>Загрузка каталога…</div>}
-                {props.catsError && <div style={{ color: "#ffb4b4" }}>{props.catsError}</div>}
-                {!props.catsLoading && props.cats.length === 0 && !props.catsError && <div>Каталог пуст.</div>}
-                {!props.catsLoading && props.cats.length > 0 && (
+                {catsLoading && <div>Загрузка каталога…</div>}
+                {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+                {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+                {!catsLoading && cats.length > 0 && (
                   <div style={{ display: "grid", gap: 12 }}>
-                    {props.cats.map((cat: any, idx: number) => {
+                    {cats.map((cat: any, idx: number) => {
                       const catKey = String(cat._id || cat.name || idx);
-                      const open = !!(props.catOpen || {})[catKey];
-                      const toggle = () => props.setCatOpen({ ...(props.catOpen || {}), [catKey]: !open });
+                      const open = !!(catOpen || {})[catKey];
+                      const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
                       return (
                         <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
                           <CatGrid
                             items={cat.items || []}
-                            plateIds={props.plateIds}
+                            plateIds={plateIds}
                             addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                            removeGraphic={(gid) => { removeGraphic(gid); markDirty(); }}
+                            removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
                           />
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                               <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
                               <CatGrid
                                 items={sub.items || []}
-                                plateIds={props.plateIds}
+                                plateIds={plateIds}
                                 addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                                removeGraphic={(gid) => { removeGraphic(gid); markDirty(); }}
+                                removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
                               />
                             </div>
                           ))}
@@ -474,11 +487,9 @@ function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void;
 /* ===== Основной компонент ===== */
 type Props = { onBack?: () => void };
 
-// Утилита: получить валидный URL тыльной стороны или null, если пусто/псевдо-URL
+// Претендент на URL тыльной стороны
 function getBackSketchUrl(draft: any): string | null {
-  const raw = String(
-    (draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? ""
-  ).trim();
+  const raw = String((draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? "").trim();
   if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
   return raw;
 }
@@ -507,8 +518,30 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   };
 
   // Эскизы и данные
-  const backSketchUrl = getBackSketchUrl(draft);
-  const hasBackSketch = !!backSketchUrl;
+  const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
+  useEffect(() => {
+    setBackCandidateUrl(getBackSketchUrl(draft));
+  }, [draft]);
+
+  const [hasBackSketch, setHasBackSketch] = useState<boolean>(false);
+  useEffect(() => {
+    if (!backCandidateUrl) {
+      setHasBackSketch(false);
+      return;
+    }
+    let cancelled = false;
+    const im = new Image();
+    im.onload = () => {
+      if (cancelled) return;
+      const ok = (im.naturalWidth || 0) > 5 && (im.naturalHeight || 0) > 5;
+      setHasBackSketch(ok);
+    };
+    im.onerror = () => {
+      if (!cancelled) setHasBackSketch(false);
+    };
+    im.src = backCandidateUrl;
+    return () => { cancelled = true; };
+  }, [backCandidateUrl]);
 
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
@@ -549,9 +582,10 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
-  // Новые чекбоксы (тумба и цветник). Тумба — включена по умолчанию.
+  // Новые чекбоксы (тумба, цветник, ваза). Тумба — включена по умолчанию.
   const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
+  const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
   // helper: сохраняем изменения в черновик (extras)
   function persistExtras(patch: Record<string, any>) {
@@ -639,9 +673,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        // Тыльная добавляется только если есть реальный эскиз:
         backNode: hasBackSketch ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: hasBackSketch ? backSketchUrl : null
+        backUrlFallback: hasBackSketch ? backCandidateUrl : null
       });
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
@@ -661,9 +694,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        // Тыльная добавляется только если есть реальный эскиз:
         backNode: hasBackSketch ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: hasBackSketch ? backSketchUrl : null
+        backUrlFallback: hasBackSketch ? backCandidateUrl : null
       });
       await sendPdfToServer(blob, {
         orderNo: String(loadIntroState().orderNumber || "").trim(),
@@ -731,8 +763,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           extraPlate={extraPlate}
           setExtraPlate={(v) => {
             setExtraPlate(v);
-            // При включении плиты сразу фиксируем текущие значения тумбы/цветника в extras
-            persistExtras({ headstonePlate: v, ...(v ? { tumba: hasPedestal, flowerbed: hasFlowerbed } : {}) });
+            // При переключении — фиксируем текущие значения в extras
+            persistExtras({ headstonePlate: v, ...(v ? { tumba: hasPedestal, flowerbed: hasFlowerbed, vase: hasVase } : {}) });
           }}
 
           // размеры и пр.
@@ -749,7 +781,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           removePlateGraphic={(gid) => { removePlateGraphic(gid); if (sentOk) setIsDirtyAfterSend(true); }}
           plateIds={plateIds}
 
-          // Чекбоксы: тумба/цветник + запись в extras
+          // Чекбоксы: тумба/цветник/ваза + запись в extras
           hasPedestal={hasPedestal}
           setHasPedestal={(v) => {
             setHasPedestal(v);
@@ -759,6 +791,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           setHasFlowerbed={(v) => {
             setHasFlowerbed(v);
             persistExtras({ flowerbed: v });
+          }}
+          hasVase={hasVase}
+          setHasVase={(v) => {
+            setHasVase(v);
+            persistExtras({ vase: v });
           }}
 
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
@@ -782,12 +819,12 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </div>
       </section>
 
-      {/* Тыльная сторона: показываем ТОЛЬКО если есть реальный эскиз */}
-      {hasBackSketch && (
+      {/* Тыльная сторона: показываем ТОЛЬКО если изображение реально загружается */}
+      {hasBackSketch && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-            <img id="pdf-back-sketch" src={backSketchUrl!} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+            <img id="pdf-back-sketch" src={backCandidateUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
           </div>
         </section>
       )}
