@@ -1,13 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Что изменено:
-// - Два отдельных аккордеона:
-//   1) «Дополнительно» — внутри одна строка чекбоксов: Тумба (включён по умолчанию), Цветник, Ваза.
-//      Эти чекбоксы НЕ зависят от включения плиты и всегда находятся в аккордеоне «Дополнительно».
-//      Значения сохраняются в черновик: extras.tumba, extras.flowerbed, extras.vase.
-//   2) «Надгробная плита» — внутри переключатель «Надгробная плита» и все настройки плиты (размер, толщина, ориентация, эпитафии, графика).
-// - Тыльная сторона: показываем и добавляем в PDF только если картинка действительно загружается (naturalWidth/Height > 5).
+// Итоговые требования выполнены:
+// - ДВА аккордеона на странице:
+//   1) «Дополнительно» — одна строка чекбоксов: Тумба (включён по умолчанию), Цветник, Ваза. Сохраняются в extras.tumba/flowerbed/vase.
+//   2) «Надгробная плита» — ОДИН аккордеон с чекбоксом «Включить плиту» и настройками (размер, толщина, ориентация, эпитафии, графика).
+//      Внутри НЕТ второго/вложенного аккордеона «Надгробная плита».
+// - Тыльная сторона: показываем и добавляем в PDF только если изображение реально загружается (naturalWidth/Height > 5).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -251,13 +250,14 @@ function PlateBlock(props: {
         </div>
       </LoudAccordion>
 
-      {/* 2) Аккордеон: Надгробная плита — переключатель и настройки */}
+      {/* 2) Аккордеон: Надгробная плита — ОДИН, с чекбоксом и настройками */}
       <LoudAccordion title="Надгробная плита" open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
         <div style={{ display: "grid", gap: 12 }}>
+          {/* Чекбокс включения плиты (без дублирования заголовка) */}
           <div style={{ ...sectionBox }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
               <input type="checkbox" checked={extraPlate} onChange={(e) => { setExtraPlate(e.target.checked); markDirty(); }} />
-              <span style={{ fontWeight: 700 }}>Надгробная плита</span>
+              <span>Включить плиту</span>
             </label>
           </div>
 
@@ -754,11 +754,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         <PlateBlock
           // Надгробная плита (переключатель и настройки)
           extraPlate={extraPlate}
-          setExtraPlate={(v) => {
-            setExtraPlate(v);
-            // При переключении фиксируем в extras
-            persistExtras({ headstonePlate: v });
-          }}
+          setExtraPlate={(v) => { setExtraPlate(v); persistExtras({ headstonePlate: v }); }}
           plateSize={plateSize} setPlateSize={(v) => { setPlateSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateCustomSize={plateCustomSize} setPlateCustomSize={(v) => { setPlateCustomSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateThickness={plateThickness} setPlateThickness={(v) => { setPlateThickness(v); if (sentOk) setIsDirtyAfterSend(true); }}
@@ -773,12 +769,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           plateIds={plateIds}
 
           // Дополнительно — чекбоксы и запись в extras
-          hasPedestal={hasPedestal}
-          setHasPedestal={(v) => { setHasPedestal(v); persistExtras({ tumba: v }); }}
-          hasFlowerbed={hasFlowerbed}
-          setHasFlowerbed={(v) => { setHasFlowerbed(v); persistExtras({ flowerbed: v }); }}
-          hasVase={hasVase}
-          setHasVase={(v) => { setHasVase(v); persistExtras({ vase: v }); }}
+          hasPedestal={hasPedestal} setHasPedestal={(v) => { setHasPedestal(v); persistExtras({ tumba: v }); }}
+          hasFlowerbed={hasFlowerbed} setHasFlowerbed={(v) => { setHasFlowerbed(v); persistExtras({ flowerbed: v }); }}
+          hasVase={hasVase} setHasVase={(v) => { setHasVase(v); persistExtras({ vase: v }); }}
 
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
