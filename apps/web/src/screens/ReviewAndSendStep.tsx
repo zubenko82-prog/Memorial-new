@@ -170,6 +170,70 @@ function TopHintNotice() {
   );
 }
 
+// ===== Заголовок: № заказа + линк справа =====
+function EditableOrderSummary({
+  orderNo,
+  onOpenTop,
+  onDirty
+}: {
+  orderNo: string;
+  onOpenTop: () => void;
+  onDirty?: () => void;
+}) {
+  const introInitial = loadIntroState().intro || {};
+  const [name, setName] = useState<string>(introInitial.customerName || "");
+  const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
+
+  const saveOnBlur = () => {
+    const next: Intro = {
+      customerName: name.trim(),
+      customerPhone: phone.trim(),
+      customerNotes: contactNotes.trim() || undefined
+    };
+    saveIntro(next, { lock: false });
+    onDirty?.();
+  };
+
+  return (
+    <section style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
+        <div style={{ marginLeft: "auto" }}>
+          <button type="button" onClick={onOpenTop} style={linkLike()}>
+            Посмотреть состав заказа
+          </button>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={saveOnBlur}
+          placeholder="Имя"
+          style={inputStyle()}
+        />
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          onBlur={saveOnBlur}
+          placeholder="+7..."
+          inputMode="tel"
+          style={inputStyle()}
+        />
+      </div>
+      <input
+        value={contactNotes}
+        onChange={(e) => setContactNotes(e.target.value)}
+        onBlur={saveOnBlur}
+        placeholder="Примечание для связи…"
+        style={inputStyle()}
+      />
+    </section>
+  );
+}
+
+
 /* ===== Короткое резюме по плите (под TopBar) ===== */
 function PlateQuickSummary({
   enabled,
