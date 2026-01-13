@@ -1,14 +1,11 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Изменения для «Дополнительно / Надгробная плита»:
-// - Добавлены чекбоксы «Тумба» (по умолчанию включён) и «Цветник».
-// - Значения сохраняются в черновик (extras.tumba и extras.flowerbed), чтобы попадали в PDF/сервер.
-// - Чекбоксы показываются внутри существующего аккордеона «Дополнительно / Надгробная плита» без дополнительного подзаголовка.
+// Обновления:
+// - В аккордеоне «Дополнительно / Надгробная плита» добавлены чекбоксы «Тумба» (включён по умолчанию) и «Цветник».
+//   Их значения пишутся в черновик (extras.tumba и extras.flowerbed).
+// - Если тыльная сторона пустая — не показываем её эскиз и любые упоминания о ней, а в PDF ничего не добавляем.
 //
-// Важно: для отправки PDF в чат менеджеров используется серверный API /api/send-order-pdf.
-// Убедитесь, что настроены переменные окружения на стороне web-приложения:
-// TGBOT_TOKEN, MANAGER_CHAT_ID (или MANAGER_CHAT_IDS).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -16,7 +13,7 @@ import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { fetchCatalog } from "../api";
-import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
+import { QUICK_EPITAPHS } from "../data/epitaphs";
 import { generateOrderPdf, downloadBlob, sendPdfToServer } from "../lib/pdf/generateOrderPdf";
 
 /* ===== UI helpers ===== */
@@ -197,7 +194,7 @@ function PlateBlock(props: {
   addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
   plateIds: string[];
 
-  // Новые чекбоксы (без отдельного подзаголовка): Тумба и Цветник
+  // Новые чекбоксы: Тумба и Цветник
   hasPedestal: boolean; setHasPedestal: (v: boolean) => void;
   hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void;
 
@@ -236,7 +233,7 @@ function PlateBlock(props: {
 
           {extraPlate && (
             <>
-              {/* Чекбоксы: Тумба и Цветник (без подзаголовка) */}
+              {/* Чекбоксы: Тумба и Цветник */}
               <div style={{ ...sectionBox }}>
                 <div style={{ display: "grid", gap: 8 }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
@@ -339,7 +336,7 @@ function PlateBlock(props: {
                             items={cat.items || []}
                             plateIds={props.plateIds}
                             addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                            removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                            removeGraphic={(gid) => { removeGraphic(gid); markDirty(); }}
                           />
                           {(cat.children || []).map((sub: any, j: number) => (
                             <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
@@ -348,7 +345,7 @@ function PlateBlock(props: {
                                 items={sub.items || []}
                                 plateIds={props.plateIds}
                                 addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                                removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                                removeGraphic={(gid) => { removeGraphic(gid); markDirty(); }}
                               />
                             </div>
                           ))}
@@ -476,6 +473,16 @@ function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void;
 
 /* ===== Основной компонент ===== */
 type Props = { onBack?: () => void };
+
+// Утилита: получить валидный URL тыльной стороны или null, если пусто/псевдо-URL
+function getBackSketchUrl(draft: any): string | null {
+  const raw = String(
+    (draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? ""
+  ).trim();
+  if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
+  return raw;
+}
+
 export default function ReviewAndSendStep({ onBack }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
@@ -500,7 +507,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   };
 
   // Эскизы и данные
-  const backSketchUrl = ((draft as any)?.editorBack?.previewHiUrl as string | undefined) || ((draft as any)?.editorBack?.previewUrl as string | undefined) || null;
+  const backSketchUrl = getBackSketchUrl(draft);
+  const hasBackSketch = !!backSketchUrl;
+
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
@@ -630,8 +639,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: document.getElementById("pdf-back-sketch"),
-        backUrlFallback: ((draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl) || null
+        // Тыльная добавляется только если есть реальный эскиз:
+        backNode: hasBackSketch ? document.getElementById("pdf-back-sketch") : null,
+        backUrlFallback: hasBackSketch ? backSketchUrl : null
       });
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
@@ -651,8 +661,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: document.getElementById("pdf-back-sketch"),
-        backUrlFallback: ((draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl) || null
+        // Тыльная добавляется только если есть реальный эскиз:
+        backNode: hasBackSketch ? document.getElementById("pdf-back-sketch") : null,
+        backUrlFallback: hasBackSketch ? backSketchUrl : null
       });
       await sendPdfToServer(blob, {
         orderNo: String(loadIntroState().orderNumber || "").trim(),
@@ -660,13 +671,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         extras: (loadOrderDraft() as any)?.extras || {}
       });
 
-      // Успех
       setConfirmOpen(false);
       setSentOk(true);
       setSuccessOpen(true);
       setIsDirtyAfterSend(false);
 
-      // Скролл к низу (блок подсказки внизу)
       setTimeout(() => {
         afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
       }, 150);
@@ -756,7 +765,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         />
       </section>
 
-      {/* Эскизы */}
+      {/* Эскиз лицевой стороны */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
         <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
@@ -773,11 +782,12 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </div>
       </section>
 
-      {backSketchUrl && (
+      {/* Тыльная сторона: показываем ТОЛЬКО если есть реальный эскиз */}
+      {hasBackSketch && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-            <img id="pdf-back-sketch" src={backSketchUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+            <img id="pdf-back-sketch" src={backSketchUrl!} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
           </div>
         </section>
       )}
