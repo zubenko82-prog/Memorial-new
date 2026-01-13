@@ -339,7 +339,7 @@ function AfterSendHint({ customerName, onSavePdf, saving }: { customerName?: str
     <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
       <div style={{ opacity: 0.92, marginBottom: 10 }}>
-        {`Спасибо${name ? `, ${name}` : ""}! Сохраните PDF заказа при необходимости.`}
+        {`Спасибо${name ? `, ${name}` : ""}! Менеджер расчитает стоимость и свяжется с вами по указанному номеру. Сохраните PDF заказа при необходимости.`}
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
