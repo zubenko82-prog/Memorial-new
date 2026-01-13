@@ -6,10 +6,12 @@
 // - Тыльная сторона показывается ТОЛЬКО если есть содержимое (графика/эпитафия/метрика/портрет) И картинка реально загружается.
 // - Блок «Выбрано для плиты» перенесён вниз — прямо над «Комментарий к заказу».
 // - Предупреждаем пользователя о любых сбоях: добавлен ErrorBottomSheet с понятным текстом, кнопками «Повторить отправку» и «Сохранить PDF».
-// - Специальная обработка ошибки FUNCTION_PAYLOAD_TOO_LARGE / 413 Request Entity Too Large: дружелюбное сообщение с рекомендациями.
+// - Специальная обработка FUNCTION_PAYLOAD_TOO_LARGE / 413 Request Entity Too Large.
+// - Предварительно проверяем размер PDF на клиенте: подтягиваем лимит с сервера (X-Upload-Limit-Bytes) и не шлём заведомо «тяжёлое».
+// - Резервный alert, если по какой-то причине окно ошибки не отрисовалось.
 //
-// Примечание: В некоторых случаях файл может уже уйти в Telegram, даже если браузер показывает ошибку (сетевой обрыв, лимит платформы и т.п.).
-// В этом случае мы честно предупреждаем: «возможно, документ уже доставлен, проверьте чат».
+// Примечание: иногда файл может прийти в Telegram, даже если браузер показал ошибку.
+// Мы честно предупреждаем: «возможно, документ уже доставлен, проверьте чат».
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -49,8 +51,7 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: pad,
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
@@ -101,6 +102,11 @@ function toParagraphs(input?: string | string[] | null): string[] {
   if (!t) return [];
   const blocks = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
   return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
+}
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n)) return `${n}`;
+  const mb = n / (1024 * 1024);
+  return `${mb.toFixed(2)} МБ`;
 }
 
 /* ===== Мини-компоненты ===== */
@@ -360,7 +366,7 @@ function CatGrid({
   );
 }
 
-/* ===== Error Bottom Sheet ===== */
+/* ===== Error Bottom Sheet (исправлен keyframes) ===== */
 function ErrorBottomSheet({
   message,
   details,
@@ -389,7 +395,7 @@ function ErrorBottomSheet({
           animation: "sheetIn 180ms ease forwards"
         }}
       >
-        <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1) } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
+        <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
         <div style={{ position: "absolute", top: 8, right: 8 }}>
           <button onClick={onClose} className="btn" title="Закрыть">×</button>
         </div>
@@ -815,8 +821,14 @@ function hasBackContent(draft: any): boolean {
 // нормализация текста ошибки для пользователя
 function normalizeErrorMessage(err: any): { msg: string; details?: string } {
   const raw = String(err?.message || err?.toString?.() || "Неизвестная ошибка");
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return {
+      msg: "Похоже, нет подключения к интернету. Проверьте сеть и попробуйте снова.",
+      details: raw
+    };
+  }
   const is413 =
-    /request entity too large|payload too large|function_payload_too_large|413/i.test(raw);
+    /request entity too large|payload too large|function_payload_too_large|http 413|status 413/i.test(raw);
   if (is413) {
     return {
       msg:
@@ -859,6 +871,25 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     if (btn && btn.getAttribute("aria-expanded") !== "true") btn.click();
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  // Лимит загрузки с сервера (HEAD заголовок X-Upload-Limit-Bytes) + дефолт
+  const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
+  const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetch("/api/send-order-pdf", { method: "HEAD" });
+        const h = resp.headers.get("X-Upload-Limit-Bytes");
+        if (h) {
+          const n = Number(h);
+          if (Number.isFinite(n) && n > 0) setUploadLimit(n);
+        }
+      } catch {}
+    })();
+  }, []);
+  const tooLargeMessage = (size: number) =>
+    `PDF (${formatBytes(size)}) слишком большой для отправки через сайт. Лимит ≈ ${formatBytes(uploadLimit)}.
+Сохраните PDF и отправьте менеджеру вручную (Telegram/почта), либо уменьшите размер.`;
 
   // Тыльная: рисуем только если есть содержимое И картинка ок
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
@@ -1055,6 +1086,12 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
+      // Резервный alert, если по какой-то причине окно не смонтировалось
+      setTimeout(() => {
+        if (!document.querySelector('[role="alertdialog"]')) {
+          alert(`${n.msg}\n\n${n.details || ""}`);
+        }
+      }, 0);
     } finally {
       setIsSaving(false);
     }
@@ -1074,6 +1111,20 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         backUrlFallback: showBack ? backCandidateUrl : null
       });
       lastPdfRef.current = blob;
+
+      // Клиентская проверка размера — не отправляем заведомо слишком большой файл
+      if (blob.size > uploadLimit) {
+        const msg = tooLargeMessage(blob.size);
+        setErrorMsg(msg);
+        setErrorDetails(`Размер: ${formatBytes(blob.size)}; Лимит: ${formatBytes(uploadLimit)}`);
+        setErrorOpen(true);
+        setTimeout(() => {
+          if (!document.querySelector('[role="alertdialog"]')) {
+            alert(`${msg}`);
+          }
+        }, 0);
+        return;
+      }
 
       await sendPdfToServer(blob, {
         orderNo: String(loadIntroState().orderNumber || "").trim(),
@@ -1095,6 +1146,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
+      setTimeout(() => {
+        if (!document.querySelector('[role="alertdialog"]')) {
+          alert(`${n.msg}\n\n${n.details || ""}`);
+        }
+      }, 0);
     } finally {
       setIsSending(false);
     }
@@ -1106,16 +1162,30 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     try {
       setIsSending(true);
       const blob = lastPdfRef.current;
-      if (blob) {
-        await sendPdfToServer(blob, {
-          orderNo: String(loadIntroState().orderNumber || "").trim(),
-          intro: loadIntroState().intro || {},
-          extras: (loadOrderDraft() as any)?.extras || {}
-        });
-      } else {
-        await handleSendPdf(); // fallback: с регенерацией
+
+      if (!blob) {
+        await handleSendPdf();
         return;
       }
+
+      if (blob.size > uploadLimit) {
+        const msg = tooLargeMessage(blob.size);
+        setErrorMsg(msg);
+        setErrorDetails(`Размер: ${formatBytes(blob.size)}; Лимит: ${formatBytes(uploadLimit)}`);
+        setErrorOpen(true);
+        setTimeout(() => {
+          if (!document.querySelector('[role="alertdialog"]')) {
+            alert(`${msg}`);
+          }
+        }, 0);
+        return;
+      }
+
+      await sendPdfToServer(blob, {
+        orderNo: String(loadIntroState().orderNumber || "").trim(),
+        intro: loadIntroState().intro || {},
+        extras: (loadOrderDraft() as any)?.extras || {}
+      });
 
       setErrorOpen(false);
       setSentOk(true);
@@ -1129,6 +1199,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
+      setTimeout(() => {
+        if (!document.querySelector('[role="alertdialog"]')) {
+          alert(`${n.msg}\n\n${n.details || ""}`);
+        }
+      }, 0);
     } finally {
       setIsSending(false);
     }
@@ -1140,7 +1215,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
     } else {
-      // если по какой-то причине PDF ещё нет — сгенерируем
       handleSavePdf();
     }
   }
