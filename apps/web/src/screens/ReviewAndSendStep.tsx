@@ -10,7 +10,15 @@
 // - Пометка выбранной графики в галерее (подсветка + бейдж с количеством).
 // - Тыльная сторона отображается только если есть содержимое и картинка загрузилась.
 // - Обработка ошибок отправки с предупреждением пользователя (включая 413 Payload Too Large).
-// - Предварительная проверка размера PDF (лимит подтягивается HEAD-запросом из /api/send-order-pdf).
+// - Интегрирована отправка PDF через Vercel Blob (прямая загрузка файла в хранилище) с прогрессом,
+//   затем сервер отправляет документ в Telegram по URL (через /api/send-order-by-url).
+// - Предварительная проверка размера PDF (лимит подтягивается HEAD-запросом из /api/send-order-pdf) оставлена как fallback
+//   для случая, когда загрузка в Blob недоступна (например, отсутствует токен).
+//
+// ВНИМАНИЕ: Для работы отправки через Blob необходимо добавить серверные роуты:
+// - /api/blob-upload-url (возвращает одноразовый uploadUrl; см. инструкцию)
+// - /api/send-order-by-url (отправка в Telegram по document=fileUrl)
+// и переменную окружения BLOB_READ_WRITE_TOKEN на Vercel.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -20,6 +28,7 @@ import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS } from "../data/epitaphs";
 import { generateOrderPdf, downloadBlob, sendPdfToServer } from "../lib/pdf/generateOrderPdf";
+import { useBlobUpload } from "../hooks/useBlobUpload";
 
 /* ===== UI helpers ===== */
 function safeRoot(): React.CSSProperties {
@@ -50,8 +59,7 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: pad,
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
@@ -281,7 +289,7 @@ function LoudAccordion({
   );
 }
 
-/* ===== Галерея графики (отмечаем выбранные) ===== */
+/* ===== Галерея графики ===== */
 function CatGrid({
   items,
   plateIds,
@@ -462,7 +470,7 @@ function ErrorBottomSheet({
   );
 }
 
-/* ===== Аккордеоны «Дополнительно» и «Надгробная плита» (с чекбоксом в заголовке) ===== */
+/* ===== Аккордеоны «Дополнительно» и «Надгробная плита» ===== */
 function PlateBlock(props: {
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
@@ -927,7 +935,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Подтягиваем лимит загрузки
+  // Подтягиваем лимит загрузки (для fallback в serverless)
   const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
   const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
   useEffect(() => {
@@ -974,16 +982,22 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   }, [itemUrl]);
 
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
-  const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
-    id: p.id || `p-${i}`,
-    lines: personLines(p),
-    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
-  })), [frontPersons]);
+  const peopleBlocks = useMemo(
+    () =>
+      frontPersons.map((p: any, i: number) => ({
+        id: p.id || `p-${i}`,
+        lines: personLines(p),
+        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
+      })),
+    [frontPersons]
+  );
 
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
-  const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
+  const isCross = (g: any) =>
+    (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross");
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
+
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
@@ -996,7 +1010,12 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [plateCustomSize, setPlateCustomSize] = useState<string>(extras0.plateCustomSize || "");
   const [plateThickness, setPlateThickness] = useState<string>(extras0.plateThickness || "5 см");
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
-  const [plateOrientation, setPlateOrientation] = useState<string>(extras0.plateOrientation || (((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")) ? "horizontal" : "vertical"));
+  const [plateOrientation, setPlateOrientation] = useState<string>(
+    extras0.plateOrientation ||
+      ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")
+        ? "horizontal"
+        : "vertical")
+  );
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
@@ -1004,7 +1023,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // СИНХРОНИЗАЦИЯ: при обновлении draft/extras восстанавливаем локальные состояния (не сбрасываются при навигации/refresh)
+  // Синхронизация локальных состояний при обновлении draft/extras
   useEffect(() => {
     const ex = ((loadOrderDraft() as any)?.extras || {}) as any;
     const upd = <T,>(cur: T, next: T, setter: (v: T) => void) => { if (JSON.stringify(cur) !== JSON.stringify(next)) setter(next as any); };
@@ -1032,7 +1051,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     if (sentOk) setIsDirtyAfterSend(true);
   }
 
-  // Добавление/удаление графики с сохранением в extras
+  // Добавление/удаление графики с записью в extras
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
     const nextIds = [...plateIds, gid];
@@ -1046,7 +1065,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     if (idx === -1) return;
     const nextIds = plateIds.slice(); nextIds.splice(idx, 1);
     setPlateIds(nextIds);
-    // meta оставляем (может пригодиться повторно), но можно очистить, если совсем нет ссылок
     persistExtras({ plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta });
   };
 
@@ -1105,13 +1123,20 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [sentOk, setSentOk] = useState(false);
   const [successOpen, setSuccessOpen] = useState(false);
 
-  // Ошибка отправки
+  // Ошибки
   const [errorOpen, setErrorOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
   const lastPdfRef = useRef<Blob | null>(null);
 
-  // Сохранение основных настроек плиты при изменениях (persistExtras) — чтобы точно не терялись при навигации
+  // Blob uploader (Vercel Blob) — прогресс и статус
+  const { upload, abort, status: blobStatus, progress: blobProgress, error: blobError, uploadedUrl } = useBlobUpload({
+    defaultAccess: "public",
+    defaultAddRandomSuffix: true
+  });
+  const isBlobActive = blobStatus === "requestingUrl" || blobStatus === "uploading";
+
+  // Автосохранение основных настроек плиты при изменениях
   useEffect(() => { persistExtras({ plateSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateSize]);
   useEffect(() => { persistExtras({ plateCustomSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomSize]);
   useEffect(() => { persistExtras({ plateThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateThickness]);
@@ -1123,7 +1148,39 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   useEffect(() => { persistExtras({ flowerbed: hasFlowerbed }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasFlowerbed]);
   useEffect(() => { persistExtras({ vase: hasVase }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasVase]);
 
-  // ===== Генерация/сохранение PDF =====
+  // ===== Отправка PDF (приоритет — через Blob, fallback — через serverless) =====
+  async function sendPdfViaBlob(blob: Blob) {
+    // 1) Загрузка в Vercel Blob с прогрессом
+    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+    const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
+    const res = await upload(blob, {
+      name: fileName,
+      contentType: "application/pdf",
+      access: "public"
+    });
+    const fileUrl = res.url || uploadedUrl;
+    if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
+
+    // 2) Сообщаем серверу отправить документ в Telegram по URL
+    const payload = {
+      fileUrl,
+      orderNo: orderNoCur,
+      caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
+    };
+    const resp = await fetch("/api/send-order-by-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const text = await resp.text().catch(() => "");
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch {}
+    if (!resp.ok || !json?.ok) {
+      const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
+      throw new Error(msg);
+    }
+  }
+
   async function handleSavePdf() {
     try {
       setIsSaving(true);
@@ -1167,33 +1224,50 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       });
       lastPdfRef.current = blob;
 
-      if (blob.size > uploadLimit) {
-        const msg = tooLargeMessage(blob.size);
-        setErrorMsg(msg);
-        setErrorDetails(`Размер: ${formatBytes(blob.size)}; Лимит: ${formatBytes(uploadLimit)}`);
-        setErrorOpen(true);
-        setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`); }, 0);
-        return;
+      // 1) Пытаемся отправить через Blob (без лимита 4 МБ)
+      try {
+        await sendPdfViaBlob(blob);
+      } catch (blobErr: any) {
+        // 2) Fallback на старый способ (через serverless). Сработает только если файл <= лимита прокси.
+        // Если файл слишком большой — покажем дружелюбную ошибку.
+        const raw = String(blobErr?.message || blobErr || "");
+        // Если upload-url недоступен (например, BLOB_READ_WRITE_TOKEN не задан), пробуем fallback.
+        if (blob.size > uploadLimit) {
+          const msg = tooLargeMessage(blob.size);
+          setErrorMsg(msg);
+          setErrorDetails(`Blob error: ${raw}`);
+          setErrorOpen(true);
+          setTimeout(() => {
+            if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`);
+          }, 0);
+          return;
+        }
+        // Пробуем отправить как раньше
+        await sendPdfToServer(blob, {
+          orderNo: String(loadIntroState().orderNumber || "").trim(),
+          intro: loadIntroState().intro || {},
+          extras: (loadOrderDraft() as any)?.extras || {}
+        });
       }
 
-      await sendPdfToServer(blob, {
-        orderNo: String(loadIntroState().orderNumber || "").trim(),
-        intro: loadIntroState().intro || {},
-        extras: (loadOrderDraft() as any)?.extras || {}
-      });
-
+      // успех
       setConfirmOpen(false);
       setSentOk(true);
       setSuccessOpen(true);
       setIsDirtyAfterSend(false);
-
-      setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
+      setTimeout(() => {
+        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      }, 150);
     } catch (e: any) {
       const n = normalizeErrorMessage(e);
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
-      setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${n.msg}\n\n${n.details || ""}`); }, 0);
+      setTimeout(() => {
+        if (!document.querySelector('[role="alertdialog"]')) {
+          alert(`${n.msg}\n\n${n.details || ""}`);
+        }
+      }, 0);
     } finally {
       setIsSending(false);
     }
@@ -1204,38 +1278,49 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     try {
       setIsSending(true);
       const blob = lastPdfRef.current;
-
       if (!blob) {
         await handleSendPdf();
         return;
       }
 
-      if (blob.size > uploadLimit) {
-        const msg = tooLargeMessage(blob.size);
-        setErrorMsg(msg);
-        setErrorDetails(`Размер: ${formatBytes(blob.size)}; Лимит: ${formatBytes(uploadLimit)}`);
-        setErrorOpen(true);
-        setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`); }, 0);
-        return;
+      try {
+        await sendPdfViaBlob(blob);
+      } catch (blobErr: any) {
+        const raw = String(blobErr?.message || blobErr || "");
+        if (blob.size > uploadLimit) {
+          const msg = tooLargeMessage(blob.size);
+          setErrorMsg(msg);
+          setErrorDetails(`Blob error: ${raw}`);
+          setErrorOpen(true);
+          setTimeout(() => {
+            if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`);
+          }, 0);
+          return;
+        }
+        await sendPdfToServer(blob, {
+          orderNo: String(loadIntroState().orderNumber || "").trim(),
+          intro: loadIntroState().intro || {},
+          extras: (loadOrderDraft() as any)?.extras || {}
+        });
       }
-
-      await sendPdfToServer(blob, {
-        orderNo: String(loadIntroState().orderNumber || "").trim(),
-        intro: loadIntroState().intro || {},
-        extras: (loadOrderDraft() as any)?.extras || {}
-      });
 
       setErrorOpen(false);
       setSentOk(true);
       setSuccessOpen(true);
       setIsDirtyAfterSend(false);
-      setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
+      setTimeout(() => {
+        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      }, 150);
     } catch (e: any) {
       const n = normalizeErrorMessage(e);
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
-      setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${n.msg}\n\n${n.details || ""}`); }, 0);
+      setTimeout(() => {
+        if (!document.querySelector('[role="alertdialog"]')) {
+          alert(`${n.msg}\n\n${n.details || ""}`);
+        }
+      }, 0);
     } finally {
       setIsSending(false);
     }
@@ -1253,6 +1338,16 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const showBottomButtons = !sentOk || isDirtyAfterSend;
 
+  // Текст оверлея с прогрессом загрузки в Blob
+  const overlayText =
+    isBlobActive
+      ? `Загружаем в хранилище… ${Math.max(0, Math.min(100, blobProgress || 0))}%`
+      : isSending
+        ? "Отправляем заказ…"
+        : isSaving
+          ? "Формируем PDF…"
+          : "";
+
   return (
     <div style={safeRoot()}>
       {/* TopBar */}
@@ -1261,7 +1356,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       {/* Заметная подсказка */}
       <TopHintNotice />
 
-      {/* Короткое резюме по плите (видно «в топбаре» области) */}
+      {/* Короткое резюме по плите (видно вверху) */}
       <PlateQuickSummary
         enabled={extraPlate}
         size={plateSize === "Свой вариант" ? plateCustomSize || "свой" : plateSize}
@@ -1401,25 +1496,47 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
-          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>
+          <button
+            type="button"
+            onPointerUp={() => setConfirmOpen(true)}
+            onClick={() => setConfirmOpen(true)}
+            style={glassButtonStyle("sm")}
+          >
             Рассчитать стоимость
           </button>
         </div>
       )}
 
       {/* Bottom sheets */}
-      {confirmOpen && <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending} />}
-      {successOpen && <SuccessBottomSheet customerName={customerName} onClose={() => setSuccessOpen(false)} onSave={handleSavePdf} saving={isSaving} />}
-      {errorOpen && <ErrorBottomSheet message={errorMsg} details={errorDetails} onClose={() => setErrorOpen(false)} onRetry={handleRetrySend} onSave={handleSaveLastPdf} retryDisabled={isSending} />}
+      {confirmOpen && <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending || isBlobActive} />}
+      {successOpen && (
+        <SuccessBottomSheet
+          customerName={customerName}
+          onClose={() => setSuccessOpen(false)}
+          onSave={handleSavePdf}
+          saving={isSaving}
+        />
+      )}
+      {errorOpen && (
+        <ErrorBottomSheet
+          message={errorMsg}
+          details={errorDetails}
+          onClose={() => setErrorOpen(false)}
+          onRetry={handleRetrySend}
+          onSave={handleSaveLastPdf}
+          retryDisabled={isSending || isBlobActive}
+        />
+      )}
 
       {/* Низовая подсказка после отправки */}
       <div ref={afterHintRef}>
         {sentOk && <AfterSendHint customerName={customerName} onSavePdf={handleSavePdf} saving={isSaving} />}
       </div>
 
-      {/* Оверлеи занятости */}
-      {isSending && <BusyOverlay text="Отправляем заказ…" />}
-      {isSaving && <BusyOverlay text="Формируем PDF…" />}
+      {/* Оверлеи занятости и прогресса Blob */}
+      {(isSending || isSaving || isBlobActive) && (
+        <BusyOverlay text={overlayText} />
+      )}
     </div>
   );
 }
