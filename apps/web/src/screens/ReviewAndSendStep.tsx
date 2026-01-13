@@ -1,12 +1,13 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение» с интеграцией TopBar.
 //
-// Изменения по задаче:
-// - В аккордеоне «Дополнительно / Надгробная плита» добавлены чекбоксы в ОДНУ строку: «Тумба» (включён по умолчанию), «Цветник», «Ваза».
-//   Они находятся в этом же аккордеоне, НЕ внутри блока с чекбоксом «Надгробная плита».
-//   Значения сохраняются в черновик: extras.tumba, extras.flowerbed, extras.vase.
-// - Если тыльная сторона «пустая», вообще не показываем её блок и не добавляем в PDF
-//   (проверяем фактическую загрузку изображения: naturalWidth/Height > 5).
+// Что изменено:
+// - Два отдельных аккордеона:
+//   1) «Дополнительно» — внутри одна строка чекбоксов: Тумба (включён по умолчанию), Цветник, Ваза.
+//      Эти чекбоксы НЕ зависят от включения плиты и всегда находятся в аккордеоне «Дополнительно».
+//      Значения сохраняются в черновик: extras.tumba, extras.flowerbed, extras.vase.
+//   2) «Надгробная плита» — внутри переключатель «Надгробная плита» и все настройки плиты (размер, толщина, ориентация, эпитафии, графика).
+// - Тыльная сторона: показываем и добавляем в PDF только если картинка действительно загружается (naturalWidth/Height > 5).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -181,8 +182,9 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
   );
 }
 
-/* ===== Блок плиты/дополнительно (аккордеоны) ===== */
+/* ===== Блоки аккордеонов «Дополнительно» и «Надгробная плита» ===== */
 function PlateBlock(props: {
+  // Аккордеон «Надгробная плита»
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
   plateCustomSize: string; setPlateCustomSize: (v: string) => void;
@@ -195,14 +197,15 @@ function PlateBlock(props: {
   addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
   plateIds: string[];
 
-  // Новые чекбоксы в одну строку: Тумба, Цветник, Ваза
-  hasPedestal: boolean; setHasPedestal: (v: boolean) => void;
-  hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void;
-  hasVase: boolean; setHasVase: (v: boolean) => void;
+  // Аккордеон «Дополнительно» — чекбоксы в одну строку
+  hasPedestal: boolean; setHasPedestal: (v: boolean) => void;   // tumba
+  hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void; // flowerbed
+  hasVase: boolean; setHasVase: (v: boolean) => void;           // vase
 
   onDirty?: () => void;
 }) {
   const {
+    // плита
     extraPlate, setExtraPlate,
     plateSize, setPlateSize, plateCustomSize, setPlateCustomSize,
     plateThickness, setPlateThickness, plateCustomThickness, setPlateCustomThickness,
@@ -211,13 +214,16 @@ function PlateBlock(props: {
     catsLoading, catsError, cats, catOpen, setCatOpen,
     addPlateGraphic, removePlateGraphic,
     plateIds,
+    // дополнительно
     hasPedestal, setHasPedestal,
     hasFlowerbed, setHasFlowerbed,
     hasVase, setHasVase,
     onDirty
   } = props;
 
-  const [accMainOpen, setAccMainOpen] = useState(true);
+  // Состояния раскрытия аккордеонов
+  const [accExtrasOpen, setAccExtrasOpen] = useState(true);
+  const [accPlateOpen, setAccPlateOpen] = useState(true);
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
@@ -225,9 +231,29 @@ function PlateBlock(props: {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <LoudAccordion title="Дополнительно / Надгробная плита" open={accMainOpen} onToggle={() => setAccMainOpen(v => !v)}>
+      {/* 1) Аккордеон: Дополнительно — чекбоксы в одну строку */}
+      <LoudAccordion title="Дополнительно" open={accExtrasOpen} onToggle={() => setAccExtrasOpen(v => !v)}>
+        <div style={{ ...sectionBox }}>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={hasPedestal} onChange={(e) => { setHasPedestal(e.target.checked); markDirty(); }} />
+              <span>Тумба</span>
+            </label>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={hasFlowerbed} onChange={(e) => { setHasFlowerbed(e.target.checked); markDirty(); }} />
+              <span>Цветник</span>
+            </label>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={hasVase} onChange={(e) => { setHasVase(e.target.checked); markDirty(); }} />
+              <span>Ваза</span>
+            </label>
+          </div>
+        </div>
+      </LoudAccordion>
+
+      {/* 2) Аккордеон: Надгробная плита — переключатель и настройки */}
+      <LoudAccordion title="Надгробная плита" open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
         <div style={{ display: "grid", gap: 12 }}>
-          {/* Только чекбокс включения «Надгробная плита» */}
           <div style={{ ...sectionBox }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
               <input type="checkbox" checked={extraPlate} onChange={(e) => { setExtraPlate(e.target.checked); markDirty(); }} />
@@ -235,39 +261,8 @@ function PlateBlock(props: {
             </label>
           </div>
 
-          {/* Всё, что относится к плите, показываем только если плита включена */}
           {extraPlate && (
             <>
-              {/* Новая строка чекбоксов: Тумба, Цветник, Ваза — отдельным блоком, НЕ внутри предыдущего */}
-              <div style={{ ...sectionBox }}>
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={hasPedestal}
-                      onChange={(e) => { setHasPedestal(e.target.checked); markDirty(); }}
-                    />
-                    <span>Тумба</span>
-                  </label>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={hasFlowerbed}
-                      onChange={(e) => { setHasFlowerbed(e.target.checked); markDirty(); }}
-                    />
-                    <span>Цветник</span>
-                  </label>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={hasVase}
-                      onChange={(e) => { setHasVase(e.target.checked); markDirty(); }}
-                    />
-                    <span>Ваза</span>
-                  </label>
-                </div>
-              </div>
-
               <div style={{ ...sectionBox }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -487,7 +482,7 @@ function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void;
 /* ===== Основной компонент ===== */
 type Props = { onBack?: () => void };
 
-// Претендент на URL тыльной стороны
+// Помощник: получить URL тыльной стороны либо null, если пусто/заглушка.
 function getBackSketchUrl(draft: any): string | null {
   const raw = String((draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? "").trim();
   if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
@@ -536,9 +531,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       const ok = (im.naturalWidth || 0) > 5 && (im.naturalHeight || 0) > 5;
       setHasBackSketch(ok);
     };
-    im.onerror = () => {
-      if (!cancelled) setHasBackSketch(false);
-    };
+    im.onerror = () => { if (!cancelled) setHasBackSketch(false); };
     im.src = backCandidateUrl;
     return () => { cancelled = true; };
   }, [backCandidateUrl]);
@@ -582,7 +575,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
-  // Новые чекбоксы (тумба, цветник, ваза). Тумба — включена по умолчанию.
+  // Дополнительно: тумба, цветник, ваза (тумба по умолчанию включена)
   const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
@@ -756,18 +749,16 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </section>
       )}
 
-      {/* Аккордеоны «Дополнительно / Надгробная плита» */}
+      {/* Аккордеоны: Дополнительно + Надгробная плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
-          // плита + запись в extras
+          // Надгробная плита (переключатель и настройки)
           extraPlate={extraPlate}
           setExtraPlate={(v) => {
             setExtraPlate(v);
-            // При переключении — фиксируем текущие значения в extras
-            persistExtras({ headstonePlate: v, ...(v ? { tumba: hasPedestal, flowerbed: hasFlowerbed, vase: hasVase } : {}) });
+            // При переключении фиксируем в extras
+            persistExtras({ headstonePlate: v });
           }}
-
-          // размеры и пр.
           plateSize={plateSize} setPlateSize={(v) => { setPlateSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateCustomSize={plateCustomSize} setPlateCustomSize={(v) => { setPlateCustomSize(v); if (sentOk) setIsDirtyAfterSend(true); }}
           plateThickness={plateThickness} setPlateThickness={(v) => { setPlateThickness(v); if (sentOk) setIsDirtyAfterSend(true); }}
@@ -781,22 +772,13 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           removePlateGraphic={(gid) => { removePlateGraphic(gid); if (sentOk) setIsDirtyAfterSend(true); }}
           plateIds={plateIds}
 
-          // Чекбоксы: тумба/цветник/ваза + запись в extras
+          // Дополнительно — чекбоксы и запись в extras
           hasPedestal={hasPedestal}
-          setHasPedestal={(v) => {
-            setHasPedestal(v);
-            persistExtras({ tumba: v });
-          }}
+          setHasPedestal={(v) => { setHasPedestal(v); persistExtras({ tumba: v }); }}
           hasFlowerbed={hasFlowerbed}
-          setHasFlowerbed={(v) => {
-            setHasFlowerbed(v);
-            persistExtras({ flowerbed: v });
-          }}
+          setHasFlowerbed={(v) => { setHasFlowerbed(v); persistExtras({ flowerbed: v }); }}
           hasVase={hasVase}
-          setHasVase={(v) => {
-            setHasVase(v);
-            persistExtras({ vase: v });
-          }}
+          setHasVase={(v) => { setHasVase(v); persistExtras({ vase: v }); }}
 
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
@@ -819,7 +801,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </div>
       </section>
 
-      {/* Тыльная сторона: показываем ТОЛЬКО если изображение реально загружается */}
+      {/* Тыльная — только если картинка реально загружается */}
       {hasBackSketch && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
@@ -851,7 +833,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         />
       </section>
 
-      {/* Кнопки (низ) — скрываем после отправки, показываем при изменениях */}
+      {/* Кнопки (низ) */}
       {showBottomButtons && (
         <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
           <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
@@ -859,7 +841,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </div>
       )}
 
-      {/* Bottom sheet: подтверждение → успех */}
+      {/* Bottom sheets */}
       {confirmOpen && (
         <ConfirmBottomSheet
           onClose={() => setConfirmOpen(false)}
@@ -876,7 +858,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         />
       )}
 
-      {/* Блок «Заявка отправлена … Примечание …» — в самом низу */}
+      {/* Низовая подсказка после отправки */}
       <div ref={afterHintRef}>{sentOk && <AfterSendHint customerName={customerName} onSavePdf={handleSavePdf} saving={isSaving} />}</div>
 
       {/* Оверлеи занятости */}
