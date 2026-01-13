@@ -1,11 +1,16 @@
 // pages/api/send-order-pdf.ts
+// Принимает PDF (multipart/form-data) и отправляет его в Telegram чат(ы) менеджеров.
+// Pages Router + formidable. Без использования req.formData().
+// Имя файла передаём третьим аргументом FormData.append(..., blob, fileName).
+
 import type { NextApiRequest, NextApiResponse } from "next";
+import formidable, { File as FormidableFile } from "formidable";
+import fs from "node:fs";
+import path from "node:path";
 
-const VERSION = "send-order-pdf@pages-2026-01-12";
+const VERSION = "send-order-pdf@pages-2026-01-12-fd2";
 
-export const config = {
-  api: { bodyParser: false }, // важно: сами читаем formData()
-};
+export const config = { api: { bodyParser: false } };
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -15,37 +20,72 @@ function cors(res: NextApiResponse, json = false) {
   if (json) res.setHeader("Content-Type", "application/json; charset=utf-8");
 }
 
+function parseForm(req: NextApiRequest): Promise<{ fields: formidable.Fields; files: formidable.Files }> {
+  const form = formidable({
+    multiples: false,
+    keepExtensions: true,
+    maxFileSize: 20 * 1024 * 1024, // 20 MB
+  });
+  return new Promise((resolve, reject) => {
+    form.parse(req, (err, fields, files) => (err ? reject(err) : resolve({ fields, files })));
+  });
+}
+
+type TgSendResult = { ok: boolean; result?: any; description?: string };
+
+async function tgSendDocument(botToken: string, chatId: string, blob: Blob, fileName: string, caption?: string): Promise<TgSendResult> {
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  if (caption) form.append("caption", caption.slice(0, 1024));
+  // НЕ используем new File(...). Имя файла передаём 3-м аргументом:
+  form.append("document", blob, fileName);
+
+  const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: "POST", body: form as any });
+  const text = await resp.text().catch(() => "");
+  let json: any = null; try { json = text ? JSON.parse(text) : null; } catch {}
+  if (!resp.ok || !json?.ok) {
+    const details = (json && (json.description || JSON.stringify(json))) || text || resp.statusText;
+    throw new Error(`Telegram error: ${resp.status} ${details}`);
+  }
+  return json!;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method === "HEAD") return res.status(200).end();
   if (req.method !== "POST") { res.setHeader("Allow", "POST,OPTIONS,HEAD"); return res.status(405).send("Method Not Allowed"); }
 
+  const botToken = process.env.TGBOT_TOKEN || "";
+  const single = process.env.MANAGER_CHAT_ID || "";
+  const multi = process.env.MANAGER_CHAT_IDS || "";
+  const chats = (multi ? multi.split(",") : []).map(s => s.trim()).filter(Boolean);
+  if (!chats.length && single) chats.push(single);
+  if (!botToken || !chats.length) {
+    cors(res, true);
+    return res.status(500).json({ ok: false, version: VERSION, error: "Server misconfigured: TGBOT_TOKEN and MANAGER_CHAT_ID(S) required" });
+  }
+
   try {
-    const botToken = process.env.TGBOT_TOKEN || "";
-    const single = process.env.MANAGER_CHAT_ID || "";
-    const multi = process.env.MANAGER_CHAT_IDS || "";
-    const chats = (multi ? multi.split(",") : []).map(s => s.trim()).filter(Boolean);
-    if (!chats.length && single) chats.push(single);
-    if (!botToken || !chats.length) {
-      cors(res, true);
-      return res.status(500).json({ ok: false, version: VERSION, error: "Server misconfigured: TGBOT_TOKEN and MANAGER_CHAT_ID(S) required" });
-    }
+    const { fields, files } = await parseForm(req);
 
-    // Web API formData на Node 18+
-    // @ts-ignore
-    const form: FormData = await (req as any).formData();
-    const pdf = form.get("pdf") as any; // File | Blob
-    const payloadRaw = form.get("payload") as string | null;
+    // payload (meta)
+    const payloadRaw = typeof fields.payload === "string" ? fields.payload : Array.isArray(fields.payload) ? fields.payload[0] : "{}";
+    let meta: any = {}; try { meta = JSON.parse(String(payloadRaw || "{}")); } catch {}
 
-    if (!pdf) {
+    // файл
+    const fAny = (files as any).pdf as FormidableFile | FormidableFile[] | undefined;
+    const f: FormidableFile | undefined = Array.isArray(fAny) ? fAny[0] : fAny;
+    if (!f?.filepath) {
       cors(res, true);
       return res.status(400).json({ ok: false, version: VERSION, error: "No pdf" });
     }
 
-    let meta: any = {};
-    try { meta = payloadRaw ? JSON.parse(payloadRaw) : {}; } catch {}
+    const filePath = f.filepath;
+    const originalName = f.originalFilename || f.newFilename || `order-${Date.now()}.pdf`;
+    const safeBase = path.basename(originalName).replace(/[^\w.\-]+/g, "_");
 
+    // подпись TG
     const orderNo = String(meta?.orderNo || "").trim();
     const intro = meta?.intro || {};
     const caption = [
@@ -53,26 +93,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       intro.customerName ? `Заказчик: ${intro.customerName}` : "",
       intro.customerPhone ? `Телефон: ${intro.customerPhone}` : "",
     ].filter(Boolean).join("\n");
-    const fileName = (pdf as any)?.name || `order-${orderNo || Date.now()}.pdf`;
 
-    async function sendOne(chatId: string) {
-      const tg = new FormData();
-      tg.append("chat_id", chatId);
-      if (caption) tg.append("caption", caption.slice(0, 1024));
-      tg.append("document", pdf, fileName);
-      const tgUrl = `https://api.telegram.org/bot${botToken}/sendDocument`;
-      const r = await fetch(tgUrl, { method: "POST", body: tg as any });
-      const text = await r.text().catch(() => "");
-      let json: any = null; try { json = text ? JSON.parse(text) : null; } catch {}
-      if (!r.ok || !json?.ok) {
-        const details = (json && (json.description || JSON.stringify(json))) || text || r.statusText;
-        throw new Error(`Telegram error: ${r.status} ${details}`);
-      }
-      return { chatId, messageId: json?.result?.message_id, chat: json?.result?.chat || { id: chatId } };
+    // читаем файл и создаём Blob (Node 18+)
+    const buf = await fs.promises.readFile(filePath);
+    const blob = new Blob([buf], { type: "application/pdf" });
+
+    // отправка в чаты
+    const results: any[] = [];
+    for (const chatId of chats) {
+      const resp = await tgSendDocument(botToken, chatId, blob, safeBase, caption);
+      results.push({ chatId, messageId: resp?.result?.message_id, chat: resp?.result?.chat || { id: chatId } });
     }
 
-    const results: any[] = [];
-    for (const chatId of chats) results.push(await sendOne(chatId));
+    // очистка
+    try { await fs.promises.unlink(filePath); } catch {}
 
     cors(res, true);
     return res.status(200).json({ ok: true, version: VERSION, orderNo: orderNo || undefined, chats, results });
