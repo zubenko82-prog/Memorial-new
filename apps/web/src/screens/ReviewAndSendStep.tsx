@@ -1,17 +1,16 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение».
 //
-// Обновления:
+// Дополнительно реализовано по задаче:
+// - Сохранение выбора элементов надгробной плиты в черновик (extras) при любом изменении,
+//   а также восстановление выбора при обновлении/переходе (синхронизация local state из draft.extras).
+// - Вывод краткого резюме по плите вверху (под TopBar), чтобы «в топбаре» было видно, что выбрано.
+// - Заметная подсказка вверху страницы:
+//   «Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.»
 // - Пометка выбранной графики в галерее (подсветка + бейдж с количеством).
-// - Тыльная сторона показывается ТОЛЬКО если есть содержимое (графика/эпитафия/метрика/портрет) И картинка реально загружается.
-// - Блок «Выбрано для плиты» перенесён вниз — прямо над «Комментарий к заказу».
-// - Предупреждаем пользователя о любых сбоях: добавлен ErrorBottomSheet с понятным текстом, кнопками «Повторить отправку» и «Сохранить PDF».
-// - Специальная обработка FUNCTION_PAYLOAD_TOO_LARGE / 413 Request Entity Too Large.
-// - Предварительно проверяем размер PDF на клиенте: подтягиваем лимит с сервера (X-Upload-Limit-Bytes) и не шлём заведомо «тяжёлое».
-// - Резервный alert, если по какой-то причине окно ошибки не отрисовалось.
-//
-// Примечание: иногда файл может прийти в Telegram, даже если браузер показал ошибку.
-// Мы честно предупреждаем: «возможно, документ уже доставлен, проверьте чат».
+// - Тыльная сторона отображается только если есть содержимое и картинка загрузилась.
+// - Обработка ошибок отправки с предупреждением пользователя (включая 413 Payload Too Large).
+// - Предварительная проверка размера PDF (лимит подтягивается HEAD-запросом из /api/send-order-pdf).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -51,7 +50,8 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: pad,
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
@@ -139,56 +139,96 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   );
 }
 
-/* ===== Заголовок: № заказа + линк справа ===== */
-function EditableOrderSummary({
-  orderNo,
-  onOpenTop,
-  onDirty
-}: {
-  orderNo: string;
-  onOpenTop: () => void;
-  onDirty?: () => void;
-}) {
-  const introInitial = loadIntroState().intro || {};
-  const [name, setName] = useState<string>(introInitial.customerName || "");
-  const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
-  const saveOnBlur = () => {
-    const next: Intro = {
-      customerName: name.trim(),
-      customerPhone: phone.trim(),
-      customerNotes: contactNotes.trim() || undefined
-    };
-    saveIntro(next, { lock: false });
-    onDirty?.();
-  };
-
+/* ===== Заметная подсказка вверху ===== */
+function TopHintNotice() {
   return (
-    <section style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-        <div style={{ marginLeft: "auto" }}>
-          <button type="button" onClick={onOpenTop} style={linkLike()}>
-            Посмотреть состав заказа
-          </button>
-        </div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
-      </div>
-      <input
-        value={contactNotes}
-        onChange={(e) => setContactNotes(e.target.value)}
-        onBlur={saveOnBlur}
-        placeholder="Примечание для связи…"
-        style={inputStyle()}
-      />
-    </section>
+    <div
+      role="note"
+      aria-live="polite"
+      style={{
+        margin: "10px 0",
+        padding: "10px 12px",
+        borderRadius: 12,
+        background:
+          "linear-gradient(135deg, rgba(255,215,64,0.20) 0%, rgba(255,165,0,0.20) 100%), rgba(255,255,255,0.08)",
+        border: "1px solid rgba(255,215,64,0.65)",
+        color: "#fff",
+        fontWeight: 700,
+        boxShadow: "0 6px 18px rgba(0,0,0,0.25)"
+      }}
+    >
+      Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.
+    </div>
   );
 }
 
-/* ===== Accordion (title может быть ReactNode) ===== */
+/* ===== Короткое резюме по плите (под TopBar) ===== */
+function PlateQuickSummary({
+  enabled,
+  size,
+  thickness,
+  orient,
+  graphicsCount,
+  epitaphCount,
+  hasPedestal,
+  hasFlowerbed,
+  hasVase
+}: {
+  enabled: boolean;
+  size?: string;
+  thickness?: string;
+  orient?: string;
+  graphicsCount: number;
+  epitaphCount: number;
+  hasPedestal?: boolean;
+  hasFlowerbed?: boolean;
+  hasVase?: boolean;
+}) {
+  const tag = (txt: string) => (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 8px",
+        borderRadius: 999,
+        background: "rgba(255,255,255,0.10)",
+        border: "1px solid rgba(255,255,255,0.26)",
+        fontSize: 12,
+        whiteSpace: "nowrap"
+      }}
+    >
+      {txt}
+    </span>
+  );
+  const orientRu = orient === "horizontal" ? "горизонтально" : orient === "vertical" ? "вертикально" : undefined;
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 10, marginTop: 8 }}>
+      <div style={{ fontWeight: 800, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+        <span>Надгробная плита:</span>
+        <span style={{ color: enabled ? "#71f3a1" : "#ffb4b4" }}>{enabled ? "включена" : "выключена"}</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {enabled ? (
+          <>
+            {size ? tag(`Размер: ${size}`) : null}
+            {thickness ? tag(`Толщина: ${thickness}`) : null}
+            {orientRu ? tag(`Ориентация: ${orientRu}`) : null}
+            {tag(`Графика: ${graphicsCount}`)}
+            {tag(`Эпитафии: ${epitaphCount}`)}
+            {hasPedestal ? tag("Тумба") : null}
+            {hasFlowerbed ? tag("Цветник") : null}
+            {hasVase ? tag("Ваза") : null}
+          </>
+        ) : (
+          <span style={{ opacity: 0.85, fontSize: 13 }}>Для добавления параметров включите плиту ниже.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ===== Accordion ===== */
 function LoudAccordion({
   title,
   open,
@@ -241,7 +281,7 @@ function LoudAccordion({
   );
 }
 
-/* ===== Грид каталога (для плиты) — с отметкой выбранных ===== */
+/* ===== Галерея графики (отмечаем выбранные) ===== */
 function CatGrid({
   items,
   plateIds,
@@ -366,7 +406,7 @@ function CatGrid({
   );
 }
 
-/* ===== Error Bottom Sheet (исправлен keyframes) ===== */
+/* ===== Error Bottom Sheet ===== */
 function ErrorBottomSheet({
   message,
   details,
@@ -422,9 +462,8 @@ function ErrorBottomSheet({
   );
 }
 
-/* ===== Блок аккордеонов: Дополнительно + Надгробная плита (с чекбоксом в заголовке) ===== */
+/* ===== Аккордеоны «Дополнительно» и «Надгробная плита» (с чекбоксом в заголовке) ===== */
 function PlateBlock(props: {
-  // Включение и настройки плиты
   extraPlate: boolean; setExtraPlate: (v: boolean) => void;
   plateSize: string; setPlateSize: (v: string) => void;
   plateCustomSize: string; setPlateCustomSize: (v: string) => void;
@@ -436,12 +475,9 @@ function PlateBlock(props: {
   catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
   addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
   plateIds: string[];
-
-  // Дополнительно — чекбоксы в одну строку
-  hasPedestal: boolean; setHasPedestal: (v: boolean) => void;   // tumba
-  hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void; // flowerbed
-  hasVase: boolean; setHasVase: (v: boolean) => void;           // vase
-
+  hasPedestal: boolean; setHasPedestal: (v: boolean) => void;
+  hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void;
+  hasVase: boolean; setHasVase: (v: boolean) => void;
   onDirty?: () => void;
 }) {
   const {
@@ -484,6 +520,7 @@ function PlateBlock(props: {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      {/* Дополнительно */}
       <LoudAccordion title="Дополнительно" open={accExtrasOpen} onToggle={() => setAccExtrasOpen(v => !v)}>
         <div style={{ ...sectionBox }}>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -503,6 +540,7 @@ function PlateBlock(props: {
         </div>
       </LoudAccordion>
 
+      {/* Надгробная плита */}
       <LoudAccordion title={plateTitle} open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
         <div style={{ display: "grid", gap: 12, opacity: extraPlate ? 1 : 0.6 }}>
           {!extraPlate && (
@@ -513,48 +551,79 @@ function PlateBlock(props: {
 
           {extraPlate && (
             <>
+              {/* Размер */}
               <div style={{ ...sectionBox }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {["100×50 см", "120×60 см", "140×70 см", "Свой вариант"].map((v) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-size" checked={plateSize === v} onChange={() => { setPlateSize(v); markDirty(); }} />
+                      <input
+                        type="radio"
+                        name="plate-size"
+                        checked={plateSize === v}
+                        onChange={() => { setPlateSize(v); markDirty(); }}
+                      />
                       <span>{v}</span>
                     </label>
                   ))}
                 </div>
                 {plateSize === "Свой вариант" && (
-                  <input value={plateCustomSize} onChange={(e) => { setPlateCustomSize(e.target.value); markDirty(); }} placeholder="Укажите свой размер (например, 130×60 см)" style={inputStyle()} />
+                  <input
+                    value={plateCustomSize}
+                    onChange={(e) => { setPlateCustomSize(e.target.value); markDirty(); }}
+                    onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
+                    placeholder="Укажите свой размер (например, 130×60 см)"
+                    style={inputStyle()}
+                  />
                 )}
               </div>
 
+              {/* Толщина */}
               <div style={{ ...sectionBox }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {["5 см", "8 см", "10 см", "Свой вариант"].map((v) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-thickness" checked={plateThickness === v} onChange={() => { setPlateThickness(v); markDirty(); }} />
+                      <input
+                        type="radio"
+                        name="plate-thickness"
+                        checked={plateThickness === v}
+                        onChange={() => { setPlateThickness(v); markDirty(); }}
+                      />
                       <span>{v}</span>
                     </label>
                   ))}
                 </div>
                 {plateThickness === "Свой вариант" && (
-                  <input value={plateCustomThickness} onChange={(e) => { setPlateCustomThickness(e.target.value); markDirty(); }} placeholder="Укажите толщину (например, 7 см)" style={inputStyle()} />
+                  <input
+                    value={plateCustomThickness}
+                    onChange={(e) => { setPlateCustomThickness(e.target.value); markDirty(); }}
+                    onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
+                    placeholder="Укажите толщину (например, 7 см)"
+                    style={inputStyle()}
+                  />
                 )}
               </div>
 
+              {/* Ориентация */}
               <div style={{ ...sectionBox }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {[{ v: "vertical", t: "вертикально" }, { v: "horizontal", t: "горизонтально" }].map(({ v, t }) => (
                     <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input type="radio" name="plate-orient" checked={plateOrientation === v} onChange={() => { setPlateOrientation(v); markDirty(); }} />
+                      <input
+                        type="radio"
+                        name="plate-orient"
+                        checked={plateOrientation === v}
+                        onChange={() => { setPlateOrientation(v); markDirty(); }}
+                      />
                       <span>{t}</span>
                     </label>
                   ))}
                 </div>
               </div>
 
+              {/* Эпитафии */}
               <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ ...sectionBox }}>
@@ -562,10 +631,8 @@ function PlateBlock(props: {
                     <textarea
                       rows={3}
                       value={plateEpitaph}
-                      onChange={(e) => {
-                        setPlateEpitaph(e.target.value);
-                        markDirty();
-                      }}
+                      onChange={(e) => { setPlateEpitaph(e.target.value); }}
+                      onBlur={() => markDirty()}
                       placeholder="Введите текст…"
                       style={{ ...inputStyle(), resize: "vertical" }}
                     />
@@ -582,7 +649,8 @@ function PlateBlock(props: {
                             const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
                             const exists = list.some((s) => norm(s) === norm(t));
                             const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
-                            setPlateEpitaph(next.join("\n\n"));
+                            const joined = next.join("\n\n");
+                            setPlateEpitaph(joined);
                             markDirty();
                           }}
                           style={glassButtonStyle("nano")}
@@ -596,6 +664,7 @@ function PlateBlock(props: {
                 </div>
               </LoudAccordion>
 
+              {/* Графика */}
               <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
                 {catsLoading && <div>Загрузка каталога…</div>}
                 {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
@@ -639,7 +708,7 @@ function PlateBlock(props: {
   );
 }
 
-/* ===== Индикаторы/окна ===== */
+/* ===== Индикаторы ===== */
 function BusyOverlay({ text = "Идёт обработка…" }: { text?: string }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 20000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -784,14 +853,12 @@ function ConfirmBottomSheet({
 /* ===== Основной компонент ===== */
 type Props = { onBack?: () => void };
 
-// helper: URL тыльной стороны (null если пусто/заглушка)
+// helpers для тыльной стороны и ошибок
 function getBackSketchUrl(draft: any): string | null {
   const raw = String((draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? "").trim();
   if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
   return raw;
 }
-
-// helper: есть ли содержимое на тыльной стороне (графика/эпитафия/метрика/портрет)
 function hasBackContent(draft: any): boolean {
   const eb = (draft as any)?.editorBack || {};
   const engr = (draft as any)?.engraving || {};
@@ -817,18 +884,12 @@ function hasBackContent(draft: any): boolean {
     arr((engr as any)?.metricsBack).length > 0;
   return !!(graphics || epitaph || portraits || metrics);
 }
-
-// нормализация текста ошибки для пользователя
 function normalizeErrorMessage(err: any): { msg: string; details?: string } {
   const raw = String(err?.message || err?.toString?.() || "Неизвестная ошибка");
   if (typeof navigator !== "undefined" && !navigator.onLine) {
-    return {
-      msg: "Похоже, нет подключения к интернету. Проверьте сеть и попробуйте снова.",
-      details: raw
-    };
+    return { msg: "Похоже, нет подключения к интернету. Проверьте сеть и попробуйте снова.", details: raw };
   }
-  const is413 =
-    /request entity too large|payload too large|function_payload_too_large|http 413|status 413/i.test(raw);
+  const is413 = /request entity too large|payload too large|function_payload_too_large|http 413|status 413/i.test(raw);
   if (is413) {
     return {
       msg:
@@ -849,14 +910,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
 
   useEffect(() => {
-    const refresh = () => {
-      setDraft(loadOrderDraft());
-      setIntroState(loadIntroState());
-    };
-    const markDirtyOnDraft = () => {
-      if (sentOk) setIsDirtyAfterSend(true);
-      refresh();
-    };
+    const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
+    const markDirtyOnDraft = () => { if (sentOk) setIsDirtyAfterSend(true); refresh(); };
     window.addEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
     refresh();
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
@@ -872,7 +927,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Лимит загрузки с сервера (HEAD заголовок X-Upload-Limit-Bytes) + дефолт
+  // Подтягиваем лимит загрузки
   const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
   const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
   useEffect(() => {
@@ -891,104 +946,84 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     `PDF (${formatBytes(size)}) слишком большой для отправки через сайт. Лимит ≈ ${formatBytes(uploadLimit)}.
 Сохраните PDF и отправьте менеджеру вручную (Telegram/почта), либо уменьшите размер.`;
 
-  // Тыльная: рисуем только если есть содержимое И картинка ок
+  // Тыльная сторона — условия отображения
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
-  useEffect(() => {
-    setBackCandidateUrl(getBackSketchUrl(draft));
-  }, [draft]);
+  useEffect(() => { setBackCandidateUrl(getBackSketchUrl(draft)); }, [draft]);
   const hasBackContentFlag = useMemo(() => hasBackContent(draft), [draft]);
   const [backImageOk, setBackImageOk] = useState<boolean>(false);
   useEffect(() => {
-    if (!backCandidateUrl) {
-      setBackImageOk(false);
-      return;
-    }
+    if (!backCandidateUrl) { setBackImageOk(false); return; }
     let cancelled = false;
     const im = new Image();
-    im.onload = () => {
-      if (!cancelled) setBackImageOk((im.naturalWidth || 0) > 5 && (im.naturalHeight || 0) > 5);
-    };
-    im.onerror = () => {
-      if (!cancelled) setBackImageOk(false);
-    };
+    im.onload = () => { if (!cancelled) setBackImageOk((im.naturalWidth || 0) > 5 && (im.naturalHeight || 0) > 5); };
+    im.onerror = () => { if (!cancelled) setBackImageOk(false); };
     im.src = backCandidateUrl;
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [backCandidateUrl]);
   const showBack = hasBackContentFlag && backImageOk;
 
-  // Эскиз лицевой
+  // Лицевая сторона
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
     const im = new Image();
-    im.onload = () => {
-      if (im.naturalWidth && im.naturalHeight) setAspect(`${im.naturalWidth} / ${im.naturalHeight}`);
-    };
+    im.onload = () => { if (im.naturalWidth && im.naturalHeight) setAspect(`${im.naturalWidth} / ${im.naturalHeight}`); };
     im.src = itemUrl;
   }, [itemUrl]);
 
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
-  const peopleBlocks = useMemo(
-    () =>
-      frontPersons.map((p: any, i: number) => ({
-        id: p.id || `p-${i}`,
-        lines: personLines(p),
-        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
-      })),
-    [frontPersons]
-  );
+  const peopleBlocks = useMemo(() => frontPersons.map((p: any, i: number) => ({
+    id: p.id || `p-${i}`,
+    lines: personLines(p),
+    photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
+  })), [frontPersons]);
 
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
-  const isCross = (g: any) =>
-    (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross");
+  const isCross = (g: any) => ((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"));
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
-
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита (состояния)
+  // Плита — состояния (инициализация из extras)
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
   const [plateCustomSize, setPlateCustomSize] = useState<string>(extras0.plateCustomSize || "");
   const [plateThickness, setPlateThickness] = useState<string>(extras0.plateThickness || "5 см");
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
-  const [plateOrientation, setPlateOrientation] = useState<string>(
-    extras0.plateOrientation ||
-      ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")
-        ? "horizontal"
-        : "vertical")
-  );
+  const [plateOrientation, setPlateOrientation] = useState<string>(extras0.plateOrientation || (((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")) ? "horizontal" : "vertical"));
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
-
-  // Дополнительно
   const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Ошибки/состояния отправки
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [sentOk, setSentOk] = useState(false);
-  const [successOpen, setSuccessOpen] = useState(false);
+  // СИНХРОНИЗАЦИЯ: при обновлении draft/extras восстанавливаем локальные состояния (не сбрасываются при навигации/refresh)
+  useEffect(() => {
+    const ex = ((loadOrderDraft() as any)?.extras || {}) as any;
+    const upd = <T,>(cur: T, next: T, setter: (v: T) => void) => { if (JSON.stringify(cur) !== JSON.stringify(next)) setter(next as any); };
+    upd(extraPlate, !!ex.headstonePlate, setExtraPlate);
+    upd(plateSize, ex.plateSize || "100×50 см", setPlateSize);
+    upd(plateCustomSize, ex.plateCustomSize || "", setPlateCustomSize);
+    upd(plateThickness, ex.plateThickness || "5 см", setPlateThickness);
+    upd(plateCustomThickness, ex.plateCustomThickness || "", setPlateCustomThickness);
+    upd(plateOrientation, ex.plateOrientation || plateOrientation, setPlateOrientation);
+    upd(plateEpitaph, ex.plateEpitaph || "", setPlateEpitaph);
+    upd(plateIds, (ex.plateGraphicsIds as string[]) || [], setPlateIds);
+    upd(plateMeta, (ex.plateGraphicsMeta as any) || {}, setPlateMeta);
+    upd(hasPedestal, ex.tumba ?? true, setHasPedestal);
+    upd(hasFlowerbed, !!ex.flowerbed, setHasFlowerbed);
+    upd(hasVase, !!ex.vase, setHasVase);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify((draft as any)?.extras || {})]);
 
-  // Ошибка отправки
-  const [errorOpen, setErrorOpen] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
-  const lastPdfRef = useRef<Blob | null>(null);
-
-  // helper: сохраняем extras
+  // Хелпер сохранения в extras
   function persistExtras(patch: Record<string, any>) {
     const prev = loadOrderDraft();
     const nextExtras = { ...(prev as any).extras, ...patch };
@@ -997,19 +1032,22 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     if (sentOk) setIsDirtyAfterSend(true);
   }
 
+  // Добавление/удаление графики с сохранением в extras
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
-    setPlateIds((prev) => prev.concat(gid));
-    setPlateMeta((m) => ({ ...m, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } }));
+    const nextIds = [...plateIds, gid];
+    const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
+    setPlateIds(nextIds);
+    setPlateMeta(nextMeta);
+    persistExtras({ plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta });
   };
   const removePlateGraphic = (gid: string) => {
-    setPlateIds((prev) => {
-      const i = prev.findIndex((x) => x === gid);
-      if (i === -1) return prev;
-      const next = prev.slice();
-      next.splice(i, 1);
-      return next;
-    });
+    const idx = plateIds.findIndex((x) => x === gid);
+    if (idx === -1) return;
+    const nextIds = plateIds.slice(); nextIds.splice(idx, 1);
+    setPlateIds(nextIds);
+    // meta оставляем (может пригодиться повторно), но можно очистить, если совсем нет ссылок
+    persistExtras({ plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta });
   };
 
   // Каталог для плиты
@@ -1020,22 +1058,16 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      setCatsLoading(true);
-      setCatsError("");
+      setCatsLoading(true); setCatsError("");
       try {
         const data = await fetchCatalog("graphics");
         const root = (data as any)?.categories || data;
         const catsArr = Array.isArray(root) ? root : [];
         if (alive) setCats(catsArr);
-      } catch {
-        if (alive) setCatsError("Не удалось загрузить каталог графики.");
-      } finally {
-        if (alive) setCatsLoading(false);
-      }
+      } catch { if (alive) setCatsError("Не удалось загрузить каталог графики."); }
+      finally { if (alive) setCatsLoading(false); }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
   useEffect(() => {
     if (!cats.length) return;
@@ -1052,12 +1084,11 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
-      const collect = (arr: any[]) =>
-        (arr || []).forEach((it: any) => {
-          const id = String(it.id || it.relPath || it.url || it.name || "");
-          if (!id) return;
-          if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
-        });
+      const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
+        const id = String(it.id || it.relPath || it.url || it.name || "");
+        if (!id) return;
+        if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
+      });
       collect(cat.items || []);
       (cat.children || []).forEach((sub: any) => collect(sub.items || []));
     });
@@ -1066,6 +1097,31 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   }, [plateIds, plateMeta, cats]);
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
+
+  // Отправка/сохранение PDF — состояния
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [sentOk, setSentOk] = useState(false);
+  const [successOpen, setSuccessOpen] = useState(false);
+
+  // Ошибка отправки
+  const [errorOpen, setErrorOpen] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
+  const lastPdfRef = useRef<Blob | null>(null);
+
+  // Сохранение основных настроек плиты при изменениях (persistExtras) — чтобы точно не терялись при навигации
+  useEffect(() => { persistExtras({ plateSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateSize]);
+  useEffect(() => { persistExtras({ plateCustomSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomSize]);
+  useEffect(() => { persistExtras({ plateThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateThickness]);
+  useEffect(() => { persistExtras({ plateCustomThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomThickness]);
+  useEffect(() => { persistExtras({ plateOrientation }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateOrientation]);
+  useEffect(() => { persistExtras({ plateEpitaph }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateEpitaph]);
+  useEffect(() => { persistExtras({ headstonePlate: extraPlate }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [extraPlate]);
+  useEffect(() => { persistExtras({ tumba: hasPedestal }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasPedestal]);
+  useEffect(() => { persistExtras({ flowerbed: hasFlowerbed }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasFlowerbed]);
+  useEffect(() => { persistExtras({ vase: hasVase }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasVase]);
 
   // ===== Генерация/сохранение PDF =====
   async function handleSavePdf() {
@@ -1086,7 +1142,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
-      // Резервный alert, если по какой-то причине окно не смонтировалось
       setTimeout(() => {
         if (!document.querySelector('[role="alertdialog"]')) {
           alert(`${n.msg}\n\n${n.details || ""}`);
@@ -1112,17 +1167,12 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       });
       lastPdfRef.current = blob;
 
-      // Клиентская проверка размера — не отправляем заведомо слишком большой файл
       if (blob.size > uploadLimit) {
         const msg = tooLargeMessage(blob.size);
         setErrorMsg(msg);
         setErrorDetails(`Размер: ${formatBytes(blob.size)}; Лимит: ${formatBytes(uploadLimit)}`);
         setErrorOpen(true);
-        setTimeout(() => {
-          if (!document.querySelector('[role="alertdialog"]')) {
-            alert(`${msg}`);
-          }
-        }, 0);
+        setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`); }, 0);
         return;
       }
 
@@ -1132,31 +1182,23 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         extras: (loadOrderDraft() as any)?.extras || {}
       });
 
-      // успех
       setConfirmOpen(false);
       setSentOk(true);
       setSuccessOpen(true);
       setIsDirtyAfterSend(false);
 
-      setTimeout(() => {
-        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      }, 150);
+      setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
     } catch (e: any) {
       const n = normalizeErrorMessage(e);
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
-      setTimeout(() => {
-        if (!document.querySelector('[role="alertdialog"]')) {
-          alert(`${n.msg}\n\n${n.details || ""}`);
-        }
-      }, 0);
+      setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${n.msg}\n\n${n.details || ""}`); }, 0);
     } finally {
       setIsSending(false);
     }
   }
 
-  // Повторная отправка без регенерации (если PDF уже есть)
   async function handleRetrySend() {
     if (isSending) return;
     try {
@@ -1173,11 +1215,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         setErrorMsg(msg);
         setErrorDetails(`Размер: ${formatBytes(blob.size)}; Лимит: ${formatBytes(uploadLimit)}`);
         setErrorOpen(true);
-        setTimeout(() => {
-          if (!document.querySelector('[role="alertdialog"]')) {
-            alert(`${msg}`);
-          }
-        }, 0);
+        setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`); }, 0);
         return;
       }
 
@@ -1191,19 +1229,13 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       setSentOk(true);
       setSuccessOpen(true);
       setIsDirtyAfterSend(false);
-      setTimeout(() => {
-        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      }, 150);
+      setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
     } catch (e: any) {
       const n = normalizeErrorMessage(e);
       setErrorMsg(n.msg);
       setErrorDetails(n.details);
       setErrorOpen(true);
-      setTimeout(() => {
-        if (!document.querySelector('[role="alertdialog"]')) {
-          alert(`${n.msg}\n\n${n.details || ""}`);
-        }
-      }, 0);
+      setTimeout(() => { if (!document.querySelector('[role="alertdialog"]')) alert(`${n.msg}\n\n${n.details || ""}`); }, 0);
     } finally {
       setIsSending(false);
     }
@@ -1223,8 +1255,26 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   return (
     <div style={safeRoot()}>
+      {/* TopBar */}
       <TopBarWithIntro title="Memorial" />
 
+      {/* Заметная подсказка */}
+      <TopHintNotice />
+
+      {/* Короткое резюме по плите (видно «в топбаре» области) */}
+      <PlateQuickSummary
+        enabled={extraPlate}
+        size={plateSize === "Свой вариант" ? plateCustomSize || "свой" : plateSize}
+        thickness={plateThickness === "Свой вариант" ? plateCustomThickness || "свой" : plateThickness}
+        orient={plateOrientation}
+        graphicsCount={plateIds.length}
+        epitaphCount={plateEpitaphList.length}
+        hasPedestal={hasPedestal}
+        hasFlowerbed={hasFlowerbed}
+        hasVase={hasVase}
+      />
+
+      {/* № заказа + линк справа */}
       <EditableOrderSummary
         orderNo={orderNo}
         onOpenTop={openTopbar}
@@ -1235,69 +1285,33 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
           extraPlate={extraPlate}
-          setExtraPlate={(v) => {
-            setExtraPlate(v);
-            persistExtras({ headstonePlate: v });
-          }}
+          setExtraPlate={(v) => { setExtraPlate(v); persistExtras({ headstonePlate: v }); }}
           plateSize={plateSize}
-          setPlateSize={(v) => {
-            setPlateSize(v);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setPlateSize={(v) => { setPlateSize(v); }}
           plateCustomSize={plateCustomSize}
-          setPlateCustomSize={(v) => {
-            setPlateCustomSize(v);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setPlateCustomSize={(v) => { setPlateCustomSize(v); }}
           plateThickness={plateThickness}
-          setPlateThickness={(v) => {
-            setPlateThickness(v);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setPlateThickness={(v) => { setPlateThickness(v); }}
           plateCustomThickness={plateCustomThickness}
-          setPlateCustomThickness={(v) => {
-            setPlateCustomThickness(v);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setPlateCustomThickness={(v) => { setPlateCustomThickness(v); }}
           plateOrientation={plateOrientation}
-          setPlateOrientation={(v) => {
-            setPlateOrientation(v);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setPlateOrientation={(v) => { setPlateOrientation(v); }}
           plateEpitaph={plateEpitaph}
-          setPlateEpitaph={(v) => {
-            setPlateEpitaph(v);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setPlateEpitaph={(v) => { setPlateEpitaph(v); }}
           catsLoading={catsLoading}
           catsError={catsError}
           cats={cats}
           catOpen={catOpen}
           setCatOpen={setCatOpen}
-          addPlateGraphic={(g) => {
-            addPlateGraphic(g);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
-          removePlateGraphic={(gid) => {
-            removePlateGraphic(gid);
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          addPlateGraphic={addPlateGraphic}
+          removePlateGraphic={removePlateGraphic}
           plateIds={plateIds}
           hasPedestal={hasPedestal}
-          setHasPedestal={(v) => {
-            setHasPedestal(v);
-            persistExtras({ tumba: v });
-          }}
+          setHasPedestal={(v) => { setHasPedestal(v); }}
           hasFlowerbed={hasFlowerbed}
-          setHasFlowerbed={(v) => {
-            setHasFlowerbed(v);
-            persistExtras({ flowerbed: v });
-          }}
+          setHasFlowerbed={(v) => { setHasFlowerbed(v); }}
           hasVase={hasVase}
-          setHasVase={(v) => {
-            setHasVase(v);
-            persistExtras({ vase: v });
-          }}
+          setHasVase={(v) => { setHasVase(v); }}
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
       </section>
@@ -1319,22 +1333,17 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </div>
       </section>
 
-      {/* Тыльная — только когда есть содержимое и картинка ок */}
+      {/* Тыльная — если есть содержимое и картинка ок */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-            <img
-              id="pdf-back-sketch"
-              src={backCandidateUrl}
-              alt=""
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-            />
+            <img id="pdf-back-sketch" src={backCandidateUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
           </div>
         </section>
       )}
 
-      {/* Выбрано для плиты — перенесено вниз, над комментариями */}
+      {/* Выбрано для плиты — над комментариями */}
       {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ ...sectionBox }}>
@@ -1342,14 +1351,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
             {chosenPlateList.length > 0 && (
               <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
-                  <div
-                    key={`${g.id || g.url || i}`}
-                    style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}
-                  >
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {g.name || g.id}
-                    </div>
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
                   </div>
                 ))}
               </div>
@@ -1397,39 +1401,16 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
-          <button
-            type="button"
-            onPointerUp={() => setConfirmOpen(true)}
-            onClick={() => setConfirmOpen(true)}
-            style={glassButtonStyle("sm")}
-          >
+          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>
             Рассчитать стоимость
           </button>
         </div>
       )}
 
       {/* Bottom sheets */}
-      {confirmOpen && (
-        <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending} />
-      )}
-      {successOpen && (
-        <SuccessBottomSheet
-          customerName={customerName}
-          onClose={() => setSuccessOpen(false)}
-          onSave={handleSavePdf}
-          saving={isSaving}
-        />
-      )}
-      {errorOpen && (
-        <ErrorBottomSheet
-          message={errorMsg}
-          details={errorDetails}
-          onClose={() => setErrorOpen(false)}
-          onRetry={handleRetrySend}
-          onSave={handleSaveLastPdf}
-          retryDisabled={isSending}
-        />
-      )}
+      {confirmOpen && <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending} />}
+      {successOpen && <SuccessBottomSheet customerName={customerName} onClose={() => setSuccessOpen(false)} onSave={handleSavePdf} saving={isSaving} />}
+      {errorOpen && <ErrorBottomSheet message={errorMsg} details={errorDetails} onClose={() => setErrorOpen(false)} onRetry={handleRetrySend} onSave={handleSaveLastPdf} retryDisabled={isSending} />}
 
       {/* Низовая подсказка после отправки */}
       <div ref={afterHintRef}>
