@@ -1,11 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение».
 //
-// Что сделано:
-// - Два аккордеона: «Дополнительно» (тумба/цветник/ваза в одну строку) и «Надгробная плита».
-// - У аккордеона «Надгробная плита» ЧЕКБОКС прямо в заголовке. Он включает/выключает параметры плиты.
-// - Аккордеон «Включить плиту» удалён.
-// - Тыльная сторона показывается и попадает в PDF только если картинка реально загружается.
+// Новое по задаче:
+// - В галерее графики помечаем выбранные элементы: подсветка карточки + бейдж с галочкой и количеством.
+// - Тыльная сторона скрывается, если на ней НЕТ: графики, эпитафии, метрики или портрета (даже если есть картинка).
+//   Показ/включение в PDF — только когда И картинка реально загружается, И есть содержимое.
+// - Блок «Выбрано для плиты» перенесён вниз, сразу над «Комментарий к заказу».
+// - Аккордеон «Надгробная плита» — с чекбоксом в заголовке, который включает параметры.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -119,7 +120,7 @@ function EditableOrderSummary({ orderNo, onOpenTop, onDirty }: { orderNo: string
   );
 }
 
-/* ===== Accordion (обновлён: title теперь React.ReactNode) ===== */
+/* ===== Accordion (title может быть ReactNode) ===== */
 function LoudAccordion({ title, open, onToggle, children }: { title: React.ReactNode; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
@@ -143,8 +144,18 @@ function LoudAccordion({ title, open, onToggle, children }: { title: React.React
   );
 }
 
-/* ===== Грид каталога (для плиты) ===== */
-function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
+/* ===== Грид каталога (для плиты) — с пометкой выбранных ===== */
+function CatGrid({
+  items,
+  plateIds,
+  addGraphic,
+  removeGraphic
+}: {
+  items: any[];
+  plateIds: string[];
+  addGraphic: (g: any) => void;
+  removeGraphic: (gid: string) => void;
+}) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
   useEffect(() => {
@@ -161,14 +172,68 @@ function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[];
       {items.map((g: any, idx: number) => {
         const gid = String(g.id || g.relPath || g.url || g.name || idx);
         const qty = plateIds.filter((x) => x === gid).length;
+        const selected = qty > 0;
         const thumbUrl = g.preview || g.url || "";
         const name = g.name || gid;
         return (
-          <div key={gid} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 12 }}>
-            <div role="button" title={name} onClick={() => addGraphic(g)} style={{ borderRadius: 10, overflow: "hidden", background: "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer" }}>
+          <div
+            key={gid}
+            aria-selected={selected}
+            style={{
+              ...glassPanelStyle(),
+              padding: 8,
+              borderRadius: 12,
+              position: "relative",
+              borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
+              boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
+            }}
+          >
+            {/* Бейдж выбранного */}
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                display: selected ? "inline-flex" : "none",
+                alignItems: "center",
+                gap: 4,
+                background: "rgba(10,127,46,0.95)",
+                color: "#fff",
+                borderRadius: 999,
+                padding: "0 6px",
+                fontSize: 11,
+                lineHeight: "18px",
+                height: 18
+              }}
+              title={`Выбрано: ${qty}`}
+            >
+              <span>✓</span>
+              <span>{qty}</span>
+            </div>
+
+            <div
+              role="button"
+              title={name}
+              onClick={() => addGraphic(g)}
+              style={{
+                borderRadius: 10,
+                overflow: "hidden",
+                background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
+                aspectRatio: "1/1",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
               {thumbUrl ? <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
             </div>
-            <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>{name}</div>
+            <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
+              {name}
+            </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
               <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>−</button>
               <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
@@ -225,7 +290,7 @@ function PlateBlock(props: {
 
   const markDirty = () => onDirty?.();
 
-  // Заголовок аккордеона «Надгробная плита» — с чекбоксом, который НЕ триггерит раскрытие
+  // Заголовок «Надгробная плита» — чекбокс прямо в заголовке (не триггерит раскрытие)
   const plateTitle = (
     <label
       style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
@@ -406,14 +471,7 @@ function AfterSendHint({ customerName, onSavePdf, saving }: { customerName?: str
         {`Спасибо${name ? `, ${name}` : ""}! Сохраните PDF заказа при необходимости.`}
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onPointerUp={onSavePdf}
-          onClick={onSavePdf}
-          disabled={saving}
-          style={glassButtonStyle("sm", saving)}
-          title="Сохранить PDF заказ"
-        >
+        <button type="button" onPointerUp={onSavePdf} onClick={onSavePdf} disabled={saving} style={glassButtonStyle("sm", saving)} title="Сохранить PDF заказ">
           {saving ? "Формируем PDF…" : "Сохранить PDF"}
         </button>
       </div>
@@ -482,7 +540,7 @@ function ConfirmBottomSheet({ onClose, onSend, sending }: { onClose: () => void;
         </div>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам для просчёта стоимости?</div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99д199" as any }}>
+          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
             {sending ? "Отправляем…" : "Отправить"}
           </button>
         </div>
@@ -499,6 +557,39 @@ function getBackSketchUrl(draft: any): string | null {
   const raw = String((draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? "").trim();
   if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
   return raw;
+}
+
+// helper: есть ли содержимое на тыльной стороне (графика/эпитафия/метрика/портрет)
+function hasBackContent(draft: any): boolean {
+  const eb = (draft as any)?.editorBack || {};
+  const engr = (draft as any)?.engraving || {};
+
+  const arr = (v: any) => (Array.isArray(v) ? v : []);
+  const str = (v: any) => (typeof v === "string" ? v : "");
+  const nonEmptyText = (v: any) => toParagraphs(v).length > 0;
+
+  const graphics =
+    arr((draft as any)?.graphicsBack).length > 0 ||
+    arr((eb as any)?.graphics).length > 0 ||
+    arr((eb as any)?.items).length > 0 ||
+    arr((eb as any)?.layers).length > 0 ||
+    arr((eb as any)?.objects).length > 0;
+
+  const epitaph =
+    nonEmptyText(str((engr as any)?.backEpitaph)) ||
+    nonEmptyText(str((engr as any)?.epitaphBack)) ||
+    nonEmptyText(arr((engr as any)?.backEpitaphs).join("\n\n"));
+
+  const portraits =
+    arr((draft as any)?.portraitsBack).length > 0 ||
+    arr((eb as any)?.portraits).length > 0;
+
+  const metrics =
+    !!str((engr as any)?.metricsBack).trim() ||
+    !!str((engr as any)?.backMetrics).trim() ||
+    arr((engr as any)?.metricsBack).length > 0;
+
+  return !!(graphics || epitaph || portraits || metrics);
 }
 
 export default function ReviewAndSendStep({ onBack }: Props) {
@@ -524,19 +615,24 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Тыльная сторона: показываем только если реально подгрузилась
+  // Тыльная сторона: показываем только если есть содержимое и картинка реально подгрузилась
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
   useEffect(() => { setBackCandidateUrl(getBackSketchUrl(draft)); }, [draft]);
-  const [hasBackSketch, setHasBackSketch] = useState<boolean>(false);
+
+  const hasBackContentFlag = useMemo(() => hasBackContent(draft), [draft]);
+
+  const [backImageOk, setBackImageOk] = useState<boolean>(false);
   useEffect(() => {
-    if (!backCandidateUrl) { setHasBackSketch(false); return; }
+    if (!backCandidateUrl) { setBackImageOk(false); return; }
     let cancelled = false;
     const im = new Image();
-    im.onload = () => { if (!cancelled) setHasBackSketch((im.naturalWidth || 0) > 5 && (im.naturalHeight || 0) > 5); };
-    im.onerror = () => { if (!cancelled) setHasBackSketch(false); };
+    im.onload = () => { if (!cancelled) setBackImageOk((im.naturalWidth || 0) > 5 && (im.naturalHeight || 0) > 5); };
+    im.onerror = () => { if (!cancelled) setBackImageOk(false); };
     im.src = backCandidateUrl;
     return () => { cancelled = true; };
   }, [backCandidateUrl]);
+
+  const showBack = hasBackContentFlag && backImageOk;
 
   // Эскизы и данные лицевой
   const item = (draft as any)?.item || null;
@@ -636,6 +732,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     });
   }, [cats]);
 
+  // Выбранные позиции для плиты (для «Выбрано для плиты»)
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
@@ -669,8 +766,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: hasBackSketch ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: hasBackSketch ? backCandidateUrl : null
+        backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
+        backUrlFallback: showBack ? backCandidateUrl : null
       });
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
@@ -687,8 +784,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: hasBackSketch ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: hasBackSketch ? backCandidateUrl : null
+        backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
+        backUrlFallback: showBack ? backCandidateUrl : null
       });
       await sendPdfToServer(blob, {
         orderNo: String(loadIntroState().orderNumber || "").trim(),
@@ -715,34 +812,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
       {/* № заказа + линк справа */}
       <EditableOrderSummary orderNo={orderNo} onOpenTop={openTopbar} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
-
-      {/* Выбрано для плиты */}
-      {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
-        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-          <div style={{ ...sectionBox }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
-            {chosenPlateList.length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
-                {chosenPlateList.map((g, i) => (
-                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
-                    <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {plateEpitaphList.length > 0 && (
-              <div style={{ display: "grid", gap: 6 }}>
-                {plateEpitaphList.map((t, idx) => (
-                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, padding: 8 }}>
-                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* Аккордеоны: Дополнительно + Надгробная плита (с чекбоксом в заголовке) */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
@@ -784,12 +853,40 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         </div>
       </section>
 
-      {/* Тыльная — только если картинка реально загружается */}
-      {hasBackSketch && backCandidateUrl && (
+      {/* Тыльная — показываем только при наличии содержимого и корректной картинки */}
+      {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
             <img id="pdf-back-sketch" src={backCandidateUrl} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+          </div>
+        </section>
+      )}
+
+      {/* ВЫБРАНО ДЛЯ ПЛИТЫ — ПЕРЕНЕСЕНО ВНИЗ прямо над «Комментарий к заказу» */}
+      {extraPlate && (chosenPlateList.length > 0 || plateEpitaphList.length > 0) && (
+        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
+            {chosenPlateList.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
+                {chosenPlateList.map((g, i) => (
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
+                    <Thumb url={g.url} />
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {plateEpitaphList.length > 0 && (
+              <div style={{ display: "grid", gap: 6 }}>
+                {plateEpitaphList.map((t, idx) => (
+                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, padding: 8 }}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
       )}
