@@ -1,8 +1,9 @@
 // pages/api/blob-upload-url.ts
-// INIT multipart upload for @vercel/blob (no generateUploadUrl in your build).
-// Requires JSON body from client with: name, contentType (file.type), sizeBytes (file.size).
+// INIT multipart upload для @vercel/blob (в вашей сборке нет generateUploadUrl; используем createMultipartUpload).
+// Принимает JSON (предпочтительно): { name, contentType, sizeBytes, access? }
+// Также поддерживает fallback: те же поля через query (?name=...&contentType=...&sizeBytes=...)
 // Env:
-//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (no quotes)
+//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (без кавычек)
 //  - BLOB_PUBLIC_BASE_URL=https://<store>.public.blob.vercel-storage.com
 
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -11,7 +12,7 @@ export const config = {
   api: { bodyParser: true }
 };
 
-const VERSION = "blob-upload-url@multipart-init+strict";
+const VERSION = "blob-upload-url@multipart-init+strict+debug";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -33,6 +34,15 @@ function sanitizePathName(input: string): string {
   return normalized.replace(/^\/+/, "").replace(/\/{2,}/g, "/").trim();
 }
 
+function toNumber(val: unknown): number {
+  if (typeof val === "number") return val;
+  if (typeof val === "string") {
+    const n = parseInt(val, 10);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  return NaN;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cors(res);
@@ -48,42 +58,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
     if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
-    // Expect JSON body
-    const body = (req.body || {}) as {
-      name?: string;
-      access?: "public" | "private";
-      contentType?: string;
-      sizeBytes?: number | string;
-      parts?: number;
-      partSize?: number;
-    };
+    // Считываем тело; если пришло строкой — пробуем JSON.parse
+    let bodyRaw: any = req.body;
+    if (typeof bodyRaw === "string") {
+      try { bodyRaw = JSON.parse(bodyRaw); } catch { /* оставим как есть */ }
+    }
+    if (bodyRaw == null || typeof bodyRaw !== "object") {
+      bodyRaw = {};
+    }
 
-    const access = (body.access === "private" ? "private" : "public") as "public" | "private";
-    const contentType = (body.contentType || "").trim();
+    // Fallback к query если чего-то не хватает
+    const q = req.query || {};
+    const nameIn = (bodyRaw.name ?? q.name) as string | undefined;
+    const accessIn = (bodyRaw.access ?? q.access) as ("public" | "private") | undefined;
+    const contentTypeIn = (bodyRaw.contentType ?? (q as any).contentType ?? (bodyRaw.mimeType ?? (q as any).mimeType)) as string | undefined;
+    const sizeIn = (bodyRaw.sizeBytes ?? (q as any).sizeBytes ?? bodyRaw.size ?? (q as any).size ?? bodyRaw.contentLength ?? (q as any).contentLength) as number | string | undefined;
+    const partsIn = (bodyRaw.parts ?? (q as any).parts) as number | string | undefined;
+    const partSizeIn = (bodyRaw.partSize ?? (q as any).partSize) as number | string | undefined;
 
-    // Accept both number and string for sizeBytes
-    const rawSize = (body as any).sizeBytes;
-    const sizeBytes = typeof rawSize === "string" ? parseInt(rawSize, 10) : Number(rawSize);
-
-    const providedName = (body.name && body.name.trim()) || `uploads/${Date.now()}.bin`;
+    const access = accessIn === "private" ? "private" : "public";
+    const contentType = (contentTypeIn || "").trim();
+    const sizeBytes = toNumber(sizeIn);
+    const providedName = (nameIn && String(nameIn).trim()) || `uploads/${Date.now()}.bin`;
     const pathname = sanitizePathName(providedName);
+    const parts = partsIn != null ? toNumber(partsIn) : undefined;
+    const partSize = partSizeIn != null ? toNumber(partSizeIn) : undefined;
 
     if (!contentType) {
       cors(res, true);
       return res.status(400).json({
         ok: false, version: VERSION,
-        error: "contentType is required"
+        error: "contentType is required",
+        debug: {
+          bodyType: typeof req.body,
+          bodyKeys: Object.keys(bodyRaw || {}),
+          queryKeys: Object.keys(q || {}),
+          receivedContentType: contentTypeIn ?? null,
+          reqHeaderContentType: req.headers["content-type"] ?? null
+        }
       });
     }
     if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
       cors(res, true);
       return res.status(400).json({
         ok: false, version: VERSION,
-        error: "sizeBytes is required and must be > 0"
+        error: "sizeBytes is required and must be > 0",
+        debug: {
+          bodyType: typeof req.body,
+          bodyKeys: Object.keys(bodyRaw || {}),
+          queryKeys: Object.keys(q || {}),
+          rawSize: sizeIn ?? null,
+          parsedSize: sizeBytes,
+          reqHeaderContentType: req.headers["content-type"] ?? null
+        }
       });
     }
 
-    // Load SDK dynamically (covers CJS/ESM)
+    // Динамический импорт SDK
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
 
@@ -100,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Required base options
+    // Базовые опции (многие версии требуют contentLength)
     const baseOpts: any = {
       token,
       access,
@@ -108,10 +139,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contentLength: sizeBytes
     };
 
-    // Try compatible signatures: pathname vs key, with/without parts/partSize
     const attempts = [
-      { ...baseOpts, pathname, parts: body.parts, partSize: body.partSize },
-      { ...baseOpts, key: pathname, parts: body.parts, partSize: body.partSize },
+      { ...baseOpts, pathname, parts, partSize },
+      { ...baseOpts, key: pathname, parts, partSize },
       { ...baseOpts, pathname },
       { ...baseOpts, key: pathname }
     ];
@@ -135,7 +165,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Normalize
+    // Нормализация ответа
     const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
     const outPath: string = rsp.pathname || rsp.key || pathname;
     const urls: string[] =
@@ -144,7 +174,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       Array.isArray(rsp.uploadUrls) ? rsp.uploadUrls :
       [];
 
-    const partSize = rsp.partSize || rsp.chunkSize || body.partSize || undefined;
+    const resolvedPartSize = rsp.partSize || rsp.chunkSize || partSize || undefined;
 
     if (!uploadId || !urls.length) {
       cors(res, true);
@@ -155,7 +185,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const url = buildPublicUrl(baseUrl, outPath); // Becomes valid after COMPLETE
+    const url = buildPublicUrl(baseUrl, outPath); // Станет доступным после COMPLETE
 
     cors(res, true);
     return res.status(200).json({
@@ -165,7 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       uploadId,
       pathname: outPath,
       partUrls: urls,
-      partSize,
+      partSize: resolvedPartSize,
       url
     });
   } catch (e: any) {

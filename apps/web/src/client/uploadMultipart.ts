@@ -1,7 +1,7 @@
 // client/uploadMultipart.ts
-// Client-side multipart upload to Vercel Blob using your API routes:
-//  - POST /api/blob-upload-url (init): returns { partUrls, uploadId, pathname, partSize }
-//  - POST /api/blob-upload-complete (complete): accepts { uploadId, pathname, parts[] }
+// Клиентская multipart-загрузка в Vercel Blob через ваши API-роуты:
+//  - POST /api/blob-upload-url (init): { partUrls, uploadId, pathname, partSize }
+//  - POST /api/blob-upload-complete (complete): { uploadId, pathname, parts[] }
 
 export type AccessMode = "public" | "private";
 
@@ -38,11 +38,11 @@ export type CompleteResponse =
     };
 
 export type UploadMultipartOptions = {
-  name?: string; // e.g. "uploads/123.pdf"
-  access?: AccessMode; // default "public"
-  contentType?: string; // default file.type
-  endpointInit?: string; // default "/api/blob-upload-url"
-  endpointComplete?: string; // default "/api/blob-upload-complete"
+  name?: string; // пример: "uploads/123.pdf"
+  access?: AccessMode; // по умолчанию "public"
+  contentType?: string; // по умолчанию file.type
+  endpointInit?: string; // по умолчанию "/api/blob-upload-url"
+  endpointComplete?: string; // по умолчанию "/api/blob-upload-complete"
   onProgress?: (info: {
     uploadedBytes: number;
     totalBytes: number;
@@ -99,12 +99,10 @@ export async function uploadFileMultipart(file: File, opts: UploadMultipartOptio
     completeHeaders
   } = opts;
 
-  // Ensure we use a File (not an empty Blob)
   const safeFile: File = file instanceof File ? file : new File([file as any], "file.bin", { type: contentType });
-
   const safeName = sanitizePathName(name || `uploads/${Date.now()}-${safeFile.name || "file.bin"}`);
 
-  // 1) INIT (must be JSON)
+  // 1) INIT — строго JSON
   const initPayload = {
     name: safeName,
     access,
@@ -132,12 +130,12 @@ export async function uploadFileMultipart(file: File, opts: UploadMultipartOptio
     throw new Error("INIT did not return part URLs");
   }
 
-  // 2) PUT parts
+  // 2) PUT частей
   const parts: { partNumber: number; etag: string }[] = [];
   const totalParts = partUrls.length;
   const totalBytes = safeFile.size;
-
   const sizePerPart = !partSize || partSize <= 0 ? Math.ceil(totalBytes / totalParts) : partSize;
+
   let uploadedBytes = 0;
 
   for (let i = 0; i < totalParts; i++) {

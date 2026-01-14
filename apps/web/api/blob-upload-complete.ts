@@ -1,7 +1,8 @@
 // pages/api/blob-upload-complete.ts
-// Complete multipart upload.
+// Завершение multipart загрузки.
 // POST body: { uploadId: string, pathname: string, parts: { partNumber: number, etag: string }[] }
-// Returns: { ok: true, url, pathname, version }
+//
+// Возвращает: { ok: true, url, pathname, version }
 // Env:
 //  - BLOB_READ_WRITE_TOKEN
 //  - BLOB_PUBLIC_BASE_URL
