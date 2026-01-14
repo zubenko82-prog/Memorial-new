@@ -1,13 +1,26 @@
 // pages/api/blob-upload-url.ts
-// Works with @vercel/blob 0.24.x (unstable_generateUploadUrl) and 2.x if present.
-// Uses dynamic require and introspection to avoid import issues.
+// INIT multipart upload using @vercel/blob (no generateUploadUrl in your build).
 // Env:
-//   - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
-//   - BLOB_PUBLIC_BASE_URL=https://jqsjh7yt6zfkuqwf.public.blob.vercel-storage.com
+//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
+//  - BLOB_PUBLIC_BASE_URL=https://jqsjh7yt6zfkuqwf.public.blob.vercel-storage.com
+//
+// Request (POST):
+//  { name?: string, access?: "public"|"private", contentType?: string, sizeBytes?: number }
+// Response:
+//  {
+//    ok: true,
+//    mode: "multipart",
+//    uploadId: string,
+//    pathname: string,
+//    partUrls: string[],
+//    partSize?: number,
+//    url: string | null,     // final public URL (becomes valid after completion)
+//    version: string
+//  }
 
 import type { NextApiRequest, NextApiResponse } from "next";
 
-const VERSION = "blob-upload-url@auto-introspect";
+const VERSION = "blob-upload-url@multipart-init";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -24,33 +37,6 @@ function buildPublicUrl(base: string, pathname?: string | null) {
   return `${b}/${p.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function pickGenerator(mod: any) {
-  if (!mod || typeof mod !== "object") return { fn: null, key: null, keys: [] as string[] };
-  const keys = Object.keys(mod);
-  // try common names (covering 0.24.x and various 2.x variants)
-  const candidates = [
-    "generateUploadUrl",
-    "unstable_generateUploadUrl",
-    "createUploadUrl",
-    "createUploadURL",
-    "generateUploadURL",
-  ];
-  for (const k of candidates) {
-    const fn = mod[k];
-    if (typeof fn === "function") return { fn, key: k, keys };
-  }
-  // sometimes default export contains the fns
-  if (mod.default && typeof mod.default === "object") {
-    const dkeys = Object.keys(mod.default);
-    for (const k of candidates) {
-      const fn = mod.default[k];
-      if (typeof fn === "function") return { fn, key: `default.${k}`, keys: [...keys, ...dkeys.map(x => `default.${x}`)] };
-    }
-    return { fn: null, key: null, keys: [...keys, ...dkeys.map(x => `default.${x}`)] };
-  }
-  return { fn: null, key: null, keys };
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cors(res);
@@ -63,100 +49,109 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const token = process.env.BLOB_READ_WRITE_TOKEN || "";
     const baseUrl = process.env.BLOB_PUBLIC_BASE_URL || "";
-    const debug = String((req.query.debug ?? "") || "").trim() === "1";
+    if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
+    if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
-    if (!token) {
-      cors(res, true);
-      return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" });
-    }
-    if (!baseUrl) {
-      cors(res, true);
-      return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" });
-    }
+    const {
+      name,
+      access = "public",
+      contentType = "application/octet-stream",
+      sizeBytes
+    } = (req.body || {}) as {
+      name?: string;
+      access?: "public" | "private";
+      contentType?: string;
+      sizeBytes?: number;
+    };
 
-    // dynamic require to avoid ESM named export pitfalls
-    let VBlob: any = null;
+    // dynamic import to avoid CJS/ESM pitfalls
+    let VBlob: any;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       VBlob = require("@vercel/blob");
-    } catch (_e) {
-      try {
-        VBlob = await import("@vercel/blob");
-      } catch (e2: any) {
-        cors(res, true);
-        return res.status(500).json({ ok: false, version: VERSION, error: `Failed to import @vercel/blob: ${String(e2?.message || e2)}` });
-      }
+    } catch {
+      VBlob = await import("@vercel/blob");
     }
+    const createMultipartUpload =
+      VBlob?.createMultipartUpload ||
+      VBlob?.default?.createMultipartUpload;
 
-    const { fn: genFn, key: pickedKey, keys: exportedKeys } = pickGenerator(VBlob);
-    if (!genFn) {
+    if (typeof createMultipartUpload !== "function") {
       cors(res, true);
       return res.status(500).json({
         ok: false,
         version: VERSION,
-        error: "@vercel/blob SDK does not expose a generateUploadUrl function.",
-        exportedKeys,
+        error: "@vercel/blob createMultipartUpload is not available. Check package version.",
+        exportedKeys: Object.keys(VBlob || {})
       });
     }
 
-    const { name, access = "public", contentType = "application/octet-stream", addRandomSuffix = true } =
-      (req.body || {}) as {
-        name?: string;
-        access?: "public" | "private";
-        contentType?: string;
-        addRandomSuffix?: boolean;
-      };
-
-    const blobName = name || `uploads/${Date.now()}.bin`;
-
-    // Try multiple option shapes to satisfy different SDKs
+    // Try several option signatures for compatibility
     const attempts = [
-      { access, contentType, token, addRandomSuffix, name: blobName },
-      { access, contentType, token, name: blobName },
-      { access, contentType, token },
+      { access, contentType, token, contentLength: sizeBytes, name },
+      { access, contentType, token, name },
+      { access, contentType, token }
     ];
 
-    let out: any = null;
+    let rsp: any = null;
     let lastErr: any = null;
     for (const opts of attempts) {
       try {
-        const r = await genFn(opts);
-        if (r) { out = r; break; }
+        rsp = await createMultipartUpload(opts);
+        if (rsp) break;
       } catch (e) {
         lastErr = e;
       }
     }
-
-    if (!out) {
+    if (!rsp) {
       cors(res, true);
       return res.status(500).json({
         ok: false,
         version: VERSION,
-        error: `Failed to generate upload URL via ${pickedKey || "unknown"}${lastErr ? `: ${String(lastErr?.message || lastErr)}` : ""}`,
-        exportedKeys,
+        error: `createMultipartUpload failed${lastErr ? `: ${String(lastErr?.message || lastErr)}` : ""}`
       });
     }
 
-    const uploadUrl: string = out.uploadUrl || out.url;
-    const pathname: string | null = out.pathname || out.key || null;
-    const finalUrl: string | null = (out.url && out.uploadUrl ? out.url : null) || buildPublicUrl(baseUrl, pathname);
+    // Normalize response
+    // Expected fields in some versions:
+    //  - uploadId
+    //  - key or pathname
+    //  - urls (string[]) or parts [{ url, partNumber }]
+    //  - partSize or chunkSize
+    const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
+    const pathname: string =
+      rsp.pathname || rsp.key || rsp.path || name || `uploads/${Date.now()}.bin`;
 
-    if (!uploadUrl) {
+    const urls: string[] =
+      Array.isArray(rsp.urls) ? rsp.urls :
+      Array.isArray(rsp.parts) ? rsp.parts.map((p: any) => p.url).filter(Boolean) :
+      Array.isArray(rsp.uploadUrls) ? rsp.uploadUrls :
+      [];
+
+    const partSize: number | undefined = rsp.partSize || rsp.chunkSize || undefined;
+
+    if (!uploadId || !urls.length) {
       cors(res, true);
-      return res.status(500).json({ ok: false, version: VERSION, error: "SDK returned empty uploadUrl", exportedKeys });
+      return res.status(500).json({
+        ok: false,
+        version: VERSION,
+        error: "Multipart init did not return uploadId or part URLs",
+        details: { hasUploadId: !!uploadId, urlsCount: urls.length }
+      });
     }
+
+    const url = buildPublicUrl(baseUrl, pathname); // becomes valid after completion
 
     cors(res, true);
     return res.status(200).json({
       ok: true,
       version: VERSION,
-      pickedKey,
-      uploadUrl,
-      url: finalUrl,
+      mode: "multipart",
+      uploadId,
       pathname,
-      access,
-      name: blobName,
-      ...(debug ? { exportedKeys } : {})
+      partUrls: urls,
+      partSize,
+      url
     });
   } catch (e: any) {
     cors(res, true);
