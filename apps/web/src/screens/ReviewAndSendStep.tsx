@@ -6,7 +6,7 @@
 // - «Посмотреть состав заказа» убрано из шапки заказа.
 // - В блоке «Надгробная плита» не показываем «включена/выключена» и сообщение «Включите плиту…».
 //   Если плита выключена — аккордеон просто закрыт.
-// - Интеграция отправки через Blob + fallback, сохранение extras и пометки в галерее.
+// - Интеграция отправки через Blob (multipart) + fallback, сохранение extras и пометки в галерее.
 // - Короткое резюме по плите — полностью убрано.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -17,7 +17,8 @@ import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS } from "../data/epitaphs";
 import { generateOrderPdf, downloadBlob, sendPdfToServer } from "../lib/pdf/generateOrderPdf";
-import { useBlobUpload } from "../hooks/useBlobUpload";
+// Заменили useBlobUpload на клиент для multipart:
+import uploadFileMultipart from "../client/uploadMultipart";
 
 /* ===== UI helpers ===== */
 function safeRoot(): React.CSSProperties {
@@ -820,7 +821,7 @@ function ConfirmBottomSheet({
   );
 }
 
-/* ===== Основной компонент (с Blob и fallback) ===== */
+/* ===== Основной компонент (с Blob multipart и fallback) ===== */
 type Props = { onBack?: () => void };
 
 function getBackSketchUrl(draft: any): string | null {
@@ -1090,52 +1091,52 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
   const lastPdfRef = useRef<Blob | null>(null);
 
-  // Blob uploader
-  const { upload, abort, status: blobStatus, progress: blobProgress, error: blobError, uploadedUrl } = useBlobUpload({
-    defaultAccess: "public",
-    defaultAddRandomSuffix: true
-  });
-  const isBlobActive = blobStatus === "requestingUrl" || blobStatus === "uploading";
-
-  // Автосохранение полей
-  useEffect(() => { persistExtras({ plateSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateSize]);
-  useEffect(() => { persistExtras({ plateCustomSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomSize]);
-  useEffect(() => { persistExtras({ plateThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateThickness]);
-  useEffect(() => { persistExtras({ plateCustomThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomThickness]);
-  useEffect(() => { persistExtras({ plateOrientation }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateOrientation]);
-  useEffect(() => { persistExtras({ plateEpitaph }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateEpitaph]);
-  useEffect(() => { persistExtras({ headstonePlate: extraPlate }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [extraPlate]);
-  useEffect(() => { persistExtras({ tumba: hasPedestal }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasPedestal]);
-  useEffect(() => { persistExtras({ flowerbed: hasFlowerbed }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasFlowerbed]);
-  useEffect(() => { persistExtras({ vase: hasVase }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasVase]);
+  // Состояние multipart-загрузки (вместо useBlobUpload)
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0); // проценты 0..100
 
   async function sendPdfViaBlob(blob: Blob) {
     const orderNoCur = String(loadIntroState().orderNumber || "").trim();
     const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
-    const res = await upload(blob, {
-      name: fileName,
-      contentType: "application/pdf",
-      access: "public"
-    });
-    const fileUrl = res.url || uploadedUrl;
-    if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
 
-    const payload = {
-      fileUrl,
-      orderNo: orderNoCur,
-      caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
-    };
-    const resp = await fetch("/api/send-order-by-url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const text = await resp.text().catch(() => "");
-    let json: any = null;
-    try { json = text ? JSON.parse(text) : null; } catch {}
-    if (!resp.ok || !json?.ok) {
-      const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
-      throw new Error(msg);
+    // Преобразуем Blob в File, чтобы корректно передавать size/type
+    const file = new File([blob], "order.pdf", { type: "application/pdf" });
+
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const res = await uploadFileMultipart(file, {
+        name: fileName,
+        access: "public",
+        contentType: "application/pdf",
+        onProgress: ({ uploadedBytes, totalBytes }) => {
+          const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+          setUploadProgress(Math.max(0, Math.min(100, pct)));
+        }
+      });
+
+      const fileUrl = res.url;
+      if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
+
+      const payload = {
+        fileUrl,
+        orderNo: orderNoCur,
+        caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
+      };
+      const resp = await fetch("/api/send-order-by-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const text = await resp.text().catch(() => "");
+      let json: any = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
+      if (!resp.ok || !json?.ok) {
+        const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
+        throw new Error(msg);
+      }
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -1290,8 +1291,8 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const showBottomButtons = !sentOk || isDirtyAfterSend;
   const overlayText =
-    isBlobActive
-      ? `Загружаем в хранилище… ${Math.max(0, Math.min(100, blobProgress || 0))}%`
+    uploading
+      ? `Загружаем в хранилище… ${Math.max(0, Math.min(100, uploadProgress || 0))}%`
       : isSending
         ? "Отправляем заказ…"
         : isSaving
@@ -1447,9 +1448,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       )}
 
       {/* Bottom sheets */}
-      {confirmOpen && <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending || isBlobActive} />}
+      {confirmOpen && <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending || uploading} />}
       {successOpen && <SuccessBottomSheet customerName={customerName} onClose={() => setSuccessOpen(false)} onSave={handleSavePdf} saving={isSaving} />}
-      {errorOpen && <ErrorBottomSheet message={errorMsg} details={errorDetails} onClose={() => setErrorOpen(false)} onRetry={handleRetrySend} onSave={handleSaveLastPdf} retryDisabled={isSending || isBlobActive} />}
+      {errorOpen && <ErrorBottomSheet message={errorMsg} details={errorDetails} onClose={() => setErrorOpen(false)} onRetry={handleRetrySend} onSave={handleSaveLastPdf} retryDisabled={isSending || uploading} />}
 
       {/* Низовая подсказка после отправки */}
       <div ref={afterHintRef}>
@@ -1457,7 +1458,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       </div>
 
       {/* Оверлеи */}
-      {(isSending || isSaving || isBlobActive) && (
+      {(isSending || isSaving || uploading) && (
         <BusyOverlay text={overlayText} />
       )}
     </div>
