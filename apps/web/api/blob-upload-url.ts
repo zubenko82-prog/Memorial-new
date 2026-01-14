@@ -1,18 +1,20 @@
 // pages/api/blob-upload-url.ts
-// INIT multipart upload для @vercel/blob (в вашей сборке нет generateUploadUrl; используем createMultipartUpload).
-// Принимает JSON (предпочтительно): { name, contentType, sizeBytes, access? }
-// Также поддерживает fallback: те же поля через query (?name=...&contentType=...&sizeBytes=...)
+// INIT multipart upload для @vercel/blob (в вашей сборке нет generateUploadUrl).
+// Требует: name, contentType (file.type), sizeBytes (file.size), access (public|private).
+// Автоматически подбирает parts и partSize, пробует два пути:
+//  1) createMultipartUpload
+//  2) createMultipartUploader(...).<create|init|start|...>
+//
 // Env:
 //  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (без кавычек)
 //  - BLOB_PUBLIC_BASE_URL=https://<store>.public.blob.vercel-storage.com
 
 import type { NextApiRequest, NextApiResponse } from "next";
+import path from "path";
 
-export const config = {
-  api: { bodyParser: true }
-};
+export const config = { api: { bodyParser: true } };
 
-const VERSION = "blob-upload-url@multipart-init+strict+debug";
+const VERSION = "blob-upload-url@multipart-init+compat";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -43,6 +45,22 @@ function toNumber(val: unknown): number {
   return NaN;
 }
 
+function pickParts(sizeBytes: number) {
+  // Стремимся к 5–8 МБ на часть, не меньше 5 МБ (ограничение S3 multipart)
+  const MIN = 5 * 1024 * 1024; // 5 MiB
+  const TARGET = 8 * 1024 * 1024; // 8 MiB
+  let partSize = Math.max(MIN, TARGET);
+  let parts = Math.max(1, Math.ceil(sizeBytes / partSize));
+  // Притянем partSize под целое число частей
+  partSize = Math.ceil(sizeBytes / parts);
+  // Гарантия нижнего порога
+  if (partSize < MIN && sizeBytes > 0) {
+    partSize = MIN;
+    parts = Math.max(1, Math.ceil(sizeBytes / partSize));
+  }
+  return { partSize, parts };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cors(res);
@@ -58,44 +76,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
     if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
-    // Считываем тело; если пришло строкой — пробуем JSON.parse
+    // Читаем JSON-тело (или query fallback)
     let bodyRaw: any = req.body;
-    if (typeof bodyRaw === "string") {
-      try { bodyRaw = JSON.parse(bodyRaw); } catch { /* оставим как есть */ }
-    }
-    if (bodyRaw == null || typeof bodyRaw !== "object") {
-      bodyRaw = {};
-    }
-
-    // Fallback к query если чего-то не хватает
+    if (typeof bodyRaw === "string") { try { bodyRaw = JSON.parse(bodyRaw); } catch {} }
+    if (bodyRaw == null || typeof bodyRaw !== "object") bodyRaw = {};
     const q = req.query || {};
+
     const nameIn = (bodyRaw.name ?? q.name) as string | undefined;
     const accessIn = (bodyRaw.access ?? q.access) as ("public" | "private") | undefined;
-    const contentTypeIn = (bodyRaw.contentType ?? (q as any).contentType ?? (bodyRaw.mimeType ?? (q as any).mimeType)) as string | undefined;
+    const contentTypeIn = (bodyRaw.contentType ?? (q as any).contentType ?? bodyRaw.mimeType ?? (q as any).mimeType) as string | undefined;
     const sizeIn = (bodyRaw.sizeBytes ?? (q as any).sizeBytes ?? bodyRaw.size ?? (q as any).size ?? bodyRaw.contentLength ?? (q as any).contentLength) as number | string | undefined;
-    const partsIn = (bodyRaw.parts ?? (q as any).parts) as number | string | undefined;
-    const partSizeIn = (bodyRaw.partSize ?? (q as any).partSize) as number | string | undefined;
 
     const access = accessIn === "private" ? "private" : "public";
     const contentType = (contentTypeIn || "").trim();
     const sizeBytes = toNumber(sizeIn);
     const providedName = (nameIn && String(nameIn).trim()) || `uploads/${Date.now()}.bin`;
     const pathname = sanitizePathName(providedName);
-    const parts = partsIn != null ? toNumber(partsIn) : undefined;
-    const partSize = partSizeIn != null ? toNumber(partSizeIn) : undefined;
+    const fileBase = path.basename(pathname);
 
     if (!contentType) {
       cors(res, true);
       return res.status(400).json({
         ok: false, version: VERSION,
         error: "contentType is required",
-        debug: {
-          bodyType: typeof req.body,
-          bodyKeys: Object.keys(bodyRaw || {}),
-          queryKeys: Object.keys(q || {}),
-          receivedContentType: contentTypeIn ?? null,
-          reqHeaderContentType: req.headers["content-type"] ?? null
-        }
+        debug: { bodyKeys: Object.keys(bodyRaw || {}), queryKeys: Object.keys(q || {}) }
       });
     }
     if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
@@ -103,65 +107,168 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({
         ok: false, version: VERSION,
         error: "sizeBytes is required and must be > 0",
-        debug: {
-          bodyType: typeof req.body,
-          bodyKeys: Object.keys(bodyRaw || {}),
-          queryKeys: Object.keys(q || {}),
-          rawSize: sizeIn ?? null,
-          parsedSize: sizeBytes,
-          reqHeaderContentType: req.headers["content-type"] ?? null
-        }
+        debug: { rawSize: sizeIn ?? null, parsedSize: sizeBytes, bodyKeys: Object.keys(bodyRaw || {}) }
       });
     }
+
+    const { partSize, parts } = pickParts(sizeBytes);
 
     // Динамический импорт SDK
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
+    const exportedKeys = Object.keys(VBlob || {});
 
+    // 1) Пытаемся createMultipartUpload (несколько сигнатур)
     const createMultipartUpload =
       VBlob?.createMultipartUpload || VBlob?.default?.createMultipartUpload;
 
-    if (typeof createMultipartUpload !== "function") {
-      cors(res, true);
-      return res.status(500).json({
-        ok: false,
-        version: VERSION,
-        error: "@vercel/blob createMultipartUpload is not available",
-        exportedKeys: Object.keys(VBlob || {})
-      });
-    }
-
-    // Базовые опции (многие версии требуют contentLength)
-    const baseOpts: any = {
-      token,
-      access,
-      contentType,
-      contentLength: sizeBytes
+    const tryCreateMultipartUpload = async (): Promise<any | null> => {
+      if (typeof createMultipartUpload !== "function") return null;
+      const baseOpts: any = {
+        token,
+        access,
+        contentType,
+        contentLength: sizeBytes,
+        cacheControlMaxAge: 31536000, // 1 год (можно убрать)
+        // некоторые SDK поддерживают кастомные метаданные
+        metadata: { filename: fileBase }
+      };
+      const attempts = [
+        { ...baseOpts, pathname, parts, partSize },
+        { ...baseOpts, key: pathname, parts, partSize },
+        { ...baseOpts, pathname }, // вдруг SDK сам подберёт разбиение
+        { ...baseOpts, key: pathname }
+      ];
+      let lastErr: any = null;
+      for (const opts of attempts) {
+        try {
+          const rsp = await createMultipartUpload(opts);
+          if (rsp) return rsp;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      if (lastErr) throw lastErr;
+      return null;
     };
 
-    const attempts = [
-      { ...baseOpts, pathname, parts, partSize },
-      { ...baseOpts, key: pathname, parts, partSize },
-      { ...baseOpts, pathname },
-      { ...baseOpts, key: pathname }
-    ];
+    // 2) Фолбэк: createMultipartUploader (если доступен)
+    const createMultipartUploader =
+      VBlob?.createMultipartUploader || VBlob?.default?.createMultipartUploader;
+
+    const tryCreateViaUploader = async (): Promise<any | null> => {
+      if (typeof createMultipartUploader !== "function") return null;
+      let uploader: any = null;
+      let lastErr: any = null;
+
+      // Попробуем вызвать uploader с разными наборами опций
+      const uAttempts = [
+        { token, access },
+        { token, access, cacheControlMaxAge: 31536000 },
+        { token }
+      ];
+      for (const uOpts of uAttempts) {
+        try {
+          uploader = await createMultipartUploader(uOpts);
+          if (uploader) break;
+        } catch (e) {
+          lastErr = e;
+          uploader = null;
+        }
+      }
+      if (!uploader) {
+        if (lastErr) throw lastErr;
+        return null;
+      }
+
+      // Интроспектим методы uploader и пробуем наиболее вероятные
+      const upKeys = Object.keys(uploader || {});
+      const candidates = [
+        "createUpload",
+        "initUpload",
+        "initiateUpload",
+        "startUpload",
+        "prepareUpload",
+        "create"
+      ];
+      const fnEntry = candidates
+        .map((k) => ({ k, fn: (uploader as any)[k] }))
+        .find((x) => typeof x.fn === "function");
+
+      if (!fnEntry) {
+        // иногда uploader — сама функция
+        if (typeof uploader === "function") {
+          // Попытаемся вызвать напрямую
+          const callAttempts = [
+            { access, contentType, contentLength: sizeBytes, pathname, parts, partSize },
+            { access, contentType, contentLength: sizeBytes, key: pathname, parts, partSize },
+            { access, contentType, contentLength: sizeBytes, pathname },
+            { access, contentType, contentLength: sizeBytes, key: pathname }
+          ];
+          for (const opts of callAttempts) {
+            try {
+              const rsp = await uploader(opts);
+              if (rsp) return rsp;
+            } catch (e) {
+              lastErr = e;
+            }
+          }
+          if (lastErr) throw lastErr;
+          return null;
+        }
+
+        // Если методов не нашли — вернём debug
+        throw new Error(`createMultipartUploader returned unexpected object. Keys: ${upKeys.join(", ")}`);
+      }
+
+      const callAttempts = [
+        { access, contentType, contentLength: sizeBytes, pathname, parts, partSize },
+        { access, contentType, contentLength: sizeBytes, key: pathname, parts, partSize },
+        { access, contentType, contentLength: sizeBytes, pathname },
+        { access, contentType, contentLength: sizeBytes, key: pathname }
+      ];
+      let lastErr2: any = null;
+      for (const opts of callAttempts) {
+        try {
+          const rsp = await fnEntry.fn.call(uploader, opts);
+          if (rsp) return rsp;
+        } catch (e) {
+          lastErr2 = e;
+        }
+      }
+      if (lastErr2) throw lastErr2;
+      return null;
+    };
 
     let rsp: any = null;
-    let lastErr: any = null;
-    for (const opts of attempts) {
+    let lastErrAll: any = null;
+
+    try {
+      rsp = await tryCreateMultipartUpload();
+    } catch (e) {
+      lastErrAll = e;
+    }
+
+    if (!rsp) {
       try {
-        rsp = await createMultipartUpload(opts);
-        if (rsp) break;
-      } catch (e: any) {
-        lastErr = e;
+        rsp = await tryCreateViaUploader();
+      } catch (e) {
+        lastErrAll = e;
       }
     }
+
     if (!rsp) {
       cors(res, true);
       return res.status(500).json({
         ok: false,
         version: VERSION,
-        error: `createMultipartUpload failed${lastErr ? `: ${String(lastErr?.message || lastErr)}` : ""}`
+        error: `createMultipartUpload failed${lastErrAll ? `: ${String((lastErrAll as any)?.message || lastErrAll)}` : ""}`,
+        debug: {
+          exportedKeys,
+          triedParts: parts,
+          triedPartSize: partSize,
+          pathname
+        }
       });
     }
 
@@ -181,11 +288,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({
         ok: false, version: VERSION,
         error: "Multipart init did not return uploadId or part URLs",
-        details: { hasUploadId: !!uploadId, urlsCount: urls.length }
+        details: { hasUploadId: !!uploadId, urlsCount: urls.length },
+        debug: { rspKeys: Object.keys(rsp || {}) }
       });
     }
 
-    const url = buildPublicUrl(baseUrl, outPath); // Станет доступным после COMPLETE
+    const url = buildPublicUrl(baseUrl, outPath); // станет доступен после COMPLETE
 
     cors(res, true);
     return res.status(200).json({
