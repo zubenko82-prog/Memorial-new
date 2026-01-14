@@ -203,64 +203,6 @@ function EditableOrderSummary({
   );
 }
 
-/* ===== Короткое резюме по плите (без статуса включена/выключена) ===== */
-function PlateQuickSummary({
-  enabled,
-  size,
-  thickness,
-  orient,
-  graphicsCount,
-  epitaphCount,
-  hasPedestal,
-  hasFlowerbed,
-  hasVase
-}: {
-  enabled: boolean;
-  size?: string;
-  thickness?: string;
-  orient?: string;
-  graphicsCount: number;
-  epitaphCount: number;
-  hasPedestal?: boolean;
-  hasFlowerbed?: boolean;
-  hasVase?: boolean;
-}) {
-  if (!enabled) return null; // если плита выключена — вообще не показываем блок
-  const tag = (txt: string) => (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "4px 8px",
-        borderRadius: 999,
-        background: "rgba(255,255,255,0.10)",
-        border: "1px solid rgba(255,255,255,0.26)",
-        fontSize: 12,
-        whiteSpace: "nowrap"
-      }}
-    >
-      {txt}
-    </span>
-  );
-  const orientRu = orient === "horizontal" ? "горизонтально" : orient === "vertical" ? "вертикально" : undefined;
-  return (
-    <div style={{ ...glassPanelStyle(), padding: 10, marginTop: 8 }}>
-      <div style={{ fontWeight: 800, marginBottom: 6 }}>Надгробная плита</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {size ? tag(`Размер: ${size}`) : null}
-        {thickness ? tag(`Толщина: ${thickness}`) : null}
-        {orientRu ? tag(`Ориентация: ${orientRu}`) : null}
-        {tag(`Графика: ${graphicsCount}`)}
-        {tag(`Эпитафии: ${epitaphCount}`)}
-        {hasPedestal ? tag("Тумба") : null}
-        {hasFlowerbed ? tag("Цветник") : null}
-        {hasVase ? tag("Ваза") : null}
-      </div>
-    </div>
-  );
-}
-
 /* ===== Accordion ===== */
 function LoudAccordion({
   title,
