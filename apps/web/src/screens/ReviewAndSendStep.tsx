@@ -1,24 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение».
 //
-// Дополнительно реализовано по задаче:
-// - Сохранение выбора элементов надгробной плиты в черновик (extras) при любом изменении,
-//   а также восстановление выбора при обновлении/переходе (синхронизация local state из draft.extras).
-// - Вывод краткого резюме по плите вверху (под TopBar), чтобы «в топбаре» было видно, что выбрано.
-// - Заметная подсказка вверху страницы:
-//   «Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.»
-// - Пометка выбранной графики в галерее (подсветка + бейдж с количеством).
-// - Тыльная сторона отображается только если есть содержимое и картинка загрузилась.
-// - Обработка ошибок отправки с предупреждением пользователя (включая 413 Payload Too Large).
-// - Интегрирована отправка PDF через Vercel Blob (прямая загрузка файла в хранилище) с прогрессом,
-//   затем сервер отправляет документ в Telegram по URL (через /api/send-order-by-url).
-// - Предварительная проверка размера PDF (лимит подтягивается HEAD-запросом из /api/send-order-pdf) оставлена как fallback
-//   для случая, когда загрузка в Blob недоступна (например, отсутствует токен).
-//
-// ВНИМАНИЕ: Для работы отправки через Blob необходимо добавить серверные роуты:
-// - /api/blob-upload-url (возвращает одноразовый uploadUrl; см. инструкцию)
-// - /api/send-order-by-url (отправка в Telegram по document=fileUrl)
-// и переменную окружения BLOB_READ_WRITE_TOKEN на Vercel.
+// Правки по задаче:
+// - В подсказке: перенесена ВЫШЕ TopBar; фон и контур серые; шрифт курсив, не жирный.
+// - «Посмотреть состав заказа» убрано из шапки заказа.
+// - В блоке «Надгробная плита» не показываем «включена/выключена» вообще.
+// - Сообщение «Включите плиту…» не показываем. Если плита выключена — аккордеон просто закрыт.
+// - Сохранена интеграция отправки через Blob + fallback, сохранение extras и пометки в галерее.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -59,7 +47,8 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: pad,
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
@@ -147,7 +136,7 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   );
 }
 
-/* ===== Заметная подсказка вверху ===== */
+/* ===== Подсказка (перенесена выше TopBar, серые фон/контур, курсив) ===== */
 function TopHintNotice() {
   return (
     <div
@@ -157,12 +146,11 @@ function TopHintNotice() {
         margin: "10px 0",
         padding: "10px 12px",
         borderRadius: 12,
-        background:
-          "linear-gradient(135deg, rgba(255,215,64,0.20) 0%, rgba(255,165,0,0.20) 100%), rgba(255,255,255,0.08)",
-        border: "1px solid rgba(255,215,64,0.65)",
-        color: "#fff",
-        fontWeight: 700,
-        boxShadow: "0 6px 18px rgba(0,0,0,0.25)"
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.25)",
+        color: "#ddd",
+        fontWeight: 400,
+        fontStyle: "italic"
       }}
     >
       Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.
@@ -170,10 +158,10 @@ function TopHintNotice() {
   );
 }
 
-// ===== Заголовок: № заказа + линк справа =====
+/* ===== Заголовок: № заказа (без «Посмотреть состав заказа») ===== */
 function EditableOrderSummary({
   orderNo,
-  onOpenTop,
+  onOpenTop, // оставлен в пропсах, но не используется
   onDirty
 }: {
   orderNo: string;
@@ -184,7 +172,6 @@ function EditableOrderSummary({
   const [name, setName] = useState<string>(introInitial.customerName || "");
   const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
   const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
-
   const saveOnBlur = () => {
     const next: Intro = {
       customerName: name.trim(),
@@ -199,28 +186,11 @@ function EditableOrderSummary({
     <section style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-        <div style={{ marginLeft: "auto" }}>
-          <button type="button" onClick={onOpenTop} style={linkLike()}>
-            Посмотреть состав заказа
-          </button>
-        </div>
+        {/* Кнопку «Посмотреть состав заказа» не отображаем */}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={saveOnBlur}
-          placeholder="Имя"
-          style={inputStyle()}
-        />
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          onBlur={saveOnBlur}
-          placeholder="+7..."
-          inputMode="tel"
-          style={inputStyle()}
-        />
+        <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
       </div>
       <input
         value={contactNotes}
@@ -233,8 +203,7 @@ function EditableOrderSummary({
   );
 }
 
-
-/* ===== Короткое резюме по плите (под TopBar) ===== */
+/* ===== Короткое резюме по плите (без статуса включена/выключена) ===== */
 function PlateQuickSummary({
   enabled,
   size,
@@ -256,6 +225,7 @@ function PlateQuickSummary({
   hasFlowerbed?: boolean;
   hasVase?: boolean;
 }) {
+  if (!enabled) return null; // если плита выключена — вообще не показываем блок
   const tag = (txt: string) => (
     <span
       style={{
@@ -276,25 +246,16 @@ function PlateQuickSummary({
   const orientRu = orient === "horizontal" ? "горизонтально" : orient === "vertical" ? "вертикально" : undefined;
   return (
     <div style={{ ...glassPanelStyle(), padding: 10, marginTop: 8 }}>
-      <div style={{ fontWeight: 800, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
-        <span>Надгробная плита:</span>
-        <span style={{ color: enabled ? "#71f3a1" : "#ffb4b4" }}>{enabled ? "включена" : "выключена"}</span>
-      </div>
+      <div style={{ fontWeight: 800, marginBottom: 6 }}>Надгробная плита</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {enabled ? (
-          <>
-            {size ? tag(`Размер: ${size}`) : null}
-            {thickness ? tag(`Толщина: ${thickness}`) : null}
-            {orientRu ? tag(`Ориентация: ${orientRu}`) : null}
-            {tag(`Графика: ${graphicsCount}`)}
-            {tag(`Эпитафии: ${epitaphCount}`)}
-            {hasPedestal ? tag("Тумба") : null}
-            {hasFlowerbed ? tag("Цветник") : null}
-            {hasVase ? tag("Ваза") : null}
-          </>
-        ) : (
-          <span style={{ opacity: 0.85, fontSize: 13 }}>Для добавления параметров включите плиту ниже.</span>
-        )}
+        {size ? tag(`Размер: ${size}`) : null}
+        {thickness ? tag(`Толщина: ${thickness}`) : null}
+        {orientRu ? tag(`Ориентация: ${orientRu}`) : null}
+        {tag(`Графика: ${graphicsCount}`)}
+        {tag(`Эпитафии: ${epitaphCount}`)}
+        {hasPedestal ? tag("Тумба") : null}
+        {hasFlowerbed ? tag("Цветник") : null}
+        {hasVase ? tag("Ваза") : null}
       </div>
     </div>
   );
@@ -568,9 +529,13 @@ function PlateBlock(props: {
   } = props;
 
   const [accExtrasOpen, setAccExtrasOpen] = useState(true);
-  const [accPlateOpen, setAccPlateOpen] = useState(true);
+  const [accPlateOpen, setAccPlateOpen] = useState(!!extraPlate); // по умолчанию закрыт, если плита выключена
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!extraPlate) setAccPlateOpen(false); // плита выключена — держим аккордеон закрытым
+  }, [extraPlate]);
 
   const markDirty = () => onDirty?.();
 
@@ -614,167 +579,160 @@ function PlateBlock(props: {
 
       {/* Надгробная плита */}
       <LoudAccordion title={plateTitle} open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
-        <div style={{ display: "grid", gap: 12, opacity: extraPlate ? 1 : 0.6 }}>
-          {!extraPlate && (
+        {/* Если плита выключена — НЕ показываем никаких подсказок, просто пусто (и аккордеон закрыт) */}
+        {extraPlate && (
+          <div style={{ display: "grid", gap: 12 }}>
+            {/* Размер */}
             <div style={{ ...sectionBox }}>
-              Включите плиту (чекбокс в заголовке), чтобы настроить параметры.
-            </div>
-          )}
-
-          {extraPlate && (
-            <>
-              {/* Размер */}
-              <div style={{ ...sectionBox }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["100×50 см", "120×60 см", "140×70 см", "Свой вариант"].map((v) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input
-                        type="radio"
-                        name="plate-size"
-                        checked={plateSize === v}
-                        onChange={() => { setPlateSize(v); markDirty(); }}
-                      />
-                      <span>{v}</span>
-                    </label>
-                  ))}
-                </div>
-                {plateSize === "Свой вариант" && (
-                  <input
-                    value={plateCustomSize}
-                    onChange={(e) => { setPlateCustomSize(e.target.value); markDirty(); }}
-                    onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
-                    placeholder="Укажите свой размер (например, 130×60 см)"
-                    style={inputStyle()}
-                  />
-                )}
-              </div>
-
-              {/* Толщина */}
-              <div style={{ ...sectionBox }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {["5 см", "8 см", "10 см", "Свой вариант"].map((v) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input
-                        type="radio"
-                        name="plate-thickness"
-                        checked={plateThickness === v}
-                        onChange={() => { setPlateThickness(v); markDirty(); }}
-                      />
-                      <span>{v}</span>
-                    </label>
-                  ))}
-                </div>
-                {plateThickness === "Свой вариант" && (
-                  <input
-                    value={plateCustomThickness}
-                    onChange={(e) => { setPlateCustomThickness(e.target.value); markDirty(); }}
-                    onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
-                    placeholder="Укажите толщину (например, 7 см)"
-                    style={inputStyle()}
-                  />
-                )}
-              </div>
-
-              {/* Ориентация */}
-              <div style={{ ...sectionBox }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  {[{ v: "vertical", t: "вертикально" }, { v: "horizontal", t: "горизонтально" }].map(({ v, t }) => (
-                    <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                      <input
-                        type="radio"
-                        name="plate-orient"
-                        checked={plateOrientation === v}
-                        onChange={() => { setPlateOrientation(v); markDirty(); }}
-                      />
-                      <span>{t}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Эпитафии */}
-              <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div style={{ ...sectionBox }}>
-                    <div style={{ marginBottom: 6 }}>Свой вариант:</div>
-                    <textarea
-                      rows={3}
-                      value={plateEpitaph}
-                      onChange={(e) => { setPlateEpitaph(e.target.value); }}
-                      onBlur={() => markDirty()}
-                      placeholder="Введите текст…"
-                      style={{ ...inputStyle(), resize: "vertical" }}
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {["100×50 см", "120×60 см", "140×70 см", "Свой вариант"].map((v) => (
+                  <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                    <input
+                      type="radio"
+                      name="plate-size"
+                      checked={plateSize === v}
+                      onChange={() => { setPlateSize(v); markDirty(); }}
                     />
-                  </div>
-                  <div>
-                    <div style={{ marginBottom: 8 }}>Быстрый выбор:</div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {QUICK_EPITAPHS.map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => {
-                            const list = toParagraphs(plateEpitaph);
-                            const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
-                            const exists = list.some((s) => norm(s) === norm(t));
-                            const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
-                            const joined = next.join("\n\n");
-                            setPlateEpitaph(joined);
-                            markDirty();
-                          }}
-                          style={glassButtonStyle("nano")}
-                          title={t}
-                        >
-                          {t}
-                        </button>
-                      ))}
-                    </div>
+                    <span>{v}</span>
+                  </label>
+                ))}
+              </div>
+              {plateSize === "Свой вариант" && (
+                <input
+                  value={plateCustomSize}
+                  onChange={(e) => { setPlateCustomSize(e.target.value); markDirty(); }}
+                  onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
+                  placeholder="Укажите свой размер (например, 130×60 см)"
+                  style={inputStyle()}
+                />
+              )}
+            </div>
+
+            {/* Толщина */}
+            <div style={{ ...sectionBox }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {["5 см", "8 см", "10 см", "Свой вариант"].map((v) => (
+                  <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                    <input
+                      type="radio"
+                      name="plate-thickness"
+                      checked={plateThickness === v}
+                      onChange={() => { setPlateThickness(v); markDirty(); }}
+                    />
+                    <span>{v}</span>
+                  </label>
+                ))}
+              </div>
+              {plateThickness === "Свой вариант" && (
+                <input
+                  value={plateCustomThickness}
+                  onChange={(e) => { setPlateCustomThickness(e.target.value); markDirty(); }}
+                  onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
+                  placeholder="Укажите толщину (например, 7 см)"
+                  style={inputStyle()}
+                />
+              )}
+            </div>
+
+            {/* Ориентация */}
+            <div style={{ ...sectionBox }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {[{ v: "vertical", t: "вертикально" }, { v: "horizontal", t: "горизонтально" }].map(({ v, t }) => (
+                  <label key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                    <input
+                      type="radio"
+                      name="plate-orient"
+                      checked={plateOrientation === v}
+                      onChange={() => { setPlateOrientation(v); markDirty(); }}
+                    />
+                    <span>{t}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Эпитафии */}
+            <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ ...sectionBox }}>
+                  <div style={{ marginBottom: 6 }}>Свой вариант:</div>
+                  <textarea
+                    rows={3}
+                    value={plateEpitaph}
+                    onChange={(e) => { setPlateEpitaph(e.target.value); }}
+                    onBlur={() => markDirty()}
+                    placeholder="Введите текст…"
+                    style={{ ...inputStyle(), resize: "vertical" }}
+                  />
+                </div>
+                <div>
+                  <div style={{ marginBottom: 8 }}>Быстрый выбор:</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {QUICK_EPITAPHS.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => {
+                          const list = toParagraphs(plateEpitaph);
+                          const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
+                          const exists = list.some((s) => norm(s) === norm(t));
+                          const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
+                          const joined = next.join("\n\n");
+                          setPlateEpitaph(joined);
+                          markDirty();
+                        }}
+                        style={glassButtonStyle("nano")}
+                        title={t}
+                      >
+                        {t}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </LoudAccordion>
+              </div>
+            </LoudAccordion>
 
-              {/* Графика */}
-              <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
-                {catsLoading && <div>Загрузка каталога…</div>}
-                {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-                {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-                {!catsLoading && cats.length > 0 && (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {cats.map((cat: any, idx: number) => {
-                      const catKey = String(cat._id || cat.name || idx);
-                      const open = !!(catOpen || {})[catKey];
-                      const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
-                      return (
-                        <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                          <CatGrid
-                            items={cat.items || []}
-                            plateIds={plateIds}
-                            addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                            removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
-                          />
-                          {(cat.children || []).map((sub: any, j: number) => (
-                            <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
-                              <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid
-                                items={sub.items || []}
-                                plateIds={plateIds}
-                                addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                                removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
-                              />
-                            </div>
-                          ))}
-                        </LoudAccordion>
-                      );
-                    })}
-                  </div>
-                )}
-              </LoudAccordion>
-            </>
-          )}
-        </div>
+            {/* Графика */}
+            <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
+              {catsLoading && <div>Загрузка каталога…</div>}
+              {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+              {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+              {!catsLoading && cats.length > 0 && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {cats.map((cat: any, idx: number) => {
+                    const catKey = String(cat._id || cat.name || idx);
+                    const open = !!(catOpen || {})[catKey];
+                    const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
+                    return (
+                      <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
+                        <CatGrid
+                          items={cat.items || []}
+                          plateIds={plateIds}
+                          addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
+                          removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                        />
+                        {(cat.children || []).map((sub: any, j: number) => (
+                          <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
+                            <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                            <CatGrid
+                              items={sub.items || []}
+                              plateIds={plateIds}
+                              addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
+                              removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                            />
+                          </div>
+                        ))}
+                      </LoudAccordion>
+                    );
+                  })}
+                </div>
+              )}
+            </LoudAccordion>
+          </div>
+        )}
       </LoudAccordion>
     </div>
   );
@@ -922,10 +880,9 @@ function ConfirmBottomSheet({
   );
 }
 
-/* ===== Основной компонент ===== */
+/* ===== Основной компонент (с Blob и fallback) ===== */
 type Props = { onBack?: () => void };
 
-// helpers для тыльной стороны и ошибок
 function getBackSketchUrl(draft: any): string | null {
   const raw = String((draft?.editorBack?.previewHiUrl || draft?.editorBack?.previewUrl || "") ?? "").trim();
   if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
@@ -999,7 +956,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Подтягиваем лимит загрузки (для fallback в serverless)
+  // Лимит для fallback serverless
   const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
   const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
   useEffect(() => {
@@ -1018,7 +975,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     `PDF (${formatBytes(size)}) слишком большой для отправки через сайт. Лимит ≈ ${formatBytes(uploadLimit)}.
 Сохраните PDF и отправьте менеджеру вручную (Telegram/почта), либо уменьшите размер.`;
 
-  // Тыльная сторона — условия отображения
+  // Тыльная сторона
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
   useEffect(() => { setBackCandidateUrl(getBackSketchUrl(draft)); }, [draft]);
   const hasBackContentFlag = useMemo(() => hasBackContent(draft), [draft]);
@@ -1034,7 +991,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   }, [backCandidateUrl]);
   const showBack = hasBackContentFlag && backImageOk;
 
-  // Лицевая сторона
+  // Лицевая
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
@@ -1067,7 +1024,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита — состояния (инициализация из extras)
+  // Плита — состояния (extras)
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -1087,7 +1044,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Синхронизация локальных состояний при обновлении draft/extras
+  // Синхронизация при изменении draft.extras
   useEffect(() => {
     const ex = ((loadOrderDraft() as any)?.extras || {}) as any;
     const upd = <T,>(cur: T, next: T, setter: (v: T) => void) => { if (JSON.stringify(cur) !== JSON.stringify(next)) setter(next as any); };
@@ -1106,7 +1063,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify((draft as any)?.extras || {})]);
 
-  // Хелпер сохранения в extras
+  // Сохранение в extras
   function persistExtras(patch: Record<string, any>) {
     const prev = loadOrderDraft();
     const nextExtras = { ...(prev as any).extras, ...patch };
@@ -1115,7 +1072,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     if (sentOk) setIsDirtyAfterSend(true);
   }
 
-  // Добавление/удаление графики с записью в extras
+  // Графика плиты
   const addPlateGraphic = (g: any) => {
     const gid = String(g.id || g.relPath || g.url || g.name);
     const nextIds = [...plateIds, gid];
@@ -1132,7 +1089,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     persistExtras({ plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta });
   };
 
-  // Каталог для плиты
+  // Каталог
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -1180,7 +1137,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // Отправка/сохранение PDF — состояния
+  // Отправка/сохранение PDF
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -1193,14 +1150,14 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
   const lastPdfRef = useRef<Blob | null>(null);
 
-  // Blob uploader (Vercel Blob) — прогресс и статус
+  // Blob uploader
   const { upload, abort, status: blobStatus, progress: blobProgress, error: blobError, uploadedUrl } = useBlobUpload({
     defaultAccess: "public",
     defaultAddRandomSuffix: true
   });
   const isBlobActive = blobStatus === "requestingUrl" || blobStatus === "uploading";
 
-  // Автосохранение основных настроек плиты при изменениях
+  // Автосохранение основных полей extras
   useEffect(() => { persistExtras({ plateSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateSize]);
   useEffect(() => { persistExtras({ plateCustomSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomSize]);
   useEffect(() => { persistExtras({ plateThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateThickness]);
@@ -1212,9 +1169,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   useEffect(() => { persistExtras({ flowerbed: hasFlowerbed }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasFlowerbed]);
   useEffect(() => { persistExtras({ vase: hasVase }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasVase]);
 
-  // ===== Отправка PDF (приоритет — через Blob, fallback — через serverless) =====
   async function sendPdfViaBlob(blob: Blob) {
-    // 1) Загрузка в Vercel Blob с прогрессом
     const orderNoCur = String(loadIntroState().orderNumber || "").trim();
     const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
     const res = await upload(blob, {
@@ -1225,7 +1180,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     const fileUrl = res.url || uploadedUrl;
     if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
 
-    // 2) Сообщаем серверу отправить документ в Telegram по URL
     const payload = {
       fileUrl,
       orderNo: orderNoCur,
@@ -1288,14 +1242,10 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       });
       lastPdfRef.current = blob;
 
-      // 1) Пытаемся отправить через Blob (без лимита 4 МБ)
       try {
         await sendPdfViaBlob(blob);
       } catch (blobErr: any) {
-        // 2) Fallback на старый способ (через serverless). Сработает только если файл <= лимита прокси.
-        // Если файл слишком большой — покажем дружелюбную ошибку.
         const raw = String(blobErr?.message || blobErr || "");
-        // Если upload-url недоступен (например, BLOB_READ_WRITE_TOKEN не задан), пробуем fallback.
         if (blob.size > uploadLimit) {
           const msg = tooLargeMessage(blob.size);
           setErrorMsg(msg);
@@ -1306,7 +1256,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
           }, 0);
           return;
         }
-        // Пробуем отправить как раньше
         await sendPdfToServer(blob, {
           orderNo: String(loadIntroState().orderNumber || "").trim(),
           intro: loadIntroState().intro || {},
@@ -1314,7 +1263,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
         });
       }
 
-      // успех
       setConfirmOpen(false);
       setSentOk(true);
       setSuccessOpen(true);
@@ -1401,8 +1349,6 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   }
 
   const showBottomButtons = !sentOk || isDirtyAfterSend;
-
-  // Текст оверлея с прогрессом загрузки в Blob
   const overlayText =
     isBlobActive
       ? `Загружаем в хранилище… ${Math.max(0, Math.min(100, blobProgress || 0))}%`
@@ -1414,29 +1360,29 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   return (
     <div style={safeRoot()}>
+      {/* Подсказка (над TopBar) */}
+      <TopHintNotice />
+
       {/* TopBar */}
       <TopBarWithIntro title="Memorial" />
 
-      {/* Заметная подсказка */}
-      <TopHintNotice />
-
-      {/* Короткое резюме по плите (видно вверху) */}
+      {/* Короткое резюме по плите (без статуса) */}
       <PlateQuickSummary
         enabled={extraPlate}
         size={plateSize === "Свой вариант" ? plateCustomSize || "свой" : plateSize}
         thickness={plateThickness === "Свой вариант" ? plateCustomThickness || "свой" : plateThickness}
         orient={plateOrientation}
         graphicsCount={plateIds.length}
-        epitaphCount={plateEpitaphList.length}
+        epitaphCount={toParagraphs(plateEpitaph).length}
         hasPedestal={hasPedestal}
         hasFlowerbed={hasFlowerbed}
         hasVase={hasVase}
       />
 
-      {/* № заказа + линк справа */}
+      {/* № заказа (без кнопки «Посмотреть состав заказа») */}
       <EditableOrderSummary
         orderNo={orderNo}
-        onOpenTop={openTopbar}
+        onOpenTop={() => {}}
         onDirty={() => sentOk && setIsDirtyAfterSend(true)}
       />
 
@@ -1512,7 +1458,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
                 {chosenPlateList.map((g, i) => (
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {g.name || g.id}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1573,31 +1521,15 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
       {/* Bottom sheets */}
       {confirmOpen && <ConfirmBottomSheet onClose={() => setConfirmOpen(false)} onSend={handleSendPdf} sending={isSending || isBlobActive} />}
-      {successOpen && (
-        <SuccessBottomSheet
-          customerName={customerName}
-          onClose={() => setSuccessOpen(false)}
-          onSave={handleSavePdf}
-          saving={isSaving}
-        />
-      )}
-      {errorOpen && (
-        <ErrorBottomSheet
-          message={errorMsg}
-          details={errorDetails}
-          onClose={() => setErrorOpen(false)}
-          onRetry={handleRetrySend}
-          onSave={handleSaveLastPdf}
-          retryDisabled={isSending || isBlobActive}
-        />
-      )}
+      {successOpen && <SuccessBottomSheet customerName={customerName} onClose={() => setSuccessOpen(false)} onSave={handleSavePdf} saving={isSaving} />}
+      {errorOpen && <ErrorBottomSheet message={errorMsg} details={errorDetails} onClose={() => setErrorOpen(false)} onRetry={handleRetrySend} onSave={handleSaveLastPdf} retryDisabled={isSending || isBlobActive} />}
 
       {/* Низовая подсказка после отправки */}
       <div ref={afterHintRef}>
         {sentOk && <AfterSendHint customerName={customerName} onSavePdf={handleSavePdf} saving={isSaving} />}
       </div>
 
-      {/* Оверлеи занятости и прогресса Blob */}
+      {/* Оверлеи */}
       {(isSending || isSaving || isBlobActive) && (
         <BusyOverlay text={overlayText} />
       )}
