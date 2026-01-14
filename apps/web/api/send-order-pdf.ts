@@ -3,21 +3,26 @@
 // Pages Router + formidable. Без req.formData(). Имя файла передаём 3-м аргументом FormData.append(..., blob, fileName).
 //
 // Обновления:
-// - Ранний контроль размера по заголовку Content-Length → 413 JSON с понятным сообщением (FUNCTION_PAYLOAD_TOO_LARGE).
-// - Ограничение maxFileSize в formidable синхронизировано с лимитом (по умолчанию ~4.2 МБ, можно поменять через env MAX_UPLOAD_BYTES).
+// - Лимит приёма увеличен по умолчанию до ~12 МБ (можно поменять через env MAX_UPLOAD_BYTES).
+// - Ранний контроль размера по заголовку Content-Length → 413 JSON (FUNCTION_PAYLOAD_TOO_LARGE).
+// - Ограничение maxFileSize в formidable синхронизировано с лимитом.
 // - Детальные ответы при частичных/полных сбоях отправки в Telegram (results по каждому чату).
 // - Всегда отдаём JSON с ok/кодом ошибки, чтобы фронт мог показать уведомление.
+// - Возвращаем X-Upload-Limit-Bytes (в HEAD/любом ответе) — фронт может подстроить поведение.
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable, { File as FormidableFile } from "formidable";
 import fs from "node:fs";
 import path from "node:path";
 
-// версию меняйте при правках
-const VERSION = "send-order-pdf@pages-2026-01-13-fix413";
-// Мягкий лимит под прокси serverless (~4.2 МБ по умолчанию). Можно переопределить переменной окружения.
+// версия (меняйте при правках)
+const VERSION = "send-order-pdf@pages-2026-01-14-12mb";
+
+// Мягкий лимит под прокси serverless (~12 МБ по умолчанию).
+// Можно переопределить переменной окружения MAX_UPLOAD_BYTES (в байтах).
+const DEFAULT_LIMIT = Math.floor(12 * 1024 * 1024); // 12 MiB
 const MAX_UPLOAD_BYTES = Math.floor(
-  Number(process.env.MAX_UPLOAD_BYTES || 4.2 * 1024 * 1024)
+  Number(process.env.MAX_UPLOAD_BYTES || DEFAULT_LIMIT)
 );
 
 export const config = { api: { bodyParser: false } };
@@ -76,7 +81,7 @@ async function tgSendDocument(
   const form = new FormData();
   form.append("chat_id", chatId);
   if (caption) form.append("caption", caption.slice(0, 1024));
-  // НЕ используем new File(...). Имя файла передаём 3-м аргументом:
+  // Имя файла — третьим аргументом:
   form.append("document", blob, fileName);
 
   const resp = await fetch(
@@ -85,9 +90,7 @@ async function tgSendDocument(
   );
   const text = await resp.text().catch(() => "");
   let json: any = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {}
+  try { json = text ? JSON.parse(text) : null; } catch {}
   if (!resp.ok || !json?.ok) {
     const details =
       (json && (json.description || JSON.stringify(json))) ||
@@ -121,11 +124,7 @@ export default async function handler(
         res,
         413,
         "FUNCTION_PAYLOAD_TOO_LARGE",
-        `PDF слишком большой: ${(cl / (1024 * 1024)).toFixed(
-          2
-        )} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(
-          2
-        )} МБ. Уменьшите размер файла или отправьте менеджеру вручную.`,
+        `PDF слишком большой: ${(cl / (1024 * 1024)).toFixed(2)} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(2)} МБ. Уменьшите размер файла или отправьте менеджеру вручную.`,
         { limitBytes: MAX_UPLOAD_BYTES, contentLength: cl }
       );
     }
@@ -162,16 +161,18 @@ export default async function handler(
           ? fields.payload[0]
           : "{}";
     let meta: any = {};
-    try {
-      meta = JSON.parse(String(payloadRaw || "{}"));
-    } catch {}
+    try { meta = JSON.parse(String(payloadRaw || "{}")); } catch {}
 
-    // файл
-    const fAny = (files as any).pdf as
-      | FormidableFile
-      | FormidableFile[]
-      | undefined;
-    const f: FormidableFile | undefined = Array.isArray(fAny) ? fAny[0] : fAny;
+    // файл (принимаем либо "pdf", либо "file")
+    const pickFile = (fsMap: formidable.Files): FormidableFile | undefined => {
+      const fPdf = (fsMap as any).pdf as FormidableFile | FormidableFile[] | undefined;
+      const fFile = (fsMap as any).file as FormidableFile | FormidableFile[] | undefined;
+      const take = (x: FormidableFile | FormidableFile[] | undefined) =>
+        Array.isArray(x) ? x[0] : x;
+      return take(fPdf) || take(fFile);
+    };
+
+    const f: FormidableFile | undefined = pickFile(files);
 
     if (!f?.filepath) {
       return jsonError(res, 400, "NO_FILE", "No pdf");
@@ -182,21 +183,16 @@ export default async function handler(
       f.originalFilename || f.newFilename || `order-${Date.now()}.pdf`;
     const safeBase = path.basename(originalName).replace(/[^\w.\-]+/g, "_");
 
-    // Дополнительная проверка фактического размера файла (если удалось сохранить)
+    // Доп. проверка фактического размера сохранённого файла
     try {
       const stat = await fs.promises.stat(filePath);
       if (stat.size > MAX_UPLOAD_BYTES) {
-        // удалим временный файл и вернём 413
         try { await fs.promises.unlink(filePath); } catch {}
         return jsonError(
           res,
           413,
           "FUNCTION_PAYLOAD_TOO_LARGE",
-          `PDF слишком большой: ${(stat.size / (1024 * 1024)).toFixed(
-            2
-          )} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(
-            2
-          )} МБ. Уменьшите размер файла или отправьте менеджеру вручную.`,
+          `PDF слишком большой: ${(stat.size / (1024 * 1024)).toFixed(2)} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(2)} МБ. Уменьшите размер файла или отправьте менеджеру вручную.`,
           { limitBytes: MAX_UPLOAD_BYTES, fileSize: stat.size }
         );
       }
@@ -246,9 +242,7 @@ export default async function handler(
     }
 
     // очистка временного файла
-    try {
-      await fs.promises.unlink(filePath);
-    } catch {}
+    try { await fs.promises.unlink(filePath); } catch {}
 
     const allFailed = results.every((r) => !r.ok);
     const partial = !allFailed && results.some((r) => !r.ok);
@@ -269,7 +263,7 @@ export default async function handler(
       orderNo: orderNo || undefined,
       chats,
       results,
-      partial, // true, если в какие-то чаты не получилось
+      partial,
     });
   } catch (e: any) {
     console.error("send-order-pdf pages error:", e);
@@ -280,11 +274,8 @@ export default async function handler(
       e?.message || "Internal error"
     );
   } finally {
-    // на всякий случай
     if (filePath) {
-      try {
-        await fs.promises.unlink(filePath);
-      } catch {}
+      try { await fs.promises.unlink(filePath); } catch {}
     }
   }
 }
