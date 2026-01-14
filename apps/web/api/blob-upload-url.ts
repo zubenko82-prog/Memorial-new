@@ -1,15 +1,13 @@
 // pages/api/blob-upload-url.ts
-// Генерируем одноразовый uploadUrl через @vercel/blob (с поддержкой разных версий SDK)
-// и строим публичный URL по вашему Base URL.
-//
+// Для @vercel/blob@0.24.x (используем unstable_generateUploadUrl)
 // Env:
-//   - BLOB_READ_WRITE_TOKEN (RW токен из Vercel Storage)
-//   - BLOB_PUBLIC_BASE_URL (ваш base: https://jqsjh7yt6zfkuqwf.public.blob.vercel-storage.com)
+//   - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...  (без кавычек)
+//   - BLOB_PUBLIC_BASE_URL=https://jqsjh7yt6zfkuqwf.public.blob.vercel-storage.com
 
 import type { NextApiRequest, NextApiResponse } from "next";
-import * as VBlob from "@vercel/blob";
+import { unstable_generateUploadUrl } from "@vercel/blob";
 
-const VERSION = "blob-upload-url@sdk-flex-2026-01-16";
+const VERSION = "blob-upload-url@0.24.x";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -23,105 +21,39 @@ function buildPublicUrl(base: string, pathname?: string | null): string | null {
   if (!base || !pathname) return null;
   const b = base.replace(/\/+$/, "");
   const p = String(pathname).replace(/^\/+/, "");
-  const encoded = p.split("/").map(encodeURIComponent).join("/");
-  return `${b}/${encoded}`;
+  return `${b}/${p.split("/").map(encodeURIComponent).join("/")}`;
 }
-
-type ReqBody = {
-  name?: string;
-  access?: "public" | "private";
-  contentType?: string;
-  addRandomSuffix?: boolean;
-};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method === "HEAD") return res.status(200).end();
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST,OPTIONS,HEAD");
-    return res.status(405).end("Method Not Allowed");
-  }
+  if (req.method !== "POST") { res.setHeader("Allow", "POST,OPTIONS,HEAD"); return res.status(405).end("Method Not Allowed"); }
 
   const token = process.env.BLOB_READ_WRITE_TOKEN || "";
   const baseUrl = process.env.BLOB_PUBLIC_BASE_URL || "";
-  if (!token) {
-    cors(res, true);
-    return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" });
-  }
-  if (!baseUrl) {
-    cors(res, true);
-    return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" });
-  }
+  if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
+  if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
   try {
-    const {
-      name,
-      access = "public",
-      contentType = "application/octet-stream",
-      addRandomSuffix = true
-    } = (req.body || {}) as ReqBody;
+    const { name, access = "public", contentType = "application/octet-stream" } = (req.body || {}) as {
+      name?: string; access?: "public" | "private"; contentType?: string;
+    };
 
-    const blobName = name || `uploads/${Date.now()}.bin`;
+    // 0.24.x обычно не принимает name прямо тут — это ок
+    const out: any = await unstable_generateUploadUrl({
+      access,
+      contentType,
+      token
+    } as any);
 
-    // Пытаемся найти доступную функцию в SDK
-    const anyBlob = VBlob as any;
-    const genFn =
-      anyBlob.generateUploadUrl ||
-      anyBlob.createUploadUrl ||
-      anyBlob.createUploadURL || // на случай разных кейсов
-      anyBlob.unstable_generateUploadUrl;
-
-    if (typeof genFn !== "function") {
-      cors(res, true);
-      return res.status(500).json({
-        ok: false,
-        version: VERSION,
-        error: "generateUploadUrl is not available in @vercel/blob. Please `npm i @vercel/blob@latest`."
-      });
-    }
-
-    // Параметры могут отличаться по версиям SDK — попробуем несколько сигнатур.
-    const optionsA: any = { access, contentType, token, addRandomSuffix, name: blobName };
-    const optionsB: any = { access, contentType, token, name: blobName };
-    const optionsC: any = { access, token, name: blobName };
-
-    let out: any = null;
-    let lastErr: any = null;
-
-    for (const opts of [optionsA, optionsB, optionsC]) {
-      try {
-        out = await genFn(opts);
-        if (out) break;
-      } catch (e) {
-        lastErr = e;
-        out = null;
-      }
-    }
-
-    if (!out) {
-      cors(res, true);
-      return res.status(500).json({
-        ok: false,
-        version: VERSION,
-        error: `Failed to generate upload URL via SDK${lastErr ? `: ${String(lastErr?.message || lastErr)}` : ""}`
-      });
-    }
-
-    // Нормализуем результат
-    const uploadUrl: string = out.uploadUrl || out.url;
-    const pathname: string | null = out.pathname || out.key || null;
-    const fileUrl: string | null =
-      // если SDK сразу вернул финальный URL (некоторые версии так делают)
-      (out.url && out.uploadUrl ? out.url : null) || buildPublicUrl(baseUrl, pathname);
+    const uploadUrl: string = out?.uploadUrl || out?.url;
+    const pathname: string | null = out?.pathname || out?.key || null;
+    const publicUrl = out?.url && out?.uploadUrl ? out.url : buildPublicUrl(baseUrl, pathname);
 
     if (!uploadUrl) {
       cors(res, true);
-      return res.status(500).json({
-        ok: false,
-        version: VERSION,
-        error: "SDK returned empty uploadUrl"
-      });
+      return res.status(500).json({ ok: false, version: VERSION, error: "No uploadUrl returned by SDK" });
     }
 
     cors(res, true);
@@ -129,17 +61,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ok: true,
       version: VERSION,
       uploadUrl,
-      url: fileUrl,
+      url: publicUrl,
       pathname,
       access,
-      name: blobName
+      name: name || null
     });
   } catch (e: any) {
     cors(res, true);
-    return res.status(500).json({
-      ok: false,
-      version: VERSION,
-      error: e?.message || "Internal error"
-    });
+    return res.status(500).json({ ok: false, version: VERSION, error: e?.message || "Internal error" });
   }
 }
