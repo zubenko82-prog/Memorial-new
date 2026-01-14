@@ -1,9 +1,9 @@
 // pages/api/blob-upload-url.ts
 // INIT multipart upload для @vercel/blob (у вас нет generateUploadUrl; используем createMultipartUpload).
-// Обязательные поля от клиента: name, contentType, sizeBytes.
+// Обязательные поля от клиента: name, contentType (file.type), sizeBytes (file.size).
 // Env:
 //  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (без кавычек)
-//  - BLOB_PUBLIC_BASE_URL=https://jqsjh7yt6zfkuqwf.public.blob.vercel-storage.com
+//  - BLOB_PUBLIC_BASE_URL=https://<store>.public.blob.vercel-storage.com
 
 import type { NextApiRequest, NextApiResponse } from "next";
 
@@ -24,6 +24,11 @@ function buildPublicUrl(base: string, pathname?: string | null) {
   return `${b}/${p.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+function sanitizePathName(input: string): string {
+  const normalized = input.replace(/\r?\n/g, " ").replace(/\t/g, " ").replace(/\\+/g, "/");
+  return normalized.replace(/^\/+/, "").replace(/\/{2,}/g, "/").trim();
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cors(res);
@@ -40,18 +45,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
     const body = (req.body || {}) as {
-      name?: string;                  // ОБЯЗАТЕЛЬНО (путь/имя)
-      access?: "public" | "private";  // по умолчанию public
-      contentType?: string;           // ОБЯЗАТЕЛЬНО (MIME)
-      sizeBytes?: number;             // ОБЯЗАТЕЛЬНО (точный размер)
-      parts?: number;                 // опционально: желаемое кол-во частей
-      partSize?: number;              // опционально: размер части, байт
+      name?: string;
+      access?: "public" | "private";
+      contentType?: string;
+      sizeBytes?: number | string;
+      parts?: number;
+      partSize?: number;
     };
 
     const access = body.access || "public";
-    const contentType = body.contentType || "";
-    const sizeBytes = typeof body.sizeBytes === "number" ? body.sizeBytes : NaN;
-    const pathname = (body.name && body.name.trim()) || `uploads/${Date.now()}.bin`;
+    const contentType = (body.contentType || "").trim();
+    const rawSize = (body as any).sizeBytes;
+    const sizeBytes = typeof rawSize === "string" ? parseInt(rawSize, 10) : Number(rawSize);
+    const providedName = (body.name && body.name.trim()) || `uploads/${Date.now()}.bin`;
+    const pathname = sanitizePathName(providedName);
 
     if (!contentType) {
       cors(res, true);
@@ -62,7 +69,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ ok: false, version: VERSION, error: "sizeBytes is required and must be > 0" });
     }
 
-    // Импорт SDK
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
 
@@ -72,19 +78,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (typeof createMultipartUpload !== "function") {
       cors(res, true);
       return res.status(500).json({
-        ok: false, version: VERSION,
+        ok: false,
+        version: VERSION,
         error: "@vercel/blob createMultipartUpload is not available",
         exportedKeys: Object.keys(VBlob || {})
       });
     }
 
-    // Собирам опции. Разные версии требуют key или pathname.
     const baseOpts: any = {
       token,
       access,
       contentType,
       contentLength: sizeBytes
     };
+
     const attempts = [
       { ...baseOpts, pathname, parts: body.parts, partSize: body.partSize },
       { ...baseOpts, key: pathname, parts: body.parts, partSize: body.partSize },
@@ -111,7 +118,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Нормализация ответа
     const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
     const outPath: string = rsp.pathname || rsp.key || pathname;
     const urls: string[] =
@@ -131,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const url = buildPublicUrl(baseUrl, outPath); // станет доступным после complete
+    const url = buildPublicUrl(baseUrl, outPath);
 
     cors(res, true);
     return res.status(200).json({

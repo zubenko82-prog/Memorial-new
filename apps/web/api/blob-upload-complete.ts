@@ -1,4 +1,12 @@
 // pages/api/blob-upload-complete.ts
+// Завершение multipart загрузки.
+// POST body: { uploadId: string, pathname: string, parts: { partNumber: number, etag: string }[] }
+//
+// Возвращает: { ok: true, url, pathname, version }
+// Env:
+//  - BLOB_READ_WRITE_TOKEN
+//  - BLOB_PUBLIC_BASE_URL
+
 import type { NextApiRequest, NextApiResponse } from "next";
 
 const VERSION = "blob-upload-complete@multipart";
@@ -43,13 +51,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
+
     const completeMultipartUpload =
       VBlob?.completeMultipartUpload || VBlob?.default?.completeMultipartUpload;
 
     if (typeof completeMultipartUpload !== "function") {
       cors(res, true);
       return res.status(500).json({
-        ok: false, version: VERSION,
+        ok: false,
+        version: VERSION,
         error: "@vercel/blob completeMultipartUpload is not available",
         exportedKeys: Object.keys(VBlob || {})
       });
@@ -82,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cors(res, true);
       return res.status(500).json({
         ok: false, version: VERSION,
-        error: `completeMultipartUpload failed${lastErr ? `: ${String(lastErr?.message || lastErr)}` : ""}`
+        error: `completeMultipartUpload failed${lastErr ? `: ${String((lastErr as any)?.message || lastErr)}` : ""}`
       });
     }
 
