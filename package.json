@@ -4,6 +4,7 @@
   },
   "packageManager": "pnpm@10.21.0",
   "dependencies": {
+    "@vercel/blob": "^2.0.0",
     "formidable": "^2.1.5"
   }
 }
