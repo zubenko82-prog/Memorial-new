@@ -301,7 +301,6 @@ function CatGrid({
               boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
             }}
           >
-            {/* бейдж выбранного */}
             <div
               aria-hidden
               style={{
@@ -637,7 +636,7 @@ function PlateBlock(props: {
             </LoudAccordion>
 
             {/* Графика */}
-            <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
+            <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !в)}>
               {catsLoading && <div>Загрузка каталога…</div>}
               {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
               {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
@@ -812,7 +811,7 @@ function ConfirmBottomSheet({
         </div>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам для просчёта стоимости?</div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
+          <button className="btn" onPointerUp={onSend} onClick={onSend} disabled={sending} style={{ background: "#e5ffe5", borderColor: "#99д199" as any }}>
             {sending ? "Отправляем…" : "Отправить"}
           </button>
         </div>
@@ -956,13 +955,13 @@ export default function ReviewAndSendStep({ onBack }: Props) {
 
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) =>
-    (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross");
+    (g?.catName || "").toLowerCase().includes("крест") || (г?.catSlug || "").toLowerCase().includes("cross");
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
 
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
-    return toParagraphs(engr.epitaphs ?? engr.epitaphText);
+    return toParagraphs(engr.epитaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
   // Плита — состояния
@@ -1386,7 +1385,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
                 {chosenPlateList.map((g, i) => (
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div title={г.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.name || g.id}
                     </div>
                   </div>
