@@ -1,9 +1,4 @@
 // pages/api/blob-upload-complete.ts
-// Completes multipart upload.
-// POST body: { uploadId: string, pathname: string, parts: { partNumber: number, etag: string }[] }
-//
-// Returns: { ok: true, url, pathname, version }
-
 import type { NextApiRequest, NextApiResponse } from "next";
 
 const VERSION = "blob-upload-complete@multipart";
@@ -43,38 +38,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!uploadId || !pathname || !Array.isArray(parts) || parts.length === 0) {
       cors(res, true);
-      return res.status(400).json({
-        ok: false,
-        version: VERSION,
-        error: "uploadId, pathname and parts[] are required"
-      });
+      return res.status(400).json({ ok: false, version: VERSION, error: "uploadId, pathname and parts[] are required" });
     }
 
-    // dynamic import/require
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
-
     const completeMultipartUpload =
-      VBlob?.completeMultipartUpload ||
-      VBlob?.default?.completeMultipartUpload;
+      VBlob?.completeMultipartUpload || VBlob?.default?.completeMultipartUpload;
 
     if (typeof completeMultipartUpload !== "function") {
       cors(res, true);
       return res.status(500).json({
-        ok: false,
-        version: VERSION,
-        error: "@vercel/blob completeMultipartUpload is not available.",
+        ok: false, version: VERSION,
+        error: "@vercel/blob completeMultipartUpload is not available",
         exportedKeys: Object.keys(VBlob || {})
       });
     }
 
-    // Normalize parts for S3 style: { PartNumber, ETag }
     const normalizedParts = parts.map(p => ({
       PartNumber: Number(p.partNumber),
       ETag: p.etag
     }));
 
-    // Try several signatures
     const attempts = [
       { token, uploadId, key: pathname, parts: normalizedParts },
       { token, UploadId: uploadId, key: pathname, parts: normalizedParts },
@@ -96,8 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!ok) {
       cors(res, true);
       return res.status(500).json({
-        ok: false,
-        version: VERSION,
+        ok: false, version: VERSION,
         error: `completeMultipartUpload failed${lastErr ? `: ${String(lastErr?.message || lastErr)}` : ""}`
       });
     }

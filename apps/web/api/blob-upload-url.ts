@@ -1,26 +1,13 @@
 // pages/api/blob-upload-url.ts
-// INIT multipart upload using @vercel/blob (no generateUploadUrl in your build).
+// INIT multipart upload для @vercel/blob (у вас нет generateUploadUrl; используем createMultipartUpload).
+// Обязательные поля от клиента: name, contentType, sizeBytes.
 // Env:
-//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
+//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (без кавычек)
 //  - BLOB_PUBLIC_BASE_URL=https://jqsjh7yt6zfkuqwf.public.blob.vercel-storage.com
-//
-// Request (POST):
-//  { name?: string, access?: "public"|"private", contentType?: string, sizeBytes?: number }
-// Response:
-//  {
-//    ok: true,
-//    mode: "multipart",
-//    uploadId: string,
-//    pathname: string,
-//    partUrls: string[],
-//    partSize?: number,
-//    url: string | null,     // final public URL (becomes valid after completion)
-//    version: string
-//  }
 
 import type { NextApiRequest, NextApiResponse } from "next";
 
-const VERSION = "blob-upload-url@multipart-init";
+const VERSION = "blob-upload-url@multipart-init+strict";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -52,45 +39,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
     if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
-    const {
-      name,
-      access = "public",
-      contentType = "application/octet-stream",
-      sizeBytes
-    } = (req.body || {}) as {
-      name?: string;
-      access?: "public" | "private";
-      contentType?: string;
-      sizeBytes?: number;
+    const body = (req.body || {}) as {
+      name?: string;                  // ОБЯЗАТЕЛЬНО (путь/имя)
+      access?: "public" | "private";  // по умолчанию public
+      contentType?: string;           // ОБЯЗАТЕЛЬНО (MIME)
+      sizeBytes?: number;             // ОБЯЗАТЕЛЬНО (точный размер)
+      parts?: number;                 // опционально: желаемое кол-во частей
+      partSize?: number;              // опционально: размер части, байт
     };
 
-    // dynamic import to avoid CJS/ESM pitfalls
-    let VBlob: any;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      VBlob = require("@vercel/blob");
-    } catch {
-      VBlob = await import("@vercel/blob");
+    const access = body.access || "public";
+    const contentType = body.contentType || "";
+    const sizeBytes = typeof body.sizeBytes === "number" ? body.sizeBytes : NaN;
+    const pathname = (body.name && body.name.trim()) || `uploads/${Date.now()}.bin`;
+
+    if (!contentType) {
+      cors(res, true);
+      return res.status(400).json({ ok: false, version: VERSION, error: "contentType is required" });
     }
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+      cors(res, true);
+      return res.status(400).json({ ok: false, version: VERSION, error: "sizeBytes is required and must be > 0" });
+    }
+
+    // Импорт SDK
+    let VBlob: any;
+    try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
+
     const createMultipartUpload =
-      VBlob?.createMultipartUpload ||
-      VBlob?.default?.createMultipartUpload;
+      VBlob?.createMultipartUpload || VBlob?.default?.createMultipartUpload;
 
     if (typeof createMultipartUpload !== "function") {
       cors(res, true);
       return res.status(500).json({
-        ok: false,
-        version: VERSION,
-        error: "@vercel/blob createMultipartUpload is not available. Check package version.",
+        ok: false, version: VERSION,
+        error: "@vercel/blob createMultipartUpload is not available",
         exportedKeys: Object.keys(VBlob || {})
       });
     }
 
-    // Try several option signatures for compatibility
+    // Собирам опции. Разные версии требуют key или pathname.
+    const baseOpts: any = {
+      token,
+      access,
+      contentType,
+      contentLength: sizeBytes
+    };
     const attempts = [
-      { access, contentType, token, contentLength: sizeBytes, name },
-      { access, contentType, token, name },
-      { access, contentType, token }
+      { ...baseOpts, pathname, parts: body.parts, partSize: body.partSize },
+      { ...baseOpts, key: pathname, parts: body.parts, partSize: body.partSize },
+      { ...baseOpts, pathname },
+      { ...baseOpts, key: pathname }
     ];
 
     let rsp: any = null;
@@ -99,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         rsp = await createMultipartUpload(opts);
         if (rsp) break;
-      } catch (e) {
+      } catch (e: any) {
         lastErr = e;
       }
     }
@@ -112,35 +111,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Normalize response
-    // Expected fields in some versions:
-    //  - uploadId
-    //  - key or pathname
-    //  - urls (string[]) or parts [{ url, partNumber }]
-    //  - partSize or chunkSize
+    // Нормализация ответа
     const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
-    const pathname: string =
-      rsp.pathname || rsp.key || rsp.path || name || `uploads/${Date.now()}.bin`;
-
+    const outPath: string = rsp.pathname || rsp.key || pathname;
     const urls: string[] =
       Array.isArray(rsp.urls) ? rsp.urls :
       Array.isArray(rsp.parts) ? rsp.parts.map((p: any) => p.url).filter(Boolean) :
       Array.isArray(rsp.uploadUrls) ? rsp.uploadUrls :
       [];
 
-    const partSize: number | undefined = rsp.partSize || rsp.chunkSize || undefined;
+    const partSize = rsp.partSize || rsp.chunkSize || body.partSize || undefined;
 
     if (!uploadId || !urls.length) {
       cors(res, true);
       return res.status(500).json({
-        ok: false,
-        version: VERSION,
+        ok: false, version: VERSION,
         error: "Multipart init did not return uploadId or part URLs",
         details: { hasUploadId: !!uploadId, urlsCount: urls.length }
       });
     }
 
-    const url = buildPublicUrl(baseUrl, pathname); // becomes valid after completion
+    const url = buildPublicUrl(baseUrl, outPath); // станет доступным после complete
 
     cors(res, true);
     return res.status(200).json({
@@ -148,7 +139,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       version: VERSION,
       mode: "multipart",
       uploadId,
-      pathname,
+      pathname: outPath,
       partUrls: urls,
       partSize,
       url
