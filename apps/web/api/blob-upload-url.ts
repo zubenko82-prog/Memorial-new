@@ -1,11 +1,15 @@
 // pages/api/blob-upload-url.ts
-// INIT multipart upload для @vercel/blob (у вас нет generateUploadUrl; используем createMultipartUpload).
-// Обязательные поля от клиента: name, contentType (file.type), sizeBytes (file.size).
+// INIT multipart upload for @vercel/blob (no generateUploadUrl in your build).
+// Requires JSON body from client with: name, contentType (file.type), sizeBytes (file.size).
 // Env:
-//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (без кавычек)
+//  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... (no quotes)
 //  - BLOB_PUBLIC_BASE_URL=https://<store>.public.blob.vercel-storage.com
 
 import type { NextApiRequest, NextApiResponse } from "next";
+
+export const config = {
+  api: { bodyParser: true }
+};
 
 const VERSION = "blob-upload-url@multipart-init+strict";
 
@@ -44,6 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
     if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
 
+    // Expect JSON body
     const body = (req.body || {}) as {
       name?: string;
       access?: "public" | "private";
@@ -53,22 +58,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       partSize?: number;
     };
 
-    const access = body.access || "public";
+    const access = (body.access === "private" ? "private" : "public") as "public" | "private";
     const contentType = (body.contentType || "").trim();
+
+    // Accept both number and string for sizeBytes
     const rawSize = (body as any).sizeBytes;
     const sizeBytes = typeof rawSize === "string" ? parseInt(rawSize, 10) : Number(rawSize);
+
     const providedName = (body.name && body.name.trim()) || `uploads/${Date.now()}.bin`;
     const pathname = sanitizePathName(providedName);
 
     if (!contentType) {
       cors(res, true);
-      return res.status(400).json({ ok: false, version: VERSION, error: "contentType is required" });
+      return res.status(400).json({
+        ok: false, version: VERSION,
+        error: "contentType is required"
+      });
     }
     if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
       cors(res, true);
-      return res.status(400).json({ ok: false, version: VERSION, error: "sizeBytes is required and must be > 0" });
+      return res.status(400).json({
+        ok: false, version: VERSION,
+        error: "sizeBytes is required and must be > 0"
+      });
     }
 
+    // Load SDK dynamically (covers CJS/ESM)
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
 
@@ -85,6 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // Required base options
     const baseOpts: any = {
       token,
       access,
@@ -92,6 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contentLength: sizeBytes
     };
 
+    // Try compatible signatures: pathname vs key, with/without parts/partSize
     const attempts = [
       { ...baseOpts, pathname, parts: body.parts, partSize: body.partSize },
       { ...baseOpts, key: pathname, parts: body.parts, partSize: body.partSize },
@@ -118,6 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // Normalize
     const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
     const outPath: string = rsp.pathname || rsp.key || pathname;
     const urls: string[] =
@@ -137,7 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const url = buildPublicUrl(baseUrl, outPath);
+    const url = buildPublicUrl(baseUrl, outPath); // Becomes valid after COMPLETE
 
     cors(res, true);
     return res.status(200).json({

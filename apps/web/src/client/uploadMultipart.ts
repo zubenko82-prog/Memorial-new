@@ -1,8 +1,7 @@
 // client/uploadMultipart.ts
-// Клиентская загрузка файла в Vercel Blob через multipart API.
-// Требуются серверные роуты:
-//  - POST /api/blob-upload-url (инициализация multipart; возвращает partUrls, uploadId, pathname, partSize)
-//  - POST /api/blob-upload-complete (завершение multipart; принимает { uploadId, pathname, parts[] })
+// Client-side multipart upload to Vercel Blob using your API routes:
+//  - POST /api/blob-upload-url (init): returns { partUrls, uploadId, pathname, partSize }
+//  - POST /api/blob-upload-complete (complete): accepts { uploadId, pathname, parts[] }
 
 export type AccessMode = "public" | "private";
 
@@ -39,11 +38,11 @@ export type CompleteResponse =
     };
 
 export type UploadMultipartOptions = {
-  name?: string; // пример: "uploads/123.pdf"
-  access?: AccessMode; // по умолчанию "public"
-  contentType?: string; // обычно file.type
-  endpointInit?: string; // "/api/blob-upload-url"
-  endpointComplete?: string; // "/api/blob-upload-complete"
+  name?: string; // e.g. "uploads/123.pdf"
+  access?: AccessMode; // default "public"
+  contentType?: string; // default file.type
+  endpointInit?: string; // default "/api/blob-upload-url"
+  endpointComplete?: string; // default "/api/blob-upload-complete"
   onProgress?: (info: {
     uploadedBytes: number;
     totalBytes: number;
@@ -100,14 +99,17 @@ export async function uploadFileMultipart(file: File, opts: UploadMultipartOptio
     completeHeaders
   } = opts;
 
-  const safeName = sanitizePathName(name || `uploads/${Date.now()}-${file.name || "file.bin"}`);
+  // Ensure we use a File (not an empty Blob)
+  const safeFile: File = file instanceof File ? file : new File([file as any], "file.bin", { type: contentType });
 
-  // 1) INIT
+  const safeName = sanitizePathName(name || `uploads/${Date.now()}-${safeFile.name || "file.bin"}`);
+
+  // 1) INIT (must be JSON)
   const initPayload = {
     name: safeName,
     access,
     contentType,
-    sizeBytes: file.size
+    sizeBytes: safeFile.size
   };
 
   const initResp = await fetchJson<InitResponse>(endpointInit, {
@@ -130,18 +132,18 @@ export async function uploadFileMultipart(file: File, opts: UploadMultipartOptio
     throw new Error("INIT did not return part URLs");
   }
 
-  // 2) PUT каждый кусок
+  // 2) PUT parts
   const parts: { partNumber: number; etag: string }[] = [];
   const totalParts = partUrls.length;
-  const totalBytes = file.size;
-  const sizePerPart = !partSize || partSize <= 0 ? Math.ceil(totalBytes / totalParts) : partSize;
+  const totalBytes = safeFile.size;
 
+  const sizePerPart = !partSize || partSize <= 0 ? Math.ceil(totalBytes / totalParts) : partSize;
   let uploadedBytes = 0;
 
   for (let i = 0; i < totalParts; i++) {
     const start = i * sizePerPart;
     const end = Math.min(start + sizePerPart, totalBytes);
-    const chunk = file.slice(start, end);
+    const chunk = safeFile.slice(start, end);
 
     const resp = await fetch(partUrls[i], {
       method: "PUT",
@@ -152,16 +154,15 @@ export async function uploadFileMultipart(file: File, opts: UploadMultipartOptio
 
     if (!resp.ok) {
       const t = await resp.text().catch(() => "");
-      throw new Error(`Ошибка загрузки части ${i + 1}/${totalParts}: ${resp.status} ${resp.statusText} ${t}`);
+      throw new Error(`Part ${i + 1}/${totalParts} upload failed: ${resp.status} ${resp.statusText} ${t}`);
     }
 
     const etag = getHeaderETag(resp.headers);
     if (!etag) {
-      // Если по какой-то причине ETag не вернулся заголовком — попробуем из тела
       const t = await resp.text().catch(() => "");
       const m = /"etag"\s*:\s*"([^"]+)"/i.exec(t);
       const recovered = m ? m[1] : "";
-      if (!recovered) throw new Error(`Не получен ETag для части ${i + 1}`);
+      if (!recovered) throw new Error(`Missing ETag for part ${i + 1}`);
       parts.push({ partNumber: i + 1, etag: recovered });
     } else {
       parts.push({ partNumber: i + 1, etag });

@@ -1,13 +1,16 @@
 // pages/api/blob-upload-complete.ts
-// Завершение multipart загрузки.
+// Complete multipart upload.
 // POST body: { uploadId: string, pathname: string, parts: { partNumber: number, etag: string }[] }
-//
-// Возвращает: { ok: true, url, pathname, version }
+// Returns: { ok: true, url, pathname, version }
 // Env:
 //  - BLOB_READ_WRITE_TOKEN
 //  - BLOB_PUBLIC_BASE_URL
 
 import type { NextApiRequest, NextApiResponse } from "next";
+
+export const config = {
+  api: { bodyParser: true }
+};
 
 const VERSION = "blob-upload-complete@multipart";
 
@@ -49,6 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ ok: false, version: VERSION, error: "uploadId, pathname and parts[] are required" });
     }
 
+    // Dynamic SDK import
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
 
@@ -65,11 +69,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // Normalize parts to S3 style
     const normalizedParts = parts.map(p => ({
       PartNumber: Number(p.partNumber),
       ETag: p.etag
     }));
 
+    // Try compatible signatures
     const attempts = [
       { token, uploadId, key: pathname, parts: normalizedParts },
       { token, UploadId: uploadId, key: pathname, parts: normalizedParts },
