@@ -2,11 +2,12 @@
 // Шаг «Обзор и подтверждение».
 //
 // Правки по задаче:
-// - В подсказке: перенесена ВЫШЕ TopBar; фон и контур серые; шрифт курсив, не жирный.
+// - Подсказка перенесена ВЫШЕ TopBar; фон и контур серые; шрифт курсив, не жирный.
 // - «Посмотреть состав заказа» убрано из шапки заказа.
-// - В блоке «Надгробная плита» не показываем «включена/выключена» вообще.
-// - Сообщение «Включите плиту…» не показываем. Если плита выключена — аккордеон просто закрыт.
-// - Сохранена интеграция отправки через Blob + fallback, сохранение extras и пометки в галерее.
+// - В блоке «Надгробная плита» не показываем «включена/выключена» и сообщение «Включите плиту…».
+//   Если плита выключена — аккордеон просто закрыт.
+// - Интеграция отправки через Blob + fallback, сохранение extras и пометки в галерее.
+// - Короткое резюме по плите — полностью убрано.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -161,7 +162,7 @@ function TopHintNotice() {
 /* ===== Заголовок: № заказа (без «Посмотреть состав заказа») ===== */
 function EditableOrderSummary({
   orderNo,
-  onOpenTop, // оставлен в пропсах, но не используется
+  onOpenTop, // не используется
   onDirty
 }: {
   orderNo: string;
@@ -186,7 +187,6 @@ function EditableOrderSummary({
     <section style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-        {/* Кнопку «Посмотреть состав заказа» не отображаем */}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
         <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
@@ -471,12 +471,12 @@ function PlateBlock(props: {
   } = props;
 
   const [accExtrasOpen, setAccExtrasOpen] = useState(true);
-  const [accPlateOpen, setAccPlateOpen] = useState(!!extraPlate); // по умолчанию закрыт, если плита выключена
+  const [accPlateOpen, setAccPlateOpen] = useState(!!extraPlate);
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
   useEffect(() => {
-    if (!extraPlate) setAccPlateOpen(false); // плита выключена — держим аккордеон закрытым
+    if (!extraPlate) setAccPlateOpen(false);
   }, [extraPlate]);
 
   const markDirty = () => onDirty?.();
@@ -521,7 +521,6 @@ function PlateBlock(props: {
 
       {/* Надгробная плита */}
       <LoudAccordion title={plateTitle} open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
-        {/* Если плита выключена — НЕ показываем никаких подсказок, просто пусто (и аккордеон закрыт) */}
         {extraPlate && (
           <div style={{ display: "grid", gap: 12 }}>
             {/* Размер */}
@@ -898,7 +897,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Лимит для fallback serverless
+  // Лимит (fallback)
   const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
   const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
   useEffect(() => {
@@ -917,7 +916,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     `PDF (${formatBytes(size)}) слишком большой для отправки через сайт. Лимит ≈ ${formatBytes(uploadLimit)}.
 Сохраните PDF и отправьте менеджеру вручную (Telegram/почта), либо уменьшите размер.`;
 
-  // Тыльная сторона
+  // Тыльная
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
   useEffect(() => { setBackCandidateUrl(getBackSketchUrl(draft)); }, [draft]);
   const hasBackContentFlag = useMemo(() => hasBackContent(draft), [draft]);
@@ -966,7 +965,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита — состояния (extras)
+  // Плита — состояния
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -986,7 +985,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Синхронизация при изменении draft.extras
+  // Синхронизация локальных состояний
   useEffect(() => {
     const ex = ((loadOrderDraft() as any)?.extras || {}) as any;
     const upd = <T,>(cur: T, next: T, setter: (v: T) => void) => { if (JSON.stringify(cur) !== JSON.stringify(next)) setter(next as any); };
@@ -1099,7 +1098,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   });
   const isBlobActive = blobStatus === "requestingUrl" || blobStatus === "uploading";
 
-  // Автосохранение основных полей extras
+  // Автосохранение полей
   useEffect(() => { persistExtras({ plateSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateSize]);
   useEffect(() => { persistExtras({ plateCustomSize }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateCustomSize]);
   useEffect(() => { persistExtras({ plateThickness }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [plateThickness]);
@@ -1308,20 +1307,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
       {/* TopBar */}
       <TopBarWithIntro title="Memorial" />
 
-      {/* Короткое резюме по плите (без статуса) */}
-      <PlateQuickSummary
-        enabled={extraPlate}
-        size={plateSize === "Свой вариант" ? plateCustomSize || "свой" : plateSize}
-        thickness={plateThickness === "Свой вариант" ? plateCustomThickness || "свой" : plateThickness}
-        orient={plateOrientation}
-        graphicsCount={plateIds.length}
-        epitaphCount={toParagraphs(plateEpitaph).length}
-        hasPedestal={hasPedestal}
-        hasFlowerbed={hasFlowerbed}
-        hasVase={hasVase}
-      />
-
-      {/* № заказа (без кнопки «Посмотреть состав заказа») */}
+      {/* № заказа */}
       <EditableOrderSummary
         orderNo={orderNo}
         onOpenTop={() => {}}
