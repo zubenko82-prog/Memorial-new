@@ -1,14 +1,14 @@
 // pages/api/blob-upload-url.ts
-// Генерация одноразового uploadUrl для Vercel Blob (совместимо с разными версиями API).
-// Env: BLOB_READ_WRITE_TOKEN (Storage → Access Tokens).
+// Обновлённый роут: используем актуальную точку Vercel Blob
+// POST https://api.vercel.com/v2/blob/generate-upload-url
 //
-// POST /api/blob-upload-url
-// body: { name?: string; access?: "public"|"private"; contentType?: string; addRandomSuffix?: boolean }
-// resp: { ok: true, uploadUrl, url, pathname, access, name, version }
+// Env: BLOB_READ_WRITE_TOKEN (Storage → Access Tokens, RW)
+// Body: { name?: string, access?: "public"|"private", contentType?: string, addRandomSuffix?: boolean }
+// Resp: { ok: true, uploadUrl, url, pathname, access, name, version }
 
 import type { NextApiRequest, NextApiResponse } from "next";
 
-const VERSION = "blob-upload-url@2026-01-15";
+const VERSION = "blob-upload-url@2026-01-16";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -18,7 +18,7 @@ function cors(res: NextApiResponse, json = false) {
   if (json) res.setHeader("Content-Type", "application/json; charset=utf-8");
 }
 
-type Body = {
+type ReqBody = {
   name?: string;
   access?: "public" | "private";
   contentType?: string;
@@ -37,11 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const token = process.env.BLOB_READ_WRITE_TOKEN;
   if (!token) {
     cors(res, true);
-    return res.status(500).json({
-      ok: false,
-      version: VERSION,
-      error: "Missing BLOB_READ_WRITE_TOKEN env var"
-    });
+    return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" });
   }
 
   try {
@@ -50,84 +46,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       access = "public",
       contentType = "application/octet-stream",
       addRandomSuffix = true
-    } = (req.body || {}) as Body;
+    } = (req.body || {}) as ReqBody;
 
     const blobName = name || `uploads/${Date.now()}.bin`;
 
-    // Пулы эндпоинтов на случай изменений API.
-    const endpoints = [
-      // Варианты, встречающиеся в разных версиях API
-      "https://api.vercel.com/v2/blob/upload-url",
-      "https://api.vercel.com/v2/blobs",
-      "https://api.vercel.com/v1/blobs"
-    ];
+    // Актуальный эндпоинт для выдачи одноразовой uploadUrl
+    const endpoint = "https://api.vercel.com/v2/blob/generate-upload-url";
 
-    // Собираем payload с максимально совместимыми ключами
     const payload = {
       name: blobName,
-      filename: blobName,
-      mimeType: contentType,
-      contentType,
       access, // "public" | "private"
+      mimeType: contentType,
       addRandomSuffix
     };
 
-    let respOk = false;
-    let lastStatus = 0;
-    let lastText = "";
-    let data: any = null;
+    const vr = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
 
-    for (const url of endpoints) {
-      try {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        });
-        lastStatus = r.status;
-        lastText = await r.text().catch(() => "");
-        try {
-          data = lastText ? JSON.parse(lastText) : null;
-        } catch {
-          data = null;
-        }
-        // ожидаемые поля разных версий: uploadUrl / upload_url
-        const uploadUrl = data?.uploadUrl || data?.upload_url;
-        if (r.ok && uploadUrl) {
-          respOk = true;
-          break;
-        }
-        // если 404 — пробуем следующий эндпоинт
-        if (r.status === 404) continue;
-        // если не 404 и не ок — прекращаем
-        if (!r.ok) break;
-      } catch (e: any) {
-        lastStatus = 0;
-        lastText = e?.message || String(e);
-        data = null;
-        // Пробуем следующий эндпоинт
-      }
+    const text = await vr.text().catch(() => "");
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
     }
 
-    if (!respOk) {
-      const errMsg =
-        (data && (data.error?.message || data.error || JSON.stringify(data))) ||
-        lastText ||
-        "The requested API endpoint was not found.";
+    // ожидаем в ответе хотя бы uploadUrl
+    const uploadUrl = data?.uploadUrl;
+    if (!vr.ok || !uploadUrl) {
+      const msg =
+        data?.error?.message ||
+        data?.error ||
+        data?.message ||
+        text ||
+        vr.statusText ||
+        "Unknown error";
       cors(res, true);
-      return res.status(lastStatus || 502).json({
+      return res.status(vr.status || 500).json({
         ok: false,
         version: VERSION,
-        error: errMsg
+        error: msg
       });
     }
 
-    const uploadUrl = data.uploadUrl || data.upload_url;
-    const fileUrl = data.url || data.fileUrl || data.file_url || null;
-    const pathname = data.pathname || data.key || data.path || null;
+    const fileUrl = data?.url || null;
+    const pathname = data?.pathname || data?.key || null;
 
     cors(res, true);
     return res.status(200).json({
