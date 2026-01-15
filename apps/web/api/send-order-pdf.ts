@@ -2,28 +2,34 @@
 // Принимает PDF (multipart/form-data) и отправляет его в Telegram чат(ы) менеджеров.
 // Pages Router + formidable. Без req.formData(). Имя файла передаём 3-м аргументом FormData.append(..., blob, fileName).
 //
-// Обновления:
-// - Лимит приёма увеличен по умолчанию до ~12 МБ (можно поменять через env MAX_UPLOAD_BYTES).
-// - Ранний контроль размера по заголовку Content-Length → 413 JSON (FUNCTION_PAYLOAD_TOO_LARGE).
-// - Ограничение maxFileSize в formidable синхронизировано с лимитом.
-// - Детальные ответы при частичных/полных сбоях отправки в Telegram (results по каждому чату).
-// - Всегда отдаём JSON с ok/кодом ошибки, чтобы фронт мог показать уведомление.
-// - Возвращаем X-Upload-Limit-Bytes (в HEAD/любом ответе) — фронт может подстроить поведение.
+// Адаптация под хард-лимит Vercel Serverless (~4.2–4.5 МБ):
+// - Возвращаем честный лимит через X-Upload-Limit-Bytes (по умолчанию ~4.2 MiB).
+// - Любая попытка больше лимита → 413 (FUNCTION_PAYLOAD_TOO_LARGE).
+// - Остальная логика без изменений.
+//
+// Примечание: файлы 4.2–5.0 МБ нельзя отправить ни через server PUT (413), ни через multipart (ограничение <5 MiB).
+// Для них на фронтенде надо либо сжать PDF до <4.2 МБ, либо увеличить размер ≥5 MiB и отправить через multipart в Blob.
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable, { File as FormidableFile } from "formidable";
 import fs from "node:fs";
 import path from "node:path";
 
-// версия (меняйте при правках)
-const VERSION = "send-order-pdf@pages-2026-01-14-12mb";
+const VERSION = "send-order-pdf@pages-2026-01-14-hardcap-4_2mb";
 
-// Мягкий лимит под прокси serverless (~12 МБ по умолчанию).
-// Можно переопределить переменной окружения MAX_UPLOAD_BYTES (в байтах).
-const DEFAULT_LIMIT = Math.floor(12 * 1024 * 1024); // 12 MiB
-const MAX_UPLOAD_BYTES = Math.floor(
-  Number(process.env.MAX_UPLOAD_BYTES || DEFAULT_LIMIT)
-);
+// Хард-лимит платформы (безопасное значение). Не поднимайте выше ~4.2 MiB — Vercel всё равно вернёт 413.
+const HARDCAP_BYTES = Math.floor(4.2 * 1024 * 1024);
+
+// Можно уменьшить лимит через ENV, но итоговый лимит не превысит HARDCAP_BYTES.
+const REQUESTED_LIMIT =
+  typeof process.env.MAX_UPLOAD_BYTES === "string"
+    ? Math.floor(Number(process.env.MAX_UPLOAD_BYTES))
+    : HARDCAP_BYTES;
+
+// Итоговый рабочий лимит:
+const MAX_UPLOAD_BYTES = Number.isFinite(REQUESTED_LIMIT) && REQUESTED_LIMIT > 0
+  ? Math.min(REQUESTED_LIMIT, HARDCAP_BYTES)
+  : HARDCAP_BYTES;
 
 export const config = { api: { bodyParser: false } };
 
@@ -81,7 +87,6 @@ async function tgSendDocument(
   const form = new FormData();
   form.append("chat_id", chatId);
   if (caption) form.append("caption", caption.slice(0, 1024));
-  // Имя файла — третьим аргументом:
   form.append("document", blob, fileName);
 
   const resp = await fetch(
@@ -124,7 +129,7 @@ export default async function handler(
         res,
         413,
         "FUNCTION_PAYLOAD_TOO_LARGE",
-        `PDF слишком большой: ${(cl / (1024 * 1024)).toFixed(2)} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(2)} МБ. Уменьшите размер файла или отправьте менеджеру вручную.`,
+        `PDF слишком большой: ${(cl / (1024 * 1024)).toFixed(2)} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(2)} МБ. Уменьшите размер файла или используйте загрузку в Blob (multipart) для файлов ≥ 5 MiB.`,
         { limitBytes: MAX_UPLOAD_BYTES, contentLength: cl }
       );
     }
@@ -192,7 +197,7 @@ export default async function handler(
           res,
           413,
           "FUNCTION_PAYLOAD_TOO_LARGE",
-          `PDF слишком большой: ${(stat.size / (1024 * 1024)).toFixed(2)} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(2)} МБ. Уменьшите размер файла или отправьте менеджеру вручную.`,
+          `PDF слишком большой: ${(stat.size / (1024 * 1024)).toFixed(2)} МБ. Лимит ~${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(2)} МБ. Уменьшите размер файла или используйте загрузку в Blob (multipart) для файлов ≥ 5 MiB.`,
           { limitBytes: MAX_UPLOAD_BYTES, fileSize: stat.size }
         );
       }
