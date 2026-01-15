@@ -1095,34 +1095,24 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0); // проценты 0..100
 
-  // Замените в файле src/screens/ReviewAndSendStep.tsx эту функцию целиком.
-// Убраны несуществующие чанковые роуты. Логика:
-// 1) Пытаемся загрузить через Blob (INIT v2).
-// 2) Если INIT падает (missing options/SMALL_FILE/404 и т.п.) — пробуем legacy INIT.
-// 3) Если и он падает — выбрасываем ошибку; внешний код выполнит серверный fallback sendPdfToServer.
-//    При превышении серверного лимита внешний код покажет сообщение пользователю.
-
+  // Замените функцию sendPdfViaBlob полностью
 async function sendPdfViaBlob(blob: Blob) {
   const orderNoCur = String(loadIntroState().orderNumber || "").trim();
   const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
-
-  // Преобразуем Blob в File, чтобы корректно передавать size/type
   const file = new File([blob], "order.pdf", { type: "application/pdf" });
 
   setUploading(true);
   setUploadProgress(0);
 
-  // Хелпер: после успешной загрузки в Blob отправляем ссылку на сервер, чтобы переслать в Telegram
   const notifyByUrl = async (fileUrl: string) => {
-    const payload = {
-      fileUrl,
-      orderNo: orderNoCur,
-      caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
-    };
     const resp = await fetch("/api/send-order-by-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        fileUrl,
+        orderNo: orderNoCur,
+        caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
+      })
     });
     const text = await resp.text().catch(() => "");
     let json: any = null;
@@ -1133,59 +1123,89 @@ async function sendPdfViaBlob(blob: Blob) {
     }
   };
 
-  // Универсальный вызов multipart-клиента с указанным INIT-роутом
-  const doUploadWithInit = async (endpointInit: string) => {
-    return uploadFileMultipart(file, {
+  // Попытка №1: загрузка в Blob (если сработает — дальше сервер сам оповестит по URL)
+  try {
+    const res = await uploadFileMultipart(file, {
       name: fileName,
       access: "public",
       contentType: "application/pdf",
-      endpointInit,
-      // endpointComplete — дефолтный (/api/blob-upload-complete)
+      endpointInit: "/api/blob-upload-url-v2",
       onProgress: ({ uploadedBytes, totalBytes }) => {
         const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
         setUploadProgress(Math.max(0, Math.min(100, pct)));
       }
     });
+    if (!res?.url) throw new Error("Multipart init returned no URL");
+    await notifyByUrl(res.url);
+    return;
+  } catch (e: any) {
+    // INIT-ошибка — идём в серверный чанковый fallback
+    // console.warn("Blob multipart failed, switching to chunked server upload:", e);
+  }
+
+  // Попытка №2: чанковая отправка на сервер (обходит лимит 4.2 МБ)
+  const metaPayload = {
+    orderNo: orderNoCur,
+    intro: loadIntroState().intro || {},
+    extras: (loadOrderDraft() as any)?.extras || {}
   };
 
-  try {
-    let res: { url?: string } | undefined;
+  // узнаём безопасный размер чанка
+  const safeLimitBytes = uploadLimit || Math.floor(4.2 * 1024 * 1024);
+  const chunkSize = Math.max(128 * 1024, Math.floor(safeLimitBytes * 0.85)); // ~85% лимита
 
-    // 1) INIT v2 (wide-compat)
-    try {
-      res = await doUploadWithInit("/api/blob-upload-url-v2");
-    } catch (e1: any) {
-      const msg1 = String(e1?.message || e1 || "");
-      const looksLikeInitProblem =
-        /missing options/i.test(msg1) ||
-        /createMultipartUpload failed/i.test(msg1) ||
-        /SMALL_FILE_USE_SERVER_PUT/i.test(msg1) ||
-        /blob-upload-url/i.test(msg1) ||
-        /NOT_FOUND/i.test(msg1);
+  // init
+  const initResp = await fetch("/api/send-order-pdf-chunks/init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileName, contentType: "application/pdf", totalBytes: file.size })
+  });
+  const initJson = await initResp.json().catch(() => ({}));
+  if (!initResp.ok || !initJson?.uploadId) {
+    throw new Error(`Chunk init failed: ${initJson?.error || initResp.statusText}`);
+  }
+  const uploadId: string = initJson.uploadId;
 
-      if (!looksLikeInitProblem) {
-        throw e1; // не INIT-проблема — отдаём наверх (внешний catch покажет ошибку)
-      }
+  // части
+  const totalBytes = file.size;
+  const totalParts = Math.max(1, Math.ceil(totalBytes / chunkSize));
+  let uploaded = 0;
 
-      // 2) Legacy INIT (если он ещё доступен)
-      try {
-        res = await doUploadWithInit("/api/blob-upload-url");
-      } catch (e2: any) {
-        // оба INIT не сработали — отдаём наружу, чтобы сработал серверный fallback
-        const msg2 = String(e2?.message || e2 || "");
-        const combined = `Blob INIT failed. v2: ${msg1}; legacy: ${msg2}`;
-        const err = new Error(combined);
-        (err as any).code = "BLOB_INIT_FAILED";
-        throw err;
-      }
+  for (let index = 0; index < totalParts; index++) {
+    const start = index * chunkSize;
+    const end = Math.min(totalBytes, start + chunkSize);
+    const chunk = file.slice(start, end, "application/octet-stream");
+
+    const fd = new FormData();
+    fd.append("uploadId", uploadId);
+    fd.append("index", String(index));
+    fd.append("total", String(totalParts));
+    fd.append("chunk", chunk, `part-${index}.bin`);
+
+    const partResp = await fetch("/api/send-order-pdf-chunks/part", { method: "POST", body: fd });
+    const partJson = await partResp.json().catch(() => ({}));
+    if (!partResp.ok || !partJson?.ok) {
+      throw new Error(`Chunk ${index + 1}/${totalParts} failed: ${partJson?.error || partResp.statusText}`);
     }
 
-    const fileUrl = res?.url;
-    if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
-    await notifyByUrl(fileUrl);
-  } finally {
-    setUploading(false);
+    uploaded += chunk.size;
+    const pct = Math.round((uploaded / totalBytes) * 100);
+    setUploadProgress(Math.max(0, Math.min(100, pct)));
   }
+
+  // complete: сервер соберёт PDF и отправит в Telegram
+  const completeResp = await fetch("/api/send-order-pdf-chunks/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uploadId, fileName, contentType: "application/pdf", payload: metaPayload })
+  });
+  const done = await completeResp.json().catch(() => ({}));
+  if (!completeResp.ok || !done?.ok) {
+    throw new Error(`Chunk complete failed: ${done?.error || completeResp.statusText}`);
+  }
+
+  setUploadProgress(100);
+  setUploading(false);
 }
 
 
