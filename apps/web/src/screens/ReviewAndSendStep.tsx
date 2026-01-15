@@ -4,9 +4,8 @@
 // Новое:
 // - Прямая отправка в Telegram без Blob-хранилищ: текст → PDF (document) → фото (photo).
 // - Сжатие PDF/фото до безопасного размера для serverless.
-// - Явный блок статуса доставки: “Доставлено: PDF — да/нет, фото: X из Y”.
-// - Кнопка “Повторить недоставленные”.
-// - В крайнем случае — инструкция и кнопка “Скачать PDF и отправить вручную”.
+// - Объединённый нижний блок: «Заявка отправлена» + «Статус доставки» + кнопки (Повторить недоставленные, Скачать PDF, инструкция).
+// - Вернули блок «Выбрано для плиты», добавили «Размер» и «Ширина», расположили над «Комментарий к заказу».
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -648,13 +647,13 @@ async function generatePdfUnderLimit(opts: {
   for (const a of attempts) {
     const blob = await generateOrderPdf({
       draft: opts.draft, intro: opts.intro, frontNode: opts.frontNode, backNode: opts.backNode,
-      backUrlFallback: opts.backUrlFallback, scale: a.scale, quality: a.quality
+      backUrlFallback: opts.backUrlFallback, scale: a.scale, quality: a.quality, includeAttachedPhotos: false // при отправке — не встраиваем портреты
     } as any);
     if (blob.size <= opts.maxBytes) return blob;
   }
   return await generateOrderPdf({
     draft: opts.draft, intro: opts.intro, frontNode: opts.frontNode, backNode: opts.backNode,
-    backUrlFallback: opts.backUrlFallback, scale: 0.5, quality: "low"
+    backUrlFallback: opts.backUrlFallback, scale: 0.5, quality: "low", includeAttachedPhotos: false
   } as any);
 }
 
@@ -715,7 +714,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Back side presence
+  // Back presence
   function getBackSketchUrl(d: any): string | null {
     const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
     if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
@@ -856,7 +855,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [sentOk, setSentOk] = useState(false);
-  const [successOpen, setSuccessOpen] = useState(false);
 
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -870,7 +868,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [failedPhotoIdx, setFailedPhotoIdx] = useState<number[]>([]);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  // Telegram helpers
+  // Helpers
   async function sendMessageHeader(headerText: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const resp = await fetch("/api/tg-send-message", {
@@ -910,7 +908,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   }
 
-  // Main send workflow
+  // Send workflow
   const sendOrderDirect = async (showBackInner: boolean, backUrlInner: string | null, pdfOverride?: Blob) => {
     setUploading(true);
     setUploadProgress(0);
@@ -930,7 +928,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         surnames.length ? `Фамилии: ${Array.from(new Set(surnames)).join(", ")}` : ""
       ].filter(Boolean).join("\n");
 
-      // 1) Header message (non-blocking)
+      // 1) Header (non-blocking)
       const msgRes = await sendMessageHeader(headerText);
       if (!msgRes.ok && msgRes.error) warnings.push(`Текст не отправлен: ${msgRes.error}`);
 
@@ -975,6 +973,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       setFailedPhotoIdx(failedIdx);
       setLastWarnings(warnings);
+      setSentOk(true);
     } finally {
       setUploading(false);
       setUploadProgress(100);
@@ -1035,7 +1034,8 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
         backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: showBack ? backCandidateUrl : null
+        backUrlFallback: showBack ? backCandidateUrl : null,
+        includeAttachedPhotos: true
       });
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
@@ -1063,8 +1063,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       setIsSending(true);
       await sendOrderDirect(showBack, backCandidateUrl);
       setConfirmOpen(false);
-      setSentOk(true);
-      setSuccessOpen(true);
       setIsDirtyAfterSend(false);
       setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
     } catch (e: any) {
@@ -1080,8 +1078,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     try {
       setIsSending(true);
       await sendOrderDirect(showBack, backCandidateUrl, lastPdfRef.current || undefined);
-      setSentOk(true);
-      setSuccessOpen(true);
       setIsDirtyAfterSend(false);
       setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
     } catch (e: any) {
@@ -1090,6 +1086,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     } finally {
       setIsSending(false);
     }
+  }
+
+  // Helpers: вывод «Ширина» из «Размер»
+  function extractPlateWidthText(): string {
+    const effective = (plateSize === "Свой вариант" ? plateCustomSize : plateSize || "").trim();
+    if (!effective) return "—";
+    // Ищем формат A×B см
+    const m = effective.match(/(\d+)\s*[×xX]\s*(\d+)/);
+    if (m) return `${m[2]} см`;
+    // Если указан один размер, попробуем вернуть его как ширину
+    const n = effective.match(/(\d+)\s*см/);
+    if (n) return `${n[1]} см`;
+    return effective;
   }
 
   // Bottom overlay text
@@ -1176,52 +1185,42 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </section>
       )}
 
-      {/* Delivery status block */}
-      {deliveryVisible && (
-        <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 10 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Статус доставки</div>
+      {/* Выбрано для плиты — над комментарием */}
+      {extraPlate && (
+        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
+          <div style={{ ...sectionBox }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
 
-          <div style={{ display: "grid", gap: 6 }}>
-            <div>
-              <span style={{ opacity: 0.85 }}>Доставлено: PDF — </span>
-              <strong style={{ color: pdfDelivered == null ? "#ccc" : pdfDelivered ? "#7dffa0" : "#ffb4b4" }}>
-                {pdfDelivered == null ? "—" : pdfDelivered ? "да" : "нет"}
-              </strong>
+            {/* Размер и ширина */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
+              <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
             </div>
-            <div>
-              <span style={{ opacity: 0.85 }}>Фото — </span>
-              <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : "#ffb4b4" }}>
-                {photosDelivered} из {photosTotal}
-              </strong>
-              {failedPhotoIdx.length > 0 && (
-                <span style={{ marginLeft: 8, color: "#ffb4b4" }}>(ошибки: {failedPhotoIdx.length})</span>
-              )}
-            </div>
-          </div>
 
-          {lastWarnings.length > 0 && (
-            <details style={{ marginTop: 8 }}>
-              <summary style={{ cursor: "pointer" }}>Подробности</summary>
-              <ul style={{ margin: "6px 0 0 20px" }}>
-                {lastWarnings.map((w, i) => (<li key={`w-${i}`} style={{ marginBottom: 4 }}>{w}</li>))}
-              </ul>
-            </details>
-          )}
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            {(pdfDelivered === false || failedPhotoIdx.length > 0) && (
-              <button type="button" onClick={retryUndelivered} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
-                {uploading ? "Повторяем…" : "Повторить недоставленные"}
-              </button>
+            {/* Графика */}
+            {chosenPlateList.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
+                {chosenPlateList.map((g, i) => (
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
+                    <Thumb url={g.url} />
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {g.name || g.id}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-            <button type="button" onClick={handleSaveLastPdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>
-              {isSaving ? "Формируем PDF…" : "Скачать PDF"}
-            </button>
-          </div>
 
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-            Если часть файлов не доставилась, скачайте PDF и отправьте менеджеру вручную (в Telegram или по почте).
-            Укажите номер заказа и приложите фотографии, подписав к каждому фото ФИО и даты.
+            {/* Эпитафии плиты */}
+            {plateEpitaphList.length > 0 && (
+              <div style={{ display: "grid", gap: 6 }}>
+                {plateEpitaphList.map((t, idx) => (
+                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, padding: 8 }}>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -1289,23 +1288,66 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
-      {/* Success hint after send */}
-      <div ref={afterHintRef}>
-        {sentOk && (
+      {/* Нижний объединённый блок: «Заявка отправлена» + «Статус доставки» */}
+      {(deliveryVisible || sentOk) && (
+        <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
-            <div style={{ opacity: 0.92, marginBottom: 10 }}>{`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}</div>
+            <div style={{ opacity: 0.92, marginBottom: 10 }}>
+              {`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}
+            </div>
+
+            {/* Статус доставки */}
+            <div style={{ ...sectionBox, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Статус доставки</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                <div>
+                  <span style={{ opacity: 0.85 }}>Доставлено: PDF — </span>
+                  <strong style={{ color: pdfDelivered == null ? "#ccc" : pdfDelivered ? "#7dffa0" : "#ffb4b4" }}>
+                    {pdfDelivered == null ? "—" : pdfDelivered ? "да" : "нет"}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ opacity: 0.85 }}>Фото — </span>
+                  <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : "#ffb4b4" }}>
+                    {photosDelivered} из {photosTotal}
+                  </strong>
+                  {failedPhotoIdx.length > 0 && (
+                    <span style={{ marginLeft: 8, color: "#ffb4b4" }}>(ошибки: {failedPhotoIdx.length})</span>
+                  )}
+                </div>
+              </div>
+
+              {lastWarnings.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: "pointer" }}>Подробности</summary>
+                  <ul style={{ margin: "6px 0 0 20px" }}>
+                    {lastWarnings.map((w, i) => (<li key={`w-${i}`} style={{ marginBottom: 4 }}>{w}</li>))}
+                  </ul>
+                </details>
+              )}
+            </div>
+
+            {/* Кнопки действий */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onPointerUp={handleSavePdf} onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)} title="Сохранить PDF заказ">
-                {isSaving ? "Формируем PDF…" : "Сохранить PDF"}
+              {(pdfDelivered === false || failedPhotoIdx.length > 0) && (
+                <button type="button" onClick={retryUndelivered} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
+                  {uploading ? "Повторяем…" : "Повторить недоставленные"}
+                </button>
+              )}
+              <button type="button" onClick={handleSaveLastPdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>
+                {isSaving ? "Формируем PDF…" : "Скачать PDF"}
               </button>
             </div>
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-              Примечание: генерация PDF может занять до 5–10 секунд. Пожалуйста, подождите.
+
+            {/* Инструкция */}
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
+              Если часть файлов не доставилась, скачайте PDF и отправьте менеджеру вручную (в Telegram или по почте).
+              Укажите номер заказа и приложите фотографии, подписав к каждому фото ФИО и даты.
             </div>
           </section>
-        )}
-      </div>
+        </div>
+      )}
 
       {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
     </div>
