@@ -2,13 +2,13 @@
 // Шаг «Обзор и подтверждение»
 //
 // Обновление для гарантированной доставки:
-// - Убираем отправку PDF через сервер (часто 413/4.2MiB лимит).
-// - Отправляем:
-//   1) Большое текстовое сообщение с полным содержанием заказа (разбивается на части <= 4096 символов).
-//   2) Эскизы (лицевая/тыльная) как отдельные изображения сжатые до безопасного размера.
-// - PDF по-прежнему можно скачать локально из интерфейса (“Скачать PDF”) — он генерируется с включением фото.
-// - Блок “Заявка отправлена” объединён со “Статус доставки” и перенесён в самый низ.
-// - Блок “Выбрано для плиты” возвращён и расположен над “Комментарий к заказу”; добавлены “Размер” и “Ширина”.
+// - Не отправляем PDF через сервер (лимиты payload). Вместо этого:
+//   1) Отправляем полное текстовое описание заказа (разбиваем на части ≤4096 символов).
+//   2) Отправляем эскизы (лицевая/тыльная) как изображения с компрессией.
+//   3) Обязательно отправляем портретные фотографии по отдельности с подписями (ФИО и даты).
+// - Кнопка «Скачать PDF» формирует локальный PDF со всеми фото (только для скачивания).
+// - «Заявка отправлена» объединена с «Статус доставки» и размещена внизу страницы.
+// - Блок «Выбрано для плиты» возвращен, добавлены «Размер» и «Ширина», расположен над «Комментарий к заказу».
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -631,16 +631,14 @@ function PlateBlock(props: {
   );
 }
 
-/* ========= Sending: only text + sketches (no PDF upload) ========= */
+/* ========= Sending helpers ========= */
 
-// Строгий лимит для фото в multipart (большой запас под заголовки формы)
+// Строгий целевой лимит для фото (с запасом под заголовки multipart/form-data)
 const TARGET_FILE_BYTES = Math.floor(2.7 * 1024 * 1024); // ~2.7 MiB
-
-// Телеграм ограничение текста 4096 символов
-const TELEGRAM_TEXT_LIMIT = 4096;
+// Telegram ограничение текста — 4096 символов. Отправляем частями.
 const TELEGRAM_CHUNK_SIZE = 3500;
 
-// html-to-image (динамическая подгрузка для конвертации DOM → PNG)
+// html-to-image для эскизов
 async function ensureHtmlToImage(): Promise<any> {
   if (typeof window === "undefined") throw new Error("No window");
   if ((window as any).htmlToImage) return (window as any).htmlToImage;
@@ -675,7 +673,6 @@ function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   return new File([u8], name, { type: mime });
 }
 
-/* ========= PDF download remains available ========= */
 function formatBytes(n: number): string {
   if (!Number.isFinite(n)) return `${n}`;
   const mb = n / (1024 * 1024);
@@ -700,7 +697,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Back presence helpers
+  // Back presence
   function getBackSketchUrl(d: any): string | null {
     const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
     if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
@@ -753,16 +750,21 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     im.src = itemUrl;
   }, [itemUrl]);
 
+  // Люди для эскиза (с ФОТО!)
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(
-    () => frontPersons.map((p: any, i: number) => ({
-      id: p.id || `p-${i}`, lines: personLines(p),
-      photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
-    })), [frontPersons]
+    () =>
+      frontPersons.map((p: any, i: number) => ({
+        id: p.id || `p-${i}`,
+        lines: personLines(p),
+        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null // фото отображаем на эскизе
+      })),
+    [frontPersons]
   );
 
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
-  const isCross = (g: any) => (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross");
+  const isCross = (g: any) =>
+    (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross");
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
 
@@ -780,7 +782,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
   const [plateOrientation, setPlateOrientation] = useState<string>(
     extras0.plateOrientation ||
-    ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
+      ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h")
+        ? "horizontal"
+        : "vertical")
   );
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
@@ -845,15 +849,98 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const lastPdfRef = useRef<Blob | null>(null);
 
   const [deliveryVisible, setDeliveryVisible] = useState(false);
   const [textDelivered, setTextDelivered] = useState<boolean | null>(null);
   const [frontSketchDelivered, setFrontSketchDelivered] = useState<boolean | null>(null);
   const [backSketchDelivered, setBackSketchDelivered] = useState<boolean | null>(null);
+  const [photosDelivered, setPhotosDelivered] = useState(0);
+  const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  /* ===== Build full order text and send as multiple messages ===== */
+  /* ===== Telegram helpers ===== */
+  async function sendLargeText(fullText: string): Promise<{ ok: boolean; errors: string[] }> {
+    const parts: string[] = [];
+    let cursor = 0;
+    while (cursor < fullText.length) {
+      parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE));
+      cursor += TELEGRAM_CHUNK_SIZE;
+    }
+    const errors: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const resp = await fetch("/api/tg-send-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: parts[i] })
+      });
+      const raw = await resp.text().catch(() => "");
+      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      if (!resp.ok || !json?.ok) {
+        errors.push(json?.error || raw || resp.statusText);
+      }
+      await sleep(150);
+    }
+    return { ok: errors.length === 0, errors };
+  }
+
+  async function sendSketchFromNode(nodeId: string, caption: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const el = document.getElementById(nodeId);
+      if (!el) return { ok: false, error: "Элемент эскиза не найден" };
+      const dataUrl = await elementToPngDataUrl(el, { pixelRatio: 2, bg: "#ffffff" });
+      if (!dataUrl) return { ok: false, error: "Пустые данные эскиза" };
+      const file = dataUrlToFile(dataUrl, `${nodeId}.png`);
+      const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
+        maxWidth: 2000,
+        maxHeight: 2000,
+        mime: "image/jpeg",
+        qualityStart: 0.9,
+        qualityMin: 0.55,
+        qualityStep: 0.08
+      });
+      const fd = new FormData();
+      fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
+      fd.append("caption", caption);
+      const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
+      const raw = await resp.text().catch(() => "");
+      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      if (!resp.ok || !json?.ok) return { ok: false, error: (json?.error || raw || resp.statusText) };
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  function collectPersonPhotosWithCaptions(d: any): { file: File; caption: string; name: string }[] {
+    const persons = (((d || {}).engraving || {}).persons || []).filter(Boolean);
+    const out: { file: File; caption: string; name: string }[] = [];
+    for (const p of persons) {
+      const lastName = (p?.lastName || "").trim();
+      const first = (p?.firstName || "").trim();
+      const middle = (p?.middleName || "").trim();
+      const birth = (p?.birthDate || "").trim();
+      const death = (p?.deathDate || "").trim();
+      const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ");
+      const dates = [birth, death].filter(Boolean).join(" — ");
+      const caption = [fio, dates].filter(Boolean).join("\n");
+
+      const dataUrl = (p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
+      if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
+
+      const bin = atob(dataUrl.split(",")[1]);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const mime = dataUrl.substring(5, dataUrl.indexOf(";")) || "image/jpeg";
+      const blob = new Blob([arr], { type: mime });
+      const safeName = `${fio || "photo"}.jpg`;
+      const file = new File([blob], safeName, { type: "image/jpeg" });
+
+      out.push({ file, caption, name: safeName });
+    }
+    return out;
+  }
+
+  /* ===== Build order text ===== */
   function extractPlateWidthText(): string {
     const effective = (plateSize === "Свой вариант" ? plateCustomSize : plateSize || "").trim();
     if (!effective) return "—";
@@ -901,29 +988,26 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
     const lines: string[] = [];
 
-    // Заголовок
     const orderNoLine = intro?.orderNumber ? `Заявка №${intro.orderNumber}` : "Заявка";
-    lines.push(orderNoLine);
-    lines.push("");
+    lines.push(orderNoLine, "");
 
-    // Клиент
     lines.push("Клиент:");
     lines.push(`- Имя: ${(intro?.intro?.customerName || "").trim() || "—"}`);
     lines.push(`- Телефон: ${(intro?.intro?.customerPhone || "").trim() || "—"}`);
     if ((intro?.intro?.customerNotes || "").trim()) lines.push(`- Примечание: ${(intro?.intro?.customerNotes || "").trim()}`);
     lines.push("");
 
-    // Изделие
-    lines.push("Изделие:");
-    if (itemName) lines.push(`- Модель: ${itemName}`);
-    lines.push("");
+    if (itemName) {
+      lines.push("Изделие:");
+      lines.push(`- Модель: ${itemName}`);
+      lines.push("");
+    }
 
-    // Люди
     lines.push("Люди:");
     if (persons.length === 0) {
       lines.push("- —");
     } else {
-      persons.forEach((p, i) => {
+      persons.forEach((p) => {
         const fio = [p.last, p.namePatr].filter(Boolean).join(" ");
         lines.push(`- ${fio || "—"}`);
         if (p.dates) lines.push(`  ${p.dates}`);
@@ -931,19 +1015,17 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
     lines.push("");
 
-    // Эпитафии
     if (epsFront.length) {
       lines.push("Эпитафии (лицевая):");
-      epsFront.forEach((ep, i) => { lines.push(`- ${ep}`); });
+      epsFront.forEach((ep) => { lines.push(`- ${ep}`); });
       lines.push("");
     }
     if (epsRear.length) {
       lines.push("Эпитафии (тыльная):");
-      epsRear.forEach((ep, i) => { lines.push(`- ${ep}`); });
+      epsRear.forEach((ep) => { lines.push(`- ${ep}`); });
       lines.push("");
     }
 
-    // Графика
     if (gfxFront.length) {
       lines.push("Графика (лицевая):");
       gfxFront.forEach((n) => lines.push(`- ${n}`));
@@ -952,13 +1034,13 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     if (gfxRear.length) {
       lines.push("Графика (тыльная):");
       gfxRear.forEach((n) => {
-        const count = rearCounts[(rearIds || []).find(id => (rearMeta[id]?.name || id) === n) || ""] || 1;
+        const id = (rearIds || []).find(id0 => (rearMeta[id0]?.name || id0) === n) || "";
+        const count = rearCounts[id] || 1;
         lines.push(`- ${n}${count > 1 ? ` ×${count}` : ""}`);
       });
       lines.push("");
     }
 
-    // Плита
     if (plateOn) {
       lines.push("Надгробная плита:");
       if (pSize)   lines.push(`- Размер: ${pSize}`);
@@ -976,75 +1058,21 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       lines.push("");
     }
 
-    // Дополнительно
     lines.push("Дополнительно:");
     lines.push(`- Цветник: ${flowerbed ? "да" : "нет"}`);
     lines.push(`- Тумба: ${tumba ? "да" : "нет"}`);
     lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
     lines.push("");
 
-    // Комментарий к заказу
     if (notes) {
       lines.push("Комментарий к заказу:");
-      lines.push(notes);
-      lines.push("");
+      lines.push(notes, "");
     }
 
     return lines.join("\n");
   }
 
-  async function sendLargeText(fullText: string): Promise<{ ok: boolean; errors: string[] }> {
-    const parts: string[] = [];
-    let cursor = 0;
-    while (cursor < fullText.length) {
-      parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE));
-      cursor += TELEGRAM_CHUNK_SIZE;
-    }
-    const errors: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const resp = await fetch("/api/tg-send-message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: parts[i] })
-      });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
-      if (!resp.ok || !json?.ok) {
-        errors.push(json?.error || raw || resp.statusText);
-      }
-      await sleep(150);
-    }
-    return { ok: errors.length === 0, errors };
-  }
-
-  async function sendSketchFromNode(nodeId: string, caption: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      const el = document.getElementById(nodeId);
-      const dataUrl = await elementToPngDataUrl(el, { pixelRatio: 2, bg: "#ffffff" });
-      if (!dataUrl) return { ok: false, error: "Sketch dataUrl is empty" };
-      const file = dataUrlToFile(dataUrl, `${nodeId}.png`);
-      const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
-        maxWidth: 2000,
-        maxHeight: 2000,
-        mime: "image/jpeg",
-        qualityStart: 0.9,
-        qualityMin: 0.55,
-        qualityStep: 0.08
-      });
-      const fd = new FormData();
-      fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
-      fd.append("caption", caption);
-      const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
-      if (!resp.ok || !json?.ok) return { ok: false, error: (json?.error || raw || resp.statusText) };
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
-  }
-
-  // Main send
+  /* ===== Main send: text + sketches + portraits ===== */
   const sendOrderDirect = async (showBackInner: boolean, backUrlInner: string | null) => {
     setUploading(true);
     setUploadProgress(0);
@@ -1052,31 +1080,61 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     setLastWarnings([]);
     setTextDelivered(null);
     setFrontSketchDelivered(null);
-    setBackSketchDelivered(showBackInner ? null : false);
-
+    setBackSketchDelivered(showBackInner ? null : null); // если тыльной нет — вообще не показываем статус
+    setPhotosDelivered(0);
     const warnings: string[] = [];
     try {
+      // 1) Текст
       const full = buildOrderText();
       const textRes = await sendLargeText(full);
       setTextDelivered(textRes.ok);
       if (!textRes.ok) warnings.push(`Текст не отправлен: ${textRes.errors.join(" | ")}`);
 
-      // Эскизы (лицевая обязательно)
+      // 2) Эскиз (лицевая)
       const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)");
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // Эскиз (тыльная) — если есть
+      // 3) Эскиз (тыльная) — только если она есть
       if (showBackInner && backUrlInner) {
-        // Создаём временно <img id="pdf-back-sketch"> уже есть в DOM — используем его.
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)");
         setBackSketchDelivered(backRes.ok);
         if (!backRes.ok && backRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${backRes.error}`);
       }
 
-      setUploadProgress(100);
+      // 4) Портретные фото — обязательно, с подписями
+      const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
+      setPhotosTotal(photos.length);
+      let delivered = 0;
+      for (let i = 0; i < photos.length; i++) {
+        const ph = photos[i];
+        const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, {
+          maxWidth: 2000,
+          maxHeight: 2000,
+          mime: "image/jpeg",
+          qualityStart: 0.9,
+          qualityMin: 0.55,
+          qualityStep: 0.08
+        });
+        const fd = new FormData();
+        fd.append("file", new File([compressed], ph.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
+        fd.append("caption", ph.caption);
+        const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
+        const raw = await resp.text().catch(() => "");
+        let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+        if (!resp.ok || !json?.ok) {
+          warnings.push(`Фото не отправлено (${ph.name}): ${json?.error || raw || resp.statusText}`);
+        } else {
+          delivered += 1;
+          setPhotosDelivered(delivered);
+        }
+        setUploadProgress(Math.round(((i + 1) / Math.max(1, photos.length)) * 100));
+        await sleep(200);
+      }
+
       setSentOk(true);
       if (warnings.length) setLastWarnings(warnings);
+      setUploadProgress(100);
     } finally {
       setUploading(false);
     }
@@ -1116,10 +1174,13 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
   }
 
+  // Overlay text
   const overlayText =
     uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%` :
     isSending ? "Отправляем заказ…" :
     isSaving ? "Формируем PDF…" : "";
+
+  // Вычисления для «Выбрано для плиты» — ниже в JSX
 
   return (
     <div style={safeRoot()}>
@@ -1128,7 +1189,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       <EditableOrderSummary orderNo={orderNo} onOpenTop={() => {}} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
 
-      {/* Плита и доп. опции */}
+      {/* Плита/дополнения (аккордеоны) */}
       <PlateSection
         draft={draft}
         extras0={extras0}
@@ -1150,18 +1211,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         }}
       />
 
-      {/* Эскиз лицевой */}
+      {/* Эскиз лицевой (с фото) */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
         <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
           <div id="pdf-front-sketch" style={{ position: "absolute", inset: 0 }}>
             <SketchTemplate
-              item={item}
-              peopleBlocks={frontPersons.map((p: any, i: number) => ({
-                id: p.id || `p-${i}`,
-                lines: personLines((draft.engraving?.persons || [])[i] || {}),
-                photo: null // для эскиза не вставляем портреты
-              }))}
+              item={(draft as any)?.item || null}
+              peopleBlocks={peopleBlocks}
               crosses={selectedCrosses}
               others={selectedOthers}
               epitaphs={frontEpitaphs}
@@ -1171,7 +1228,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       </section>
 
-      {/* Эскиз тыльной */}
+      {/* Эскиз тыльной — только если есть */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
@@ -1192,7 +1249,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
               <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
             </div>
 
-            {/* Графика плиты */}
+            {/* Список выбранной графики (по plateIds) */}
             {(() => {
               const index: Record<string, any> = {};
               cats.forEach((cat: any) => {
@@ -1321,10 +1378,18 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                     {frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}
                   </strong>
                 </div>
+                {showBack && (
+                  <div>
+                    <span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span>
+                    <strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
+                      {backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}
+                    </strong>
+                  </div>
+                )}
                 <div>
-                  <span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span>
-                  <strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
-                    {backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}
+                  <span style={{ opacity: 0.85 }}>Фото — </span>
+                  <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : photosTotal === 0 ? "#ccc" : "#ffb4b4" }}>
+                    {photosTotal > 0 ? `${photosDelivered} из ${photosTotal}` : "—"}
                   </strong>
                 </div>
               </div>
@@ -1340,8 +1405,13 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {/* При частичной доставке повторяем */}
-              {((textDelivered === false) || (frontSketchDelivered === false) || (backSketchDelivered === false)) && (
+              {/* Повторная отправка, если что-то не дошло */}
+              {(
+                (textDelivered === false) ||
+                (frontSketchDelivered === false) ||
+                (showBack && backSketchDelivered === false) ||
+                (photosTotal > 0 && photosDelivered < photosTotal)
+              ) && (
                 <button type="button" onClick={() => sendOrderDirect(showBack, backCandidateUrl)} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
@@ -1364,7 +1434,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   );
 }
 
-/* ========= PlateSection helper (чтобы разгрузить JSX) ========= */
+/* ========= PlateSection helper ========= */
 function PlateSection({
   draft,
   extras0,
