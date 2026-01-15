@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "tg-send-message@2026-01-15+diag";
+const VERSION = "tg-send-message@2026-01-15+4096";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -34,7 +34,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
-    const text = String(body.text || "").slice(0, 2000);
+    // Telegram limit 4096 chars
+    const text = String(body.text || "").slice(0, 4096);
     if (!text) {
       cors(res, true);
       return res.status(400).json({ ok: false, version: VERSION, error: "Text is required" });
@@ -54,6 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else {
         results.push({ ok: true, chatId, messageId: json?.result?.message_id });
       }
+      await new Promise(r => setTimeout(r, 120));
     }
 
     const allFailed = results.every(r => !r.ok);
