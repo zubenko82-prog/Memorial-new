@@ -1,15 +1,15 @@
 // pages/api/blob-upload-url-v2.ts
-// INIT multipart upload для @vercel/blob (без generateUploadUrl).
-// Разрешаем multipart для любых размеров (в т.ч. < 5 MiB) — 1 часть при необходимости.
-// Перебираем сигнатуры: pathname|key|path|filename|name|без пути, с/без parts.
-// GET вернёт версию для быстрой проверки деплоя.
+// INIT multipart upload для @vercel/blob с максимально широкой совместимостью.
+// Пробуем createMultipartUpload с разными наборами опций.
+// Если не вышло — пробуем createMultipartUploader и разные методы на нём.
+// GET — для быстрой проверки деплоя/конфига.
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import path from "node:path";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "blob-upload-url@multipart-init+wide-compat-v2";
+const VERSION = "blob-upload-url@multipart-init+wide-compat-v2+uploader-fallback";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -17,13 +17,6 @@ function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Cache-Control", "no-store");
   if (json) res.setHeader("Content-Type", "application/json; charset=utf-8");
-}
-
-function buildPublicUrl(base: string, pathname?: string | null) {
-  if (!base || !pathname) return null;
-  const b = base.replace(/\/+$/, "");
-  const p = String(pathname).replace(/^\/+/, "");
-  return `${b}/${p.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 function sanitizePathName(input: string): string {
@@ -64,9 +57,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const token = process.env.BLOB_READ_WRITE_TOKEN || "";
-    const baseUrl = process.env.BLOB_PUBLIC_BASE_URL || "";
-    if (!token) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" }); }
-    if (!baseUrl) { cors(res, true); return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_PUBLIC_BASE_URL" }); }
+    if (!token) {
+      cors(res, true);
+      return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" });
+    }
 
     let body: any = req.body;
     if (typeof body === "string") { try { body = JSON.parse(body); } catch {} }
@@ -102,7 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Любой размер: 1 часть для мелких файлов, иначе делим на ~8 MiB
+    // 1 часть для мелких файлов, иначе ~8 MiB
     const wantParts = Math.max(1, Math.ceil(sizeBytes / (8 * 1024 * 1024)));
     const wantPartSize = Math.ceil(sizeBytes / wantParts);
 
@@ -110,48 +104,105 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
     const exportedKeys = Object.keys(VBlob || {});
-    const createMultipartUpload =
-      VBlob?.createMultipartUpload || VBlob?.default?.createMultipartUpload;
-
-    if (typeof createMultipartUpload !== "function") {
-      cors(res, true);
-      return res.status(500).json({
-        ok: false, version: VERSION,
-        error: "@vercel/blob createMultipartUpload is not available",
-        exportedKeys
-      });
-    }
+    const createMultipartUpload = VBlob?.createMultipartUpload || VBlob?.default?.createMultipartUpload;
 
     const baseOpts: any = {
       token,
       access,
       contentType,
       contentLength: sizeBytes,
+      // дублируем альтернативные поля, если SDK ищет другое имя:
+      size: sizeBytes,
+      sizeBytes,
       metadata: { filename: fileBase }
     };
 
-    const attempts: any[] = [
-      { ...baseOpts, pathname, parts: wantParts, partSize: wantPartSize },
-      { ...baseOpts, key: pathname, parts: wantParts, partSize: wantPartSize },
-      { ...baseOpts, path: pathname, parts: wantParts, partSize: wantPartSize },
-      { ...baseOpts, filename: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
-      { ...baseOpts, name: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
-      { ...baseOpts, pathname },
-      { ...baseOpts, key: pathname },
-      { ...baseOpts, path: pathname },
-      { ...baseOpts, filename: fileBase, addRandomSuffix: false },
-      { ...baseOpts, name: fileBase, addRandomSuffix: false },
-      { ...baseOpts }
-    ];
+    const buildAttempts = () => {
+      const withParts = [
+        { ...baseOpts, pathname, parts: wantParts, partSize: wantPartSize },
+        { ...baseOpts, key: pathname, parts: wantParts, partSize: wantPartSize },
+        { ...baseOpts, path: pathname, parts: wantParts, partSize: wantPartSize },
+        { ...baseOpts, filename: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
+        { ...baseOpts, name: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false }
+      ];
+      const minimal = [
+        { ...baseOpts, pathname },
+        { ...baseOpts, key: pathname },
+        { ...baseOpts, path: pathname },
+        { ...baseOpts, filename: fileBase, addRandomSuffix: false },
+        { ...baseOpts, name: fileBase, addRandomSuffix: false }
+      ];
+      return [...withParts, ...minimal, { ...baseOpts }];
+    };
+
+    const attempts = buildAttempts();
 
     let rsp: any = null;
-    let lastErr: any = null;
-    for (const opts of attempts) {
-      try {
-        rsp = await createMultipartUpload(opts);
-        if (rsp) break;
-      } catch (e) {
-        lastErr = e;
+    let lastErrText: string[] = [];
+
+    // 1) Пробуем createMultipartUpload
+    if (typeof createMultipartUpload === "function") {
+      for (const opts of attempts) {
+        try {
+          rsp = await createMultipartUpload(opts);
+          if (rsp) break;
+        } catch (e: any) {
+          lastErrText.push(String(e?.message || e));
+        }
+      }
+    }
+
+    // 2) Фолбэк: createMultipartUploader
+    if (!rsp) {
+      const createMultipartUploader = VBlob?.createMultipartUploader || VBlob?.default?.createMultipartUploader;
+      if (typeof createMultipartUploader === "function") {
+        let uploader: any = null;
+        const uOptsList = [
+          { token, access },
+          { token },
+          { token, access, cacheControlMaxAge: 31536000 }
+        ];
+        let uploaderErr: string | null = null;
+        for (const uo of uOptsList) {
+          try {
+            uploader = await createMultipartUploader(uo);
+            if (uploader) break;
+          } catch (e: any) {
+            uploaderErr = String(e?.message || e);
+          }
+        }
+        if (!uploader && uploaderErr) lastErrText.push(`uploader: ${uploaderErr}`);
+
+        if (uploader) {
+          const candidates = ["createUpload", "initUpload", "initiateUpload", "startUpload", "prepareUpload", "create"];
+          const entry = candidates
+            .map((k) => ({ k, fn: (uploader as any)[k] }))
+            .find((x) => typeof x.fn === "function");
+
+          if (entry) {
+            for (const opts of attempts) {
+              try {
+                rsp = await entry.fn.call(uploader, opts);
+                if (rsp) break;
+              } catch (e: any) {
+                lastErrText.push(`${entry.k}: ${String(e?.message || e)}`);
+              }
+            }
+          } else if (typeof uploader === "function") {
+            for (const opts of attempts) {
+              try {
+                rsp = await uploader(opts);
+                if (rsp) break;
+              } catch (e: any) {
+                lastErrText.push(`uploader() call: ${String(e?.message || e)}`);
+              }
+            }
+          } else {
+            lastErrText.push(`uploader has no callable methods. Keys: ${Object.keys(uploader || {}).join(", ")}`);
+          }
+        }
+      } else {
+        lastErrText.push("createMultipartUploader is not a function");
       }
     }
 
@@ -160,17 +211,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({
         ok: false,
         version: VERSION,
-        error: `createMultipartUpload failed${lastErr ? `: ${String((lastErr as any)?.message || lastErr)}` : ""}`,
+        error: `createMultipartUpload failed: ${lastErrText[lastErrText.length - 1] || "Unknown"}`,
         debug: {
           exportedKeys,
           triedPathname: pathname,
           triedFilename: fileBase,
           triedParts: wantParts,
-          triedPartSize: wantPartSize
+          triedPartSize: wantPartSize,
+          attemptsCount: attempts.length,
+          errorsSample: lastErrText.slice(-4)
         }
       });
     }
 
+    // Нормализация ответа
     const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
     const outPath: string = rsp.pathname || rsp.key || rsp.path || pathname || fileBase;
     const urls: string[] =
@@ -191,7 +245,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const url = buildPublicUrl(baseUrl, outPath);
     cors(res, true);
     return res.status(200).json({
       ok: true,
@@ -200,8 +253,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       uploadId,
       pathname: outPath,
       partUrls: urls,
-      partSize: resolvedPartSize,
-      url
+      partSize: resolvedPartSize
     });
   } catch (e: any) {
     cors(res, true);
