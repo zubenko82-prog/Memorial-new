@@ -1095,50 +1095,55 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0); // проценты 0..100
 
-  async function sendPdfViaBlob(blob: Blob) {
-    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-    const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
+  // Замените в файле src/screens/ReviewAndSendStep.tsx эту функцию целиком
+async function sendPdfViaBlob(blob: Blob) {
+  const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+  const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
 
-    // Преобразуем Blob в File, чтобы корректно передавать size/type
-    const file = new File([blob], "order.pdf", { type: "application/pdf" });
+  // Преобразуем Blob в File, чтобы корректно передавать size/type
+  const file = new File([blob], "order.pdf", { type: "application/pdf" });
 
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      const res = await uploadFileMultipart(file, {
-        name: fileName,
-        access: "public",
-        contentType: "application/pdf",
-        onProgress: ({ uploadedBytes, totalBytes }) => {
-          const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-          setUploadProgress(Math.max(0, Math.min(100, pct)));
-        }
-      });
-
-      const fileUrl = res.url;
-      if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
-
-      const payload = {
-        fileUrl,
-        orderNo: orderNoCur,
-        caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
-      };
-      const resp = await fetch("/api/send-order-by-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      const text = await resp.text().catch(() => "");
-      let json: any = null;
-      try { json = text ? JSON.parse(text) : null; } catch {}
-      if (!resp.ok || !json?.ok) {
-        const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
-        throw new Error(msg);
+  setUploading(true);
+  setUploadProgress(0);
+  try {
+    const res = await uploadFileMultipart(file, {
+      name: fileName,
+      access: "public",
+      contentType: "application/pdf",
+      // ВАЖНО: используем новый INIT-роут без small-fallback
+      endpointInit: "/api/blob-upload-url-v2",
+      // endpointComplete оставляем дефолтный: "/api/blob-upload-complete"
+      onProgress: ({ uploadedBytes, totalBytes }) => {
+        const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+        setUploadProgress(Math.max(0, Math.min(100, pct)));
       }
-    } finally {
-      setUploading(false);
+    });
+
+    const fileUrl = res.url;
+    if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
+
+    const payload = {
+      fileUrl,
+      orderNo: orderNoCur,
+      caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
+    };
+    const resp = await fetch("/api/send-order-by-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const text = await resp.text().catch(() => "");
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch {}
+    if (!resp.ok || !json?.ok) {
+      const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
+      throw new Error(msg);
     }
+  } finally {
+    setUploading(false);
   }
+}
+
 
   async function handleSavePdf() {
     try {
