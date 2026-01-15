@@ -6,7 +6,7 @@
 // - «Посмотреть состав заказа» убрано из шапки заказа.
 // - В блоке «Надгробная плита» не показываем «включена/выключена» и сообщение «Включите плиту…».
 //   Если плита выключена — аккордеон просто закрыт.
-// - Интеграция отправки через Blob (multipart) + fallback, сохранение extras и пометки в галерее.
+// - Отправка напрямую в Telegram: текст → PDF (document) → фото (photo), с локальной компрессией.
 // - Короткое резюме по плите — полностью убрано.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -16,9 +16,8 @@ import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/orde
 import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS } from "../data/epitaphs";
-import { generateOrderPdf, downloadBlob, sendPdfToServer } from "../lib/pdf/generateOrderPdf";
-// Заменили useBlobUpload на клиент для multipart:
-import uploadFileMultipart from "../client/uploadMultipart";
+import { generateOrderPdf, downloadBlob } from "../lib/pdf/generateOrderPdf";
+import { compressImageFileToMaxBytes } from "../lib/media/resize";
 
 /* ===== UI helpers ===== */
 function safeRoot(): React.CSSProperties {
@@ -107,6 +106,9 @@ function formatBytes(n: number): string {
   const mb = n / (1024 * 1024);
   return `${mb.toFixed(2)} МБ`;
 }
+
+// Безопасный лимит файла для payload serverless-функции (~4.2 MiB). Держимся ниже с запасом.
+const MAX_FILE_BYTES = Math.floor(3.8 * 1024 * 1024);
 
 /* ===== Мини-компоненты ===== */
 function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) {
@@ -821,7 +823,7 @@ function ConfirmBottomSheet({
   );
 }
 
-/* ===== Основной компонент (с Blob multipart и fallback) ===== */
+/* ===== Основной компонент (напрямая отправка в Telegram) ===== */
 type Props = { onBack?: () => void };
 
 function getBackSketchUrl(draft: any): string | null {
@@ -874,6 +876,158 @@ function normalizeErrorMessage(err: any): { msg: string; details?: string } {
   };
 }
 
+// Генерация PDF с попытками уложиться в лимит
+async function generatePdfUnderLimit(opts: {
+  draft: any;
+  intro: any;
+  frontNode: HTMLElement | null;
+  backNode: HTMLElement | null;
+  backUrlFallback?: string | null;
+  maxBytes: number;
+}): Promise<Blob> {
+  const attempts = [
+    { scale: 1.0, quality: "high" as const },
+    { scale: 0.9, quality: "medium" as const },
+    { scale: 0.8, quality: "medium" as const },
+    { scale: 0.7, quality: "low" as const },
+    { scale: 0.6, quality: "low" as const }
+  ];
+  for (const a of attempts) {
+    const blob = await generateOrderPdf({
+      draft: opts.draft,
+      intro: opts.intro,
+      frontNode: opts.frontNode,
+      backNode: opts.backNode,
+      backUrlFallback: opts.backUrlFallback,
+      scale: a.scale,
+      quality: a.quality
+    } as any);
+    if (blob.size <= opts.maxBytes) return blob;
+  }
+  return await generateOrderPdf({
+    draft: opts.draft,
+    intro: opts.intro,
+    frontNode: opts.frontNode,
+    backNode: opts.backNode,
+    backUrlFallback: opts.backUrlFallback,
+    scale: 0.6,
+    quality: "low"
+  } as any);
+}
+
+// Фото с подписями: "ФИО\nДаты"
+function collectPersonPhotosWithCaptions(draft: any): { file: File; caption: string }[] {
+  const persons = (((draft || {}).engraving || {}).persons || []).filter(Boolean);
+  const out: { file: File; caption: string }[] = [];
+  for (const p of persons) {
+    const lastName = (p?.lastName || "").trim();
+    const first = (p?.firstName || "").trim();
+    const middle = (p?.middleName || "").trim();
+    const birth = (p?.birthDate || "").trim();
+    const death = (p?.deathDate || "").trim();
+    const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ");
+    const dates = [birth, death].filter(Boolean).join(" — ");
+    const caption = [fio, dates].filter(Boolean).join("\n");
+
+    const dataUrl = (p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
+    if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
+
+    const bin = atob(dataUrl.split(",")[1]);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const mime = dataUrl.substring(5, dataUrl.indexOf(";")) || "image/jpeg";
+    const blob = new Blob([arr], { type: mime });
+    const file = new File([blob], `${fio || "photo"}.jpg`, { type: "image/jpeg" });
+
+    out.push({ file, caption });
+  }
+  return out;
+}
+
+// Прямая отправка: sendMessage → sendDocument(PDF) → sendPhoto(портреты)
+async function sendOrderDirect(showBack: boolean, backCandidateUrl: string | null, pdfOverride?: Blob) {
+  const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+
+  setUploading(true);
+  setUploadProgress(0);
+
+  // Текст-заголовок
+  const surnames = (((loadOrderDraft() || {}).engraving || {}).persons || [])
+    .map((p: any) => (p?.lastName || "").trim())
+    .filter(Boolean);
+  const headerText = [
+    orderNoCur ? `Заявка №${orderNoCur}` : "Заявка",
+    surnames.length ? `Фамилии: ${Array.from(new Set(surnames)).join(", ")}` : ""
+  ].filter(Boolean).join("\n");
+
+  {
+    const headerResp = await fetch("/api/tg-send-message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: headerText })
+    });
+    if (!headerResp.ok) {
+      const t = await headerResp.text().catch(() => "");
+      throw new Error(`sendMessage failed: ${t || headerResp.statusText}`);
+    }
+  }
+
+  // PDF
+  let pdfBlob = pdfOverride;
+  if (!pdfBlob) {
+    pdfBlob = await generatePdfUnderLimit({
+      draft: loadOrderDraft(),
+      intro: loadIntroState(),
+      frontNode: document.getElementById("pdf-front-sketch"),
+      backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
+      backUrlFallback: showBack ? backCandidateUrl : null,
+      maxBytes: MAX_FILE_BYTES
+    });
+  }
+  // Сохраняем для ретраев/кнопки «Сохранить PDF»
+  lastPdfRef.current = pdfBlob;
+
+  {
+    const fileName = `order-${orderNoCur || Date.now()}.pdf`;
+    const fd = new FormData();
+    fd.append("file", new File([pdfBlob], fileName, { type: "application/pdf" }));
+    fd.append("caption", orderNoCur ? `Заявка №${orderNoCur}` : "Заявка");
+    const docResp = await fetch("/api/tg-send-document", { method: "POST", body: fd });
+    if (!docResp.ok) {
+      const t = await docResp.text().catch(() => "");
+      throw new Error(`sendDocument failed: ${t || docResp.statusText}`);
+    }
+  }
+
+  // Фото
+  const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
+  let sent = 0;
+  for (const ph of photos) {
+    const compressed = await compressImageFileToMaxBytes(ph.file, MAX_FILE_BYTES, {
+      maxWidth: 2200,
+      maxHeight: 2200,
+      mime: "image/jpeg",
+      qualityStart: 0.9,
+      qualityMin: 0.55,
+      qualityStep: 0.08
+    });
+
+    const fd = new FormData();
+    fd.append("file", new File([compressed], ph.file.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
+    fd.append("caption", ph.caption);
+    const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      throw new Error(`sendPhoto failed: ${t || r.statusText}`);
+    }
+    sent++;
+    setUploadProgress(Math.round((sent / Math.max(1, photos.length)) * 100));
+  }
+
+  setUploadProgress(100);
+  setUploading(false);
+}
+
 export default function ReviewAndSendStep({ onBack }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
@@ -897,7 +1051,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Лимит (fallback)
+  // Лимит (ранее использовался для серверного fallback — можно оставить для совместимости)
   const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
   const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
   useEffect(() => {
@@ -1091,123 +1245,9 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
   const lastPdfRef = useRef<Blob | null>(null);
 
-  // Состояние multipart-загрузки (вместо useBlobUpload)
+  // Состояние отправки
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0); // проценты 0..100
-
-  // Замените функцию sendPdfViaBlob полностью
-async function sendPdfViaBlob(blob: Blob) {
-  const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-  const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
-  const file = new File([blob], "order.pdf", { type: "application/pdf" });
-
-  setUploading(true);
-  setUploadProgress(0);
-
-  const notifyByUrl = async (fileUrl: string) => {
-    const resp = await fetch("/api/send-order-by-url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fileUrl,
-        orderNo: orderNoCur,
-        caption: orderNoCur ? `Заявка №${orderNoCur}` : "Заявка"
-      })
-    });
-    const text = await resp.text().catch(() => "");
-    let json: any = null;
-    try { json = text ? JSON.parse(text) : null; } catch {}
-    if (!resp.ok || !json?.ok) {
-      const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
-      throw new Error(msg);
-    }
-  };
-
-  // Попытка №1: загрузка в Blob (если сработает — дальше сервер сам оповестит по URL)
-  try {
-    const res = await uploadFileMultipart(file, {
-      name: fileName,
-      access: "public",
-      contentType: "application/pdf",
-      endpointInit: "/api/blob-upload-url-v2",
-      onProgress: ({ uploadedBytes, totalBytes }) => {
-        const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-        setUploadProgress(Math.max(0, Math.min(100, pct)));
-      }
-    });
-    if (!res?.url) throw new Error("Multipart init returned no URL");
-    await notifyByUrl(res.url);
-    return;
-  } catch (e: any) {
-    // INIT-ошибка — идём в серверный чанковый fallback
-    // console.warn("Blob multipart failed, switching to chunked server upload:", e);
-  }
-
-  // Попытка №2: чанковая отправка на сервер (обходит лимит 4.2 МБ)
-  const metaPayload = {
-    orderNo: orderNoCur,
-    intro: loadIntroState().intro || {},
-    extras: (loadOrderDraft() as any)?.extras || {}
-  };
-
-  // узнаём безопасный размер чанка
-  const safeLimitBytes = uploadLimit || Math.floor(4.2 * 1024 * 1024);
-  const chunkSize = Math.max(128 * 1024, Math.floor(safeLimitBytes * 0.85)); // ~85% лимита
-
-  // init
-  const initResp = await fetch("/api/send-order-pdf-chunks/init", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fileName, contentType: "application/pdf", totalBytes: file.size })
-  });
-  const initJson = await initResp.json().catch(() => ({}));
-  if (!initResp.ok || !initJson?.uploadId) {
-    throw new Error(`Chunk init failed: ${initJson?.error || initResp.statusText}`);
-  }
-  const uploadId: string = initJson.uploadId;
-
-  // части
-  const totalBytes = file.size;
-  const totalParts = Math.max(1, Math.ceil(totalBytes / chunkSize));
-  let uploaded = 0;
-
-  for (let index = 0; index < totalParts; index++) {
-    const start = index * chunkSize;
-    const end = Math.min(totalBytes, start + chunkSize);
-    const chunk = file.slice(start, end, "application/octet-stream");
-
-    const fd = new FormData();
-    fd.append("uploadId", uploadId);
-    fd.append("index", String(index));
-    fd.append("total", String(totalParts));
-    fd.append("chunk", chunk, `part-${index}.bin`);
-
-    const partResp = await fetch("/api/send-order-pdf-chunks/part", { method: "POST", body: fd });
-    const partJson = await partResp.json().catch(() => ({}));
-    if (!partResp.ok || !partJson?.ok) {
-      throw new Error(`Chunk ${index + 1}/${totalParts} failed: ${partJson?.error || partResp.statusText}`);
-    }
-
-    uploaded += chunk.size;
-    const pct = Math.round((uploaded / totalBytes) * 100);
-    setUploadProgress(Math.max(0, Math.min(100, pct)));
-  }
-
-  // complete: сервер соберёт PDF и отправит в Telegram
-  const completeResp = await fetch("/api/send-order-pdf-chunks/complete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uploadId, fileName, contentType: "application/pdf", payload: metaPayload })
-  });
-  const done = await completeResp.json().catch(() => ({}));
-  if (!completeResp.ok || !done?.ok) {
-    throw new Error(`Chunk complete failed: ${done?.error || completeResp.statusText}`);
-  }
-
-  setUploadProgress(100);
-  setUploading(false);
-}
-
 
   async function handleSavePdf() {
     try {
@@ -1243,35 +1283,7 @@ async function sendPdfViaBlob(blob: Blob) {
       setIsSending(true);
       await new Promise((r) => setTimeout(r, 0));
 
-      const blob = await generateOrderPdf({
-        draft: loadOrderDraft(),
-        intro: loadIntroState(),
-        frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: showBack ? backCandidateUrl : null
-      });
-      lastPdfRef.current = blob;
-
-      try {
-        await sendPdfViaBlob(blob);
-      } catch (blobErr: any) {
-        const raw = String(blobErr?.message || blobErr || "");
-        if (blob.size > uploadLimit) {
-          const msg = tooLargeMessage(blob.size);
-          setErrorMsg(msg);
-          setErrorDetails(`Blob error: ${raw}`);
-          setErrorOpen(true);
-          setTimeout(() => {
-            if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`);
-          }, 0);
-          return;
-        }
-        await sendPdfToServer(blob, {
-          orderNo: String(loadIntroState().orderNumber || "").trim(),
-          intro: loadIntroState().intro || {},
-          extras: (loadOrderDraft() as any)?.extras || {}
-        });
-      }
+      await sendOrderDirect(showBack, backCandidateUrl);
 
       setConfirmOpen(false);
       setSentOk(true);
@@ -1299,32 +1311,9 @@ async function sendPdfViaBlob(blob: Blob) {
     if (isSending) return;
     try {
       setIsSending(true);
-      const blob = lastPdfRef.current;
-      if (!blob) {
-        await handleSendPdf();
-        return;
-      }
+      const pdf = lastPdfRef.current || null;
 
-      try {
-        await sendPdfViaBlob(blob);
-      } catch (blobErr: any) {
-        const raw = String(blobErr?.message || blobErr || "");
-        if (blob.size > uploadLimit) {
-          const msg = tooLargeMessage(blob.size);
-          setErrorMsg(msg);
-          setErrorDetails(`Blob error: ${raw}`);
-          setErrorOpen(true);
-          setTimeout(() => {
-            if (!document.querySelector('[role="alertdialog"]')) alert(`${msg}`);
-          }, 0);
-          return;
-        }
-        await sendPdfToServer(blob, {
-          orderNo: String(loadIntroState().orderNumber || "").trim(),
-          intro: loadIntroState().intro || {},
-          extras: (loadOrderDraft() as any)?.extras || {}
-        });
-      }
+      await sendOrderDirect(showBack, backCandidateUrl, pdf || undefined);
 
       setErrorOpen(false);
       setSentOk(true);
@@ -1361,7 +1350,7 @@ async function sendPdfViaBlob(blob: Blob) {
   const showBottomButtons = !sentOk || isDirtyAfterSend;
   const overlayText =
     uploading
-      ? `Загружаем в хранилище… ${Math.max(0, Math.min(100, uploadProgress || 0))}%`
+      ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%`
       : isSending
         ? "Отправляем заказ…"
         : isSaving

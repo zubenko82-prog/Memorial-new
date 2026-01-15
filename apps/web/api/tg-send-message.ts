@@ -1,0 +1,70 @@
+// pages/api/tg-send-message.ts
+import type { NextApiRequest, NextApiResponse } from "next";
+
+export const config = { api: { bodyParser: true } };
+
+const VERSION = "tg-send-message@2026-01-15";
+
+function cors(res: NextApiResponse, json = false) {
+  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS,HEAD");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cache-Control", "no-store");
+  if (json) res.setHeader("Content-Type", "application/json; charset=utf-8");
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  cors(res);
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method === "HEAD") return res.status(200).end();
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST,OPTIONS,HEAD");
+    return res.status(405).end("Method Not Allowed");
+  }
+
+  try {
+    const botToken = process.env.TGBOT_TOKEN || "";
+    const single = process.env.MANAGER_CHAT_ID || "";
+    const multi = process.env.MANAGER_CHAT_IDS || "";
+    const chats = (multi ? multi.split(",") : []).map(s => s.trim()).filter(Boolean);
+    if (!chats.length && single) chats.push(single);
+    if (!botToken || !chats.length) {
+      cors(res, true);
+      return res.status(500).json({ ok: false, version: VERSION, error: "CONFIG_ERROR: TGBOT_TOKEN/CHAT_ID(S) missing" });
+    }
+
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+    const text = String(body.text || "").slice(0, 2000);
+    if (!text) {
+      cors(res, true);
+      return res.status(400).json({ ok: false, version: VERSION, error: "Text is required" });
+    }
+
+    const results: any[] = [];
+    for (const chatId of chats) {
+      const fd = new FormData();
+      fd.append("chat_id", chatId);
+      fd.append("text", text);
+      const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: "POST",
+        body: fd as any
+      });
+      const txt = await resp.text().catch(() => "");
+      let json: any = null;
+      try { json = txt ? JSON.parse(txt) : null; } catch {}
+      if (!resp.ok || !json?.ok) {
+        results.push({ ok: false, chatId, error: (json && (json.description || JSON.stringify(json))) || txt || resp.statusText });
+      } else {
+        results.push({ ok: true, chatId, messageId: json?.result?.message_id });
+      }
+    }
+
+    const allFailed = results.every(r => !r.ok);
+    cors(res, true);
+    if (allFailed) return res.status(502).json({ ok: false, version: VERSION, error: "TELEGRAM_SEND_FAILED", results });
+    return res.status(200).json({ ok: true, version: VERSION, results, partial: results.some(r => !r.ok) });
+  } catch (e: any) {
+    cors(res, true);
+    return res.status(500).json({ ok: false, version: VERSION, error: e?.message || "Internal error" });
+  }
+}
