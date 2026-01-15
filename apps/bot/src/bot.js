@@ -23,7 +23,7 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .map((s) => Number(String(s).trim()))
   .filter(Boolean);
 
-const WEBAPP_URL = process.env.WEBAPP_URL || 'memorial-web-five.vercel.app/';
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 
 // Подсказка, отдельным сообщением перед первым шагом (в ЛС)
