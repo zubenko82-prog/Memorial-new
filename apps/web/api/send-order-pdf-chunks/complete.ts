@@ -1,9 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import fs from "node:fs";
 import path from "node:path";
+import fs from "node:fs";
 
-const VERSION = "send-order-pdf-chunks@2026-01-15-complete";
-const SAFE_LIMIT = Math.floor(Number(process.env.MAX_UPLOAD_BYTES || 4.2 * 1024 * 1024)); // инфо для заголовка
+const VERSION = "send-order-pdf-chunks@2026-01-15-complete-from-blob";
+const SAFE_LIMIT = Math.floor(Number(process.env.MAX_UPLOAD_BYTES || 4.2 * 1024 * 1024));
 
 export const config = { api: { bodyParser: true } };
 
@@ -50,6 +50,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const token = process.env.BLOB_READ_WRITE_TOKEN || "";
+    if (!token) {
+      cors(res, true);
+      return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" });
+    }
+
     const { uploadId, fileName, contentType, payload } =
       (typeof req.body === "string" ? JSON.parse(req.body) : req.body) || {};
     if (!uploadId || !fileName || !contentType) {
@@ -57,56 +63,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ ok: false, version: VERSION, error: "Bad payload" });
     }
 
-    const root = path.join("/tmp", "so-chunks-" + uploadId);
-    const metaPath = path.join(root, "meta.json");
-    const exists = await fs.promises.stat(metaPath).then(() => true).catch(() => false);
-    if (!exists) {
+    // SDK
+    let VBlob: any;
+    try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
+    const list = VBlob?.list || VBlob?.default?.list;
+    const del = VBlob?.del || VBlob?.default?.del;
+    const getDownloadUrl = VBlob?.getDownloadUrl || VBlob?.default?.getDownloadUrl;
+
+    if (typeof list !== "function" || typeof del !== "function" || typeof getDownloadUrl !== "function") {
       cors(res, true);
-      return res.status(404).json({ ok: false, version: VERSION, error: "Upload not found" });
+      return res.status(500).json({ ok: false, version: VERSION, error: "@vercel/blob list/getDownloadUrl/del not available" });
     }
 
-    const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf-8"));
-    const parts = await fs.promises.readdir(root);
-    const partFiles = parts.filter((f) => /^part-\d+\.bin$/.test(f)).sort((a, b) => {
-      const ai = Number(a.match(/\d+/)?.[0] || 0);
-      const bi = Number(b.match(/\d+/)?.[0] || 0);
-      return ai - bi;
+    const prefix = path.posix.join("tmp-chunks", uploadId, "/");
+    const listed = await list({ token, prefix }).catch((e: any) => {
+      throw new Error(`Blob list failed: ${e?.message || e}`);
     });
-    if (!partFiles.length) {
+
+    const chunks = (listed?.blobs || [])
+      .map((b: any) => {
+        const m = b.pathname.match(/part-(\d+)\.bin$/);
+        const idx = m ? Number(m[1]) : -1;
+        return { idx, pathname: b.pathname };
+      })
+      .filter((x: any) => x.idx >= 0)
+      .sort((a: any, b: any) => a.idx - b.idx);
+
+    if (!chunks.length) {
       cors(res, true);
       return res.status(400).json({ ok: false, version: VERSION, error: "No parts uploaded" });
     }
 
-    // Собираем в один файл
-    const finalPath = path.join("/tmp", `so-final-${uploadId}.pdf`);
-    const out = fs.createWriteStream(finalPath);
-    for (const pf of partFiles) {
-      const p = path.join(root, pf);
-      await new Promise<void>((resolve, reject) => {
-        const r = fs.createReadStream(p);
-        r.on("error", reject);
-        out.on("error", reject);
-        r.on("end", resolve);
-        r.pipe(out, { end: false });
+    // Скачиваем чанки и собираем в память (объём PDF небольшой)
+    const buffers: Buffer[] = [];
+    for (const ch of chunks) {
+      const d = await getDownloadUrl(ch.pathname, { token }).catch((e: any) => {
+        throw new Error(`Blob getDownloadUrl failed: ${e?.message || e}`);
       });
+      const url = d?.url;
+      if (!url) throw new Error("No signed URL for chunk");
+      const arr = await fetch(url).then(r => r.arrayBuffer());
+      buffers.push(Buffer.from(arr));
     }
-    await new Promise<void>((r) => out.end(r));
+    const finalBuf = Buffer.concat(buffers);
+    const finalBlob = new Blob([finalBuf], { type: "application/pdf" });
 
-    // Отправляем в Telegram (многим чатам)
+    // Telegram отправка
     const botToken = process.env.TGBOT_TOKEN || "";
     const single = process.env.MANAGER_CHAT_ID || "";
     const multi = process.env.MANAGER_CHAT_IDS || "";
     const chats = (multi ? multi.split(",") : []).map((s) => s.trim()).filter(Boolean);
     if (!chats.length && single) chats.push(single);
     if (!botToken || !chats.length) {
-      try { await fs.promises.rm(root, { recursive: true, force: true }); } catch {}
-      try { await fs.promises.unlink(finalPath); } catch {}
       cors(res, true);
       return res.status(500).json({ ok: false, version: VERSION, error: "CONFIG_ERROR: TGBOT_TOKEN/CHAT_ID(S) missing" });
     }
-
-    const buf = await fs.promises.readFile(finalPath);
-    const blob = new Blob([buf], { type: "application/pdf" });
 
     const caption = (() => {
       const orderNo = String(payload?.orderNo || "").trim();
@@ -121,15 +132,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const results: any[] = [];
     for (const chatId of chats) {
       try {
-        const resp = await tgSendDocument(botToken, chatId, blob, path.basename(fileName), caption);
+        const resp = await tgSendDocument(botToken, chatId, finalBlob, path.basename(fileName), caption);
         results.push({ ok: true, chatId, messageId: resp?.result?.message_id, chat: resp?.result?.chat || { id: chatId } });
       } catch (e: any) {
         results.push({ ok: false, chatId, error: String(e?.message || e) });
       }
     }
 
-    try { await fs.promises.rm(root, { recursive: true, force: true }); } catch {}
-    try { await fs.promises.unlink(finalPath); } catch {}
+    // Чистим куски
+    try { await del(chunks.map(c => c.pathname), { token }); } catch {}
 
     const allFailed = results.every((r) => !r.ok);
     cors(res, true);

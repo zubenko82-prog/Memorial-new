@@ -1,6 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import fs from "node:fs";
-import path from "node:path";
 import crypto from "node:crypto";
 
 export const config = { api: { bodyParser: true } };
@@ -28,22 +26,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { fileName, contentType, totalBytes } = (typeof req.body === "string" ? JSON.parse(req.body) : req.body) || {};
+    const b = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+    const { fileName, contentType, totalBytes } = b;
     if (!fileName || !contentType || !Number.isFinite(Number(totalBytes))) {
       cors(res, true);
       return res.status(400).json({ ok: false, version: VERSION, error: "Bad payload" });
     }
 
     const uploadId = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}`;
-    const root = path.join("/tmp", "so-chunks-" + uploadId);
-    await fs.promises.mkdir(root, { recursive: true });
-
-    const meta = { fileName: String(fileName), contentType: String(contentType), totalBytes: Number(totalBytes), createdAt: Date.now() };
-    await fs.promises.writeFile(path.join(root, "meta.json"), JSON.stringify(meta));
-
-    // Рекомендованный размер чанка (85% от лимита функции)
     const maxChunkBytes = Math.max(64 * 1024, Math.floor(SAFE_LIMIT * 0.85));
-
     cors(res, true);
     return res.status(200).json({ ok: true, version: VERSION, uploadId, maxChunkBytes });
   } catch (e: any) {

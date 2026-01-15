@@ -5,7 +5,7 @@ import path from "node:path";
 
 export const config = { api: { bodyParser: false } };
 
-const VERSION = "send-order-pdf-chunks@2026-01-15-part";
+const VERSION = "send-order-pdf-chunks@2026-01-15-part-to-blob";
 const SAFE_LIMIT = Math.floor(Number(process.env.MAX_UPLOAD_BYTES || 4.2 * 1024 * 1024)); // ~4.2 MiB
 
 function cors(res: NextApiResponse, json = false) {
@@ -35,6 +35,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const token = process.env.BLOB_READ_WRITE_TOKEN || "";
+    if (!token) {
+      cors(res, true);
+      return res.status(500).json({ ok: false, version: VERSION, error: "Missing BLOB_READ_WRITE_TOKEN" });
+    }
+
     const { fields, files } = await parseForm(req);
     const uploadId = String((fields.uploadId as any) || "").trim();
     const index = Number((fields.index as any) || -1);
@@ -51,19 +57,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ ok: false, version: VERSION, error: "No chunk" });
     }
 
-    const root = path.join("/tmp", "so-chunks-" + uploadId);
-    const exists = await fs.promises.stat(root).then(() => true).catch(() => false);
-    if (!exists) {
-      try { await fs.promises.unlink(f.filepath); } catch {}
+    const key = path.posix.join("tmp-chunks", uploadId, `part-${index}.bin`);
+
+    // Заливаем чанк в Vercel Blob (private)
+    let VBlob: any;
+    try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
+    const put = VBlob?.put || VBlob?.default?.put;
+    if (typeof put !== "function") {
       cors(res, true);
-      return res.status(404).json({ ok: false, version: VERSION, error: "Upload not found" });
+      return res.status(500).json({ ok: false, version: VERSION, error: "@vercel/blob put() is not available" });
     }
 
-    const dest = path.join(root, `part-${index}.bin`);
-    await fs.promises.rename(f.filepath, dest);
+    const stream = fs.createReadStream(f.filepath);
+    await put(key, stream as any, {
+      access: "private",
+      token,
+      contentType: "application/octet-stream",
+      addRandomSuffix: false
+    }).catch((e: any) => {
+      throw new Error(`Blob put failed: ${e?.message || e}`);
+    });
+
+    try { await fs.promises.unlink(f.filepath); } catch {}
 
     cors(res, true);
-    return res.status(200).json({ ok: true, version: VERSION, uploadId, index, total });
+    return res.status(200).json({ ok: true, version: VERSION, uploadId, index, total, key });
   } catch (e: any) {
     cors(res, true);
     return res.status(500).json({ ok: false, version: VERSION, error: e?.message || "Internal error" });
