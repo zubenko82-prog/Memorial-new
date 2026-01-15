@@ -823,7 +823,75 @@ function ConfirmBottomSheet({
   );
 }
 
-/* ===== Основной компонент (напрямая отправка в Telegram) ===== */
+/* ===== Генерация PDF с попытками уложиться в лимит ===== */
+async function generatePdfUnderLimit(opts: {
+  draft: any;
+  intro: any;
+  frontNode: HTMLElement | null;
+  backNode: HTMLElement | null;
+  backUrlFallback?: string | null;
+  maxBytes: number;
+}): Promise<Blob> {
+  const attempts = [
+    { scale: 1.0, quality: "high" as const },
+    { scale: 0.9, quality: "medium" as const },
+    { scale: 0.8, quality: "medium" as const },
+    { scale: 0.7, quality: "low" as const },
+    { scale: 0.6, quality: "low" as const }
+  ];
+  for (const a of attempts) {
+    const blob = await generateOrderPdf({
+      draft: opts.draft,
+      intro: opts.intro,
+      frontNode: opts.frontNode,
+      backNode: opts.backNode,
+      backUrlFallback: opts.backUrlFallback,
+      scale: a.scale,
+      quality: a.quality
+    } as any);
+    if (blob.size <= opts.maxBytes) return blob;
+  }
+  return await generateOrderPdf({
+    draft: opts.draft,
+    intro: opts.intro,
+    frontNode: opts.frontNode,
+    backNode: opts.backNode,
+    backUrlFallback: opts.backUrlFallback,
+    scale: 0.6,
+    quality: "low"
+  } as any);
+}
+
+/* ===== Фото с подписями: "ФИО\nДаты" ===== */
+function collectPersonPhotosWithCaptions(draft: any): { file: File; caption: string }[] {
+  const persons = (((draft || {}).engraving || {}).persons || []).filter(Boolean);
+  const out: { file: File; caption: string }[] = [];
+  for (const p of persons) {
+    const lastName = (p?.lastName || "").trim();
+    const first = (p?.firstName || "").trim();
+    const middle = (p?.middleName || "").trim();
+    const birth = (p?.birthDate || "").trim();
+    const death = (p?.deathDate || "").trim();
+    const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ");
+    const dates = [birth, death].filter(Boolean).join(" — ");
+    const caption = [fio, dates].filter(Boolean).join("\n");
+
+    const dataUrl = (p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
+    if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
+
+    const bin = atob(dataUrl.split(",")[1]);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const mime = dataUrl.substring(5, dataUrl.indexOf(";")) || "image/jpeg";
+    const blob = new Blob([arr], { type: mime });
+    const file = new File([blob], `${fio || "photo"}.jpg`, { type: "image/jpeg" });
+
+    out.push({ file, caption });
+  }
+  return out;
+}
+
+/* ===== Основной компонент ===== */
 type Props = { onBack?: () => void };
 
 function getBackSketchUrl(draft: any): string | null {
@@ -876,158 +944,6 @@ function normalizeErrorMessage(err: any): { msg: string; details?: string } {
   };
 }
 
-// Генерация PDF с попытками уложиться в лимит
-async function generatePdfUnderLimit(opts: {
-  draft: any;
-  intro: any;
-  frontNode: HTMLElement | null;
-  backNode: HTMLElement | null;
-  backUrlFallback?: string | null;
-  maxBytes: number;
-}): Promise<Blob> {
-  const attempts = [
-    { scale: 1.0, quality: "high" as const },
-    { scale: 0.9, quality: "medium" as const },
-    { scale: 0.8, quality: "medium" as const },
-    { scale: 0.7, quality: "low" as const },
-    { scale: 0.6, quality: "low" as const }
-  ];
-  for (const a of attempts) {
-    const blob = await generateOrderPdf({
-      draft: opts.draft,
-      intro: opts.intro,
-      frontNode: opts.frontNode,
-      backNode: opts.backNode,
-      backUrlFallback: opts.backUrlFallback,
-      scale: a.scale,
-      quality: a.quality
-    } as any);
-    if (blob.size <= opts.maxBytes) return blob;
-  }
-  return await generateOrderPdf({
-    draft: opts.draft,
-    intro: opts.intro,
-    frontNode: opts.frontNode,
-    backNode: opts.backNode,
-    backUrlFallback: opts.backUrlFallback,
-    scale: 0.6,
-    quality: "low"
-  } as any);
-}
-
-// Фото с подписями: "ФИО\nДаты"
-function collectPersonPhotosWithCaptions(draft: any): { file: File; caption: string }[] {
-  const persons = (((draft || {}).engraving || {}).persons || []).filter(Boolean);
-  const out: { file: File; caption: string }[] = [];
-  for (const p of persons) {
-    const lastName = (p?.lastName || "").trim();
-    const first = (p?.firstName || "").trim();
-    const middle = (p?.middleName || "").trim();
-    const birth = (p?.birthDate || "").trim();
-    const death = (p?.deathDate || "").trim();
-    const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ");
-    const dates = [birth, death].filter(Boolean).join(" — ");
-    const caption = [fio, dates].filter(Boolean).join("\n");
-
-    const dataUrl = (p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
-    if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
-
-    const bin = atob(dataUrl.split(",")[1]);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    const mime = dataUrl.substring(5, dataUrl.indexOf(";")) || "image/jpeg";
-    const blob = new Blob([arr], { type: mime });
-    const file = new File([blob], `${fio || "photo"}.jpg`, { type: "image/jpeg" });
-
-    out.push({ file, caption });
-  }
-  return out;
-}
-
-// Прямая отправка: sendMessage → sendDocument(PDF) → sendPhoto(портреты)
-async function sendOrderDirect(showBack: boolean, backCandidateUrl: string | null, pdfOverride?: Blob) {
-  const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-
-  setUploading(true);
-  setUploadProgress(0);
-
-  // Текст-заголовок
-  const surnames = (((loadOrderDraft() || {}).engraving || {}).persons || [])
-    .map((p: any) => (p?.lastName || "").trim())
-    .filter(Boolean);
-  const headerText = [
-    orderNoCur ? `Заявка №${orderNoCur}` : "Заявка",
-    surnames.length ? `Фамилии: ${Array.from(new Set(surnames)).join(", ")}` : ""
-  ].filter(Boolean).join("\n");
-
-  {
-    const headerResp = await fetch("/api/tg-send-message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: headerText })
-    });
-    if (!headerResp.ok) {
-      const t = await headerResp.text().catch(() => "");
-      throw new Error(`sendMessage failed: ${t || headerResp.statusText}`);
-    }
-  }
-
-  // PDF
-  let pdfBlob = pdfOverride;
-  if (!pdfBlob) {
-    pdfBlob = await generatePdfUnderLimit({
-      draft: loadOrderDraft(),
-      intro: loadIntroState(),
-      frontNode: document.getElementById("pdf-front-sketch"),
-      backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
-      backUrlFallback: showBack ? backCandidateUrl : null,
-      maxBytes: MAX_FILE_BYTES
-    });
-  }
-  // Сохраняем для ретраев/кнопки «Сохранить PDF»
-  lastPdfRef.current = pdfBlob;
-
-  {
-    const fileName = `order-${orderNoCur || Date.now()}.pdf`;
-    const fd = new FormData();
-    fd.append("file", new File([pdfBlob], fileName, { type: "application/pdf" }));
-    fd.append("caption", orderNoCur ? `Заявка №${orderNoCur}` : "Заявка");
-    const docResp = await fetch("/api/tg-send-document", { method: "POST", body: fd });
-    if (!docResp.ok) {
-      const t = await docResp.text().catch(() => "");
-      throw new Error(`sendDocument failed: ${t || docResp.statusText}`);
-    }
-  }
-
-  // Фото
-  const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
-  let sent = 0;
-  for (const ph of photos) {
-    const compressed = await compressImageFileToMaxBytes(ph.file, MAX_FILE_BYTES, {
-      maxWidth: 2200,
-      maxHeight: 2200,
-      mime: "image/jpeg",
-      qualityStart: 0.9,
-      qualityMin: 0.55,
-      qualityStep: 0.08
-    });
-
-    const fd = new FormData();
-    fd.append("file", new File([compressed], ph.file.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
-    fd.append("caption", ph.caption);
-    const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      throw new Error(`sendPhoto failed: ${t || r.statusText}`);
-    }
-    sent++;
-    setUploadProgress(Math.round((sent / Math.max(1, photos.length)) * 100));
-  }
-
-  setUploadProgress(100);
-  setUploading(false);
-}
-
 export default function ReviewAndSendStep({ onBack }: Props) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
@@ -1051,7 +967,7 @@ export default function ReviewAndSendStep({ onBack }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Лимит (ранее использовался для серверного fallback — можно оставить для совместимости)
+  // Лимит (для совместимости; может использоваться для информирования пользователя)
   const DEFAULT_UPLOAD_LIMIT = 4.2 * 1024 * 1024;
   const [uploadLimit, setUploadLimit] = useState<number>(DEFAULT_UPLOAD_LIMIT);
   useEffect(() => {
@@ -1248,6 +1164,93 @@ export default function ReviewAndSendStep({ onBack }: Props) {
   // Состояние отправки
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0); // проценты 0..100
+
+  // Прямая отправка: sendMessage → sendDocument(PDF) → sendPhoto(портреты)
+  const sendOrderDirect = async (showBackInner: boolean, backUrlInner: string | null, pdfOverride?: Blob) => {
+    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    try {
+      // Текст-заголовок
+      const surnames = (((loadOrderDraft() || {}).engraving || {}).persons || [])
+        .map((p: any) => (p?.lastName || "").trim())
+        .filter(Boolean);
+      const headerText = [
+        orderNoCur ? `Заявка №${orderNoCur}` : "Заявка",
+        surnames.length ? `Фамилии: ${Array.from(new Set(surnames)).join(", ")}` : ""
+      ].filter(Boolean).join("\n");
+
+      {
+        const headerResp = await fetch("/api/tg-send-message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: headerText })
+        });
+        if (!headerResp.ok) {
+          const t = await headerResp.text().catch(() => "");
+          throw new Error(`sendMessage failed: ${t || headerResp.statusText}`);
+        }
+      }
+
+      // PDF
+      let pdfBlob = pdfOverride;
+      if (!pdfBlob) {
+        pdfBlob = await generatePdfUnderLimit({
+          draft: loadOrderDraft(),
+          intro: loadIntroState(),
+          frontNode: document.getElementById("pdf-front-sketch"),
+          backNode: showBackInner ? document.getElementById("pdf-back-sketch") : null,
+          backUrlFallback: showBackInner ? backUrlInner : null,
+          maxBytes: MAX_FILE_BYTES
+        });
+      }
+      // Сохраняем для ретраев/кнопки «Сохранить PDF»
+      lastPdfRef.current = pdfBlob;
+
+      {
+        const fileName = `order-${orderNoCur || Date.now()}.pdf`;
+        const fd = new FormData();
+        fd.append("file", new File([pdfBlob], fileName, { type: "application/pdf" }));
+        fd.append("caption", orderNoCur ? `Заявка №${orderNoCur}` : "Заявка");
+        const docResp = await fetch("/api/tg-send-document", { method: "POST", body: fd });
+        if (!docResp.ok) {
+          const t = await docResp.text().catch(() => "");
+          throw new Error(`sendDocument failed: ${t || docResp.statusText}`);
+        }
+      }
+
+      // Фото
+      const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
+      let sent = 0;
+      for (const ph of photos) {
+        const compressed = await compressImageFileToMaxBytes(ph.file, MAX_FILE_BYTES, {
+          maxWidth: 2200,
+          maxHeight: 2200,
+          mime: "image/jpeg",
+          qualityStart: 0.9,
+          qualityMin: 0.55,
+          qualityStep: 0.08
+        });
+
+        const fd = new FormData();
+        fd.append("file", new File([compressed], ph.file.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
+        fd.append("caption", ph.caption);
+        const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          throw new Error(`sendPhoto failed: ${t || r.statusText}`);
+        }
+        sent++;
+        setUploadProgress(Math.round((sent / Math.max(1, photos.length)) * 100));
+      }
+
+      setUploadProgress(100);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   async function handleSavePdf() {
     try {
