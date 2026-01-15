@@ -4,7 +4,7 @@ import formidable, { File as FormidableFile } from "formidable";
 
 export const config = { api: { bodyParser: false } };
 
-const VERSION = "tg-send-document@2026-01-15";
+const VERSION = "tg-send-document@2026-01-15+diag";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -51,30 +51,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const buf = await import("node:fs").then(fs => fs.promises.readFile(f.filepath));
-    const blob = new Blob([buf], { type: f.mimetype || "application/octet-stream" });
+    const blob = new Blob([buf], { type: f.mimetype || "application/pdf" });
 
     const results: any[] = [];
     for (const chatId of chats) {
-      const fd = new FormData();
-      fd.append("chat_id", chatId);
-      if (caption) fd.append("caption", caption);
-      fd.append("document", blob, f.originalFilename || "file.bin");
-      const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
-        method: "POST",
-        body: fd as any
-      });
-      const txt = await resp.text().catch(() => "");
-      let json: any = null;
-      try { json = txt ? JSON.parse(txt) : null; } catch {}
-      if (!resp.ok || !json?.ok) {
-        results.push({ ok: false, chatId, error: (json && (json.description || JSON.stringify(json))) || txt || resp.statusText });
-      } else {
-        results.push({ ok: true, chatId, messageId: json?.result?.message_id });
+      try {
+        const fd = new FormData();
+        fd.append("chat_id", chatId);
+        if (caption) fd.append("caption", caption);
+        fd.append("document", blob, f.originalFilename || "order.pdf");
+
+        const tg = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+          method: "POST",
+          body: fd as any
+        });
+
+        const raw = await tg.text().catch(() => "");
+        let json: any = null;
+        try { json = raw ? JSON.parse(raw) : null; } catch {}
+
+        if (!tg.ok || !json?.ok) {
+          const errText = json?.description || raw || tg.statusText || "Telegram error";
+          const errCode = json?.error_code || tg.status;
+          results.push({ ok: false, chatId, error: errText, error_code: errCode });
+        } else {
+          results.push({ ok: true, chatId, messageId: json?.result?.message_id });
+        }
+      } catch (e: any) {
+        results.push({ ok: false, chatId, error: String(e?.message || e) });
       }
     }
 
-    cors(res, true);
     const allFailed = results.every(r => !r.ok);
+    cors(res, true);
     if (allFailed) return res.status(502).json({ ok: false, version: VERSION, error: "TELEGRAM_SEND_FAILED", results });
     return res.status(200).json({ ok: true, version: VERSION, results, partial: results.some(r => !r.ok) });
   } catch (e: any) {

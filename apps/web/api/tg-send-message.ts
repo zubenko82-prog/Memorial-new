@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "tg-send-message@2026-01-15";
+const VERSION = "tg-send-message@2026-01-15+diag";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -45,15 +45,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const fd = new FormData();
       fd.append("chat_id", chatId);
       fd.append("text", text);
-      const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: "POST",
-        body: fd as any
-      });
-      const txt = await resp.text().catch(() => "");
+      const tg = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { method: "POST", body: fd as any });
+      const raw = await tg.text().catch(() => "");
       let json: any = null;
-      try { json = txt ? JSON.parse(txt) : null; } catch {}
-      if (!resp.ok || !json?.ok) {
-        results.push({ ok: false, chatId, error: (json && (json.description || JSON.stringify(json))) || txt || resp.statusText });
+      try { json = raw ? JSON.parse(raw) : null; } catch {}
+      if (!tg.ok || !json?.ok) {
+        results.push({ ok: false, chatId, error: (json?.description || raw || tg.statusText), error_code: json?.error_code || tg.status });
       } else {
         results.push({ ok: true, chatId, messageId: json?.result?.message_id });
       }
