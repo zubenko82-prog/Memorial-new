@@ -1,7 +1,7 @@
 // pages/api/blob-upload-url.ts
 // INIT multipart upload для @vercel/blob (без generateUploadUrl).
-// Разрешаем multipart для любых размеров (в т.ч. < 5 MiB) — 1 часть.
-// Перебираем множество сигнатур: pathname|key|path|filename|name|без пути, с/без parts.
+// Разрешаем multipart для любых размеров (в т.ч. < 5 MiB) — 1 часть при необходимости.
+// Перебираем сигнатуры: pathname|key|path|filename|name|без пути, с/без parts.
 //
 // Env:
 //  - BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
@@ -16,7 +16,7 @@ const VERSION = "blob-upload-url@multipart-init+wide-compat";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS,HEAD");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS,HEAD");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Cache-Control", "no-store");
   if (json) res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -46,10 +46,24 @@ function toNumber(val: unknown): number {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cors(res);
+
+    // Вспомогательный GET для проверки версии и конфигурации
+    if (req.method === "GET") {
+      return res.status(200).json({
+        ok: false,
+        version: VERSION,
+        error: "Use POST",
+        exportedEnv: {
+          hasToken: !!process.env.BLOB_READ_WRITE_TOKEN,
+          hasBaseUrl: !!(process.env.BLOB_PUBLIC_BASE_URL || "")
+        }
+      });
+    }
+
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method === "HEAD") return res.status(200).end();
     if (req.method !== "POST") {
-      res.setHeader("Allow", "POST,OPTIONS,HEAD");
+      res.setHeader("Allow", "GET,POST,OPTIONS,HEAD");
       return res.status(405).end("Method Not Allowed");
     }
 
@@ -92,7 +106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Для любых размеров: выбираем 1 часть для мелких файлов, иначе делим на ~8 MiB
+    // Для любых размеров: 1 часть для мелких файлов, иначе делим на ~8 MiB
     const wantParts = Math.max(1, Math.ceil(sizeBytes / (8 * 1024 * 1024)));
     const wantPartSize = Math.ceil(sizeBytes / wantParts);
 
