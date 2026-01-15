@@ -92,15 +92,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Для универсальности: 1 часть на маленькие файлы, иначе подберёт сам бекенд
-    const wantParts = Math.max(1, Math.ceil(sizeBytes / (8 * 1024 * 1024))); // целимся в ~8MiB
+    // Для любых размеров: выбираем 1 часть для мелких файлов, иначе делим на ~8 MiB
+    const wantParts = Math.max(1, Math.ceil(sizeBytes / (8 * 1024 * 1024)));
     const wantPartSize = Math.ceil(sizeBytes / wantParts);
 
-    // Загружаем SDK
+    // SDK
     let VBlob: any;
     try { VBlob = require("@vercel/blob"); } catch { VBlob = await import("@vercel/blob"); }
     const exportedKeys = Object.keys(VBlob || {});
-
     const createMultipartUpload =
       VBlob?.createMultipartUpload || VBlob?.default?.createMultipartUpload;
 
@@ -121,20 +120,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metadata: { filename: fileBase }
     };
 
-    // Перебор разных сигнатур
     const attempts: any[] = [
       { ...baseOpts, pathname, parts: wantParts, partSize: wantPartSize },
       { ...baseOpts, key: pathname, parts: wantParts, partSize: wantPartSize },
       { ...baseOpts, path: pathname, parts: wantParts, partSize: wantPartSize },
       { ...baseOpts, filename: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
       { ...baseOpts, name: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
-      // без разбиения (пусть SDK сам решит)
       { ...baseOpts, pathname },
       { ...baseOpts, key: pathname },
       { ...baseOpts, path: pathname },
       { ...baseOpts, filename: fileBase, addRandomSuffix: false },
       { ...baseOpts, name: fileBase, addRandomSuffix: false },
-      // совсем без пути — автоимя на стороне Blob
       { ...baseOpts }
     ];
 
@@ -165,7 +161,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Нормализация ответа
     const uploadId: string = rsp.uploadId || rsp.UploadId || rsp.id;
     const outPath: string = rsp.pathname || rsp.key || rsp.path || pathname || fileBase;
     const urls: string[] =
