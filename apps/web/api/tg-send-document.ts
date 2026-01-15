@@ -51,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const buf = await import("node:fs").then(fs => fs.promises.readFile(f.filepath));
-    const blob = new Blob([buf], { type: f.mimetype || "application/pdf" });
+    const blob = new Blob([buf], { type: "application/pdf" });
 
     const results: any[] = [];
     for (const chatId of chats) {
