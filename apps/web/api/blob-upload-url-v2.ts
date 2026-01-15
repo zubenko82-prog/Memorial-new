@@ -1,15 +1,17 @@
 // pages/api/blob-upload-url-v2.ts
 // INIT multipart upload для @vercel/blob с максимально широкой совместимостью.
-// Пробуем createMultipartUpload с разными наборами опций.
-// Если не вышло — пробуем createMultipartUploader и разные методы на нём.
-// GET — для быстрой проверки деплоя/конфига.
+// Теперь пробуем две сигнатуры:
+//  - createMultipartUpload(pathname, options)
+//  - createMultipartUpload(options)
+// Плюс фолбэк через createMultipartUploader с теми же стилями.
+// GET — для проверки версии/конфига.
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import path from "node:path";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "blob-upload-url@multipart-init+wide-compat-v2+uploader-fallback";
+const VERSION = "blob-upload-url@multipart-init+v2-two-arg+uploader-fallback";
 
 function cors(res: NextApiResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -43,8 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         version: VERSION,
         error: "Use POST",
         exportedEnv: {
-          hasToken: !!process.env.BLOB_READ_WRITE_TOKEN,
-          hasBaseUrl: !!(process.env.BLOB_PUBLIC_BASE_URL || "")
+          hasToken: !!process.env.BLOB_READ_WRITE_TOKEN
         }
       });
     }
@@ -96,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // 1 часть для мелких файлов, иначе ~8 MiB
+    // Для мелких — 1 часть; иначе ~8 MiB
     const wantParts = Math.max(1, Math.ceil(sizeBytes / (8 * 1024 * 1024)));
     const wantPartSize = Math.ceil(sizeBytes / wantParts);
 
@@ -111,98 +112,133 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       access,
       contentType,
       contentLength: sizeBytes,
-      // дублируем альтернативные поля, если SDK ищет другое имя:
+      // дублируем альтернативные поля
       size: sizeBytes,
       sizeBytes,
       metadata: { filename: fileBase }
     };
 
-    const buildAttempts = () => {
-      const withParts = [
-        { ...baseOpts, pathname, parts: wantParts, partSize: wantPartSize },
-        { ...baseOpts, key: pathname, parts: wantParts, partSize: wantPartSize },
-        { ...baseOpts, path: pathname, parts: wantParts, partSize: wantPartSize },
-        { ...baseOpts, filename: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
-        { ...baseOpts, name: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false }
-      ];
-      const minimal = [
-        { ...baseOpts, pathname },
-        { ...baseOpts, key: pathname },
-        { ...baseOpts, path: pathname },
-        { ...baseOpts, filename: fileBase, addRandomSuffix: false },
-        { ...baseOpts, name: fileBase, addRandomSuffix: false }
-      ];
-      return [...withParts, ...minimal, { ...baseOpts }];
-    };
-
-    const attempts = buildAttempts();
-
+    const callsTried: string[] = [];
     let rsp: any = null;
-    let lastErrText: string[] = [];
+    const errors: string[] = [];
 
-    // 1) Пробуем createMultipartUpload
-    if (typeof createMultipartUpload === "function") {
-      for (const opts of attempts) {
+    // 1) createMultipartUpload — двухаргументный стиль
+    if (typeof createMultipartUpload === "function" && !rsp) {
+      const twoArgAttempts = [
+        [pathname, { ...baseOpts, parts: wantParts, partSize: wantPartSize }],
+        [pathname, { ...baseOpts }], // без parts
+        [fileBase, { ...baseOpts, parts: wantParts, partSize: wantPartSize }],
+        [fileBase, { ...baseOpts }]
+      ] as const;
+
+      for (const [arg1, arg2] of twoArgAttempts) {
         try {
-          rsp = await createMultipartUpload(opts);
+          callsTried.push(`createMultipartUpload("${arg1}", opts:${Object.keys(arg2).join(",")})`);
+          rsp = await createMultipartUpload(arg1 as any, arg2 as any);
           if (rsp) break;
         } catch (e: any) {
-          lastErrText.push(String(e?.message || e));
+          errors.push(`two-arg: ${String(e?.message || e)}`);
         }
       }
     }
 
-    // 2) Фолбэк: createMultipartUploader
+    // 2) createMultipartUpload — одноаргументный стиль (объект)
+    if (typeof createMultipartUpload === "function" && !rsp) {
+      const oneArgAttempts = [
+        { ...baseOpts, pathname, parts: wantParts, partSize: wantPartSize },
+        { ...baseOpts, pathname },
+        { ...baseOpts, key: pathname, parts: wantParts, partSize: wantPartSize },
+        { ...baseOpts, key: pathname },
+        { ...baseOpts, path: pathname, parts: wantParts, partSize: wantPartSize },
+        { ...baseOpts, path: pathname },
+        { ...baseOpts, filename: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
+        { ...baseOpts, filename: fileBase, addRandomSuffix: false },
+        { ...baseOpts, name: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
+        { ...baseOpts, name: fileBase, addRandomSuffix: false },
+        { ...baseOpts }
+      ];
+
+      for (const opts of oneArgAttempts) {
+        try {
+          callsTried.push(`createMultipartUpload(opts:${Object.keys(opts).join(",")})`);
+          rsp = await createMultipartUpload(opts);
+          if (rsp) break;
+        } catch (e: any) {
+          errors.push(`one-arg: ${String(e?.message || e)}`);
+        }
+      }
+    }
+
+    // 3) Фолбэк: createMultipartUploader (и двух-, и одноарг. стили)
     if (!rsp) {
       const createMultipartUploader = VBlob?.createMultipartUploader || VBlob?.default?.createMultipartUploader;
       if (typeof createMultipartUploader === "function") {
         let uploader: any = null;
-        const uOptsList = [
-          { token, access },
-          { token },
-          { token, access, cacheControlMaxAge: 31536000 }
-        ];
         let uploaderErr: string | null = null;
+        const uOptsList = [{ token, access }, { token }, { token, access, cacheControlMaxAge: 31536000 }];
         for (const uo of uOptsList) {
           try {
+            callsTried.push(`createMultipartUploader(${JSON.stringify(Object.keys(uo))})`);
             uploader = await createMultipartUploader(uo);
             if (uploader) break;
           } catch (e: any) {
             uploaderErr = String(e?.message || e);
           }
         }
-        if (!uploader && uploaderErr) lastErrText.push(`uploader: ${uploaderErr}`);
+        if (!uploader) errors.push(`uploader: ${uploaderErr || "no instance"}`);
 
         if (uploader) {
-          const candidates = ["createUpload", "initUpload", "initiateUpload", "startUpload", "prepareUpload", "create"];
-          const entry = candidates
-            .map((k) => ({ k, fn: (uploader as any)[k] }))
-            .find((x) => typeof x.fn === "function");
+          const methods = ["createUpload", "initUpload", "initiateUpload", "startUpload", "prepareUpload", "create"];
+          const entry = methods.map(k => ({ k, fn: (uploader as any)[k] })).find(x => typeof x.fn === "function");
 
           if (entry) {
-            for (const opts of attempts) {
+            // двухаргументный стиль
+            const twoArgUAttempts = [
+              [pathname, { ...baseOpts, parts: wantParts, partSize: wantPartSize }],
+              [pathname, { ...baseOpts }],
+              [fileBase, { ...baseOpts, parts: wantParts, partSize: wantPartSize }],
+              [fileBase, { ...baseOpts }]
+            ] as const;
+            for (const [arg1, arg2] of twoArgUAttempts) {
               try {
-                rsp = await entry.fn.call(uploader, opts);
+                callsTried.push(`uploader.${entry.k}("${arg1}", opts)`);
+                rsp = await entry.fn.call(uploader, arg1 as any, arg2 as any);
                 if (rsp) break;
               } catch (e: any) {
-                lastErrText.push(`${entry.k}: ${String(e?.message || e)}`);
+                errors.push(`uploader two-arg ${entry.k}: ${String(e?.message || e)}`);
               }
             }
-          } else if (typeof uploader === "function") {
-            for (const opts of attempts) {
-              try {
-                rsp = await uploader(opts);
-                if (rsp) break;
-              } catch (e: any) {
-                lastErrText.push(`uploader() call: ${String(e?.message || e)}`);
+            // одноаргументный стиль
+            if (!rsp) {
+              const oneArgUAttempts = [
+                { ...baseOpts, pathname, parts: wantParts, partSize: wantPartSize },
+                { ...baseOpts, pathname },
+                { ...baseOpts, key: pathname, parts: wantParts, partSize: wantPartSize },
+                { ...baseOpts, key: pathname },
+                { ...baseOpts, path: pathname, parts: wantParts, partSize: wantPartSize },
+                { ...baseOpts, path: pathname },
+                { ...baseOpts, filename: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
+                { ...baseOpts, filename: fileBase, addRandomSuffix: false },
+                { ...baseOpts, name: fileBase, parts: wantParts, partSize: wantPartSize, addRandomSuffix: false },
+                { ...baseOpts, name: fileBase, addRandomSuffix: false },
+                { ...baseOpts }
+              ];
+              for (const opts of oneArgUAttempts) {
+                try {
+                  callsTried.push(`uploader.${entry.k}(opts:${Object.keys(opts).join(",")})`);
+                  rsp = await entry.fn.call(uploader, opts);
+                  if (rsp) break;
+                } catch (e: any) {
+                  errors.push(`uploader one-arg ${entry.k}: ${String(e?.message || e)}`);
+                }
               }
             }
           } else {
-            lastErrText.push(`uploader has no callable methods. Keys: ${Object.keys(uploader || {}).join(", ")}`);
+            errors.push(`uploader has no known method. Keys: ${Object.keys(uploader || {}).join(", ")}`);
           }
         }
       } else {
-        lastErrText.push("createMultipartUploader is not a function");
+        errors.push("createMultipartUploader is not a function");
       }
     }
 
@@ -211,15 +247,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({
         ok: false,
         version: VERSION,
-        error: `createMultipartUpload failed: ${lastErrText[lastErrText.length - 1] || "Unknown"}`,
+        error: `createMultipartUpload failed: ${errors[errors.length - 1] || "Unknown"}`,
         debug: {
           exportedKeys,
           triedPathname: pathname,
           triedFilename: fileBase,
           triedParts: wantParts,
           triedPartSize: wantPartSize,
-          attemptsCount: attempts.length,
-          errorsSample: lastErrText.slice(-4)
+          attemptsCount: callsTried.length,
+          callsSample: callsTried.slice(-6),
+          errorsSample: errors.slice(-6)
         }
       });
     }
