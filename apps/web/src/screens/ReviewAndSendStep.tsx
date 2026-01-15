@@ -1105,23 +1105,9 @@ async function sendPdfViaBlob(blob: Blob) {
 
   setUploading(true);
   setUploadProgress(0);
-  try {
-    const res = await uploadFileMultipart(file, {
-      name: fileName,
-      access: "public",
-      contentType: "application/pdf",
-      // ВАЖНО: используем новый INIT-роут без small-fallback
-      endpointInit: "/api/blob-upload-url-v2",
-      // endpointComplete оставляем дефолтный: "/api/blob-upload-complete"
-      onProgress: ({ uploadedBytes, totalBytes }) => {
-        const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-        setUploadProgress(Math.max(0, Math.min(100, pct)));
-      }
-    });
 
-    const fileUrl = res.url;
-    if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
-
+  // Хелпер отправки ссылки в Telegram после успешной загрузки в Blob
+  const notifyByUrl = async (fileUrl: string) => {
     const payload = {
       fileUrl,
       orderNo: orderNoCur,
@@ -1139,6 +1125,58 @@ async function sendPdfViaBlob(blob: Blob) {
       const msg = (json && (json.error || JSON.stringify(json))) || text || resp.statusText;
       throw new Error(msg);
     }
+  };
+
+  // Универсальный загрузчик через multipart, с последовательными попытками INIT
+  const tryUpload = async (endpointInit: string) => {
+    const res = await uploadFileMultipart(file, {
+      name: fileName,
+      access: "public",
+      contentType: "application/pdf",
+      endpointInit, // пробуем переданный INIT
+      // endpointComplete — дефолтный (/api/blob-upload-complete)
+      onProgress: ({ uploadedBytes, totalBytes }) => {
+        const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+        setUploadProgress(Math.max(0, Math.min(100, pct)));
+      }
+    });
+    return res;
+  };
+
+  try {
+    // 1) Пробуем новый INIT-роут (v2)
+    let res: { url: string; pathname: string };
+
+    try {
+      res = await tryUpload("/api/blob-upload-url-v2");
+    } catch (e: any) {
+      const msg = String(e?.message || e || "");
+      const isInitIssue =
+        /SMALL_FILE_USE_SERVER_PUT/i.test(msg) ||
+        /missing options/i.test(msg) ||
+        /createMultipartUpload failed/i.test(msg) ||
+        /blob-upload-url/i.test(msg);
+      if (!isInitIssue) {
+        throw e; // не похоже на INIT-проблему — отдадим наружу
+      }
+
+      // 2) Фолбэк: попробуем старый INIT-роут (если он задеплоен)
+      try {
+        res = await tryUpload("/api/blob-upload-url");
+      } catch (e2: any) {
+        const msg2 = String(e2?.message || e2 || "");
+        // Бросаем осмысленную ошибку, чтобы внешний код показал подсказку/фолбэк
+        const combined = `Blob INIT failed. v2: ${msg}; legacy: ${msg2}`;
+        const err = new Error(combined);
+        (err as any).code = "BLOB_INIT_FAILED";
+        throw err;
+      }
+    }
+
+    const fileUrl = res.url;
+    if (!fileUrl) throw new Error("Не удалось получить URL загруженного файла");
+
+    await notifyByUrl(fileUrl);
   } finally {
     setUploading(false);
   }
