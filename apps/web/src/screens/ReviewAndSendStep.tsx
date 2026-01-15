@@ -1100,8 +1100,29 @@ async function sendPdfViaBlob(blob: Blob) {
   const orderNoCur = String(loadIntroState().orderNumber || "").trim();
   const fileName = `orders/order-${orderNoCur || Date.now()}.pdf`;
 
-  // Преобразуем Blob в File, чтобы корректно передавать size/type
-  const file = new File([blob], "order.pdf", { type: "application/pdf" });
+  // Базовый File из исходного Blob
+  let baseFile = new File([blob], "order.pdf", { type: "application/pdf" });
+
+  const FIVE_MIB = 5 * 1024 * 1024;
+  const PAD_MARGIN = 128 * 1024; // +128 KiB поверх порога 5 MiB
+  const effectiveUploadLimit = uploadLimit || (4.2 * 1024 * 1024);
+
+  // Если файл попадает в «дырку» платформы: (лимит сервера; ~4.2 MiB, 4.5 MiB] .. < 5 MiB,
+  // то увеличиваем его до > 5 MiB, добавляя безопасный «паддинг» в конец PDF
+  // (PDF-ридеры игнорируют хвостовые пробелы/комментарии после %%EOF).
+  if (baseFile.size > effectiveUploadLimit && baseFile.size < FIVE_MIB) {
+    try {
+      const needBytes = FIVE_MIB + PAD_MARGIN - baseFile.size;
+      if (needBytes > 0) {
+        const header = new TextEncoder().encode(`\n%%Pad ${needBytes} bytes (for multipart)\n`);
+        const padding = new Uint8Array(needBytes).fill(0x20); // spaces
+        const paddedBlob = new Blob([baseFile, header, padding], { type: "application/pdf" });
+        baseFile = new File([paddedBlob], "order.pdf", { type: "application/pdf" });
+      }
+    } catch {
+      // Если не получилось дополнить — продолжаем с исходным файлом (дальше сработает fallback/ошибка)
+    }
+  }
 
   setUploading(true);
   setUploadProgress(0);
@@ -1127,13 +1148,13 @@ async function sendPdfViaBlob(blob: Blob) {
     }
   };
 
-  // Универсальный загрузчик через multipart, с последовательными попытками INIT
+  // Универсальный загрузчик через multipart (INIT на v2)
   const tryUpload = async (endpointInit: string) => {
-    const res = await uploadFileMultipart(file, {
+    const res = await uploadFileMultipart(baseFile, {
       name: fileName,
       access: "public",
       contentType: "application/pdf",
-      endpointInit, // пробуем переданный INIT
+      endpointInit, // новый INIT-роут без small-fallback
       // endpointComplete — дефолтный (/api/blob-upload-complete)
       onProgress: ({ uploadedBytes, totalBytes }) => {
         const pct = totalBytes ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
@@ -1144,7 +1165,7 @@ async function sendPdfViaBlob(blob: Blob) {
   };
 
   try {
-    // 1) Пробуем новый INIT-роут (v2)
+    // 1) Пробуем v2 INIT
     let res: { url: string; pathname: string };
 
     try {
@@ -1156,16 +1177,16 @@ async function sendPdfViaBlob(blob: Blob) {
         /missing options/i.test(msg) ||
         /createMultipartUpload failed/i.test(msg) ||
         /blob-upload-url/i.test(msg);
+
       if (!isInitIssue) {
-        throw e; // не похоже на INIT-проблему — отдадим наружу
+        throw e; // не похоже на INIT-проблему — выкидываем наружу
       }
 
-      // 2) Фолбэк: попробуем старый INIT-роут (если он задеплоен)
+      // 2) Фолбэк: legacy INIT (если вдруг актуален)
       try {
         res = await tryUpload("/api/blob-upload-url");
       } catch (e2: any) {
         const msg2 = String(e2?.message || e2 || "");
-        // Бросаем осмысленную ошибку, чтобы внешний код показал подсказку/фолбэк
         const combined = `Blob INIT failed. v2: ${msg}; legacy: ${msg2}`;
         const err = new Error(combined);
         (err as any).code = "BLOB_INIT_FAILED";
