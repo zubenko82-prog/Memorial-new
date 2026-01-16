@@ -1,64 +1,59 @@
 // src/components/StepNav.tsx
 // Компактная навигация по шагам.
+// Изменения:
+// - Панель по умолчанию ЛИПКая (sticky = true).
+// - Сохранил авто-включение после шага "finish" через localStorage (persistKey = "memorial.navEnabled").
+// - Добавил topOffset (px) для тонкой настройки отступа сверху под ваши шапки.
 //
-// Требование: панель навигации должна появляться ТОЛЬКО после достижения шага ReviewAndSendStep,
-// а не сразу. После первого достижения — может оставаться видимой на остальных шагах.
+// Использование:
+// {step !== 'done' && (
+//   <StepNav
+//     steps={NAV_STEPS}
+//     currentId={currentWizardId}
+//     onSelect={handleNavSelect}
+//     // sticky по умолчанию true; можно отключить: sticky={false}
+//     topOffset={6} // опционально: добавит 6px к safe-area сверху
+//   />
+// )}
 //
-// Что сделано:
-// - По умолчанию панель скрыта. Она активируется автоматически, когда текущий шаг соответствует
-//   ReviewAndSendStep (по умолчанию ожидаем id шага "review-and-send" или "ReviewAndSendStep").
-// - Для гибкости добавлен props triggerId (string | string[]), чтобы указать точный id шага,
-//   после достижения которого панель станет видимой. По умолчанию учтены синонимы:
-//   ["review", "review-and-send", "reviewandsend", "reviewandsendstep", "ReviewAndSendStep"].
-// - Состояние видимости запоминается в localStorage (persistKey = "memorial.navEnabled.reviewOnly").
-//   Если не нужно запоминать между сессиями — передайте persistKey={null}.
-// - По умолчанию панель липкая (sticky = true). Есть topOffset (px) и авто-спейсер над панелью,
-//   чтобы избежать «мгновенного прилипания» в начале скролл-контейнера.
-// - Если хотите полностью управлять показом извне — передайте enabled={true|false}.
-//
-// Пример использования:
-// <StepNav
-//   steps={NAV_STEPS}
-//   currentId={currentStepId}           // текущий id шага от вашего роутера/мастера
-//   onSelect={(i, id) => goToStep(id)}  // по клику на иконку шага
-//   triggerId="ReviewAndSendStep"       // (опционально) если ваш id отличается от дефолтных синонимов
-//   topOffset={6}                       // (опционально) отступ сверху
-// />
-//
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+// Поведение:
+// - Пока пользователь не дошёл до шага finish — панель не рендерится (null).
+// - После первого входа на finish — панель включается и далее показывается на всех шагах.
+
+import React, { useEffect, useMemo, useState } from "react";
 
 export type StepDef = { id: string; title: string; icon?: React.ReactNode };
 
 export type StepNavProps = {
   steps?: StepDef[];
-  current?: number;           // 0-based индекс активного шага (альтернатива currentId)
-  currentId?: string;         // id активного шага (предпочтительно)
-  activeId?: string;          // alias для совместимости
-  active?: string;            // alias для совместимости
+  current?: number;           // 0-based
+  currentId?: string;         // id активного шага
+  activeId?: string;          // alias
+  active?: string;            // alias (совм. со старым кодом)
   onSelect?: (index: number, id: string) => void;
   linkForId?: (id: string) => string;
   hint?: string;
 
   // Параметры показа/позиционирования
-  sticky?: boolean;           // по умолчанию: true (панель липкая)
+  sticky?: boolean;           // ПО УМОЛЧАНИЮ: true (панель липкая)
   topOffset?: number;         // доп. отступ сверху (px), по умолчанию 0
-  spacerPx?: number;          // спейсер над панелью (px). Если не задан — авто (8px при необходимости)
 
-  // Управление показом
+  // Управление режимом «появится после завершения»
   enabled?: boolean;          // если задан — жёстко управляет показом (true/false)
-  triggerId?: string | string[]; // шаг(и), после достижения которого панель активируется (дефолт: ReviewAndSendStep и синонимы)
-  persistKey?: string | null; // ключ LS для флага включения (по умолчанию "memorial.navEnabled.reviewOnly"); null — не сохранять
+  activateOnFinish?: boolean; // по умолчанию true: включаемся автоматически на finish
+  persistKey?: string;        // ключ LS для флага включения, по умолчанию "memorial.navEnabled"
 };
 
+// Без «extras»
 const defaultSteps: StepDef[] = [
-  { id: "item",    title: "Резная работа" },
-  { id: "params",  title: "Размеры стелы" },
+  { id: "item", title: "Резная работа" },
+  { id: "params", title: "Размеры стелы" },
   { id: "persons", title: "Усопшие" },
-  { id: "graphics",title: "Графика" },
+  { id: "graphics", title: "Графика" },
   { id: "epitaph", title: "Эпитафия" },
-  { id: "editor",  title: "Редактор" },
-  { id: "rear",    title: "Тыльная сторона" },
-  { id: "review-and-send", title: "Обзор и отправка" } // не обязательно, просто пример
+  { id: "editor", title: "Редактор" },
+  { id: "rear", title: "Тыльная сторона" },
+  { id: "finish", title: "Завершение" }
 ];
 
 function Icon({ id }: { id: string }) {
@@ -78,8 +73,8 @@ function Icon({ id }: { id: string }) {
       return (<svg {...p} aria-hidden><path d="M4 5h16v14H4z" stroke="currentColor" strokeWidth="2" fill="none" /><path d="M9 9h6v6H9z" /></svg>);
     case "rear":
       return (<svg {...p} aria-hidden><path d="M5 6h9v12H5z" stroke="currentColor" strokeWidth="2" fill="none" /><path d="M10 6h9v12h-9z" /></svg>);
-    case "review-and-send":
-      return (<svg {...p} aria-hidden><path d="M6 6h12v12H6z" stroke="currentColor" strokeWidth="2" fill="none" /><path d="M8 10h8M8 14h8" stroke="currentColor" strokeWidth="2" /></svg>);
+    case "finish":
+      return (<svg {...p} aria-hidden><path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2" fill="none" /></svg>);
     default:
       return (<svg {...p} aria-hidden><circle cx="12" cy="12" r="8" /></svg>);
   }
@@ -106,21 +101,6 @@ function detectIdFromLocation(stepIds: string[]): string | null {
   return null;
 }
 
-function normalizeId(id?: string | null): string {
-  return String(id || "")
-    .toLowerCase()
-    .replace(/[\s_]/g, "-")
-    .replace(/[^a-z0-9-]/g, "");
-}
-
-function isTriggerReached(currentId: string, trigger: string | string[] | undefined): boolean {
-  const cur = normalizeId(currentId);
-  const defaults = ["review", "review-and-send", "reviewandsend", "reviewandsendstep", "reviewandsendstep".toLowerCase()];
-  const trgList = Array.isArray(trigger) ? trigger : (trigger ? [trigger] : defaults);
-  const trgNorm = trgList.map(normalizeId);
-  return trgNorm.includes(cur);
-}
-
 export default function StepNav({
   steps = defaultSteps,
   current,
@@ -130,89 +110,110 @@ export default function StepNav({
   onSelect,
   hint,
   linkForId,
-  sticky = true,
-  topOffset = 0,
-  spacerPx, // если не задан — используем авто-спейсер
+  sticky = true,            // теперь по умолчанию липкая
+  topOffset = 0,            // опциональный доп. отступ сверху
   enabled: enabledProp,
-  triggerId, // при достижении этого шага панель активируется
-  persistKey = "memorial.navEnabled.reviewOnly" // новый ключ, чтобы не подхватывать старые значения
+  activateOnFinish = true,
+  persistKey = "memorial.navEnabled"
 }: StepNavProps) {
   const ids = useMemo(() => steps.map(s => s.id), [steps]);
 
-  // Определяем текущий id шага из пропсов/локации
-  const curIdComputed = useMemo(() => {
-    if (currentId || activeId || active) return (currentId || activeId || active)!;
-    const loc = detectIdFromLocation(ids);
-    if (loc) return loc;
-    if (Number.isInteger(current as number)) return steps[clamp(Number(current), 0, steps.length - 1)].id;
-    return "";
-  }, [current, currentId, activeId, active, ids, steps]);
-
-  // Показ панели: по умолчанию скрыта до достижения триггер-шагa
+  // Определяем, активирован ли показ панели
   const [enabled, setEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return !!enabledProp;
     if (typeof enabledProp === "boolean") return enabledProp;
-    try { return window.localStorage.getItem(persistKey || "") === "1"; } catch { return false; }
+    try { return window.localStorage.getItem(persistKey) === "1"; } catch { return false; }
   });
 
-  // При достижении триггер-шагa — активировать и (опционально) запомнить
+  // Авто-включение на finish
   useEffect(() => {
-    if (typeof enabledProp === "boolean") return; // внешнее управление имеет приоритет
-    const nowId = curIdComputed;
-    if (!nowId) return;
-    if (enabled) return; // уже включено
-    if (isTriggerReached(nowId, triggerId)) {
+    if (!activateOnFinish || typeof window === "undefined") return;
+    const idNow = (currentId || activeId || active || detectIdFromLocation(ids)) || "";
+    if (idNow === "finish") {
+      try { window.localStorage.setItem(persistKey, "1"); } catch {}
       setEnabled(true);
-      if (persistKey) {
-        try { window.localStorage.setItem(persistKey, "1"); } catch {}
-      }
     }
-  }, [curIdComputed, triggerId, enabled, enabledProp, persistKey]);
+    const onChange = () => {
+      const idLoc = detectIdFromLocation(ids);
+      if (idLoc === "finish") {
+        try { window.localStorage.setItem(persistKey, "1"); } catch {}
+        setEnabled(true);
+      }
+    };
+    window.addEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
+    return () => {
+      window.removeEventListener("hashchange", onChange);
+      window.removeEventListener("popstate", onChange);
+    };
+  }, [activateOnFinish, persistKey, ids, currentId, activeId, active]);
 
-  // Сброс/установка enabled извне
+  // Внешний контроль enabled (имеет приоритет)
   useEffect(() => {
     if (typeof enabledProp === "boolean") setEnabled(enabledProp);
   }, [enabledProp]);
 
-  // Sticky: авто-спейсер (если над панелью нет контента)
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [autoSpacer, setAutoSpacer] = useState<number>(0);
-  useLayoutEffect(() => {
-    if (!sticky) { setAutoSpacer(0); return; }
-    const el = rootRef.current;
-    if (!el) return;
-    const prev = el.previousElementSibling as HTMLElement | null;
-    const prevH = prev ? (prev.getBoundingClientRect().height || 0) : 0;
-    setAutoSpacer(prevH <= 1 ? 8 : 0);
-  }, [sticky]);
+  // Текущий индекс
+  const initIndex = (() => {
+    if (Number.isInteger(current as number)) {
+      return clamp(Number(current), 0, steps.length - 1);
+    }
+    const idProp = currentId || activeId || active;
+    if (idProp && ids.includes(idProp)) return ids.indexOf(idProp);
+    const fromLoc = detectIdFromLocation(ids);
+    if (fromLoc) return ids.indexOf(fromLoc);
+    return 0;
+  })();
+  const [curIndex, setCurIndex] = useState<number>(initIndex);
 
-  const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/${encodeURIComponent(id)}`);
-  const stickyTopValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
-  const finalSpacer = typeof spacerPx === "number" ? spacerPx : autoSpacer;
+  useEffect(() => {
+    if (Number.isInteger(current as number)) {
+      setCurIndex(clamp(Number(current), 0, steps.length - 1));
+      return;
+    }
+    const idProp = currentId || activeId || active;
+    if (idProp && ids.includes(idProp)) {
+      setCurIndex(ids.indexOf(idProp));
+      return;
+    }
+    const fromLoc = detectIdFromLocation(ids);
+    if (fromLoc) setCurIndex(ids.indexOf(fromLoc));
+  }, [current, currentId, activeId, active, ids, steps.length]);
 
-  // Если панель ещё не активирована — не рендерим вовсе
+  useEffect(() => {
+    const onChange = () => {
+      const fromLoc = detectIdFromLocation(ids);
+      if (fromLoc) setCurIndex(ids.indexOf(fromLoc));
+    };
+    window.addEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
+    return () => {
+      window.removeEventListener("hashchange", onChange);
+      window.removeEventListener("popstate", onChange);
+    };
+  }, [ids]);
+
+  const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/wizard/${encodeURIComponent(id)}`);
+
+  const stickyTopValue = `calc(${topOffset}px + env(safe-area-inset-top, 0px))`;
+  const containerStyle: React.CSSProperties = sticky
+    ? {
+        position: "sticky",
+        top: stickyTopValue,
+        zIndex: 1000,
+        display: "grid",
+        gap: 6
+      }
+    : { display: "grid", gap: 6 };
+
+  // До «активации» панель не отображаем вовсе
   if (!enabled) return null;
 
-  // Текущий индекс (только для выделения активной «таблетки»)
-  const curIndex = useMemo(() => {
-    const idxById = ids.indexOf(curIdComputed);
-    if (idxById >= 0) return idxById;
-    if (Number.isInteger(current as number)) return clamp(Number(current), 0, steps.length - 1);
-    return 0;
-  }, [curIdComputed, ids, current, steps.length]);
-
   return (
-    <div ref={rootRef} style={{ width: "100%" }}>
-      {sticky && finalSpacer > 0 && (
-        <div aria-hidden style={{ height: finalSpacer }} />
-      )}
-
+    <div style={containerStyle}>
       <nav
         aria-label="Навигация по шагам"
         style={{
-          position: sticky ? "sticky" as const : "static" as const,
-          top: sticky ? stickyTopValue : undefined,
-          zIndex: sticky ? 1000 : undefined,
           maxWidth: 600,
           margin: "0 auto",
           display: "grid",
@@ -224,9 +225,9 @@ export default function StepNav({
           border: "1px solid rgba(255,255,255,0.14)",
           background:
             "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%), rgba(20,20,24,0.55)",
-          backdropFilter: sticky ? "blur(6px)" : undefined,
-          WebkitBackdropFilter: sticky ? "blur(6px)" : undefined,
-          boxShadow: sticky ? "0 4px 20px rgba(0,0,0,0.20)" : undefined,
+          backdropFilter: "blur(6px)",      // чуть подложим блюра, чтобы липкая панель читалась на прокрутке
+          WebkitBackdropFilter: "blur(6px)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.20)",
           width: "100%",
           boxSizing: "border-box"
         }}
@@ -243,6 +244,8 @@ export default function StepNav({
                 if (onSelect) {
                   e.preventDefault();
                   onSelect(idx, s.id);
+                } else {
+                  setCurIndex(idx);
                 }
               }}
               style={{
@@ -270,7 +273,7 @@ export default function StepNav({
       </nav>
 
       {hint && (
-        <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, marginTop: 4 }}>{hint}</div>
+        <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9 }}>{hint}</div>
       )}
     </div>
   );
