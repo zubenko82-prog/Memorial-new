@@ -1,15 +1,9 @@
 // src/screens/Start.tsx
 // Стартовый экран каталога «Резьба».
-// ВАЖНО: глобальную StepNav рендерит App.tsx, здесь её нет.
-// Внутренняя навигация по категориям — ЛИПКая (position: sticky).
+// ВАЖНО: Глобальную StepNav больше не рендерим здесь (она рендерится в App.tsx).
+// Внутренняя навигация по категориям — липкая (sticky) как раньше.
 
-import React, {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState
-} from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchCatalog, type CatalogCategory, type CatalogItem } from "../api";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -85,6 +79,7 @@ function errorTextStyle(): React.CSSProperties {
   return { color: "#ffb4b4", fontSize: 12 };
 }
 
+// Вензель‑разделитель (локально)
 function FiligreeSeparator({
   top = 10,
   bottom = 10,
@@ -119,8 +114,11 @@ function getDecodedFileName(item: CatalogItem): string {
   } catch {
     decodedName = last;
   }
+  // Удаляем расширение файла, если оно есть
   const dotIndex = decodedName.lastIndexOf(".");
-  if (dotIndex !== -1) return decodedName.substring(0, dotIndex);
+  if (dotIndex !== -1) {
+    return decodedName.substring(0, dotIndex);
+  }
   return decodedName;
 }
 
@@ -147,7 +145,9 @@ function useCollapse(open: boolean, duration = 260) {
         transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
       });
       const t = setTimeout(() => {
-        if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
+        if (ref.current) {
+          setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
+        }
       }, duration + 20);
       return () => clearTimeout(t);
     } else {
@@ -201,7 +201,7 @@ function PreviewBottomSheet({
     return () => clearTimeout(t);
   }, []);
 
-  // Автосохранение промежуточных значений
+  // Автосохранение промежуточных значений (без фиксации)
   useEffect(() => {
     saveIntro(
       {
@@ -222,20 +222,17 @@ function PreviewBottomSheet({
     setTimeout(cb, 220);
   };
 
-  // Подтверждение: если уже заполнено — не показываем форму, иначе — раскрываем
+  // Подтверждение:
   const handleConfirm = () => {
     const st = loadIntroState();
     if (isIntroValid(st.intro)) {
-      const lockedState =
-        st.locked && st.orderNumber ? st : saveIntro(st.intro!, { lock: true });
-      return closeWithFade(() =>
-        onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! })
-      );
+      const lockedState = st.locked && st.orderNumber ? st : saveIntro(st.intro!, { lock: true });
+      return closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
     }
     setShowIntro(true);
   };
 
-  // Сабмит «знакомства»
+  // Сабмит «знакомства»: фиксируем один раз (назначаем номер) и продолжаем
   const submitIntro = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched({ name: true, phone: true });
@@ -252,15 +249,14 @@ function PreviewBottomSheet({
     setOrderNumber(lockedState.orderNumber || null);
 
     if (lockedState.intro && lockedState.orderNumber) {
-      return closeWithFade(() =>
-        onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! })
-      );
+      return closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
     }
   };
 
-  const bottomInset =
-    "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
+  // Общая вставка под нижние панели (Telegram/Safe Area)
+  const bottomInset = "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
 
+  // Обработчики для нижней панели при открытом «знакомстве»
   const handleIntroBack = () => setShowIntro(false);
   const handleIntroSubmit = () => {
     if (!formValid) return;
@@ -367,10 +363,7 @@ function PreviewBottomSheet({
           </div>
 
           {/* «Знакомство» — плавное раскрытие */}
-          <div
-            ref={introColl.ref}
-            style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}
-          >
+          <div ref={introColl.ref} style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}>
             {showIntro && (
               <section
                 style={{
@@ -382,29 +375,15 @@ function PreviewBottomSheet({
                   border: "1px solid rgba(255,255,255,0.08)"
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "baseline",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    flexWrap: "wrap"
-                  }}
-                >
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                   <h3 style={{ margin: 0, fontWeight: 500 }}>Давайте познакомимся</h3>
-                  {orderNumber && (
-                    <div style={{ opacity: 0.9, fontSize: 14 }}>№ {orderNumber}</div>
-                  )}
+                  {orderNumber && <div style={{ opacity: 0.9, fontSize: 14 }}>№ {orderNumber}</div>}
                 </div>
                 <p style={{ margin: "6px 0 10px 0", opacity: 0.9 }}>
                   Укажите ваши контакты — мы свяжемся для уточнения деталей заказа.
                 </p>
 
-                <form
-                  ref={formRef}
-                  onSubmit={submitIntro}
-                  style={{ display: "grid", gap: 10 }}
-                >
+                <form ref={formRef} onSubmit={submitIntro} style={{ display: "grid", gap: 10 }}>
                   <label style={{ display: "grid", gap: 6 }}>
                     <span>Представьтесь, пожалуйста</span>
                     <input
@@ -415,9 +394,7 @@ function PreviewBottomSheet({
                       style={inputStyle()}
                     />
                     {touched.name && customerName.trim().length <= 1 && (
-                      <div style={errorTextStyle()}>
-                        Пожалуйста, укажите имя и фамилию.
-                      </div>
+                      <div style={errorTextStyle()}>Пожалуйста, укажите имя и фамилию.</div>
                     )}
                   </label>
 
@@ -449,60 +426,69 @@ function PreviewBottomSheet({
                     />
                   </label>
                 </form>
-
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "center",
-                    gap: 8,
-                    flexWrap: "wrap",
-                    marginTop: 10
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={handleIntroBack}
-                    style={glassButtonStyle("nano")}
-                  >
-                    Назад
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleIntroSubmit}
-                    disabled={!formValid}
-                    style={glassButtonStyle("nano", !formValid)}
-                  >
-                    Продолжить
-                  </button>
-                </div>
               </section>
             )}
           </div>
         </div>
 
-        {/* Нижние кнопки (когда форма не раскрыта) */}
-        {!showIntro && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              gap: 8,
-              flexWrap: "wrap",
-              paddingBottom: bottomInset
-            }}
-          >
-            <button onClick={() => closeWithFade(onClose)} style={glassButtonStyle("nano")}>
-              Выбрать другую
-            </button>
-            <button
-              onClick={handleConfirm}
-              style={glassButtonStyle("nano")}
-              title="Подтвердить"
-            >
-              Подтвердить
-            </button>
-          </div>
-        )}
+        {/* Нижние кнопки */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            paddingBottom: bottomInset
+          }}
+        >
+          {!showIntro ? (
+            <>
+              <button
+                onClick={() => closeWithFade(onClose)}
+                style={glassButtonStyle("nano")}
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Выбрать другую
+              </button>
+              <button
+                onClick={handleConfirm}
+                style={glassButtonStyle("nano")}
+                title="Подтвердить"
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Подтвердить
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleIntroBack}
+                style={glassButtonStyle("nano")}
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Назад
+              </button>
+              <button
+                type="button"
+                onClick={handleIntroSubmit}
+                disabled={!formValid}
+                style={glassButtonStyle("nano", !formValid)}
+                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
+              >
+                Продолжить
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </>,
     document.body
@@ -521,25 +507,7 @@ export default function Start({
   const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
   const [outro, setOutro] = useState(false);
 
-  // Измеряем высоту TopBar и делаем спейсер, чтобы sticky не прилипал мгновенно
-  const topBarRef = useRef<HTMLDivElement | null>(null);
-  const [stickySpacer, setStickySpacer] = useState(0);
-  useLayoutEffect(() => {
-    const measureTop = () => {
-      const h = topBarRef.current?.getBoundingClientRect().height || 0;
-      setStickySpacer(Math.ceil(h + 6));
-    };
-    measureTop();
-    const ro = new ResizeObserver(measureTop);
-    if (topBarRef.current) ro.observe(topBarRef.current);
-    window.addEventListener("resize", measureTop);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measureTop);
-    };
-  }, []);
-
-  // Липкая навигация по категориям
+  // Липкая навигация по категориям (внутри шага)
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState<number>(56);
 
@@ -550,8 +518,7 @@ export default function Start({
   }, []);
 
   useLayoutEffect(() => {
-    const measure = () =>
-      setNavH(navRef.current?.getBoundingClientRect().height ?? 0);
+    const measure = () => setNavH(navRef.current?.getBoundingClientRect().height ?? 0);
     measure();
     window.addEventListener("resize", measure);
     const ro = new ResizeObserver(measure);
@@ -575,18 +542,11 @@ export default function Start({
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   };
 
-  // Сортировка, как в каталоге
-  const collator = useMemo(
-    () => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }),
-    []
-  );
+  // Сортировка как в каталоге
+  const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
   function sortedItems(items: CatalogItem[]) {
     const keyOf = (it: CatalogItem) =>
-      (it as any).order ??
-      (it as any).index ??
-      (it as any).idx ??
-      (it as any).position ??
-      (it as any).sort;
+      (it as any).order ?? (it as any).index ?? (it as any).idx ?? (it as any).position ?? (it as any).sort;
     return items.slice().sort((a, b) => {
       const ka = keyOf(a);
       const kb = keyOf(b);
@@ -603,11 +563,12 @@ export default function Start({
     });
   }
 
-  // Подтверждение выбора: сохраняем в драфт и уходим на следующий шаг
   const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
+    // Сохраняем выбранный элемент в драфт заказа (для TopBar и следующих шагов)
     saveOrderDraft({
       item: { name: it.name, url: it.url, relPath: (it as any).relPath }
     });
+
     setPreviewItem(null);
     setOutro(true);
     window.setTimeout(() => onConfirm(it, meta), 220);
@@ -626,42 +587,31 @@ export default function Start({
         margin: "0 auto"
       }}
     >
-      {/* Оборачиваем TopBar для измерения высоты */}
-      <div ref={topBarRef}>
-        <TopBarWithIntro title="Стела" />
-      </div>
-
-      {/* Спейсер, чтобы sticky-панель не прилипала мгновенно (учёт TopBar) */}
-      <div aria-hidden style={{ height: stickySpacer }} />
+      {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
+      <TopBarWithIntro title="Стела" />
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
 
-      {/* Липкая панель навигации по категориям */}
+      {/* Липкая панель навигации по категориям (sticky как раньше) */}
       {cats && cats.length > 0 && (
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: "env(safe-area-inset-top, 0px)",
-            zIndex: 1000,
+            top: 0, // липко относительно скролл-контейнера App
+            zIndex: 50,
+            paddingTop: "env(safe-area-inset-top)",
             ...glassPanelStyle(),
             borderRadius: 0,
             borderLeft: "none",
             borderRight: "none",
-            marginBottom: 10
-            // Важно: без transform и overflow у sticky‑элемента
+            marginBottom: 10,
+            transform: "translateZ(0)" // iOS/Safari fix внутри overflow контейнера
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 6,
-              padding: "6px 8px"
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px", overflow: "hidden" }}>
             {cats.map((cat, idx) => {
               const catId = makeCatId(cat, idx);
               return (
@@ -675,6 +625,9 @@ export default function Start({
                     lineHeight: 1.15
                   }}
                   title={`Перейти к: ${cat.name}`}
+                  onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                  onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                  onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
                 >
                   {cat.name}
                 </button>
@@ -686,9 +639,7 @@ export default function Start({
 
       {err && <div style={{ color: "salmon" }}>{err}</div>}
       {!cats && <div>Загрузка...</div>}
-      {cats && cats.length === 0 && (
-        <div>Пока пусто. Добавьте папки и изображения в data/catalogs/carvings.</div>
-      )}
+      {cats && cats.length === 0 && <div>Пока пусто. Добавьте папки и изображения в data/catalogs/carvings.</div>}
 
       <div style={{ display: "grid", gap: 14, scrollBehavior: "smooth" }}>
         {cats?.map((cat, idx) => {
@@ -724,8 +675,13 @@ export default function Start({
                       borderRadius: 12,
                       padding: 6,
                       cursor: "pointer",
-                      textAlign: "center"
+                      textAlign: "center",
+                      transform: "translateZ(0)"
                     }}
+                    onPointerEnter={(e) => (e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.35)")}
+                    onPointerLeave={(e) => (e.currentTarget.style.boxShadow = "")}
+                    onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.995)")}
+                    onPointerUp={(e) => (e.currentTarget.style.transform = "")}
                   >
                     <div
                       style={{
@@ -760,7 +716,7 @@ export default function Start({
         })}
       </div>
 
-      {/* Предпросмотр. «Знакомство» открывается только после клика «Подтвердить» */}
+      {/* Предпросмотр. «Знакомство» откроется ТОЛЬКО после клика «Подтвердить» */}
       {previewItem && (
         <PreviewBottomSheet
           item={previewItem}
