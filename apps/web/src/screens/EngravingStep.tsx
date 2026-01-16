@@ -1,17 +1,10 @@
 // src/screens/EngravingStep.tsx
 // Шаг «Информация об усопших» (без редактора).
 //
-// Требования:
-// - Тяжёлые фото сжимаются до «безопасного» размера перед сохранением (локально через canvas).
-// - Драфт НЕ обновляем «на лету». Сохраняем ТОЛЬКО:
-//     • по «Назад» / «Продолжить»,
-//     • при размонтировании компонента,
-//     • при beforeunload / pagehide / visibilitychange (уход со страницы),
-//     • при hashchange / popstate (переход между шагами).
-// - При внешней очистке/изменении драфта (TopBar) — подтягиваем новые данные, сбрасываем локальные.
-//
-// Навигация: внутренняя панель — липкая (sticky).
-// Предпросмотр: SketchTemplate; эпитафии из драфта/initial; carvingOpacity управляет прозрачностью.
+// Фото: сжатие больших изображений локально (canvas) до безопасного размера.
+// Сохранение драфта: ТОЛЬКО при переходах/уходе (не «на лету»).
+// Синхронизация: на внешние изменения (storage, DRAFT_UPDATED_EVENT, visibilitychange:visible).
+// Sticky‑навигация, предпросмотр SketchTemplate, валидация дат.
 
 import React, {
   useCallback,
@@ -39,8 +32,8 @@ type Person = {
   middleName?: string;
   birthDate?: string;
   deathDate?: string;
-  photoUrl?: string | null;     // для превью (внешний URL или blob:)
-  photoDataUrl?: string | null; // сжатый dataURL
+  photoUrl?: string | null;     // превью (внешний URL или blob:)
+  photoDataUrl?: string | null; // сжатый dataURL (храним в драфте)
 };
 type NormalizedPerson = {
   id: string;
@@ -160,7 +153,7 @@ function validateDates(birth?: string, death?: string): string | null {
 
 /* ===== Image compressor (canvas) ===== */
 const PHOTO_TARGET_MAX_BYTES = Math.floor(2.7 * 1024 * 1024); // ≈2.7 MiB
-const MAX_DIM = 2200; // длинная сторона
+const MAX_DIM = 2200;
 const QUALITY_START = 0.9;
 const QUALITY_MIN = 0.55;
 const QUALITY_STEP = 0.08;
@@ -205,7 +198,6 @@ async function compressImageFileToMaxBytes(file: File, maxBytes = PHOTO_TARGET_M
   if (!ctx) return file;
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-  // подбор качества
   let q = QUALITY_START;
   let out: Blob = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
   if (out.size <= maxBytes) return out;
@@ -244,26 +236,14 @@ type Props = {
   item: any;
   sizeResult?: any;
   initial?:
-    | {
-        persons?: Person[];
-        epitaphs?: string[];
-        epitaphText?: string;
-        [k: string]: any;
-      }
+    | { persons?: Person[]; epitaphs?: string[]; epitaphText?: string; [k: string]: any }
     | null;
   onBack?: () => void;
   onSaveDraft?: (data: any) => void;
   onDone?: (data: any) => void;
 };
 
-export default function EngravingStep({
-  item,
-  sizeResult,
-  initial,
-  onBack,
-  onSaveDraft,
-  onDone
-}: Props) {
+export default function EngravingStep({ item, sizeResult, initial, onBack, onSaveDraft, onDone }: Props) {
   const [outro, setOutro] = useState(false);
 
   // Драфт
@@ -363,14 +343,12 @@ export default function EngravingStep({
       setPersons((prev) => prev.map((p) => (p.id === personId ? { ...p, ...patch } : p)));
     };
 
-    // Очистка
     if (!pv) {
       setTransientFor(personId, null);
       commitLocal({ photoUrl: null, photoDataUrl: null });
       return;
     }
 
-    // Источник: dataUrl
     if ((pv as any)?.dataUrl) {
       const dataUrl = (pv as any).dataUrl as string;
       (async () => {
@@ -387,7 +365,6 @@ export default function EngravingStep({
       return;
     }
 
-    // Источник: File
     const maybeFile: File | undefined = (pv as any)?.file;
     if (maybeFile instanceof File) {
       const tempUrl = URL.createObjectURL(maybeFile); // мгновенное превью
@@ -409,7 +386,6 @@ export default function EngravingStep({
       return;
     }
 
-    // Источник: url
     if ((pv as any)?.url) {
       const url = (pv as any).url as string;
       if (isBlobUrl(url)) {
@@ -426,14 +402,13 @@ export default function EngravingStep({
           }
         })();
       } else {
-        // внешний URL
         setTransientFor(personId, null);
         commitLocal({ photoUrl: url, photoDataUrl: null });
       }
     }
   };
 
-  /* ===== Навигация / sticky-панель ===== */
+  /* ===== Навигация / sticky‑панель ===== */
   const navRef = useRef<HTMLDivElement | null>(null);
   const navRowRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState(56);
@@ -469,7 +444,7 @@ export default function EngravingStep({
     if (persons.length > 0) scrollToForm(persons[0].id);
   }, [persons]);
 
-  /* ===== Сохранение драфта ТОЛЬКО при переходах/уходе ===== */
+  /* ===== Сохранение драфта (только переходы/уход) ===== */
   const persistPersons = useCallback((list: Person[]) => {
     const prev = loadOrderDraft();
     const norm = normalizePersonsForSave(list);
@@ -481,6 +456,11 @@ export default function EngravingStep({
     const stored = saveOrderDraft(next);
     setOrderDraft(stored);
     onSaveDraft?.({ persons: norm });
+    // ВАЖНО: уведомим окружение (TopBar/другие вкладки)
+    try {
+      window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+      window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+    } catch {}
   }, [onSaveDraft]);
 
   // save on unmount
@@ -489,13 +469,14 @@ export default function EngravingStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // save on beforeunload/pagehide/visibilitychange/hashchange/popstate
+  // save on beforeunload/pagehide/visibilitychange(hashchange/popstate отдельные!)
   useEffect(() => {
     const saveNow = () => { try { persistPersons(persons); } catch {} };
     const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
     window.addEventListener("beforeunload", saveNow);
     window.addEventListener("pagehide", saveNow);
     window.addEventListener("visibilitychange", onVisibility);
+    // Переходы между шагами (сохраняем)
     window.addEventListener("hashchange", saveNow);
     window.addEventListener("popstate", saveNow);
     return () => {
@@ -507,7 +488,7 @@ export default function EngravingStep({
     };
   }, [persons, persistPersons]);
 
-  // Подтягиваем внешние изменения драфта (в т.ч. «Очистить всё»)
+  // Синхронизация ИЗ стора (НЕ на hashchange/popstate!)
   useEffect(() => {
     const syncFromStore = () => {
       const fresh = loadOrderDraft();
@@ -519,17 +500,16 @@ export default function EngravingStep({
         setTransientPhotoUrlById({});
       }
     };
-    const events: Array<[string, any]> = [
+    const handlers: Array<[string, any]> = [
       ["storage", syncFromStore],
       [DRAFT_UPDATED_EVENT, syncFromStore],
       ["memorial:orderDraftUpdated", syncFromStore as any],
-      ["hashchange", syncFromStore],
-      ["popstate", syncFromStore],
       ["visibilitychange", () => { if (document.visibilityState === "visible") syncFromStore(); }]
     ];
-    events.forEach(([n, h]) => window.addEventListener(n, h as any));
+    handlers.forEach(([n, h]) => window.addEventListener(n, h as any));
+    // первичная проверка
     syncFromStore();
-    return () => events.forEach(([n, h]) => window.removeEventListener(n, h as any));
+    return () => handlers.forEach(([n, h]) => window.removeEventListener(n, h as any));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -742,13 +722,7 @@ export default function EngravingStep({
         {/* Кнопки */}
         <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
           <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
-          <button
-            type="button"
-            disabled={!canContinue || isRendering}
-            onClick={handleContinue}
-            style={{ ...glassButtonStyle("sm"), opacity: canContinue && !isRendering ? 1 : 0.6 }}
-            title={isRendering ? "Подождите, формируем изображение…" : undefined}
-          >
+          <button type="button" disabled={!canContinue || isRendering} onClick={handleContinue} style={{ ...glassButtonStyle("sm"), opacity: canContinue && !isRendering ? 1 : 0.6 }}>
             {isRendering ? "Формирование…" : "Продолжить"}
           </button>
         </div>
