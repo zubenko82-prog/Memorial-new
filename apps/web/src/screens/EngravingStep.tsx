@@ -1,22 +1,27 @@
 // src/screens/EngravingStep.tsx
 // Шаг «Информация об усопших» (без редактора).
 //
-// Фото/драфт:
-// - Драфт НЕ сохраняем «на лету». saveOrderDraft вызывается только по «Назад»/«Продолжить».
-// - Транзиентный blob:ObjectURL для превью (ревок при замене/очистке/анмаунте).
-// - Перемещение по порядку (▲/▼) — оставлено.
+// Обновлено:
+// - Всегда пишем текущее состояние людей (persons) в драфт:
+//   • при любом изменении полей/фото/порядка,
+//   • при любом переходе (unmount),
+//   • при обновлении/перезагрузке страницы (beforeunload).
+// - Надёжная синхронизация с внешними очистками: слушаем DRAFT_UPDATED_EVENT, storage,
+//   hashchange/popstate/visibilitychange. Если драфт очищен в TopBar — локальное состояние
+//   этого шага сбрасывается (не остаются старые данные).
+// - Снимок драфта больше не используется статично — берём актуальный драфт из стора
+//   и отслеживаем обновления (orderDraft state).
 //
 // Навигация:
 // - Внутренняя навигация — липкая (sticky).
-// - «Компактный вид ☰» — ссылка; при нажатии сворачивает все аккордеоны с усопшими.
-//   Показываем «Компактный вид ☰» только если усопших больше одного.
+// - «Компактный вид ☰» — сворачивает все аккордеоны с усопшими (показываем, если > 1 усопшего).
 //
-// Исправлено/упрощено:
-// - validateDates/parseFlexibleDate на месте.
-// - Подключён общий SketchTemplate (общий предпросмотр с гориз./верт. шаблонами) из ../components/SketchTemplate.
-// - Прозрачность резной работы настраивается через carvingOpacity (передаётся в SketchTemplate).
-// - Передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
-// - ПОДСКАЗКА: при отсутствии фото выводим подсказку НАД кнопкой «Прикрепить фото».
+// Предпросмотр:
+// - Общий SketchTemplate с эпитафиями
+// - carvingOpacity управляет прозрачностью резной работы
+//
+// Подсказка:
+// - При отсутствии фото подсказка над «Прикрепить фото».
 
 import React, {
   useCallback,
@@ -136,6 +141,11 @@ function makeBlankPerson(id?: string): Person {
     photoDataUrl: null
   };
 }
+function personsEqual(a: Person[], b: Person[]): boolean {
+  const na = normalizePersonsForSave(a);
+  const nb = normalizePersonsForSave(b);
+  return JSON.stringify(na) === JSON.stringify(nb);
+}
 
 /* ===== Date validation ===== */
 function parseFlexibleDate(input?: string): Date | null {
@@ -195,35 +205,32 @@ export default function EngravingStep({
 }: Props) {
   const [outro, setOutro] = useState(false);
 
-  // Снимок драфта на вход (без лайв-подписок)
-  const draftSnapRef = useRef<OrderDraft>(loadOrderDraft());
+  // Живой драфт (обновляем при внешних событиях)
+  const [orderDraft, setOrderDraft] = useState<OrderDraft>(() => loadOrderDraft());
+  const draftRef = useRef<OrderDraft>(orderDraft);
+  useEffect(() => { draftRef.current = orderDraft; }, [orderDraft]);
 
-  // Persons — локально, драфт сохраняем по кнопкам
-  const personsFromDraft = draftPersonsToLocal(
-    draftSnapRef.current?.engraving?.persons as any
+  // Локальные люди — отталкиваемся от актуального драфта
+  const initialPersons = useMemo(
+    () => draftPersonsToLocal(orderDraft?.engraving?.persons as any) || [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
   );
   const [persons, setPersons] = useState<Person[]>(
-    personsFromDraft.length
-      ? personsFromDraft
+    initialPersons.length
+      ? initialPersons
       : Array.isArray(initial?.persons) && initial!.persons!.length
-      ? initial!.persons!.map((p: any, i: number) => ({
-          id: p.id || `p-${i}`,
-          ...p
-        }))
+      ? initial!.persons!.map((p: any, i: number) => ({ id: p.id || `p-${i}`, ...p }))
       : [makeBlankPerson("p-0")]
   );
 
   // Транзиентные превью с ревоком
-  const [transientPhotoUrlById, setTransientPhotoUrlById] = useState<
-    Record<string, string | null>
-  >({});
+  const [transientPhotoUrlById, setTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const setTransientFor = useCallback((id: string, url: string | null) => {
     setTransientPhotoUrlById((prev) => {
       const prevUrl = prev[id];
       if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
-        try {
-          URL.revokeObjectURL(prevUrl);
-        } catch {}
+        try { URL.revokeObjectURL(prevUrl); } catch {}
       }
       return { ...prev, [id]: url ?? null };
     });
@@ -231,11 +238,7 @@ export default function EngravingStep({
   useEffect(() => {
     return () => {
       Object.values(transientPhotoUrlById).forEach((u) => {
-        if (u && u.startsWith("blob:")) {
-          try {
-            URL.revokeObjectURL(u);
-          } catch {}
-        }
+        if (u && u.startsWith("blob:")) { try { URL.revokeObjectURL(u); } catch {} }
       });
     };
   }, [transientPhotoUrlById]);
@@ -254,26 +257,19 @@ export default function EngravingStep({
   // Валидность
   const dateErrors = useMemo(() => {
     const errs: Record<string, string | null> = {};
-    persons.forEach(
-      (p) => (errs[p.id] = validateDates(p.birthDate, p.deathDate))
-    );
+    persons.forEach((p) => (errs[p.id] = validateDates(p.birthDate, p.deathDate)));
     return errs;
   }, [persons]);
-  const canContinue = useMemo(
-    () => Object.values(dateErrors).every((e) => !e),
-    [dateErrors]
-  );
+  const canContinue = useMemo(() => Object.values(dateErrors).every((e) => !e), [dateErrors]);
 
   // Открыто/закрыто по id + автообновление при изменении persons
-  const [openMap, setOpenMap] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(persons.map((p) => [p.id, true]))
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(persons.map((p) => [p.id, true]))
   );
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
-      persons.forEach((p) => {
-        next[p.id] = prev[p.id] ?? true;
-      });
+      persons.forEach((p) => { next[p.id] = prev[p.id] ?? true; });
       return next;
     });
   }, [persons]);
@@ -286,26 +282,13 @@ export default function EngravingStep({
       const next = prev.filter((_, i) => i !== idx);
       return next.length > 0 ? next : [makeBlankPerson("p-0")];
     });
-  const addPerson = () =>
-    setPersons((prev) => prev.concat([makeBlankPerson()]));
+  const addPerson = () => setPersons((prev) => prev.concat([makeBlankPerson()]));
   const moveUp = (idx: number) =>
-    setPersons((prev) =>
-      idx === 0
-        ? prev
-        : prev.map((x, i) =>
-            i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x
-          )
-    );
+    setPersons((prev) => (idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))));
   const moveDown = (idx: number) =>
-    setPersons((prev) =>
-      idx === prev.length - 1
-        ? prev
-        : prev.map((x, i) =>
-            i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x
-          )
-    );
+    setPersons((prev) => (idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))));
 
-  /* ===== Фото локально (без мгновенного сохранения драфта) ===== */
+  /* ===== Фото локально ===== */
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const fileToDataUrl = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -319,14 +302,11 @@ export default function EngravingStep({
   const setPersonPhotoById = (personId: string, pv: PhotoValue | null) => {
     const nextSeq = (photoSeqByIdRef.current[personId] || 0) + 1;
     photoSeqByIdRef.current[personId] = nextSeq;
-    const isCurrentSeq = () =>
-      photoSeqByIdRef.current[personId] === nextSeq;
+    const isCurrentSeq = () => photoSeqByIdRef.current[personId] === nextSeq;
     const commitLocal = (patch: Partial<Person>) => {
       if (!isCurrentSeq()) return;
       setTransientFor(personId, null);
-      setPersons((prev) =>
-        prev.map((p) => (p.id === personId ? { ...p, ...patch } : p))
-      );
+      setPersons((prev) => prev.map((p) => (p.id === personId ? { ...p, ...patch } : p)));
     };
 
     if (!pv) {
@@ -347,16 +327,12 @@ export default function EngravingStep({
       fileToDataUrl(maybeFile)
         .then((d) => {
           if (!isCurrentSeq()) return;
-          try {
-            URL.revokeObjectURL(tempUrl);
-          } catch {}
+          try { URL.revokeObjectURL(tempUrl); } catch {}
           commitLocal({ photoDataUrl: d, photoUrl: d });
         })
         .catch(() => {
           if (!isCurrentSeq()) return;
-          try {
-            URL.revokeObjectURL(tempUrl);
-          } catch {}
+          try { URL.revokeObjectURL(tempUrl); } catch {}
         });
       return;
     }
@@ -366,15 +342,9 @@ export default function EngravingStep({
         setTransientFor(personId, url);
         fetch(url)
           .then((res) => res.blob())
-          .then((blob) =>
-            fileToDataUrl(new File([blob], "photo", { type: blob.type || "image/*" }))
-          )
-          .then((d) => {
-            if (isCurrentSeq()) commitLocal({ photoDataUrl: d, photoUrl: d });
-          })
-          .catch(() => {
-            if (isCurrentSeq()) commitLocal({ photoUrl: url, photoDataUrl: null });
-          });
+          .then((blob) => fileToDataUrl(new File([blob], "photo", { type: blob.type || "image/*" })))
+          .then((d) => { if (isCurrentSeq()) commitLocal({ photoDataUrl: d, photoUrl: d }); })
+          .catch(() => { if (isCurrentSeq()) commitLocal({ photoUrl: url, photoDataUrl: null }); });
       } else {
         setTransientFor(personId, null);
         commitLocal({ photoUrl: url, photoDataUrl: null });
@@ -407,20 +377,14 @@ export default function EngravingStep({
     const el = formRefs.current[id];
     if (!el) return;
     const r = el.getBoundingClientRect();
-    window.scrollTo({
-      top: Math.max(0, window.scrollY + r.top - (navH + 10)),
-      behavior: "smooth"
-    });
+    window.scrollTo({ top: Math.max(0, window.scrollY + r.top - (navH + 10)), behavior: "smooth" });
   };
   const previewRef = useRef<HTMLElement | null>(null);
   const scrollToPreview = () => {
     const el = previewRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    window.scrollTo({
-      top: Math.max(0, window.scrollY + r.top - (navH + 10)),
-      behavior: "smooth"
-    });
+    window.scrollTo({ top: Math.max(0, window.scrollY + r.top - (navH + 10)), behavior: "smooth" });
   };
 
   // Сворачивание всех аккордеонов
@@ -429,19 +393,69 @@ export default function EngravingStep({
     if (persons.length > 0) scrollToForm(persons[0].id);
   }, [persons]);
 
-  // Сохранение драфта при Back/Continue
-  const flushSaveNow = useCallback(() => {
+  /* ===== ПЕРСИСТЕНТ: пишем в драфт при любом изменении/переходе/обновлении ===== */
+  const persistPersons = useCallback((list: Person[]) => {
     const prev = loadOrderDraft();
-    const norm = normalizePersonsForSave(persons);
-    const stored = saveOrderDraft({
+    const norm = normalizePersonsForSave(list);
+    const next: OrderDraft = {
       ...prev,
-      item: prev?.item ?? (item ?? null),
       engraving: { ...(prev?.engraving || {}), persons: norm },
       updatedAt: Date.now()
-    });
+    };
+    const stored = saveOrderDraft(next);
+    setOrderDraft(stored);
+    // обратная связь наружу (если нужно)
     onSaveDraft?.({ persons: norm });
-    draftSnapRef.current = stored;
-  }, [persons, item, onSaveDraft]);
+  }, [onSaveDraft]);
+
+  // Пишем при любом изменении persons
+  useEffect(() => {
+    persistPersons(persons);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persons]);
+
+  // Пишем при размонтировании (переход) и при закрытии/обновлении вкладки
+  useEffect(() => {
+    const onBeforeUnload = () => { try { persistPersons(persons); } catch {} };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      try { persistPersons(persons); } catch {}
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [persons, persistPersons]);
+
+  // При внешних изменениях драфта (например, «Очистить всё» в топбаре) — подтягиваем и синхронизируем
+  useEffect(() => {
+    const syncFromStore = () => {
+      const fresh = loadOrderDraft();
+      setOrderDraft(fresh);
+      const incomingPersons = draftPersonsToLocal(fresh?.engraving?.persons as any);
+      // Если пришли пустые — показываем один пустой блок
+      const normalizedIncoming = incomingPersons.length ? incomingPersons : [makeBlankPerson("p-0")];
+      if (!personsEqual(persons, normalizedIncoming)) {
+        setPersons(normalizedIncoming);
+        // сбрасываем транзиентные превью, чтобы не оставались старые blob: ссылки
+        setTransientPhotoUrlById({});
+      }
+    };
+    const events: Array<[string, any]> = [
+      ["storage", syncFromStore],
+      ["memorial:orderDraftUpdated", syncFromStore as any],
+      ["hashchange", syncFromStore],
+      ["popstate", syncFromStore],
+      ["visibilitychange", () => { if (document.visibilityState === "visible") syncFromStore(); }]
+    ];
+    events.forEach(([n, h]) => window.addEventListener(n, h));
+    // Первичная синхронизация на всякий случай
+    syncFromStore();
+    return () => events.forEach(([n, h]) => window.removeEventListener(n, h));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Кнопки «Назад/Продолжить» (для совместимости — уже всё и так сохраняется)
+  const flushSaveNow = useCallback(() => {
+    persistPersons(persons);
+  }, [persistPersons, persons]);
 
   const handleBack = useCallback(() => {
     flushSaveNow();
@@ -459,52 +473,29 @@ export default function EngravingStep({
     setTimeout(() => onDone?.({ persons, sketchDataUrl: null }), 200);
   }, [canContinue, flushSaveNow, onDone, persons]);
 
-  /* ===== Оверлеи из снапшота драфта (на входе) ===== */
-  const selectedGraphics = useMemo(
-    () => (draftSnapRef.current?.graphics || []) as any[],
-    []
-  );
+  /* ===== Данные для эскиза из актуального драфта ===== */
+  const selectedGraphics = useMemo(() => (orderDraft?.graphics || []) as any[], [orderDraft]);
   const selectedCrosses = useMemo(
-    () =>
-      selectedGraphics.filter(
-        (g) =>
-          (g.catName || "").toLowerCase().includes("крест") ||
-          (g.catSlug || "").toLowerCase().includes("cross")
-      ),
+    () => selectedGraphics.filter((g) => (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross")),
     [selectedGraphics]
   );
   const selectedOtherGraphics = useMemo(
-    () =>
-      selectedGraphics.filter(
-        (g) =>
-          !(
-            (g.catName || "").toLowerCase().includes("крест") ||
-            (g.catSlug || "").toLowerCase().includes("cross")
-          )
-      ),
+    () => selectedGraphics.filter((g) => !((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"))),
     [selectedGraphics]
   );
 
-  // Эпитафии — берём из драфта (snapshot), иначе из initial
   const epitaphsForPreview = useMemo(() => {
-    const engr: any = draftSnapRef.current?.engraving || {};
-    if (Array.isArray(engr.epitaphs) && engr.epitaphs.length)
-      return engr.epitaphs.filter(Boolean);
+    const engr: any = orderDraft?.engraving || {};
+    if (Array.isArray(engr.epitaphs) && engr.epitaphs.length) return engr.epitaphs.filter(Boolean);
     if (typeof engr.epitaphText === "string" && engr.epitaphText.trim()) {
-      return engr.epitaphText
-        .split(/\r?\n/)
-        .map((s: string) => s.trim())
-        .filter(Boolean);
+      return engr.epitaphText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
     }
     if (Array.isArray(initial?.epitaphs)) return (initial!.epitaphs as string[]).filter(Boolean);
     if (typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()) {
-      return initial!.епитaphText!
-        .split(/\r?\n/)
-        .map((s: string) => s.trim())
-        .filter(Boolean);
+      return initial!.епитaphText!.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
     }
     return [];
-  }, [initial]);
+  }, [orderDraft, initial]);
 
   /* ===== MAX WIDTH LIMIT ===== */
   const MAX_W = 600;
@@ -525,7 +516,7 @@ export default function EngravingStep({
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Усопшие" />
 
-        {/* Навигация (липкая, как раньше) */}
+        {/* Навигация (липкая) */}
         <div
           ref={navRef}
           style={{
@@ -560,15 +551,14 @@ export default function EngravingStep({
                   collapseAll();
                 }}
                 style={linkLikeStyle()}
-                title="Список"
-              >                
+                title="Свернуть все — компактный вид"
+              >
+                Компактный вид ☰
               </a>
             )}
 
             {persons.map((p) => {
-              const name =
-                [p.firstName, p.middleName].filter(Boolean).join(" ") ||
-                "Без имени";
+              const name = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
               return (
                 <button
                   key={p.id}
@@ -590,11 +580,9 @@ export default function EngravingStep({
 
         {/* Список персон */}
         <section>
-          <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>
-            Информация об усопших
-          </h2>
+          <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
 
-          {/* Подсказка — только если больше одного усопшего. «Компактный вид ☰» — ссылка */}
+          {/* Подсказка — только если больше одного усопшего */}
           {persons.length > 1 && (
             <div style={{ margin: "0 0 8px 0", textAlign: "left" }}>
               Для изменения порядка нажмите (▲/▼) напротив имени.{" "}
@@ -617,22 +605,13 @@ export default function EngravingStep({
               const id = p.id;
               const isOpen = openMap[id] ?? true;
               const err = validateDates(p.birthDate, p.deathDate);
-              const nameLeft =
-                [p.firstName, p.middleName].filter(Boolean).join(" ") ||
-                "Без имени";
-              const hasPhoto =
-                !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
+              const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+              const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
 
               return (
-                <div
-                  key={id}
-                  ref={(el) => (formRefs.current[id] = el)}
-                  style={{ ...glassPanelStyle(), padding: 0 }}
-                >
+                <div key={id} ref={(el) => (formRefs.current[id] = el)} style={{ ...glassPanelStyle(), padding: 0 }}>
                   <div
-                    onClick={() =>
-                      setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))
-                    }
+                    onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -644,32 +623,13 @@ export default function EngravingStep({
                     }}
                   >
                     <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
-                    <div
-                      style={{
-                        fontSize: 16,
-                        fontWeight: 600,
-                        flex: 1,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap"
-                      }}
-                    >
+                    <div style={{ fontSize: 16, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {nameLeft}
                     </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        whiteSpace: "nowrap"
-                      }}
-                    >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveUp(idx);
-                        }}
+                        onClick={(e) => { e.stopPropagation(); moveUp(idx); }}
                         disabled={idx === 0}
                         style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
                         title="Выше"
@@ -678,25 +638,16 @@ export default function EngravingStep({
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveDown(idx);
-                        }}
+                        onClick={(e) => { e.stopPropagation(); moveDown(idx); }}
                         disabled={idx === persons.length - 1}
-                        style={{
-                          ...iconBtn(),
-                          opacity: idx === persons.length - 1 ? 0.4 : 1
-                        }}
+                        style={{ ...iconBtn(), opacity: idx === persons.length - 1 ? 0.4 : 1 }}
                         title="Ниже"
                       >
                         ▼
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removePerson(idx);
-                        }}
+                        onClick={(e) => { e.stopPropagation(); removePerson(idx); }}
                         style={iconBtn()}
                         title="Удалить"
                       >
@@ -706,73 +657,43 @@ export default function EngravingStep({
                   </div>
 
                   {isOpen && (
-                    <div
-                      style={{
-                        padding: 10,
-                        borderTop: "1px solid rgba(255,255,255,0.14)"
-                      }}
-                    >
+                    <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
                       <div style={{ display: "grid", gap: 10 }}>
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr",
-                            gap: 8
-                          }}
-                        >
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
                           <Field label="Фамилия">
                             <input
                               value={p.lastName ?? ""}
-                              onChange={(e) =>
-                                updatePerson(idx, { lastName: e.target.value })
-                              }
-                              style={inputStyle()}
+                              onChange={(e) => updatePerson(idx, { lastName: e.target.value })}
+                              style={inputStyleField()}
                               placeholder="Иванов"
                             />
                           </Field>
                           <Field label="Имя">
                             <input
                               value={p.firstName ?? ""}
-                              onChange={(e) =>
-                                updatePerson(idx, { firstName: e.target.value })
-                              }
-                              style={inputStyle()}
+                              onChange={(e) => updatePerson(idx, { firstName: e.target.value })}
+                              style={inputStyleField()}
                               placeholder="Иван"
                             />
                           </Field>
                           <Field label="Отчество">
                             <input
                               value={p.middleName ?? ""}
-                              onChange={(e) =>
-                                updatePerson(idx, { middleName: e.target.value })
-                              }
-                              style={inputStyle()}
+                              onChange={(e) => updatePerson(idx, { middleName: e.target.value })}
+                              style={inputStyleField()}
                               placeholder="Иванович"
                             />
                           </Field>
                         </div>
 
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr",
-                            gap: 8
-                          }}
-                        >
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
                           <Field label="Дата рождения">
                             <input
                               value={p.birthDate ?? ""}
-                              onChange={(e) =>
-                                updatePerson(idx, {
-                                  birthDate: e.target.value
-                                })
-                              }
+                              onChange={(e) => updatePerson(idx, { birthDate: e.target.value })}
                               style={{
-                                ...inputStyle(),
-                                borderColor:
-                                  err && err.includes("рождения")
-                                    ? "salmon"
-                                    : "rgba(255,255,255,0.18)"
+                                ...inputStyleField(),
+                                borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)"
                               }}
                               placeholder="01.01.1950"
                             />
@@ -780,31 +701,16 @@ export default function EngravingStep({
                           <Field label="Дата смерти">
                             <input
                               value={p.deathDate ?? ""}
-                              onChange={(e) =>
-                                updatePerson(idx, {
-                                  deathDate: e.target.value
-                                })
-                              }
+                              onChange={(e) => updatePerson(idx, { deathDate: e.target.value })}
                               style={{
-                                ...inputStyle(),
-                                borderColor:
-                                  err &&
-                                  (err.includes("смерти") ||
-                                    err.includes("раньше"))
-                                    ? "salmon"
-                                    : "rgba(255,255,255,0.18)"
+                                ...inputStyleField(),
+                                borderColor: err && (err.includes("смерти") || err.includes("раньше")) ? "salmon" : "rgba(255,255,255,0.18)"
                               }}
                               placeholder="01.01.2024"
                             />
                           </Field>
                           {!!err && (
-                            <div
-                              style={{
-                                color: "salmon",
-                                fontSize: 12,
-                                marginTop: -4
-                              }}
-                            >
+                            <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>
                               {err}
                             </div>
                           )}
@@ -813,26 +719,13 @@ export default function EngravingStep({
                         {/* Фото + подсказка над кнопкой «Прикрепить фото» при отсутствии фото */}
                         <div>
                           {!hasPhoto && (
-                            <div
-                              style={{
-                                marginBottom: 6,
-                                fontSize: 12,
-                                lineHeight: 1.35,
-                                opacity: 0.92
-                              }}
-                            >
-                              
+                            <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
+                              Прикрепите фотографию. Она сохранится в заявке.
                             </div>
                           )}
                           <PhotoField
                             label="Фотография"
-                            value={{
-                              url:
-                                transientPhotoUrlById[p.id] ??
-                                p.photoUrl ??
-                                undefined,
-                              dataUrl: p.photoDataUrl ?? undefined
-                            }}
+                            value={{ url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
                             onChange={(pv) => setPersonPhotoById(p.id, pv)}
                           />
                         </div>
@@ -851,24 +744,23 @@ export default function EngravingStep({
           </div>
         </section>
 
-        {/* Эскиз — общий шаблон SketchTemplate (с эпитафиями) */}
+        {/* Пояснение */}
         <div
-        style={{
-          color: "#fff",
-          opacity: 0.9,
-          fontSize: 15,
-          lineHeight: 1.25,
-          margin: "6px 0 8px",
-          textAlign: "center",
-          fontWeight: 400,
-        }}
-      >
-        Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
-      </div>
-        <section
-          ref={previewRef as any}
-          style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}
+          style={{
+            color: "#fff",
+            opacity: 0.9,
+            fontSize: 15,
+            lineHeight: 1.25,
+            margin: "6px 0 8px",
+            textAlign: "center",
+            fontWeight: 400
+          }}
         >
+          Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
+        </div>
+
+        {/* Эскиз */}
+        <section ref={previewRef as any} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
           <SketchTemplate
             item={item}
             peopleBlocks={peopleBlocks}
@@ -880,15 +772,7 @@ export default function EngravingStep({
         </section>
 
         {/* Кнопки */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: 8,
-            margin: "10px 0",
-            flexWrap: "wrap"
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, margin: "10px 0", flexWrap: "wrap" }}>
           <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
@@ -896,13 +780,8 @@ export default function EngravingStep({
             type="button"
             disabled={!canContinue || isRendering}
             onClick={handleContinue}
-            style={{
-              ...glassButtonStyle("sm"),
-              opacity: canContinue && !isRendering ? 1 : 0.6
-            }}
-            title={
-              isRendering ? "Подождите, формируем изображение…" : undefined
-            }
+            style={{ ...glassButtonStyle("sm"), opacity: canContinue && !isRendering ? 1 : 0.6 }}
+            title={isRendering ? "Подождите, формируем изображение…" : undefined}
           >
             {isRendering ? "Формирование…" : "Продолжить"}
           </button>
@@ -915,20 +794,13 @@ export default function EngravingStep({
 /* ===== Form helpers ===== */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label
-      style={{
-        display: "grid",
-        gap: 4,
-        width: "100%",
-        boxSizing: "border-box"
-      }}
-    >
+    <label style={{ display: "grid", gap: 4, width: "100%", boxSizing: "border-box" }}>
       <span style={{ fontSize: 13 }}>{label}</span>
       {children}
     </label>
   );
 }
-function inputStyle(): React.CSSProperties {
+function inputStyleField(): React.CSSProperties {
   return {
     width: "100%",
     maxWidth: "100%",
