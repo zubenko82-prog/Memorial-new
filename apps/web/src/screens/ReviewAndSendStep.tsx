@@ -823,17 +823,13 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   function startMarkerText(no: string): string {
     const n = no || "—";
     return [
-      "🟦🟦🟦🟦🟦🟦🟦🟦",
-      `⬛ НАЧАЛО ЗАЯВКИ №${n}`,
-      "🟦🟦🟦🟦🟦🟦🟦🟦"
+      `🟦 НАЧАЛО ЗАЯВКИ №${n}`
     ].join("\n");
   }
   function endMarkerText(no: string): string {
     const n = no || "—";
     return [
-      "🟥🟥🟥🟥🟥🟥🟥🟥",
-      `⬛ КОНЕЦ ЗАЯВКИ №${n}`,
-      "🟥🟥🟥🟥🟥🟥🟥🟥"
+      `🟥 КОНЕЦ ЗАЯВКИ №${n}`
     ].join("\n");
   }
 
