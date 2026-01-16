@@ -1,7 +1,7 @@
 // src/screens/Start.tsx
 // Стартовый экран каталога «Резьба».
-// ВАЖНО: Глобальную StepNav не рендерим здесь (она в App.tsx).
-// Внутренняя навигация по категориям — ЛИПКая (sticky).
+// ВАЖНО: глобальную StepNav рендерит App.tsx.
+// Внутренняя навигация по категориям — ЛИПКая (position: sticky).
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -79,23 +79,10 @@ function errorTextStyle(): React.CSSProperties {
   return { color: "#ffb4b4", fontSize: 12 };
 }
 
-// Вензель‑разделитель (локально)
-function FiligreeSeparator({
-  top = 10,
-  bottom = 10,
-  widthPct = 60
-}: {
-  top?: number;
-  bottom?: number;
-  widthPct?: number;
-}) {
+function FiligreeSeparator({ top = 10, bottom = 10, widthPct = 60 }: { top?: number; bottom?: number; widthPct?: number; }) {
   return (
     <div style={{ margin: `${top}px 0 ${bottom}px` }}>
-      <svg
-        viewBox="0 0 600 80"
-        preserveAspectRatio="xMidYMid meet"
-        style={{ display: "block", margin: "0 auto", width: `${widthPct}%`, opacity: 0.55 }}
-      >
+      <svg viewBox="0 0 600 80" preserveAspectRatio="xMidYMid meet" style={{ display: "block", margin: "0 auto", width: `${widthPct}%`, opacity: 0.55 }}>
         <path d="M10,40 C60,5 120,5 160,40 C200,75 260,75 300,40 C340,5 400,5 440,40 C480,75 540,75 590,40" fill="none" stroke="white" strokeWidth="1" strokeOpacity="0.7" />
         <path d="M20,42 C70,10 130,10 170,42 C210,74 270,74 310,42 C350,10 410,10 450,42 C490,74 550,74 580,42" fill="none" stroke="white" strokeWidth="0.8" strokeOpacity="0.6" />
         <path d="M30,38 C80,15 140,15 180,38 C220,61 280,61 320,38 C360,15 420,15 460,38 C500,61 560,61 570,38" fill="none" stroke="white" strokeWidth="0.6" strokeOpacity="0.5" />
@@ -109,11 +96,7 @@ function getDecodedFileName(item: CatalogItem): string {
   const noQuery = String(src).split(/[?#]/)[0];
   const last = (noQuery.split("/").pop() || noQuery).split("\\").pop() || noQuery;
   let decodedName;
-  try {
-    decodedName = decodeURIComponent(last.replace(/\+/g, " "));
-  } catch {
-    decodedName = last;
-  }
+  try { decodedName = decodeURIComponent(last.replace(/\+/g, " ")); } catch { decodedName = last; }
   const dotIndex = decodedName.lastIndexOf(".");
   if (dotIndex !== -1) return decodedName.substring(0, dotIndex);
   return decodedName;
@@ -141,9 +124,7 @@ function useCollapse(open: boolean, duration = 260) {
         transform: "translateY(0)",
         transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
       });
-      const t = setTimeout(() => {
-        if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
-      }, duration + 20);
+      const t = setTimeout(() => { if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight })); }, duration + 20);
       return () => clearTimeout(t);
     } else {
       setStyle({
@@ -174,20 +155,15 @@ function PreviewBottomSheet({
   onConfirm: (meta: ConfirmMeta) => void;
 }) {
   const [visible, setVisible] = useState(false);
-
-  // «Знакомство» показываем только после клика «Подтвердить»
   const initialIntroState = loadIntroState();
   const [showIntro, setShowIntro] = useState<boolean>(false);
 
-  // Поля «знакомства»
   const [customerName, setCustomerName] = useState(initialIntroState.intro?.customerName || "");
   const [customerPhone, setCustomerPhone] = useState(initialIntroState.intro?.customerPhone || "");
   const [customerNotes, setCustomerNotes] = useState(initialIntroState.intro?.customerNotes || "");
   const [orderNumber, setOrderNumber] = useState<string | null>(initialIntroState.orderNumber);
-
   const [touched, setTouched] = useState<{ name?: boolean; phone?: boolean }>({});
 
-  // Плавное раскрытие секции «знакомства»
   const introColl = useCollapse(showIntro, 260);
   const formRef = useRef<HTMLFormElement | null>(null);
 
@@ -197,24 +173,14 @@ function PreviewBottomSheet({
   }, []);
 
   useEffect(() => {
-    saveIntro(
-      {
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerNotes: customerNotes.trim() || undefined
-      },
-      { lock: false }
-    );
+    saveIntro({ customerName: customerName.trim(), customerPhone: customerPhone.trim(), customerNotes: customerNotes.trim() || undefined }, { lock: false });
   }, [customerName, customerPhone, customerNotes]);
 
   const isNameValid = customerName.trim().length > 1;
   const isPhoneOk = isPhoneValid(customerPhone);
   const formValid = isNameValid && isPhoneOk;
 
-  const closeWithFade = (cb: () => void) => {
-    setVisible(false);
-    setTimeout(cb, 220);
-  };
+  const closeWithFade = (cb: () => void) => { setVisible(false); setTimeout(cb, 220); };
 
   const handleConfirm = () => {
     const st = loadIntroState();
@@ -229,136 +195,42 @@ function PreviewBottomSheet({
     e.preventDefault();
     setTouched({ name: true, phone: true });
     if (!formValid) return;
-
-    const lockedState = saveIntro(
-      {
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerNotes: customerNotes.trim() || undefined
-      },
-      { lock: true }
-    );
+    const lockedState = saveIntro({ customerName: customerName.trim(), customerPhone: customerPhone.trim(), customerNotes: customerNotes.trim() || undefined }, { lock: true });
     setOrderNumber(lockedState.orderNumber || null);
-
-    if (lockedState.intro && lockedState.orderNumber) {
-      return closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
-    }
+    if (lockedState.intro && lockedState.orderNumber) closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
   };
 
   const bottomInset = "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
-
   const handleIntroBack = () => setShowIntro(false);
-  const handleIntroSubmit = () => {
-    if (!formValid) return;
-    formRef.current?.requestSubmit();
-  };
+  const handleIntroSubmit = () => { if (formValid) formRef.current?.requestSubmit(); };
 
   return createPortal(
     <>
-      <div
-        aria-hidden
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 2147483600,
-          background: "rgba(12, 8, 8, 0.45)",
-          opacity: visible ? 1 : 0,
-          transition: "opacity 220ms ease",
-          pointerEvents: "none"
-        }}
-      />
-      <div
-        role="dialog"
-        aria-modal="false"
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 2147483601,
-          width: "100%",
-          height: "clamp(560px, 98svh, 1000px)",
-          padding: 12,
-          paddingBottom: bottomInset,
-          borderTopLeftRadius: 12,
-          borderTopRightRadius: 12,
-          ...glassPanelStyle(),
-          boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
-          display: "grid",
-          gridTemplateRows: "auto 1fr auto",
-          gap: 10,
-          opacity: visible ? 1 : 0,
-          transition: "opacity 220ms ease",
-          boxSizing: "border-box",
-          overflow: "hidden"
-        }}
-      >
-        <div
-          style={{
-            textAlign: "center",
-            fontSize: 16,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis"
-          }}
-          title={getDecodedFileName(item)}
-        >
+      <div aria-hidden style={{ position: "fixed", inset: 0, zIndex: 2147483600, background: "rgba(12, 8, 8, 0.45)", opacity: visible ? 1 : 0, transition: "opacity 220ms ease", pointerEvents: "none" }} />
+      <div role="dialog" aria-modal="false" style={{
+        position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 2147483601, width: "100%",
+        height: "clamp(560px, 98svh, 1000px)", padding: 12, paddingBottom: bottomInset,
+        borderTopLeftRadius: 12, borderTopRightRadius: 12, ...glassPanelStyle(),
+        boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
+        display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, opacity: visible ? 1 : 0,
+        transition: "opacity 220ms ease", boxSizing: "border-box", overflow: "hidden"
+      }}>
+        <div style={{ textAlign: "center", fontSize: 16, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={getDecodedFileName(item)}>
           {getDecodedFileName(item)}
         </div>
 
-        <div
-          style={{
-            minHeight: 0,
-            overflowY: "auto",
-            display: "grid",
-            gap: 10,
-            paddingBottom: 8
-          }}
-        >
-          <div
-            style={{
-              ...bottomUnderlayGradient(),
-              borderRadius: 12,
-              padding: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-              maxHeight: showIntro ? "18vh" : "48vh",
-              transition: "max-height 260ms ease, padding 260ms ease"
-            }}
-          >
-            <img
-              src={item.url}
-              alt={item.name}
-              style={{
-                maxWidth: "100%",
-                maxHeight: "100%",
-                width: "auto",
-                height: "auto",
-                objectFit: "contain",
-                borderRadius: 8,
-                display: "block",
-                margin: 0,
-                userSelect: "none",
-                pointerEvents: "none"
-              }}
-              draggable={false}
-            />
+        <div style={{ minHeight: 0, overflowY: "auto", display: "grid", gap: 10, paddingBottom: 8 }}>
+          <div style={{
+            ...bottomUnderlayGradient(), borderRadius: 12, padding: 8, display: "flex",
+            alignItems: "center", justifyContent: "center", overflow: "hidden",
+            maxHeight: showIntro ? "18vh" : "48vh", transition: "max-height 260ms ease, padding 260ms ease"
+          }}>
+            <img src={item.url} alt={item.name} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", objectFit: "contain", borderRadius: 8, display: "block", margin: 0, userSelect: "none", pointerEvents: "none" }} draggable={false} />
           </div>
 
           <div ref={introColl.ref} style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}>
             {showIntro && (
-              <section
-                style={{
-                  ...glassPanelStyle(),
-                  padding: 12,
-                  transform: "translateY(0)",
-                  transition: "transform 260ms ease",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-                  border: "1px solid rgba(255,255,255,0.08)"
-                }}
-              >
+              <section style={{ ...glassPanelStyle(), padding: 12, transform: "translateY(0)", transition: "transform 260ms ease", boxShadow: "0 8px 24px rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.08)" }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                   <h3 style={{ margin: 0, fontWeight: 500 }}>Давайте познакомимся</h3>
                   {orderNumber && <div style={{ opacity: 0.9, fontSize: 14 }}>№ {orderNumber}</div>}
@@ -370,198 +242,24 @@ function PreviewBottomSheet({
                 <form ref={formRef} onSubmit={submitIntro} style={{ display: "grid", gap: 10 }}>
                   <label style={{ display: "grid", gap: 6 }}>
                     <span>Представьтесь, пожалуйста</span>
-                    <input
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      onBlur={() => setTouched((t) => ({ ...t, name: true }))}
-                      placeholder="Иванов Иван Иванович"
-                      style={inputStyle()}
-                    />
-                    {touched.name && customerName.trim().length <= 1 && (
-                      <div style={errorTextStyle()}>Пожалуйста, укажите имя и фамилию.</div>
-                    )}
+                    <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} onBlur={() => setTouched((t) => ({ ...t, name: true }))} placeholder="Иванов Иван Иванович" style={inputStyle()} />
+                    {touched.name && customerName.trim().length <= 1 && <div style={errorTextStyle()}>Пожалуйста, укажите имя и фамилию.</div>}
                   </label>
 
                   <label style={{ display: "grid", gap: 6 }}>
                     <span>Контактный телефон</span>
-                    <input
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
-                      placeholder="+7 (___) ___-__-__"
-                      style={inputStyle()}
-                      inputMode="tel"
-                    />
-                    {touched.phone && !isPhoneOk && (
-                      <div style={errorTextStyle()}>
-                        Введите корректный телефон: 10 цифр или 11 цифр, начинающийся с 7 или 8.
-                      </div>
-                    )}
+                    <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} onBlur={() => setTouched((t) => ({ ...t, phone: true }))} placeholder="+7 (___) ___-__-__" style={inputStyle()} inputMode="tel" />
+                    {touched.phone && !isPhoneOk && <div style={errorTextStyle()}>Введите корректный телефон: 10–11 цифр, 7/8 в начале.</div>}
                   </label>
 
                   <label style={{ display: "grid", gap: 6 }}>
                     <span>Альтернативный способ связи (необязательно)</span>
-                    <textarea
-                      value={customerNotes}
-                      onChange={(e) => setCustomerNotes(e.target.value)}
-                      placeholder="Доп. телефон, email или мессенджер"
-                      rows={3}
-                      style={{ ...inputStyle(), resize: "vertical" }}
-                    />
+                    <textarea value={customerNotes} onChange={(e) => setCustomerNotes(e.target.value)} placeholder="Доп. телефон, email или мессенджер" rows={3} style={{ ...inputStyle(), resize: "vertical" }} />
                   </label>
                 </form>
-              </section>
-            )}
-          </div>
-        </div>
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: 8,
-            flexWrap: "wrap",
-            paddingBottom: bottomInset
-          }}
-        >
-          {!showIntro ? (
-            <>
-              <button
-                onClick={() => closeWithFade(onClose)}
-                style={glassButtonStyle("nano")}
-                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-              >
-                Выбрать другую
-              </button>
-              <button
-                onClick={handleConfirm}
-                style={glassButtonStyle("nano")}
-                title="Подтвердить"
-                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-              >
-                Подтвердить
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={handleIntroBack}
-                style={glassButtonStyle("nano")}
-                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-              >
-                Назад
-              </button>
-              <button
-                type="button"
-                onClick={handleIntroSubmit}
-                disabled={!formValid}
-                style={glassButtonStyle("nano", !formValid)}
-                onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
-              >
-                Продолжить
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </>,
-    document.body
-  );
-}
-
-/* ============== Экран Start (каталог) ============== */
-
-export default function Start({
-  onConfirm
-}: {
-  onConfirm: (item: CatalogItem, meta?: ConfirmMeta) => void;
-}) {
-  const [cats, setCats] = useState<CatalogCategory[] | null>(null);
-  const [err, setErr] = useState<string>("");
-  const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
-  const [outro, setOutro] = useState(false);
-
-  // Измеряем высоту TopBar и делаем спейсер, чтобы sticky-панель категорий не прилипала сразу.
-  const topBarRef = useRef<HTMLDivElement | null>(null);
-  const [stickySpacer, setStickySpacer] = useState(0);
-  useLayoutEffect(() => {
-    const measureTop = () => {
-      const h = topBarRef.current?.getBoundingClientRect().height || 0;
-      setStickySpacer(Math.ceil(h + 6)); // небольшой «воздух»
-    };
-    measureTop();
-    const ro = new ResizeObserver(measureTop);
-    if (topBarRef.current) ro.observe(topBarRef.current);
-    window.addEventListener("resize", measureTop);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measureTop);
-    };
-  }, []);
-
-  // Липкая навигация по категориям (внутри шага)
-  const navRef = useRef<HTMLDivElement | null>(null);
-  const [navH, setNavH] = useState<number>(56);
-
-  useEffect(() => {
-    fetchCatalog("carvings")
-      .then((d) => setCats(d.categories))
-      .catch((e) => setErr(String(e)));
-  }, []);
-
-  useLayoutEffect(() => {
-    const measure = () => setNavH(navRef.current?.getBoundingClientRect().height ?? 0);
-    measure();
-    window.addEventListener("resize", measure);
-    const ro = new ResizeObserver(measure);
-    if (navRef.current) ro.observe(navRef.current);
-    return () => {
-      window.removeEventListener("resize", measure);
-      ro.disconnect();
-    };
-  }, []);
-
-  const makeCatId = (cat: CatalogCategory, idx: number) => {
-    const base = (cat.slug?.trim() || cat.name || `cat-${idx}`).toString();
-    return `${encodeURIComponent(base)}__${idx}`;
-  };
-
-  const scrollToCat = (id: string) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const y = window.scrollY + rect.top - (navH + 12);
-    window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
-  };
-
-  const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
-  function sortedItems(items: CatalogItem[]) {
-    const keyOf = (it: CatalogItem) =>
-      (it as any).order ?? (it as any).index ?? (it as any).idx ?? (it as any).position ?? (it as any).sort;
-    return items.slice().sort((a, b) => {
-      const ka = keyOf(a);
-      const kb = keyOf(b);
-      const na = Number.isFinite(ka) ? Number(ka) : null;
-      const nb = Number.isFinite(kb) ? Number(kb) : null;
-      if (na !== null && nb !== null) return na - nb;
-      const pa = ((a as any).relPath as string) || a.url || a.name || "";
-      const pb = ((b as any).relPath as string) || b.url || b.name || "";
-      const cmp = collator.compare(pa, pb);
-      if (cmp !== 0) return cmp;
-      const na1 = a.name || "";
-      const nb1 = b.name || "";
-      return collator.compare(na1, nb1);
-    });
-  }
+                <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                  <button type="button" onClick={handle  }
 
   const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
     saveOrderDraft({ item: { name: it.name, url: it.url, relPath: (it as any).relPath } });
@@ -571,64 +269,52 @@ export default function Start({
   };
 
   return (
-    <div
-      style={{
-        color: "#fff",
-        fontFamily:
-          "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
-        padding: 12,
-        opacity: outro ? 0 : 1,
-        transition: "opacity 220ms ease",
-        maxWidth: 600,
-        margin: "0 auto"
-      }}
-    >
+    <div style={{
+      color: "#fff",
+      fontFamily: "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
+      padding: 12,
+      opacity: outro ? 0 : 1,
+      transition: "opacity 220ms ease",
+      maxWidth: 600,
+      margin: "0 auto"
+    }}>
       {/* Оборачиваем TopBar для измерения высоты */}
       <div ref={topBarRef}>
         <TopBarWithIntro title="Стела" />
       </div>
 
-      {/* Спейсер: чтобы sticky-панель НЕ прилипала мгновенно, учитывая высоту TopBar */}
+      {/* Спейсер над липкой панелью (учёт высоты TopBar) */}
       <div aria-hidden style={{ height: stickySpacer }} />
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
 
-      {/* Липкая панель навигации по категориям (sticky) */}
+      {/* Липкая панель навигации по категориям */}
       {cats && cats.length > 0 && (
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: 0,               // липкость с учётом спейсера
+            top: "env(safe-area-inset-top, 0px)",
             zIndex: 1000,
-            paddingTop: "env(safe-area-inset-top, 0px)",
             ...glassPanelStyle(),
             borderRadius: 0,
             borderLeft: "none",
             borderRight: "none",
             marginBottom: 10
-            // Важно: БЕЗ transform на sticky-элементе
+            // ВАЖНО: здесь НЕТ transform/overflow — это ломает sticky.
           }}
         >
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px", overflow: "hidden" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px" }}>
             {cats.map((cat, idx) => {
               const catId = makeCatId(cat, idx);
               return (
                 <button
                   key={`nav-${catId}`}
                   onClick={() => scrollToCat(catId)}
-                  style={{
-                    ...glassButtonStyle("nano"),
-                    padding: "4px 8px",
-                    fontSize: 12,
-                    lineHeight: 1.15
-                  }}
+                  style={{ ...glassButtonStyle("nano"), padding: "4px 8px", fontSize: 12, lineHeight: 1.15 }}
                   title={`Перейти к: ${cat.name}`}
-                  onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-                  onPointerUp={(e) => (e.currentTarget.style.transform = "")}
-                  onPointerLeave={(e) => (e.currentTarget.style.transform = "")}
                 >
                   {cat.name}
                 </button>
@@ -652,61 +338,22 @@ export default function Start({
               key={`cat-${catId}`}
               style={{
                 paddingTop: 2,
-                // Учитываем высоту липкой панели при переходе к секции
                 scrollMarginTop: `${navH + 14}px`
               }}
             >
               <FiligreeSeparator top={2} bottom={6} widthPct={60} />
               <h3 style={{ margin: "0 0 6px 0" }}>{cat.name}</h3>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                  gap: 10
-                }}
-              >
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
                 {items.map((it, i) => (
                   <button
                     key={it.relPath || `${catId}-${i}`}
                     onClick={() => setPreviewItem(it)}
                     title="Открыть предпросмотр"
-                    style={{
-                      ...glassPanelStyle(),
-                      borderRadius: 12,
-                      padding: 6,
-                      cursor: "pointer",
-                      textAlign: "center"
-                    }}
-                    onPointerEnter={(e) => (e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.35)")}
-                    onPointerLeave={(e) => (e.currentTarget.style.boxShadow = "")}
-                    onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.995)")}
-                    onPointerUp={(e) => (e.currentTarget.style.transform = "")}
+                    style={{ ...glassPanelStyle(), borderRadius: 12, padding: 6, cursor: "pointer", textAlign: "center" }}
                   >
-                    <div
-                      style={{
-                        ...bottomUnderlayGradient(),
-                        borderRadius: 10,
-                        aspectRatio: "1/1",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 6
-                      }}
-                    >
-                      <img
-                        src={it.url}
-                        alt={it.name}
-                        style={{
-                          maxWidth: "100%",
-                          maxHeight: "100%",
-                          width: "auto",
-                          height: "auto",
-                          objectFit: "contain",
-                          display: "block",
-                          borderRadius: 8
-                        }}
-                      />
+                    <div style={{ ...bottomUnderlayGradient(), borderRadius: 10, aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center", padding: 6 }}>
+                      <img src={it.url} alt={it.name} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", objectFit: "contain", display: "block", borderRadius: 8 }} />
                     </div>
                   </button>
                 ))}
