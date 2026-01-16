@@ -582,6 +582,47 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editorBack?.wishes || "");
   const [carvingOpacity, setCarvingOpacity] = useState<number>(() => (draft as any)?.editorBack?.carvingOpacity ?? 0.85);
 
+// === People helpers (локальные) ===
+function normalizePersonsForSave(persons: Person[]): NormalizedPerson[] {
+  return persons.map((p) => ({
+    id: p.id,
+    lastName: p.lastName?.trim() || undefined,
+    firstName: p.firstName?.trim() || undefined,
+    middleName: p.middleName?.trim() || undefined,
+    birthDate: p.birthDate?.trim() || undefined,
+    deathDate: p.deathDate?.trim() || undefined,
+    photoPreview: p.photoDataUrl ?? p.photoUrl ?? null
+  }));
+}
+
+function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((d, i) => ({
+    id: d.id || `p-${i}`,
+    lastName: d.lastName || "",
+    firstName: d.firstName || "",
+    middleName: d.middleName || "",
+    birthDate: d.birthDate || "",
+    deathDate: d.deathDate || "",
+    photoUrl: d.photoPreview ?? null,
+    photoDataUrl: d.photoPreview ?? null
+  }));
+}
+
+function makeBlankPerson(id?: string): Person {
+  return {
+    id: id ?? `p-${Date.now()}`,
+    lastName: "",
+    firstName: "",
+    middleName: "",
+    birthDate: "",
+    deathDate: "",
+    photoUrl: null,
+    photoDataUrl: null
+  };
+}
+
+
   // Люди
   const peopleFromDraft = draftPersonsToLocal(((draft as any)?.editorBack?.people as NormalizedPerson[]) || []);
   const [people, setPeople] = useState<Person[]>(
