@@ -1,7 +1,7 @@
 // src/screens/Start.tsx
 // Стартовый экран каталога «Резьба».
-// ВАЖНО: Глобальную StepNav больше не рендерим здесь (она рендерится в App.tsx).
-// Внутренняя навигация по категориям — липкая (sticky) как раньше.
+// ВАЖНО: Глобальную StepNav не рендерим здесь (она в App.tsx).
+// Внутренняя навигация по категориям — ЛИПКая (sticky).
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -114,11 +114,8 @@ function getDecodedFileName(item: CatalogItem): string {
   } catch {
     decodedName = last;
   }
-  // Удаляем расширение файла, если оно есть
   const dotIndex = decodedName.lastIndexOf(".");
-  if (dotIndex !== -1) {
-    return decodedName.substring(0, dotIndex);
-  }
+  if (dotIndex !== -1) return decodedName.substring(0, dotIndex);
   return decodedName;
 }
 
@@ -145,9 +142,7 @@ function useCollapse(open: boolean, duration = 260) {
         transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
       });
       const t = setTimeout(() => {
-        if (ref.current) {
-          setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
-        }
+        if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
       }, duration + 20);
       return () => clearTimeout(t);
     } else {
@@ -201,7 +196,6 @@ function PreviewBottomSheet({
     return () => clearTimeout(t);
   }, []);
 
-  // Автосохранение промежуточных значений (без фиксации)
   useEffect(() => {
     saveIntro(
       {
@@ -222,7 +216,6 @@ function PreviewBottomSheet({
     setTimeout(cb, 220);
   };
 
-  // Подтверждение:
   const handleConfirm = () => {
     const st = loadIntroState();
     if (isIntroValid(st.intro)) {
@@ -232,7 +225,6 @@ function PreviewBottomSheet({
     setShowIntro(true);
   };
 
-  // Сабмит «знакомства»: фиксируем один раз (назначаем номер) и продолжаем
   const submitIntro = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched({ name: true, phone: true });
@@ -253,10 +245,8 @@ function PreviewBottomSheet({
     }
   };
 
-  // Общая вставка под нижние панели (Telegram/Safe Area)
   const bottomInset = "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";
 
-  // Обработчики для нижней панели при открытом «знакомстве»
   const handleIntroBack = () => setShowIntro(false);
   const handleIntroSubmit = () => {
     if (!formValid) return;
@@ -265,7 +255,6 @@ function PreviewBottomSheet({
 
   return createPortal(
     <>
-      {/* Подложка */}
       <div
         aria-hidden
         style={{
@@ -278,7 +267,6 @@ function PreviewBottomSheet({
           pointerEvents: "none"
         }}
       />
-      {/* Фиксированный нижний лист */}
       <div
         role="dialog"
         aria-modal="false"
@@ -305,7 +293,6 @@ function PreviewBottomSheet({
           overflow: "hidden"
         }}
       >
-        {/* Заголовок (имя файла) */}
         <div
           style={{
             textAlign: "center",
@@ -319,7 +306,6 @@ function PreviewBottomSheet({
           {getDecodedFileName(item)}
         </div>
 
-        {/* Прокручиваемая середина: картинка + (опционально) «знакомство» */}
         <div
           style={{
             minHeight: 0,
@@ -329,7 +315,6 @@ function PreviewBottomSheet({
             paddingBottom: 8
           }}
         >
-          {/* Картинка — всегда видима */}
           <div
             style={{
               ...bottomUnderlayGradient(),
@@ -362,7 +347,6 @@ function PreviewBottomSheet({
             />
           </div>
 
-          {/* «Знакомство» — плавное раскрытие */}
           <div ref={introColl.ref} style={{ ...introColl.style, willChange: "max-height, opacity, transform" }}>
             {showIntro && (
               <section
@@ -431,7 +415,6 @@ function PreviewBottomSheet({
           </div>
         </div>
 
-        {/* Нижние кнопки */}
         <div
           style={{
             display: "flex",
@@ -507,6 +490,24 @@ export default function Start({
   const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
   const [outro, setOutro] = useState(false);
 
+  // Измеряем высоту TopBar и делаем спейсер, чтобы sticky-панель категорий не прилипала сразу.
+  const topBarRef = useRef<HTMLDivElement | null>(null);
+  const [stickySpacer, setStickySpacer] = useState(0);
+  useLayoutEffect(() => {
+    const measureTop = () => {
+      const h = topBarRef.current?.getBoundingClientRect().height || 0;
+      setStickySpacer(Math.ceil(h + 6)); // небольшой «воздух»
+    };
+    measureTop();
+    const ro = new ResizeObserver(measureTop);
+    if (topBarRef.current) ro.observe(topBarRef.current);
+    window.addEventListener("resize", measureTop);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measureTop);
+    };
+  }, []);
+
   // Липкая навигация по категориям (внутри шага)
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState<number>(56);
@@ -542,7 +543,6 @@ export default function Start({
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   };
 
-  // Сортировка как в каталоге
   const collator = useMemo(() => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }), []);
   function sortedItems(items: CatalogItem[]) {
     const keyOf = (it: CatalogItem) =>
@@ -564,11 +564,7 @@ export default function Start({
   }
 
   const confirmAndGo = (it: CatalogItem, meta?: ConfirmMeta) => {
-    // Сохраняем выбранный элемент в драфт заказа (для TopBar и следующих шагов)
-    saveOrderDraft({
-      item: { name: it.name, url: it.url, relPath: (it as any).relPath }
-    });
-
+    saveOrderDraft({ item: { name: it.name, url: it.url, relPath: (it as any).relPath } });
     setPreviewItem(null);
     setOutro(true);
     window.setTimeout(() => onConfirm(it, meta), 220);
@@ -587,28 +583,33 @@ export default function Start({
         margin: "0 auto"
       }}
     >
-      {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
-      <TopBarWithIntro title="Стела" />
+      {/* Оборачиваем TopBar для измерения высоты */}
+      <div ref={topBarRef}>
+        <TopBarWithIntro title="Стела" />
+      </div>
+
+      {/* Спейсер: чтобы sticky-панель НЕ прилипала мгновенно, учитывая высоту TopBar */}
+      <div aria-hidden style={{ height: stickySpacer }} />
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
 
-      {/* Липкая панель навигации по категориям (sticky как раньше) */}
+      {/* Липкая панель навигации по категориям (sticky) */}
       {cats && cats.length > 0 && (
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: 0, // липко относительно скролл-контейнера App
-            zIndex: 50,
-            paddingTop: "env(safe-area-inset-top)",
+            top: 0,               // липкость с учётом спейсера
+            zIndex: 1000,
+            paddingTop: "env(safe-area-inset-top, 0px)",
             ...glassPanelStyle(),
             borderRadius: 0,
             borderLeft: "none",
             borderRight: "none",
-            marginBottom: 10,
-            transform: "translateZ(0)" // iOS/Safari fix внутри overflow контейнера
+            marginBottom: 10
+            // Важно: БЕЗ transform на sticky-элементе
           }}
         >
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px", overflow: "hidden" }}>
@@ -675,8 +676,7 @@ export default function Start({
                       borderRadius: 12,
                       padding: 6,
                       cursor: "pointer",
-                      textAlign: "center",
-                      transform: "translateZ(0)"
+                      textAlign: "center"
                     }}
                     onPointerEnter={(e) => (e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.35)")}
                     onPointerLeave={(e) => (e.currentTarget.style.boxShadow = "")}
@@ -716,7 +716,6 @@ export default function Start({
         })}
       </div>
 
-      {/* Предпросмотр. «Знакомство» откроется ТОЛЬКО после клика «Подтвердить» */}
       {previewItem && (
         <PreviewBottomSheet
           item={previewItem}
