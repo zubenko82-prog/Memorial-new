@@ -5,6 +5,7 @@
 // - Драфт НЕ сохраняем «на лету». saveOrderDraft вызывается только по «Назад»/«Продолжить».
 // - Транзиентный blob:ObjectURL для превью (ревок при замене/очистке/анмаунте).
 // - Перемещение по порядку (▲/▼) — оставлено.
+// - НОВОЕ: при загрузке фото сжимаем до гарантированного лимита (≈2.7 MiB) с локальной перекодировкой.
 //
 // Навигация:
 // - Внутренняя навигация — липкая (sticky).
@@ -30,6 +31,7 @@ import PhotoField, { PhotoValue } from "../components/PhotoField";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, type OrderDraft } from "../lib/order";
+import { compressImageFileToMaxBytes } from "../lib/media/resize";
 
 /* ===== Types ===== */
 type Person = {
@@ -166,6 +168,24 @@ function validateDates(birth?: string, death?: string): string | null {
   if (bd && dd && dd.getTime() < bd.getTime())
     return "Дата смерти раньше даты рождения";
   return null;
+}
+
+/* ===== Image compression config ===== */
+const PHOTO_TARGET_MAX_BYTES = Math.floor(2.7 * 1024 * 1024); // ≈2.7 MiB — безопасно для последующей отправки
+const PHOTO_COMPRESS_OPTS = {
+  maxWidth: 2200,
+  maxHeight: 2200,
+  mime: "image/jpeg" as const,
+  qualityStart: 0.9,
+  qualityMin: 0.55,
+  qualityStep: 0.08
+};
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ""));
+    fr.readAsDataURL(blob);
+  });
 }
 
 /* ===== Component ===== */
@@ -329,56 +349,84 @@ export default function EngravingStep({
       );
     };
 
+    // Очистка
     if (!pv) {
       setTransientFor(personId, null);
       commitLocal({ photoUrl: null, photoDataUrl: null });
       return;
     }
+
+    // 1) Если пришёл dataUrl — перекодируем в Blob -> File -> сжимаем -> обратно в dataUrl.
     if ((pv as any)?.dataUrl) {
       const dataUrl = (pv as any).dataUrl as string;
-      setTransientFor(personId, null);
-      commitLocal({ photoDataUrl: dataUrl, photoUrl: (pv as any).url ?? dataUrl });
+      (async () => {
+        try {
+          const resp = await fetch(dataUrl);
+          const blob = await resp.blob();
+          const file = new File([blob], "photo.jpg", { type: blob.type || "image/jpeg" });
+          const compressed = await compressImageFileToMaxBytes(file, PHOTO_TARGET_MAX_BYTES, PHOTO_COMPRESS_OPTS);
+          const outDataUrl = await blobToDataUrl(compressed);
+          commitLocal({ photoDataUrl: outDataUrl, photoUrl: outDataUrl });
+        } catch {
+          // Фоллбек — ставим как есть
+          commitLocal({ photoDataUrl: dataUrl, photoUrl: (pv as any).url ?? dataUrl });
+        }
+      })();
       return;
     }
+
+    // 2) Если пришёл файл — ставим быстрый превью-blob, затем сжимаем и сохраняем итог.
     const maybeFile: File | undefined = (pv as any)?.file;
     if (maybeFile instanceof File) {
       const tempUrl = URL.createObjectURL(maybeFile);
-      setTransientFor(personId, tempUrl);
-      fileToDataUrl(maybeFile)
-        .then((d) => {
-          if (!isCurrentSeq()) return;
-          try {
-            URL.revokeObjectURL(tempUrl);
-          } catch {}
+      setTransientFor(personId, tempUrl); // быстрый превью
+
+      (async () => {
+        try {
+          const compressed = await compressImageFileToMaxBytes(
+            maybeFile,
+            PHOTO_TARGET_MAX_BYTES,
+            PHOTO_COMPRESS_OPTS
+          );
+          const outDataUrl = await blobToDataUrl(compressed);
+          try { URL.revokeObjectURL(tempUrl); } catch {}
+          commitLocal({ photoDataUrl: outDataUrl, photoUrl: outDataUrl });
+        } catch {
+          try { URL.revokeObjectURL(tempUrl); } catch {}
+          // Фоллбек: без сжатия
+          const d = await fileToDataUrl(maybeFile);
           commitLocal({ photoDataUrl: d, photoUrl: d });
-        })
-        .catch(() => {
-          if (!isCurrentSeq()) return;
-          try {
-            URL.revokeObjectURL(tempUrl);
-          } catch {}
-        });
+        }
+      })();
       return;
     }
+
+    // 3) Если пришёл URL — различаем blob: и обычный URL
     if ((pv as any)?.url) {
       const url = (pv as any).url as string;
+
+      // 3a) blob: URL — читаем, сжимаем, сохраняем
       if (isBlobUrl(url)) {
-        setTransientFor(personId, url);
-        fetch(url)
-          .then((res) => res.blob())
-          .then((blob) =>
-            fileToDataUrl(new File([blob], "photo", { type: blob.type || "image/*" }))
-          )
-          .then((d) => {
-            if (isCurrentSeq()) commitLocal({ photoDataUrl: d, photoUrl: d });
-          })
-          .catch(() => {
-            if (isCurrentSeq()) commitLocal({ photoUrl: url, photoDataUrl: null });
-          });
+        setTransientFor(personId, url); // быстрый превью
+        (async () => {
+          try {
+            const res = await fetch(url);
+            const blob = await res.blob();
+            const file = new File([blob], "photo.jpg", { type: blob.type || "image/jpeg" });
+            const compressed = await compressImageFileToMaxBytes(file, PHOTO_TARGET_MAX_BYTES, PHOTO_COMPRESS_OPTS);
+            const outDataUrl = await blobToDataUrl(compressed);
+            commitLocal({ photoDataUrl: outDataUrl, photoUrl: outDataUrl });
+          } catch {
+            // Фоллбек — используем как есть
+            commitLocal({ photoUrl: url, photoDataUrl: null });
+          }
+        })();
       } else {
+        // 3b) обычный URL (возможно внешние CORS) — оставляем URL без попыток сжатия
         setTransientFor(personId, null);
         commitLocal({ photoUrl: url, photoDataUrl: null });
       }
+      return;
     }
   };
 
@@ -561,7 +609,8 @@ export default function EngravingStep({
                 }}
                 style={linkLikeStyle()}
                 title="Список"
-              >                
+              >
+                Компактный вид ☰
               </a>
             )}
 
@@ -821,7 +870,7 @@ export default function EngravingStep({
                                 opacity: 0.92
                               }}
                             >
-                              
+                              Подсказка: прикрепите фотографию. Мы автоматически уменьшим её размер для отправки.
                             </div>
                           )}
                           <PhotoField
@@ -853,18 +902,18 @@ export default function EngravingStep({
 
         {/* Эскиз — общий шаблон SketchTemplate (с эпитафиями) */}
         <div
-        style={{
-          color: "#fff",
-          opacity: 0.9,
-          fontSize: 15,
-          lineHeight: 1.25,
-          margin: "6px 0 8px",
-          textAlign: "center",
-          fontWeight: 400,
-        }}
-      >
-        Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
-      </div>
+          style={{
+            color: "#fff",
+            opacity: 0.9,
+            fontSize: 15,
+            lineHeight: 1.25,
+            margin: "6px 0 8px",
+            textAlign: "center",
+            fontWeight: 400
+          }}
+        >
+          Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
+        </div>
         <section
           ref={previewRef as any}
           style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}
