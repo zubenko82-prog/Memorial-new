@@ -1,118 +1,147 @@
 // src/App.tsx
 // Обновления:
-// - Убрали шаг «Редактор» (EditorStep.tsx) — после «Эпитафии» сразу переходим на «Тыл» (BackEditorStep).
-// - StepNav снова липкая (sticky=true) и размещена ВНУТРИ общего скролл‑контейнера, чтобы sticky работал корректно.
-// - В StepNav скрыт пункт «editor» (навигация не будет показывать убранный шаг).
-// - StepNav показывается на всех шагах после первого достижения «review» (флаг navUnlocked хранится в localStorage).
+// - Убрали шаг «Редактор» (EditorStep.tsx): после «Эпитафии» идём на «Тыл» (BackEditorStep).
+// - StepNav липкая (sticky=true) и находится ВНУТРИ общего скролл‑контейнера, чтобы sticky работал.
+// - В StepNav скрыт пункт «editor» (и «extras»).
+// - StepNav показывается ТОЛЬКО после первого достижения шага «review» (флаг navUnlocked).
+//   Флаг дублируем в LS (ключи: LS_KEY и NAV_UNLOCK_KEY), чтобы сохранялся между сессиями.
 
-import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import Start from './screens/Start';
-import SizeStep from './screens/SizeStep';
-import EngravingStep from './screens/EngravingStep';
-import GraphicsStep from './screens/GraphicsStep';
-import EpitaphStep from './screens/EpitaphStep';
-// import EditorStep from './screens/EditorStep'; // шаг убран
-import BackEditorStep from './screens/BackEditorStep';
-import ReviewAndSendStep from './screens/ReviewAndSendStep';
+import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import Start from "./screens/Start";
+import SizeStep from "./screens/SizeStep";
+import EngravingStep from "./screens/EngravingStep";
+import GraphicsStep from "./screens/GraphicsStep";
+import EpitaphStep from "./screens/EpitaphStep";
+// import EditorStep from './screens/EditorStep'; // убран
+import BackEditorStep from "./screens/BackEditorStep";
+import ReviewAndSendStep from "./screens/ReviewAndSendStep";
 
-import StepNav from './components/StepNav';
-import { STEPS, type StepId } from './wizard/steps';
+import StepNav from "./components/StepNav";
+import { STEPS, type StepId } from "./wizard/steps";
 
 type Step =
-  | 'start'
-  | 'size'
-  | 'inscription'
-  | 'graphics'
-  | 'epitaph'
-  // | 'editor'   // шаг убран
-  | 'editorBack'
-  | 'review'
-  | 'done';
+  | "start"
+  | "size"
+  | "inscription"
+  | "graphics"
+  | "epitaph"
+  // | 'editor' // убран
+  | "editorBack"
+  | "review"
+  | "done";
 
-const LS_KEY = 'memorial.progress.v6';
+const LS_KEY = "memorial.progress.v6";
+const NAV_UNLOCK_KEY = "memorial.navEnabled.reviewOnly"; // совместимо с StepNav
 
-function glassButtonStyle(size: 'nano' | 'sm' | 'md' = 'sm', disabled = false) {
-  const map = { nano: '6px 10px', sm: '10px 14px', md: '12px 18px' } as const;
+function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false) {
+  const map = { nano: "6px 10px", sm: "10px 14px", md: "12px 18px" } as const;
   return {
     padding: map[size],
     borderRadius: 12,
-    border: '1px solid rgba(255,255,255,0.28)',
+    border: "1px solid rgba(255,255,255,0.28)",
     background:
-      'linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)',
-    color: '#fff',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    whiteSpace: 'nowrap',
+      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    color: "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap",
     boxShadow:
-      'inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)',
-    backdropFilter: 'blur(14px) saturate(140%)',
-    WebkitBackdropFilter: 'blur(14px) saturate(140%)',
+      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
+    backdropFilter: "blur(14px) saturate(140%)",
+    WebkitBackdropFilter: "blur(14px) saturate(140%)",
     opacity: disabled ? 0.6 : 1,
-    transition: 'transform 320ms ease, opacity 320ms ease, box-shadow 320ms ease',
-    willChange: 'transform'
+    transition: "transform 320ms ease, opacity 320ms ease, box-shadow 320ms ease",
+    willChange: "transform"
   } as React.CSSProperties;
 }
 
 // Прокрутка к началу при смене шага
 function forceScrollTop() {
-  try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); } catch {}
-  try { (document.scrollingElement as any).scrollTop = 0; } catch {}
-  try { (document.documentElement as any).scrollTop = 0; } catch {}
-  try { (document.body as any).scrollTop = 0; } catch {}
+  try {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  } catch {}
+  try {
+    (document.scrollingElement as any).scrollTop = 0;
+  } catch {}
+  try {
+    (document.documentElement as any).scrollTop = 0;
+  } catch {}
+  try {
+    (document.body as any).scrollTop = 0;
+  } catch {}
 }
 
 // Скрываем из StepNav «extras» и «editor»
-const NAV_STEPS = STEPS.filter(s => s.id !== 'extras' && s.id !== 'editor');
-const STEP_IDS = NAV_STEPS.map(s => s.id);
+const NAV_STEPS = STEPS.filter((s) => s.id !== "extras" && s.id !== "editor");
+const STEP_IDS = NAV_STEPS.map((s) => s.id);
 const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
 const localStepFromId = (id: StepId): Step => {
   switch (id) {
-    case 'item':    return 'start';
-    case 'params':  return 'size';
-    case 'persons': return 'inscription';
-    case 'graphics':return 'graphics';
-    case 'epitaph': return 'epitaph';
+    case "item":
+      return "start";
+    case "params":
+      return "size";
+    case "persons":
+      return "inscription";
+    case "graphics":
+      return "graphics";
+    case "epitaph":
+      return "epitaph";
     // Перенаправляем старые ссылки на editor сразу на «тыл»
-    case 'editor':  return 'editorBack';
-    case 'rear':    return 'editorBack';
-    case 'extras':  return 'review';
-    case 'finish':  return 'review';
-    default:        return 'start';
+    case "editor":
+      return "editorBack";
+    case "rear":
+      return "editorBack";
+    case "extras":
+      return "review";
+    case "finish":
+      return "review";
+    default:
+      return "start";
   }
 };
 const idFromLocalStep = (s: Step): StepId => {
   switch (s) {
-    case 'start':       return 'item';
-    case 'size':        return 'params';
-    case 'inscription': return 'persons';
-    case 'graphics':    return 'graphics';
-    case 'epitaph':     return 'epitaph';
-    // case 'editor':   return 'editor'; // убрано
-    case 'editorBack':  return 'rear';
-    case 'review':      return 'finish';
-    case 'done':        return 'finish';
-    default:            return 'item';
+    case "start":
+      return "item";
+    case "size":
+      return "params";
+    case "inscription":
+      return "persons";
+    case "graphics":
+      return "graphics";
+    case "epitaph":
+      return "epitaph";
+    // case 'editor': return 'editor';
+    case "editorBack":
+      return "rear";
+    case "review":
+      return "finish";
+    case "done":
+      return "finish";
+    default:
+      return "item";
   }
 };
 
 function getStepIdFromLocation(win: Window = window): StepId {
   try {
-    const hash = (win.location.hash || '').replace(/^#/, '');
+    const hash = (win.location.hash || "").replace(/^#/, "");
     const hparts = hash.split(/[/?#]/).filter(Boolean);
     for (let i = hparts.length - 1; i >= 0; i--) {
       const token = decodeURIComponent(hparts[i]);
       if (isStepId(token)) return token as StepId;
     }
-    const pparts = (win.location.pathname || '').split('/').filter(Boolean);
+    const pparts = (win.location.pathname || "").split("/").filter(Boolean);
     for (let i = pparts.length - 1; i >= 0; i--) {
       const token = decodeURIComponent(pparts[i]);
       if (isStepId(token)) return token as StepId;
     }
     const sp = new URLSearchParams(win.location.search);
-    const q = sp.get('step');
+    const q = sp.get("step");
     if (q && isStepId(q)) return q as StepId;
   } catch {}
-  return 'item';
+  return "item";
 }
 
 function setHashForStep(id: StepId, replace = false) {
@@ -120,40 +149,50 @@ function setHashForStep(id: StepId, replace = false) {
   if (replace) {
     const url = new URL(window.location.href);
     url.hash = hash.slice(1);
-    window.history.replaceState(null, '', url.toString());
+    window.history.replaceState(null, "", url.toString());
   } else {
     window.location.hash = hash;
   }
 }
 
 export default function App() {
-  const [step, setStep] = useState<Step>('start');
-  const [navUnlocked, setNavUnlocked] = useState<boolean>(false); // после «review» показываем StepNav на всех экранах
+  const [step, setStep] = useState<Step>("start");
+  // navUnlocked — только после «review». Берём из обоих ключей LS, чтобы не «залипало» от старых версий.
+  const [navUnlocked, setNavUnlocked] = useState<boolean>(() => {
+    try {
+      const a = localStorage.getItem(LS_KEY);
+      const b = localStorage.getItem(NAV_UNLOCK_KEY);
+      if (b === "1") return true;
+      if (a) {
+        const p = JSON.parse(a);
+        if (p?.navUnlocked || p?.step === "review" || p?.step === "done") return true;
+      }
+    } catch {}
+    return false;
+  });
 
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [sizeResult, setSizeResult] = useState<any>(null);
   const [engraving, setEngraving] = useState<any>(null);
   const [decor, setDecor] = useState<any>({});
-  // const [editorState, setEditorState] = useState<any>(null); // не требуется для убранного шага
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // Восстановление прогресса
+  // Восстановление прогресса (остальные поля)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
       if (!raw) return;
       const p = JSON.parse(raw);
-      if (p && typeof p === 'object') {
-        setStep((p.step as Step) || 'start');
+      if (p && typeof p === "object") {
+        setStep((p.step as Step) || "start");
         setSelectedItem(p.selectedItem ?? null);
         setSizeResult(p.sizeResult ?? null);
         setEngraving(p.engraving ?? null);
         setDecor(p.decor ?? {});
-        // setEditorState(p.editorState ?? null);
         setEditorBackState(p.editorBackState ?? null);
-        setNavUnlocked(Boolean(p.navUnlocked) || p.step === 'review' || p.step === 'done');
       }
     } catch {}
+    // не трогаем navUnlocked здесь — он уже инициализирован из LS выше
   }, []);
 
   // Синхронизация c URL при входе
@@ -161,7 +200,12 @@ export default function App() {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
     setStep(s);
-    if (s === 'review' || s === 'done') setNavUnlocked(true);
+    if (s === "review" || s === "done") {
+      setNavUnlocked(true);
+      try {
+        localStorage.setItem(NAV_UNLOCK_KEY, "1");
+      } catch {}
+    }
   }, []);
 
   // Слушаем back/forward
@@ -170,17 +214,22 @@ export default function App() {
       const id = getStepIdFromLocation();
       const s = localStepFromId(id);
       setStep(s);
-      if (s === 'review' || s === 'done') setNavUnlocked(true);
+      if (s === "review" || s === "done") {
+        setNavUnlocked(true);
+        try {
+          localStorage.setItem(NAV_UNLOCK_KEY, "1");
+        } catch {}
+      }
     };
-    window.addEventListener('hashchange', onChange);
-    window.addEventListener('popstate', onChange);
+    window.addEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
     return () => {
-      window.removeEventListener('hashchange', onChange);
-      window.removeEventListener('popstate', onChange);
+      window.removeEventListener("hashchange", onChange);
+      window.removeEventListener("popstate", onChange);
     };
   }, []);
 
-  // Сохранение прогресса (включая флаг navUnlocked)
+  // Сохранение прогресса (+ флаг navUnlocked)
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -191,20 +240,26 @@ export default function App() {
           sizeResult,
           engraving,
           decor,
-          // editorState,
           editorBackState,
           navUnlocked
         })
       );
+      if (navUnlocked) localStorage.setItem(NAV_UNLOCK_KEY, "1");
     } catch {}
-  }, [step, selectedItem, sizeResult, engraving, decor, /*editorState,*/ editorBackState, navUnlocked]);
+  }, [step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked]);
 
   // Guards
   useEffect(() => {
-    if (!selectedItem && step !== 'start') { setStep('start'); return; }
-    if (step !== 'start' && !sizeResult) { setStep('size'); return; }
-    if ((step === 'graphics' || step === 'epitaph' || step === 'editorBack' || step === 'review') && !engraving) {
-      setStep('inscription');
+    if (!selectedItem && step !== "start") {
+      setStep("start");
+      return;
+    }
+    if (step !== "start" && !sizeResult) {
+      setStep("size");
+      return;
+    }
+    if ((step === "graphics" || step === "epitaph" || step === "editorBack" || step === "review") && !engraving) {
+      setStep("inscription");
       return;
     }
   }, [step, selectedItem, sizeResult, engraving]);
@@ -214,7 +269,10 @@ export default function App() {
     forceScrollTop();
     const t0 = setTimeout(forceScrollTop, 0);
     const t1 = setTimeout(forceScrollTop, 150);
-    return () => { clearTimeout(t0); clearTimeout(t1); };
+    return () => {
+      clearTimeout(t0);
+      clearTimeout(t1);
+    };
   }, [step]);
 
   // Синхронизация hash с локальным шагом + разблокировка навигации
@@ -222,7 +280,12 @@ export default function App() {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
     if (window.location.hash !== need) setHashForStep(id, true);
-    if (step === 'review' || step === 'done') setNavUnlocked(true);
+    if (step === "review" || step === "done") {
+      setNavUnlocked(true);
+      try {
+        localStorage.setItem(NAV_UNLOCK_KEY, "1");
+      } catch {}
+    }
   }, [step]);
 
   // Переход из StepNav
@@ -234,45 +297,62 @@ export default function App() {
   };
 
   // Колбэки шагов
-  const onStartConfirm = (item: any) => { setSelectedItem(item); setStep('size'); };
+  const onStartConfirm = (item: any) => {
+    setSelectedItem(item);
+    setStep("size");
+  };
 
-  const onSizeBack = () => setStep('start');
-  const onSizeDone = (data: any) => { setSizeResult(data); setStep('inscription'); };
+  const onSizeBack = () => setStep("start");
+  const onSizeDone = (data: any) => {
+    setSizeResult(data);
+    setStep("inscription");
+  };
 
-  const onEngravingBack = () => setStep('size');
+  const onEngravingBack = () => setStep("size");
   const onEngravingSave = (data: any) => setEngraving(data);
-  const onEngravingDone = (data: any) => { setEngraving(data); setStep('graphics'); };
+  const onEngravingDone = (data: any) => {
+    setEngraving(data);
+    setStep("graphics");
+  };
 
-  const onGraphicsBack = () => setStep('inscription');
+  const onGraphicsBack = () => setStep("inscription");
   const onGraphicsSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
-  const onGraphicsDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('epitaph'); };
+  const onGraphicsDone = (data: any) => {
+    setDecor((prev: any) => ({ ...(prev || {}), ...data }));
+    setStep("epitaph");
+  };
 
-  const onEpitaphBack = () => setStep('graphics');
+  const onEpitaphBack = () => setStep("graphics");
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
-  // РАНЬШЕ: после эпитафии шли на editor → теперь сразу на тыл:
-  const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep('editorBack'); };
+  // После «Эпитафии» — сразу на «Тыл»
+  const onEpitaphDone = (data: any) => {
+    setDecor((prev: any) => ({ ...(prev || {}), ...data }));
+    setStep("editorBack");
+  };
 
-  // Тыльная (BackEditorStep)
-  const onBackEditorBack = () => setStep('epitaph');
+  // Тыльная
+  const onBackEditorBack = () => setStep("epitaph");
   const onBackEditorDone = (payload: any) => {
     setEditorBackState(payload);
-    setStep('review');
+    setStep("review");
   };
 
   // ReviewAndSend
-  const onReviewBack = () => setStep('editorBack');
-  const onReviewSend = () => setStep('done');
+  const onReviewBack = () => setStep("editorBack");
+  const onReviewSend = () => setStep("done");
 
   const resetAll = () => {
-    try { localStorage.removeItem(LS_KEY); } catch {}
+    try {
+      localStorage.removeItem(LS_KEY);
+      localStorage.removeItem(NAV_UNLOCK_KEY); // сброс флага показа StepNav
+    } catch {}
     setSelectedItem(null);
     setSizeResult(null);
     setEngraving(null);
     setDecor({});
-    // setEditorState(null);
     setEditorBackState(null);
     setNavUnlocked(false);
-    setStep('start');
+    setStep("start");
   };
 
   const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
@@ -280,42 +360,37 @@ export default function App() {
   return (
     <div
       style={{
-        minHeight: '100vh',
-        background: '#0f0f12',
-        color: '#fff',
-        display: 'grid',
-        gridTemplateRows: '1fr' // один общий скролл‑контейнер
+        minHeight: "100vh",
+        background: "#0f0f12",
+        color: "#fff",
+        display: "grid",
+        gridTemplateRows: "1fr" // единый скролл‑контейнер
       }}
     >
       {/* Весь контент, включая StepNav и шаги — внутри одного скролл‑контейнера.
-          Это нужно, чтобы position: sticky работал и для StepNav, и для внутренних панелей. */}
-      <div style={{ minHeight: 0, overflow: 'auto' }}>
-        {/* Глобальная навигация по шагам — липкая (sticky=true).
-            Показывается на всех экранах ПОСЛЕ того, как пользователь дошёл до «review». */}
-        {step !== 'done' && navUnlocked && (
+          Это нужно, чтобы position: sticky работал. */}
+      <div style={{ minHeight: 0, overflow: "auto" }}>
+        {/* Глобальная навигация по шагам — липкая. Показываем ТОЛЬКО после review/done. */}
+        {step !== "done" && navUnlocked && (
           <StepNav
-            steps={NAV_STEPS}           // STEPS без 'extras' и без 'editor'
+            steps={NAV_STEPS}             // STEPS без 'extras' и 'editor'
             currentId={currentWizardId}
             onSelect={handleNavSelect}
-            sticky={true}               // липкая панель
-            enabled={navUnlocked}
-            activateOnFinish={false}
+            sticky={true}
+            enabled={true}                // показываем, раз navUnlocked=true
+            activateOnFinish={false}      // авто-активация внутри StepNav не нужна
+            topOffset={0}
           />
         )}
 
         {/* Шаги */}
-        {step === 'start' && <Start onConfirm={onStartConfirm} />}
+        {step === "start" && <Start onConfirm={onStartConfirm} />}
 
-        {step === 'size' && selectedItem && (
-          <SizeStep
-            item={selectedItem}
-            initial={sizeResult || undefined}
-            onBack={onSizeBack}
-            onDone={onSizeDone}
-          />
+        {step === "size" && selectedItem && (
+          <SizeStep item={selectedItem} initial={sizeResult || undefined} onBack={onSizeBack} onDone={onSizeDone} />
         )}
 
-        {step === 'inscription' && selectedItem && sizeResult && (
+        {step === "inscription" && selectedItem && sizeResult && (
           <EngravingStep
             item={selectedItem}
             sizeResult={sizeResult}
@@ -326,7 +401,7 @@ export default function App() {
           />
         )}
 
-        {step === 'graphics' && selectedItem && sizeResult && engraving && (
+        {step === "graphics" && selectedItem && sizeResult && engraving && (
           <GraphicsStep
             item={selectedItem}
             engraving={engraving}
@@ -337,7 +412,7 @@ export default function App() {
           />
         )}
 
-        {step === 'epitaph' && selectedItem && sizeResult && engraving && (
+        {step === "epitaph" && selectedItem && sizeResult && engraving && (
           <EpitaphStep
             item={selectedItem}
             engraving={engraving}
@@ -348,49 +423,27 @@ export default function App() {
           />
         )}
 
-        {/* УБРАНО:
-        {step === 'editor' && selectedItem && sizeResult && engraving && (
-          <EditorStep
-            item={selectedItem}
-            engraving={engraving}
-            decor={decor || {}}
-            onBack={onEditorBack}
-            onSendOrder={onSendOrder}
-            onGenerateSketch={onGenerateSketch}
-            onRearSide={onRearSide}
-            onSaveDraft={onEditorSave}
-          />
-        )} */}
+        {step === "editorBack" && <BackEditorStep onBack={onBackEditorBack} onContinue={(payload) => onBackEditorDone(payload)} />}
 
-        {step === 'editorBack' && (
-          <BackEditorStep
-            onBack={onBackEditorBack}
-            onContinue={(payload) => onBackEditorDone(payload)}
-          />
-        )}
+        {step === "review" && <ReviewAndSendStep onBack={onReviewBack} onSend={onReviewSend} />}
 
-        {step === 'review' && (
-          <ReviewAndSendStep
-            onBack={onReviewBack}
-            onSend={onReviewSend}
-          />
-        )}
-
-        {step === 'done' && (
+        {step === "done" && (
           <div style={{ padding: 16 }}>
             <h2 style={{ marginTop: 0 }}>Заявка отправлена менеджерам</h2>
-            <div style={{ opacity: 0.9, marginBottom: 12 }}>
-              Спасибо! Менеджер свяжется с вами. Вы можете начать заново.
-            </div>
-            <button style={glassButtonStyle('sm')} onClick={resetAll}>Начать заново</button>
+            <div style={{ opacity: 0.9, marginBottom: 12 }}>Спасибо! Менеджер свяжется с вами. Вы можете начать заново.</div>
+            <button style={glassButtonStyle("sm")} onClick={resetAll}>
+              Начать заново
+            </button>
           </div>
         )}
 
         {/* Фолбек на случай неизвестного шага */}
-        {!['start','size','inscription','graphics','epitaph','editorBack','review','done'].includes(step) && (
+        {!["start", "size", "inscription", "graphics", "epitaph", "editorBack", "review", "done"].includes(step) && (
           <div style={{ padding: 16 }}>
             <h3>Неизвестный шаг: {String(step)}</h3>
-            <button style={glassButtonStyle('sm')} onClick={() => setStep('start')}>На главную</button>
+            <button style={glassButtonStyle("sm")} onClick={() => setStep("start")}>
+              На главную
+            </button>
           </div>
         )}
       </div>
