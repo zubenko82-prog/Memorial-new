@@ -542,21 +542,7 @@ export default function EngravingStep({
               justifyContent: "flex-start"
             }}
           >
-            {/* Ссылка «Список ☰» — только если больше одного усопшего */}
-            {persons.length > 1 && (
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  collapseAll();
-                }}
-                style={linkLikeStyle()}
-                title="Свернуть все — компактный вид"
-              >
-                Компактный вид ☰
-              </a>
-            )}
-
+          
             {persons.map((p) => {
               const name = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
               return (
