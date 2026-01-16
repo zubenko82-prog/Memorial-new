@@ -5,19 +5,17 @@
 // - Драфт НЕ сохраняем «на лету». saveOrderDraft вызывается только по «Назад»/«Продолжить».
 // - Транзиентный blob:ObjectURL для превью (ревок при замене/очистке/анмаунте).
 // - Перемещение по порядку (▲/▼) — оставлено.
-// - НОВОЕ: при загрузке фото сжимаем до гарантированного лимита (≈2.7 MiB) с локальной перекодировкой.
+// - Сжатие фото при загрузке до гарантированного лимита (~2.7 MiB) для последующей отправки в Telegram.
 //
 // Навигация:
-// - Внутренняя навигация — липкая (sticky).
-// - «Компактный вид ☰» — ссылка; при нажатии сворачивает все аккордеоны с усопшими.
-//   Показываем «Компактный вид ☰» только если усопших больше одного.
+// - Внутренняя навигация — ЛИПКИЙ блок (position: sticky).
+// - «Компактный вид ☰» — сворачивает все аккордеоны с усопшими (появляется, если > 1 усопшего).
 //
-// Исправлено/упрощено:
-// - validateDates/parseFlexibleDate на месте.
-// - Подключён общий SketchTemplate (общий предпросмотр с гориз./верт. шаблонами) из ../components/SketchTemplate.
-// - Прозрачность резной работы настраивается через carvingOpacity (передаётся в SketchTemplate).
-// - Передаём эпитафии (epitaphs) в SketchTemplate для отображения в эскизе.
-// - ПОДСКАЗКА: при отсутствии фото выводим подсказку НАД кнопкой «Прикрепить фото».
+// Предпросмотр:
+// - Общий SketchTemplate (с горизонт./вертик. шаблонами).
+// - Прозрачность резной работы настроена через carvingOpacity.
+// - Эпитафии передаются в SketchTemplate для отображения на эскизе.
+// - Подсказка над кнопкой «Прикрепить фото», если фото не прикреплено.
 
 import React, {
   useCallback,
@@ -86,6 +84,36 @@ function linkLikeStyle(): React.CSSProperties {
     textDecoration: "underline",
     cursor: "pointer",
     background: "transparent"
+  };
+}
+function inputStyle(): React.CSSProperties {
+  return {
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.18)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    outline: "none",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25)",
+    boxSizing: "border-box"
+  };
+}
+function iconBtn(): React.CSSProperties {
+  return {
+    padding: "2px 6px",
+    borderRadius: 6,
+    border: "1px solid rgba(255,255,255,0.25)",
+    background: "rgba(255,255,255,0.12)",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 12,
+    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center"
   };
 }
 
@@ -171,7 +199,7 @@ function validateDates(birth?: string, death?: string): string | null {
 }
 
 /* ===== Image compression config ===== */
-const PHOTO_TARGET_MAX_BYTES = Math.floor(2.7 * 1024 * 1024); // ≈2.7 MiB — безопасно для последующей отправки
+const PHOTO_TARGET_MAX_BYTES = Math.floor(2.7 * 1024 * 1024); // ≈2.7 MiB — безопасно для Telegram
 const PHOTO_COMPRESS_OPTS = {
   maxWidth: 2200,
   maxHeight: 2200,
@@ -271,7 +299,7 @@ export default function EngravingStep({
     [persons, transientPhotoUrlById]
   );
 
-  // Валидность
+  // Валидность дат
   const dateErrors = useMemo(() => {
     const errs: Record<string, string | null> = {};
     persons.forEach(
@@ -339,8 +367,8 @@ export default function EngravingStep({
   const setPersonPhotoById = (personId: string, pv: PhotoValue | null) => {
     const nextSeq = (photoSeqByIdRef.current[personId] || 0) + 1;
     photoSeqByIdRef.current[personId] = nextSeq;
-    const isCurrentSeq = () =>
-      photoSeqByIdRef.current[personId] === nextSeq;
+    const isCurrentSeq = () => photoSeqByIdRef.current[personId] === nextSeq;
+
     const commitLocal = (patch: Partial<Person>) => {
       if (!isCurrentSeq()) return;
       setTransientFor(personId, null);
@@ -356,7 +384,7 @@ export default function EngravingStep({
       return;
     }
 
-    // 1) Если пришёл dataUrl — перекодируем в Blob -> File -> сжимаем -> обратно в dataUrl.
+    // 1) Если пришёл dataUrl — перекодируем и сжимаем
     if ((pv as any)?.dataUrl) {
       const dataUrl = (pv as any).dataUrl as string;
       (async () => {
@@ -375,7 +403,7 @@ export default function EngravingStep({
       return;
     }
 
-    // 2) Если пришёл файл — ставим быстрый превью-blob, затем сжимаем и сохраняем итог.
+    // 2) Если пришёл файл — быстрый blob-превью, затем сжатие
     const maybeFile: File | undefined = (pv as any)?.file;
     if (maybeFile instanceof File) {
       const tempUrl = URL.createObjectURL(maybeFile);
@@ -393,7 +421,6 @@ export default function EngravingStep({
           commitLocal({ photoDataUrl: outDataUrl, photoUrl: outDataUrl });
         } catch {
           try { URL.revokeObjectURL(tempUrl); } catch {}
-          // Фоллбек: без сжатия
           const d = await fileToDataUrl(maybeFile);
           commitLocal({ photoDataUrl: d, photoUrl: d });
         }
@@ -422,7 +449,7 @@ export default function EngravingStep({
           }
         })();
       } else {
-        // 3b) обычный URL (возможно внешние CORS) — оставляем URL без попыток сжатия
+        // 3b) обычный URL (может быть внешним) — оставляем без сжатия
         setTransientFor(personId, null);
         commitLocal({ photoUrl: url, photoDataUrl: null });
       }
@@ -573,19 +600,19 @@ export default function EngravingStep({
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Усопшие" />
 
-        {/* Навигация (липкая, как раньше) */}
+        {/* Навигация (липкая) */}
         <div
           ref={navRef}
           style={{
             position: "sticky",
-            top: 2,
-            zIndex: 50,
-            paddingTop: "env(safe-area-inset-top)",
-            background: "rgba(0,0,0,0.96)",
+            top: "calc(env(safe-area-inset-top, 0px) + 0px)",
+            zIndex: 1000,
+            background: "rgba(0,0,0,0.85)",
+            backdropFilter: "saturate(180%) blur(8px)",
+            WebkitBackdropFilter: "saturate(180%) blur(8px)",
             borderRadius: 12,
-            border: "1px dashed rgba(255, 255, 255, 0.6)",
-            marginBottom: 10,
-            transform: "translateZ(0)"
+            border: "1px solid rgba(255,255,255,0.18)",
+            marginBottom: 10
           }}
         >
           <div
@@ -599,7 +626,7 @@ export default function EngravingStep({
               justifyContent: "flex-start"
             }}
           >
-            {/* Ссылка «Список ☰» — только если больше одного усопшего */}
+            {/* «Компактный вид ☰» — только если больше одного усопшего */}
             {persons.length > 1 && (
               <a
                 href="#"
@@ -608,7 +635,7 @@ export default function EngravingStep({
                   collapseAll();
                 }}
                 style={linkLikeStyle()}
-                title="Список"
+                title="Свернуть все — компактный вид"
               >
                 Компактный вид ☰
               </a>
@@ -643,7 +670,7 @@ export default function EngravingStep({
             Информация об усопших
           </h2>
 
-          {/* Подсказка — только если больше одного усопшего. «Компактный вид ☰» — ссылка */}
+          {/* Подсказка — если больше одного усопшего */}
           {persons.length > 1 && (
             <div style={{ margin: "0 0 8px 0", textAlign: "left" }}>
               Для изменения порядка нажмите (▲/▼) напротив имени.{" "}
@@ -870,7 +897,7 @@ export default function EngravingStep({
                                 opacity: 0.92
                               }}
                             >
-                              Подсказка: прикрепите фотографию. Мы автоматически уменьшим её размер для отправки.
+                              Подсказка: прикрепите фотографию. Мы автоматически уменьшим её размер для последующей отправки.
                             </div>
                           )}
                           <PhotoField
@@ -949,9 +976,7 @@ export default function EngravingStep({
               ...glassButtonStyle("sm"),
               opacity: canContinue && !isRendering ? 1 : 0.6
             }}
-            title={
-              isRendering ? "Подождите, формируем изображение…" : undefined
-            }
+            title={isRendering ? "Подождите, формируем изображение…" : undefined}
           >
             {isRendering ? "Формирование…" : "Продолжить"}
           </button>
@@ -976,34 +1001,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
-}
-function inputStyle(): React.CSSProperties {
-  return {
-    width: "100%",
-    maxWidth: "100%",
-    minWidth: 0,
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#fff",
-    outline: "none",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.25)",
-    boxSizing: "border-box"
-  };
-}
-function iconBtn(): React.CSSProperties {
-  return {
-    padding: "2px 6px",
-    borderRadius: 6,
-    border: "1px solid rgba(255,255,255,0.25)",
-    background: "rgba(255,255,255,0.12)",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 12,
-    lineHeight: 1,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center"
-  };
 }
