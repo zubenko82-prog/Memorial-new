@@ -3,19 +3,15 @@
 //
 // Требования:
 // - Тяжёлые фото сжимаются до «безопасного» размера перед сохранением (локально через canvas).
-// - Драфт НЕ обновляем «на лету» при каждом вводе. Сохраняем ТОЛЬКО:
+// - Драфт НЕ обновляем «на лету». Сохраняем ТОЛЬКО:
 //     • по «Назад» / «Продолжить»,
 //     • при размонтировании компонента,
 //     • при beforeunload / pagehide / visibilitychange (уход со страницы),
 //     • при hashchange / popstate (переход между шагами).
 // - При внешней очистке/изменении драфта (TopBar) — подтягиваем новые данные, сбрасываем локальные.
 //
-// Навигация:
-// - Внутренняя панель — липкая (sticky).
-//
-// Предпросмотр:
-// - Общий SketchTemplate; эпитафии из драфта/initial.
-// - carvingOpacity управляет прозрачноcтью «резной» подложки.
+// Навигация: внутренняя панель — липкая (sticky).
+// Предпросмотр: SketchTemplate; эпитафии из драфта/initial; carvingOpacity управляет прозрачностью.
 
 import React, {
   useCallback,
@@ -43,8 +39,8 @@ type Person = {
   middleName?: string;
   birthDate?: string;
   deathDate?: string;
-  photoUrl?: string | null;     // для превью (может быть внешний URL или blob:)
-  photoDataUrl?: string | null; // сжатый dataURL (готовим к отправке/ресайзу)
+  photoUrl?: string | null;     // для превью (внешний URL или blob:)
+  photoDataUrl?: string | null; // сжатый dataURL
 };
 type NormalizedPerson = {
   id: string;
@@ -91,7 +87,7 @@ function linkLikeStyle(): React.CSSProperties {
   };
 }
 
-/* ===== Helpers ===== */
+/* ===== Data helpers ===== */
 function linesFromPerson(p: Person) {
   const l1 = (p.lastName || "").trim();
   const l2 = [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
@@ -162,9 +158,9 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
-/* ===== Локальный компрессор изображений (canvas) ===== */
+/* ===== Image compressor (canvas) ===== */
 const PHOTO_TARGET_MAX_BYTES = Math.floor(2.7 * 1024 * 1024); // ≈2.7 MiB
-const MAX_DIM = 2200; // длинная сторона в пикселях
+const MAX_DIM = 2200; // длинная сторона
 const QUALITY_START = 0.9;
 const QUALITY_MIN = 0.55;
 const QUALITY_STEP = 0.08;
@@ -207,34 +203,30 @@ async function compressImageFileToMaxBytes(file: File, maxBytes = PHOTO_TARGET_M
   canvas.height = Math.max(1, Math.round(th));
   const ctx = canvas.getContext("2d");
   if (!ctx) return file;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
+  // подбор качества
   let q = QUALITY_START;
   let out: Blob = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
   if (out.size <= maxBytes) return out;
-
   while (q > QUALITY_MIN && out.size > maxBytes) {
     q = Math.max(QUALITY_MIN, q - QUALITY_STEP);
     out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
   }
   if (out.size <= maxBytes) return out;
 
-  // Доп. уменьшение геометрии, если всё ещё велик
+  // уменьшение геометрии
   let scale = 0.9;
   for (let i = 0; i < 4 && out.size > maxBytes; i++) {
     const nw = Math.max(1, Math.round(canvas.width * scale));
     const nh = Math.max(1, Math.round(canvas.height * scale));
     const c2 = document.createElement("canvas");
     c2.width = nw; c2.height = nh;
-    const x2 = c2.getContext("2d");
-    if (!x2) break;
+    const x2 = c2.getContext("2d")!;
     x2.drawImage(canvas, 0, 0, nw, nh);
-
-    // заменяем исходный canvas, пробуем снова
     canvas.width = nw; canvas.height = nh;
-    ctx.clearRect(0, 0, nw, nh);
-    ctx.drawImage(c2, 0, 0);
+    const ctx2 = canvas.getContext("2d")!;
+    ctx2.drawImage(c2, 0, 0);
 
     q = QUALITY_START;
     out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
@@ -244,7 +236,6 @@ async function compressImageFileToMaxBytes(file: File, maxBytes = PHOTO_TARGET_M
     }
     scale *= 0.9;
   }
-
   return out;
 }
 
@@ -275,7 +266,7 @@ export default function EngravingStep({
 }: Props) {
   const [outro, setOutro] = useState(false);
 
-  // Живой драфт (подписка)
+  // Драфт
   const [orderDraft, setOrderDraft] = useState<OrderDraft>(() => loadOrderDraft());
   const draftRef = useRef<OrderDraft>(orderDraft);
   useEffect(() => { draftRef.current = orderDraft; }, [orderDraft]);
@@ -313,7 +304,7 @@ export default function EngravingStep({
     };
   }, [transientPhotoUrlById]);
 
-  // Элементы предпросмотра
+  // Данные для предпросмотра
   const peopleBlocks = useMemo(
     () => persons.map((p) => {
       const t = transientPhotoUrlById[p.id];
@@ -331,7 +322,7 @@ export default function EngravingStep({
   }, [persons]);
   const canContinue = useMemo(() => Object.values(dateErrors).every((e) => !e), [dateErrors]);
 
-  // Состояние аккордеонов
+  // Открыто/закрыто
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(
     () => Object.fromEntries(persons.map((p) => [p.id, true]))
   );
@@ -357,7 +348,7 @@ export default function EngravingStep({
   const moveDown = (idx: number) =>
     setPersons((prev) => (idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))));
 
-  /* ===== Фото: сжатие перед сохранением ===== */
+  /* ===== Фото: сжатие и запись в state ===== */
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
@@ -379,9 +370,309 @@ export default function EngravingStep({
       return;
     }
 
-    // dataUrl
+    // Источник: dataUrl
     if ((pv as any)?.dataUrl) {
-      const dataUrl">▼</button>
+      const dataUrl = (pv as any).dataUrl as string;
+      (async () => {
+        try {
+          const blob = await (await fetch(dataUrl)).blob();
+          const input = new File([blob], "photo.jpg", { type: blob.type || "image/jpeg" });
+          const compressed = await compressImageFileToMaxBytes(input, PHOTO_TARGET_MAX_BYTES);
+          const out = await blobToDataUrl(compressed);
+          commitLocal({ photoDataUrl: out, photoUrl: out });
+        } catch {
+          commitLocal({ photoDataUrl: dataUrl, photoUrl: (pv as any).url ?? dataUrl });
+        }
+      })();
+      return;
+    }
+
+    // Источник: File
+    const maybeFile: File | undefined = (pv as any)?.file;
+    if (maybeFile instanceof File) {
+      const tempUrl = URL.createObjectURL(maybeFile); // мгновенное превью
+      setTransientFor(personId, tempUrl);
+      (async () => {
+        try {
+          const compressed = await compressImageFileToMaxBytes(maybeFile, PHOTO_TARGET_MAX_BYTES);
+          const out = await blobToDataUrl(compressed);
+          try { URL.revokeObjectURL(tempUrl); } catch {}
+          commitLocal({ photoDataUrl: out, photoUrl: out });
+        } catch {
+          try { URL.revokeObjectURL(tempUrl); } catch {}
+          const fr = new FileReader();
+          fr.onload = () => commitLocal({ photoDataUrl: String(fr.result || ""), photoUrl: String(fr.result || "") });
+          fr.onerror = () => commitLocal({ photoUrl: tempUrl, photoDataUrl: null });
+          fr.readAsDataURL(maybeFile);
+        }
+      })();
+      return;
+    }
+
+    // Источник: url
+    if ((pv as any)?.url) {
+      const url = (pv as any).url as string;
+      if (isBlobUrl(url)) {
+        setTransientFor(personId, url);
+        (async () => {
+          try {
+            const blob = await (await fetch(url)).blob();
+            const input = new File([blob], "photo.jpg", { type: blob.type || "image/jpeg" });
+            const compressed = await compressImageFileToMaxBytes(input, PHOTO_TARGET_MAX_BYTES);
+            const out = await blobToDataUrl(compressed);
+            commitLocal({ photoDataUrl: out, photoUrl: out });
+          } catch {
+            commitLocal({ photoUrl: url, photoDataUrl: null });
+          }
+        })();
+      } else {
+        // внешний URL
+        setTransientFor(personId, null);
+        commitLocal({ photoUrl: url, photoDataUrl: null });
+      }
+    }
+  };
+
+  /* ===== Навигация / sticky-панель ===== */
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const navRowRef = useRef<HTMLDivElement | null>(null);
+  const [navH, setNavH] = useState(56);
+  useLayoutEffect(() => {
+    const measure = () => setNavH(navRef.current?.getBoundingClientRect().height || 0);
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (navRef.current) ro.observe(navRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
+  const formRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const scrollToForm = (id: string) => {
+    const el = formRefs.current[id];
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    window.scrollTo({ top: Math.max(0, window.scrollY + r.top - (navH + 10)), behavior: "smooth" });
+  };
+  const previewRef = useRef<HTMLElement | null>(null);
+  const scrollToPreview = () => {
+    const el = previewRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    window.scrollTo({ top: Math.max(0, window.scrollY + r.top - (navH + 10)), behavior: "smooth" });
+  };
+
+  const collapseAll = useCallback(() => {
+    setOpenMap(Object.fromEntries(persons.map((p) => [p.id, false])));
+    if (persons.length > 0) scrollToForm(persons[0].id);
+  }, [persons]);
+
+  /* ===== Сохранение драфта ТОЛЬКО при переходах/уходе ===== */
+  const persistPersons = useCallback((list: Person[]) => {
+    const prev = loadOrderDraft();
+    const norm = normalizePersonsForSave(list);
+    const next: OrderDraft = {
+      ...prev,
+      engraving: { ...(prev?.engraving || {}), persons: norm },
+      updatedAt: Date.now()
+    };
+    const stored = saveOrderDraft(next);
+    setOrderDraft(stored);
+    onSaveDraft?.({ persons: norm });
+  }, [onSaveDraft]);
+
+  // save on unmount
+  useEffect(() => {
+    return () => { try { persistPersons(persons); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // save on beforeunload/pagehide/visibilitychange/hashchange/popstate
+  useEffect(() => {
+    const saveNow = () => { try { persistPersons(persons); } catch {} };
+    const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
+    window.addEventListener("beforeunload", saveNow);
+    window.addEventListener("pagehide", saveNow);
+    window.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("hashchange", saveNow);
+    window.addEventListener("popstate", saveNow);
+    return () => {
+      window.removeEventListener("beforeunload", saveNow);
+      window.removeEventListener("pagehide", saveNow);
+      window.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("hashchange", saveNow);
+      window.removeEventListener("popstate", saveNow);
+    };
+  }, [persons, persistPersons]);
+
+  // Подтягиваем внешние изменения драфта (в т.ч. «Очистить всё»)
+  useEffect(() => {
+    const syncFromStore = () => {
+      const fresh = loadOrderDraft();
+      setOrderDraft(fresh);
+      const incoming = draftPersonsToLocal(fresh?.engraving?.persons as any);
+      const normalizedIncoming = incoming.length ? incoming : [makeBlankPerson("p-0")];
+      if (!personsEqual(persons, normalizedIncoming)) {
+        setPersons(normalizedIncoming);
+        setTransientPhotoUrlById({});
+      }
+    };
+    const events: Array<[string, any]> = [
+      ["storage", syncFromStore],
+      [DRAFT_UPDATED_EVENT, syncFromStore],
+      ["memorial:orderDraftUpdated", syncFromStore as any],
+      ["hashchange", syncFromStore],
+      ["popstate", syncFromStore],
+      ["visibilitychange", () => { if (document.visibilityState === "visible") syncFromStore(); }]
+    ];
+    events.forEach(([n, h]) => window.addEventListener(n, h as any));
+    syncFromStore();
+    return () => events.forEach(([n, h]) => window.removeEventListener(n, h as any));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Кнопки «Назад/Продолжить»
+  const handleBack = useCallback(() => {
+    persistPersons(persons);
+    setOutro(true);
+    setTimeout(() => onBack?.(), 200);
+  }, [persistPersons, persons, onBack]);
+
+  const [isRendering, setIsRendering] = useState(false);
+  const handleContinue = useCallback(() => {
+    if (!canContinue) return;
+    persistPersons(persons);
+    setIsRendering(true);
+    setIsRendering(false);
+    setOutro(true);
+    setTimeout(() => onDone?.({ persons, sketchDataUrl: null }), 200);
+  }, [canContinue, persistPersons, persons, onDone]);
+
+  /* ===== Данные для эскиза ===== */
+  const selectedGraphics = useMemo(() => (orderDraft?.graphics || []) as any[], [orderDraft]);
+  const selectedCrosses = useMemo(
+    () => selectedGraphics.filter((g) => (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross")),
+    [selectedGraphics]
+  );
+  const selectedOtherGraphics = useMemo(
+    () => selectedGraphics.filter((g) => !((g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross"))),
+    [selectedGraphics]
+  );
+
+  const epitaphsForPreview = useMemo(() => {
+    const engr: any = orderDraft?.engraving || {};
+    if (Array.isArray(engr.epitaphs) && engr.epitaphs.length) return engr.epitaphs.filter(Boolean);
+    if (typeof engr.epitaphText === "string" && engr.epitaphText.trim()) {
+      return engr.epitaphText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
+    }
+    if (Array.isArray(initial?.epitaphs)) return (initial!.epitaphs as string[]).filter(Boolean);
+    if (typeof initial?.epitaphText === "string" && initial!.epitaphText!.trim()) {
+      return initial!.epitaphText!.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
+    }
+    return [];
+  }, [orderDraft, initial]);
+
+  /* ===== MAX WIDTH LIMIT ===== */
+  const MAX_W = 600;
+
+  return (
+    <div
+      style={{
+        color: "#fff",
+        padding: 12,
+        opacity: outro ? 0 : 1,
+        transition: "opacity 240ms ease",
+        backgroundImage: `url(/data/bg.svg)`,
+        backgroundSize: "cover",
+        backgroundPosition: "center center",
+        backgroundAttachment: "fixed"
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
+        <TopBarWithIntro title="Усопшие" />
+
+        {/* Навигация (липкая) */}
+        <div
+          ref={navRef}
+          style={{
+            position: "sticky",
+            top: 2,
+            zIndex: 50,
+            paddingTop: "env(safe-area-inset-top)",
+            background: "rgba(0,0,0,0.96)",
+            borderRadius: 12,
+            border: "1px dashed rgba(255, 255, 255, 0.6)",
+            marginBottom: 10
+          }}
+        >
+          <div
+            ref={navRowRef}
+            style={{
+              display: "flex",
+              gap: 8,
+              padding: 12,
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: "flex-start"
+            }}
+          >
+            {persons.map((p) => {
+              const name = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+              return (
+                <button key={p.id} onClick={() => scrollToForm(p.id)} style={glassButtonStyle("nano")} title={name}>
+                  {name}
+                </button>
+              );
+            })}
+            <div style={{ flex: 1 }} />
+            <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>Эскиз</button>
+          </div>
+        </div>
+
+        {/* Список персон */}
+        <section>
+          <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
+
+          {persons.length > 1 && (
+            <div style={{ margin: "0 0 8px 0", textAlign: "left" }}>
+              Для изменения порядка нажмите (▲/▼) напротив имени.{" "}
+              <a href="#" onClick={(e) => { e.preventDefault(); collapseAll(); }} style={linkLikeStyle()} title="Свернуть все — компактный вид">
+                Компактный вид ☰
+              </a>
+            </div>
+          )}
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {persons.map((p, idx) => {
+              const id = p.id;
+              const isOpen = openMap[id] ?? true;
+              const err = validateDates(p.birthDate, p.deathDate);
+              const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+              const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
+
+              return (
+                <div key={id} ref={(el) => (formRefs.current[id] = el)} style={{ ...glassPanelStyle(), padding: 0 }}>
+                  <div
+                    onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "6px 8px",
+                      background: "rgba(0,0,0,0.66)",
+                      borderRadius: "12px 12px 0 0",
+                      cursor: "pointer"
+                    }}
+                  >
+                    <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
+                    <div style={{ fontSize: 16, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {nameLeft}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); moveUp(idx); }} disabled={idx === 0} style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }} title="Выше">▲</button>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); moveDown(idx); }} disabled={idx === persons.length - 1} style={{ ...iconBtn(), opacity: idx === persons.length - 1 ? 0.4 : 1 }} title="Ниже">▼</button>
                       <button type="button" onClick={(e) => { e.stopPropagation(); removePerson(idx); }} style={iconBtn()} title="Удалить">✖</button>
                     </div>
                   </div>
