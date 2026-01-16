@@ -1,276 +1,134 @@
 // src/lib/order.ts
-// Единый стор заказа (draft) в localStorage + оригинал фото в IndexedDB.
-// Поля: size.width/height/thickness/notes/orientation, graphics, engraving, etc.
-
-import { idbPutBlob, idbGetBlob, idbDel } from "./idb";
-
-export type Orientation = "vertical" | "horizontal";
-
-export type OrderItem = {
-  id?: string;
-  name?: string;
-  url?: string;
-  relPath?: string;
-};
-
-export type OrderSize = {
-  width?: number; // мм
-  height?: number; // мм
-  thickness?: number; // мм
-  orientation?: Orientation; // вертикально/горизонтально
-  notes?: string;
-};
-
-export type Person = {
-  id?: string;
-  lastName?: string;
-  firstName?: string;
-  middleName?: string;
-  birthDate?: string;
-  deathDate?: string;
-  lines?: string[];
-  photoPreview?: string | null;
-};
-
-export type EngravingData = {
-  persons?: Person[];
-  epitaphs?: string[];
-  epitaphText?: string; // если одна строка
-  lines?: string[]; // legacy
-  photoPreview?: string | null;
-  photoFileName?: string | null;
-  photoMime?: string | null;
-  photoOriginalKey?: string | null;
-};
-
-export type Graphic = {
-  id: string;
-  name: string;
-  url: string;
-  preview?: string;
-  catName?: string;
-  catSlug?: string;
-  subCatName?: string;
-  subCatSlug?: string;
-};
 
 export type OrderDraft = {
-  orderNumber?: string | null;
-  intro?: {
-    customerName?: string;
-    customerPhone?: string;
-    customerNotes?: string;
+  item?: { name?: string; url?: string; relPath?: string | null } | null;
+  size?: any;
+  engraving?: {
+    persons?: Array<{
+      id: string;
+      lastName?: string;
+      firstName?: string;
+      middleName?: string;
+      birthDate?: string;
+      deathDate?: string;
+      photoPreview?: string | null;
+    }>;
+    epitaphs?: string[];
+    epitaphText?: string;
   } | null;
-  item?: OrderItem | null;
-  size?: OrderSize | null;
-  engraving?: EngravingData | null;
-  graphics?: Graphic[];
-  notes?: string;
-  orientation?: Orientation; // legacy-дубль для совместимости
+  graphics?: any[];   // выбранная графика (фронт/общая)
+  editorBack?: any;   // данные тыльной стороны
   updatedAt?: number;
+  // + любые другие поля драфта
 };
 
-export const LS_ORDER_DRAFT_KEY = "memorial.order.draft.v1";
+const STORAGE_KEY = "memorial.orderDraft.v1";
 export const DRAFT_UPDATED_EVENT = "memorial:orderDraftUpdated";
 
-/* ==================== Helpers ==================== */
-
-function emitDraftUpdated() {
-  try {
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
-    }
-  } catch {}
-}
-
-function now() {
-  return Date.now();
-}
-
-/* ==================== Deep merge ==================== */
-
-function deepMergeDefined<T>(target: T, source: Partial<T>): T {
-  if (source == null) return target;
-  const out: any = Array.isArray(target) ? [...(target as any)] : { ...(target as any) };
-  for (const [k, v] of Object.entries(source)) {
-    if (v === undefined || v === null) continue; // не пишем undefined/null, чтобы не затирать поля
-    if (typeof v === "object" && !Array.isArray(v)) {
-      out[k] = deepMergeDefined(out[k] ?? {}, v as any);
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
-}
-
-/* ==================== Load/Save ==================== */
+// Специальная метка «стереть поле» при мердже (если нужно убрать конкретный ключ)
+export const CLEAR = Symbol("memorial:clear");
 
 export function loadOrderDraft(): OrderDraft {
+  if (typeof window === "undefined") return {};
   try {
-    const raw = localStorage.getItem(LS_ORDER_DRAFT_KEY);
-    if (!raw) return { graphics: [], updatedAt: now() };
-    const obj = JSON.parse(raw) as OrderDraft;
-    if (!Array.isArray(obj.graphics)) obj.graphics = [];
-    if (obj.size && typeof obj.size !== "object") obj.size = null;
-    if (obj.item && typeof obj.item !== "object") obj.item = null;
-    if (obj.engraving && typeof obj.engraving !== "object") obj.engraving = null;
-    return { ...obj, updatedAt: obj.updatedAt || now() };
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const data = JSON.parse(raw);
+    return data && typeof data === "object" ? data : {};
   } catch {
-    return { graphics: [], updatedAt: now() };
+    return {};
   }
 }
 
+// Глубокий мердж объектов.
+// - Массивы заменяем целиком.
+// - undefined в patch пропускаем.
+// - null в patch по умолчанию ТАКЖЕ пропускаем (чтобы другие шаги случайно не «затирали» разделы null'ом).
+//   Если нужно очистить ключ намеренно — используйте значение CLEAR.
+function deepMerge<T extends Record<string, any>>(base: T | undefined, patch: Partial<T> | undefined): T {
+  if (!base) base = {} as T;
+  if (!patch) return base as T;
+
+  const out: any = Array.isArray(base) ? base.slice() : { ...base };
+
+  for (const k of Object.keys(patch)) {
+    const pv: any = (patch as any)[k];
+    const bv: any = (base as any)[k];
+
+    if (pv === undefined) continue;
+
+    if (pv === CLEAR) {
+      // Явное удаление ключа
+      if (Array.isArray(out)) {
+        // для массивов удалить по индексу нельзя — пропускаем
+      } else {
+        delete out[k];
+      }
+      continue;
+    }
+
+    // По умолчанию игнорируем null в patch (не стираем существующие данные).
+    if (pv === null) {
+      // хотим игнорировать null — просто оставим исходное значение
+      // если ключа не было — не добавляем
+      continue;
+    }
+
+    if (
+      pv &&
+      typeof pv === "object" &&
+      !Array.isArray(pv) &&
+      bv &&
+      typeof bv === "object" &&
+      !Array.isArray(bv)
+    ) {
+      out[k] = deepMerge(bv, pv);
+    } else {
+      // массивы, примитивы — замена
+      out[k] = pv;
+    }
+  }
+
+  return out as T;
+}
+
+// Единая точка записи: безопасный мердж с существующим драфтом + updatedAt + событие
 export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
+  if (typeof window === "undefined") return { ...(patch || {}), updatedAt: Date.now() };
+
   const prev = loadOrderDraft();
-  const next: OrderDraft = deepMergeDefined(prev, { ...patch, updatedAt: now() });
+  const merged = deepMerge(prev, patch) as OrderDraft;
+  const next: OrderDraft = { ...merged, updatedAt: Date.now() };
+
   try {
-    localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
-  } catch {}
-  emitDraftUpdated();
-  return next;
-}
-
-/* ==================== Размеры: удобные сеттеры ==================== */
-
-export function setSizeFromCm(params: {
-  heightCm?: number;
-  widthCm?: number;
-  thicknessCm?: number;
-  orientation?: Orientation;
-  notes?: string;
-}): OrderDraft {
-  const { heightCm, widthCm, thicknessCm, orientation, notes } = params;
-  const mm = (v?: number) => (typeof v === "number" && isFinite(v) ? Math.round(v * 10) : undefined);
-
-  const sizePatch: any = {};
-  if (typeof heightCm === "number" && isFinite(heightCm)) sizePatch.height = mm(heightCm);
-  if (typeof widthCm === "number" && isFinite(widthCm)) sizePatch.width = mm(widthCm);
-  if (typeof thicknessCm === "number" && isFinite(thicknessCm)) sizePatch.thickness = mm(thicknessCm);
-  if (orientation) sizePatch.orientation = orientation;
-  if (typeof notes === "string" && notes.trim()) sizePatch.notes = notes.trim();
-
-  return saveOrderDraft({ size: sizePatch, ...(orientation ? { orientation } : {}) });
-}
-
-/* ==================== Работа с фото (оригинал в IndexedDB) ==================== */
-
-export async function setPhotoOriginal(file: File): Promise<OrderDraft> {
-  const key = `photo:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-  await idbPutBlob(key, file);
-  const preview = await makePreviewDataUrl(file, 300);
-  const next = saveOrderDraft({
-    engraving: {
-      photoOriginalKey: key,
-      photoFileName: file.name || "photo",
-      photoMime: file.type || "image/jpeg",
-      photoPreview: preview
-    }
-  });
-  return next;
-}
-
-export async function getPhotoOriginalFromDraft(draft?: OrderDraft): Promise<Blob | null> {
-  const cur = draft || loadOrderDraft();
-  const key = cur.engraving?.photoOriginalKey;
-  if (!key) return null;
-  try {
-    return await idbGetBlob(key);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {
-    return null;
+    // ignore quota/blocked
   }
-}
 
-export async function clearPhotoOriginal(): Promise<OrderDraft> {
-  const cur = loadOrderDraft();
-  const key = cur.engraving?.photoOriginalKey;
-  if (key) {
-    try {
-      await idbDel(key);
-    } catch {}
-  }
-  return saveOrderDraft({
-    engraving: {
-      ...(cur.engraving || {}),
-      photoOriginalKey: null,
-      photoPreview: null,
-      photoFileName: null,
-      photoMime: null
-    }
-  });
-}
-
-/* ==================== Очистка драфта ==================== */
-
-export async function clearOrderDraft(): Promise<void> {
   try {
-    const cur = loadOrderDraft();
-    const key = cur.engraving?.photoOriginalKey;
-    if (key) {
-      try {
-        await idbDel(key);
-      } catch {}
-    }
-    localStorage.removeItem(LS_ORDER_DRAFT_KEY);
-  } catch {}
-  emitDraftUpdated();
+    // Уведомляем все подписчики (TopBar, шаги, другие вкладки)
+    window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+    window.dispatchEvent(new Event("storage")); // некоторые окружения слушают общий storage
+  } catch {
+    // ignore
+  }
+
+  return next;
 }
 
-/* ==================== Превью изображений ==================== */
-
-async function makePreviewDataUrl(file: File, maxSide = 300): Promise<string> {
-  const img = await fileToImage(file);
-  const { canvas } = drawContain(img, maxSide, maxSide);
-  return canvas.toDataURL("image/jpeg", 0.8);
-}
-
-function fileToImage(file: File): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(img);
-    };
-    img.onerror = (e) => {
-      URL.revokeObjectURL(url);
-      reject(e);
-    };
-    img.src = url;
-  });
-}
-
-function drawContain(img: HTMLImageElement, w: number, h: number) {
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#f4f4f4";
-  ctx.fillRect(0, 0, w, h);
-  const ratio = Math.min(w / img.width, h / img.height);
-  const nw = Math.round(img.width * ratio);
-  const nh = Math.round(img.height * ratio);
-  const dx = Math.round((w - nw) / 2);
-  const dy = Math.round((h - nh) / 2);
-  ctx.drawImage(img, dx, dy, nw, nh);
-  return { canvas, ctx };
-}
-
-/* ==================== Графика (удобные хелперы) ==================== */
-
-export function addGraphic(g: Graphic): OrderDraft {
-  const cur = loadOrderDraft();
-  const exists = (cur.graphics || []).some((x) => x.id === g.id);
-  const nextGraphics = exists ? cur.graphics! : [...(cur.graphics || []), g];
-  return saveOrderDraft({ graphics: nextGraphics });
-}
-
-export function removeGraphicById(id: string): OrderDraft {
-  const cur = loadOrderDraft();
-  const nextGraphics = (cur.graphics || []).filter((x) => x.id !== id);
-  return saveOrderDraft({ graphics: nextGraphics });
-}
-
-export function clearGraphics(): OrderDraft {
-  return saveOrderDraft({ graphics: [] });
+// Явная очистка всего драфта
+export function clearOrderDraft(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+  try {
+    window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+    window.dispatchEvent(new Event("storage"));
+  } catch {
+    // ignore
+  }
 }
