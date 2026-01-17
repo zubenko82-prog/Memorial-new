@@ -1,14 +1,18 @@
 // src/screens/BackEditorStep.tsx
 // ТЫЛЬНАЯ СТОРОНА — отдельный редактор.
-// По задаче:
-// - Навигация липкая.
-// - Подложка (изделие) растягивается на всю область (object-fit: cover).
-// - Узлы редактирования: увеличены hit-area/ручки.
-// - Первый добавленный элемент — 80% по длинной стороне холста.
-// - Последующие — выше предыдущих, по центру; при нехватке места — общий даунскейл группы.
-// - Автосохранения и превью сохранены.
-// - ВАЖНО: выбранную графику и выбранные эпитафии объединяем в один блок «Выбранное» и размещаем ПОД ЭСКИЗОМ.
-//   Старые блоки «Выбранная графика» и «Выбранные эпитафии» внутри аккордеона убраны.
+//
+// Изменения по задаче:
+// 1) Авто-раскладка новых элементов (графика/эпитафии) без наложений:
+//    при каждом изменении выбранных элементов весь их список равномерно
+//    раскладывается по вертикали с одинаковыми отступами, выровнен по центру.
+//    Фото/метрики людей авто-раскладка не затрагивает.
+// 2) При нажатии на любой верхний аккордеон (Графика/Эпитафии/Усопшие)
+//    остальные сворачиваются (как и было) и выполняется прокрутка к этому
+//    аккордеону ПОСЛЕ завершения анимации.
+//
+// Дополнительно:
+// - validateDates/parseFlexibleDate добавлены локально (исключает ReferenceError).
+// - Сохраняется поведение sticky-навигации, превью, автосохранения editorBack.
 
 import React, {
   useCallback,
@@ -501,11 +505,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return () => { window.removeEventListener("resize", measure); ro.disconnect(); };
   }, []);
 
-  // Якоря секций
+  const SCROLL_ANIM_MS = 280;
   const secGraphicsId = "sec-graphics";
   const secEpitaphsId = "sec-epitaphs";
   const secPeopleId = "sec-people";
-  const chosenSectionId = "rear-chosen";   // объединённый блок — ТЕПЕРЬ ПОД ЭСКИЗОМ
+  const chosenSectionId = "rear-chosen";   // объединённый блок — ПОД ЭСКИЗОМ
   const previewSectionId = "rear-preview";
 
   const scrollToById = (id: string) => {
@@ -514,15 +518,23 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const rect = el.getBoundingClientRect();
     window.scrollTo({ top: Math.max(0, window.scrollY + rect.top - (navH + 12)), behavior: "smooth" });
   };
+  const scrollToByIdDelayed = (id: string, delay = SCROLL_ANIM_MS + 40) => {
+    scrollToById(id);
+    window.setTimeout(() => scrollToById(id), delay);
+  };
 
-  /* ===== Аккордеоны верхнего уровня — по одному открыт ===== */
+  /* ===== Аккордеоны верхнего уровня — по одному открыт + прокрутка ===== */
   const [openSecGraphics, setOpenSecGraphics] = useState(false);
   const [openSecEpitaphs, setOpenSecEpitaphs] = useState(false);
   const [openSecPeople, setOpenSecPeople] = useState(false);
   const openOnly = (which: "graphics" | "epitaphs" | "people") => {
-    if (which === "graphics") { setOpenSecGraphics((v) => { const next = !v; setOpenSecEpitaphs(false); setOpenSecPeople(false); return next; }); }
-    else if (which === "epitaphs") { setOpenSecEpitaphs((v) => { const next = !v; setOpenSecGraphics(false); setOpenSecPeople(false); return next; }); }
-    else { setOpenSecPeople((v) => { const next = !v; setOpenSecGraphics(false); setOpenSecEpitaphs(false); return next; }); }
+    if (which === "graphics") {
+      setOpenSecGraphics((v) => { const next = !v; setOpenSecEpitaphs(false); setOpenSecPeople(false); return next; });
+    } else if (which === "epitaphs") {
+      setOpenSecEpitaphs((v) => { const next = !v; setOpenSecGraphics(false); setOpenSecPeople(false); return next; });
+    } else {
+      setOpenSecPeople((v) => { const next = !v; setOpenSecGraphics(false); setOpenSecEpitaphs(false); return next; });
+    }
   };
 
   /* ===== Каталог графики (rear) ===== */
@@ -582,68 +594,67 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editorBack?.wishes || "");
   const [carvingOpacity, setCarvingOpacity] = useState<number>(() => (draft as any)?.editorBack?.carvingOpacity ?? 0.85);
 
-// === People helpers (локальные) ===
-function normalizePersonsForSave(persons: Person[]): NormalizedPerson[] {
-  return persons.map((p) => ({
-    id: p.id,
-    lastName: p.lastName?.trim() || undefined,
-    firstName: p.firstName?.trim() || undefined,
-    middleName: p.middleName?.trim() || undefined,
-    birthDate: p.birthDate?.trim() || undefined,
-    deathDate: p.deathDate?.trim() || undefined,
-    photoPreview: p.photoDataUrl ?? p.photoUrl ?? null
-  }));
-}
+  // === People helpers (локальные) ===
+  function normalizePersonsForSave(persons: Person[]): NormalizedPerson[] {
+    return persons.map((p) => ({
+      id: p.id,
+      lastName: p.lastName?.trim() || undefined,
+      firstName: p.firstName?.trim() || undefined,
+      middleName: p.middleName?.trim() || undefined,
+      birthDate: p.birthDate?.trim() || undefined,
+      deathDate: p.deathDate?.trim() || undefined,
+      photoPreview: p.photoDataUrl ?? p.photoUrl ?? null
+    }));
+  }
 
-function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
-  if (!Array.isArray(list)) return [];
-  return list.map((d, i) => ({
-    id: d.id || `p-${i}`,
-    lastName: d.lastName || "",
-    firstName: d.firstName || "",
-    middleName: d.middleName || "",
-    birthDate: d.birthDate || "",
-    deathDate: d.deathDate || "",
-    photoUrl: d.photoPreview ?? null,
-    photoDataUrl: d.photoPreview ?? null
-  }));
-}
+  function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
+    if (!Array.isArray(list)) return [];
+    return list.map((d, i) => ({
+      id: d.id || `p-${i}`,
+      lastName: d.lastName || "",
+      firstName: d.firstName || "",
+      middleName: d.middleName || "",
+      birthDate: d.birthDate || "",
+      deathDate: d.deathDate || "",
+      photoUrl: d.photoPreview ?? null,
+      photoDataUrl: d.photoPreview ?? null
+    }));
+  }
 
-function makeBlankPerson(id?: string): Person {
-  return {
-    id: id ?? `p-${Date.now()}`,
-    lastName: "",
-    firstName: "",
-    middleName: "",
-    birthDate: "",
-    deathDate: "",
-    photoUrl: null,
-    photoDataUrl: null
-  };
-}
+  function makeBlankPerson(id?: string): Person {
+    return {
+      id: id ?? `p-${Date.now()}`,
+      lastName: "",
+      firstName: "",
+      middleName: "",
+      birthDate: "",
+      deathDate: "",
+      photoUrl: null,
+      photoDataUrl: null
+    };
+  }
 
-// === Date helpers (локально для шага тыльной стороны) ===
-function parseFlexibleDate(input?: string): Date | null {
-  const s = (input || "").trim();
-  if (!s) return null;
-  const m = s.match(/\d+/g);
-  if (!m || m.length < 3) return null;
-  const d = +m[0], mo = +m[1], y = +m[2];
-  if (!d || !mo || !y || y < 100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  const dt = new Date(y, mo - 1, d);
-  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
-  return dt;
-}
-function validateDates(birth?: string, death?: string): string | null {
-  const bd = parseFlexibleDate(birth);
-  const dd = parseFlexibleDate(death);
-  if (!bd && !dd) return null;
-  if (birth && !bd) return "Некорректная дата рождения";
-  if (death && !dd) return "Некорректная дата смерти";
-  if (bd && dd && dd.getTime() < bd.getTime()) return "Дата смерти раньше даты рождения";
-  return null;
-}
-
+  // === Date helpers (локально для шага тыльной стороны) ===
+  function parseFlexibleDate(input?: string): Date | null {
+    const s = (input || "").trim();
+    if (!s) return null;
+    const m = s.match(/\d+/g);
+    if (!m || m.length < 3) return null;
+    const d = +m[0], mo = +m[1], y = +m[2];
+    if (!d || !mo || !y || y < 100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return dt;
+  }
+  function validateDates(birth?: string, death?: string): string | null {
+    const bd = parseFlexibleDate(birth);
+    const dd = parseFlexibleDate(death);
+    if (!bd && !dd) return null;
+    if (birth && !bd) return "Некорректная дата рождения";
+    if (death && !dd) return "Некорректная дата смерти";
+    if (bd && dd && dd.getTime() < bd.getTime()) return "Дата смерти раньше даты рождения";
+    return null;
+  }
 
   // Люди
   const peopleFromDraft = draftPersonsToLocal(((draft as any)?.editorBack?.people as NormalizedPerson[]) || []);
@@ -865,64 +876,13 @@ function validateDates(birth?: string, death?: string): string | null {
     return h >= w;
   }, [imgWH]);
 
-  /* ------ Авто‑позиции и раскладка без наложений ------ */
-  type Rect = { x: number; y: number; w: number; h: number };
-  const clampPct = (r: Rect): Rect => ({
-    x: Math.max(0, Math.min(100 - r.w, r.x)),
-    y: Math.max(0, Math.min(100 - r.h, r.y)),
-    w: Math.max(1, Math.min(100, r.w)),
-    h: Math.max(1, Math.min(100, r.h))
-  });
-  const firstBox = (base: Rect): Rect => {
-    if (isPortraitCanvas) {
-      const h = 80;
-      const w = Math.min(90, Math.max(20, base.w));
-      return clampPct({ x: 50 - w / 2, y: 50 - h / 2, w, h });
-    } else {
-      const w = 80;
-      const h = Math.min(40, Math.max(16, base.h));
-      return clampPct({ x: 50 - w / 2, y: 50 - h / 2, w, h });
-    }
-  };
-  const contentRects = (arr: EditorEl[]): Rect[] =>
-    arr
-      .filter((e) => e.type === "graphic" || e.type === "epitaph" || e.type === "photo" || e.type === "metric")
-      .map((e) => ({ x: e.x, y: e.y, w: e.w, h: e.h }));
-  const placeAboveGroupCenter = (group: Rect[], candidate: Rect, margin = 2): Rect | null => {
-    if (group.length === 0) return clampPct(candidate);
-    const top = group.reduce((m, r) => Math.min(m, r.y), 100);
-    const newR = clampPct({ x: 50 - candidate.w / 2, y: top - margin - candidate.h, w: candidate.w, h: candidate.h });
-    if (newR.y < 0) return null;
-    return newR;
-  };
-  const scaleGroupToFit = (group: Rect[], newRect: Rect, margin = 2): { group: Rect[]; newest: Rect } => {
-    let factor = 0.95;
-    let scaledNew = { ...newRect };
-    let scaledGroup = group.map((r) => ({ ...r }));
-    for (let i = 0; i < 20; i++) {
-      const gTop = scaledGroup.reduce((m, r) => Math.min(m, r.y), 100);
-      let tryNew = { ...scaledNew, x: 50 - scaledNew.w / 2, y: gTop - margin - scaledNew.h };
-      if (tryNew.y >= 0) return { group: scaledGroup, newest: tryNew };
-      scaledGroup = scaledGroup.map((r) => ({
-        w: Math.max(6, r.w * factor),
-        h: Math.max(6, r.h * factor),
-        x: 50 - Math.max(6, r.w * factor) / 2,
-        y: r.y * factor
-      }));
-      scaledNew = {
-        w: Math.max(6, scaledNew.w * factor),
-        h: Math.max(6, scaledNew.h * factor),
-        x: 50 - Math.max(6, scaledNew.w * factor) / 2,
-        y: scaledNew.y * factor
-      };
-      factor *= 0.95;
-    }
-    return { group: scaledGroup, newest: { ...scaledNew, x: 50 - scaledNew.w / 2, y: 0 } };
-  };
-
-  // Синхронизация графики/эпитафий с выбором + раскладка
+  /* ===== Новый автолейаут графики/эпитафий: равномерная раскладка без наложений ===== */
   useEffect(() => {
     setElements((prev) => {
+      const prevMap = new Map(prev.map((e) => [e.id, e]));
+      const photoMetricEls = prev.filter((e) => e.type === "photo" || e.type === "metric");
+
+      // желаемый состав контент-элементов
       const wantIds: string[] = [];
       const seen: Record<string, number> = {};
       for (const gid of selGraphicIds) {
@@ -932,75 +892,52 @@ function validateDates(birth?: string, death?: string): string | null {
       }
       for (const t of selEpitaphTexts) wantIds.push(epitaphId(textKey(t)));
 
-      const wantSet = new Set(wantIds);
-      let out: EditorEl[] = [];
-      let changed = false;
-
-      for (const el of prev) {
-        if (el.type === "graphic" || el.type === "epitaph") {
-          if (wantSet.has(el.id)) {
-            if (el.type === "epitaph") {
-              const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === el.id) || el.text || "";
-              out.push({ ...el, text: t, staircase: isRememberLoveMourn(t) });
-            } else out.push(el);
-          } else {
-            changed = true;
-            if (selectedId === el.id) setSelectedId(null);
+      // построим содержимое (переиспользуем где можно)
+      const contentEls: EditorEl[] = wantIds.map((id, idx) => {
+        const existed = prevMap.get(id);
+        if (existed && (existed.type === "graphic" || existed.type === "epitaph")) {
+          if (existed.type === "epitaph") {
+            const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === id) || existed.text || "";
+            return { ...existed, text: t, staircase: isRememberLoveMourn(t) };
           }
-        } else {
-          out.push(el);
+          return existed;
         }
-      }
-
-      const currentIds = new Set(out.map((e) => e.id));
-      let maxZ = out.reduce((m, e) => Math.max(m, e.z), 0);
-
-      for (const id of wantIds) {
-        if (currentIds.has(id)) continue;
-
-        const isGraphic = id.startsWith("graphic|");
-        const isEpi = id.startsWith("epitaph|");
-        let rect: Rect = { x: 50 - 20, y: 30, w: 40, h: 20 };
-        if (out.filter((e) => e.type !== undefined).length === 0) rect = firstBox(rect);
-
-        const group = contentRects(out);
-        if (group.length === 0) {
-          rect = clampPct({ ...rect });
+        if (id.startsWith("graphic|")) {
+          return { id, type: "graphic", x: 15, y: 10, w: 70, h: 20, z: 100 + idx, flipH: false };
         } else {
-          const placed = placeAboveGroupCenter(group, rect, 2);
-          if (placed) rect = placed;
-          else {
-            const { group: scaled, newest } = scaleGroupToFit(group, rect, 2);
-            const contentIds = out.filter((e) => e.type === "graphic" || e.type === "epitaph" || e.type === "photo" || e.type === "metric").map((e) => e.id);
-            let idx = 0;
-            out = out.map((e) => {
-              if (contentIds.includes(e.id)) {
-                const r = scaled[idx++];
-                return { ...e, x: r.x, y: r.y, w: r.w, h: r.h };
-              }
-              return e;
-            });
-            rect = newest;
-          }
-        }
-
-        if (isGraphic) {
-          out.push({ id, type: "graphic", x: rect.x, y: rect.y, w: rect.w, h: rect.h, z: ++maxZ, flipH: false, title: "Графика" });
-          changed = true;
-        } else if (isEpi) {
           const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === id) || "";
-          out.push({ id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x: rect.x, y: rect.y, w: rect.w, h: rect.h, z: ++maxZ, title: "Эпитафия" });
-          changed = true;
+          return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x: 15, y: 10, w: 70, h: 20, z: 100 + idx };
         }
+      });
+
+      // равномерная раскладка по вертикали
+      const K = contentEls.length;
+      if (K > 0) {
+        const top = 10;      // верхняя граница (проценты)
+        const bottom = 90;   // нижняя граница
+        const gap = 3;       // зазор между блоками
+        const usable = Math.max(10, bottom - top);
+        const blockH = Math.max(10, Math.min(28, (usable - gap * (K - 1)) / K));
+        const totalH = K * blockH + gap * (K - 1);
+        const startY = Math.max(0, (100 - totalH) / 2);
+
+        contentEls.forEach((el, i) => {
+          const y = startY + i * (blockH + gap);
+          el.x = 15; el.w = 70;
+          el.y = y; el.h = blockH;
+          el.z = 100 + i;
+        });
       }
 
-      if (changed) saveEditorBack({ elements: out });
-      return changed ? out : prev;
+      const next = [...photoMetricEls, ...contentEls];
+      const changed = JSON.stringify(next) !== JSON.stringify(prev);
+      if (changed) saveEditorBack({ elements: next });
+      return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selGraphicIds, selEpitaphTexts, isPortraitCanvas, gCats, rearMeta]);
+  }, [selGraphicIds, selEpitaphTexts]);
 
-  // Фото/метрика
+  // Фото/метрика — синхронизация с людьми
   useEffect(() => {
     setElements((prev) => {
       let changed = false;
@@ -1239,6 +1176,7 @@ function validateDates(birth?: string, death?: string): string | null {
     }, 260) as unknown as number;
 
     return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elements, selGraphicIds, selEpitaphTexts, rearMeta, item?.url, gCats, carvingOpacity, people, transientPhotoUrlById]);
 
   /* ===== WYSIWYG: слой «резной работы» (оверлей) ===== */
@@ -1592,13 +1530,13 @@ function validateDates(birth?: string, death?: string): string | null {
         }}
       >
         <div style={{ display: "flex", gap: 8, padding: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-start" }}>
-          <button onClick={() => { openOnly("graphics"); scrollToById(secGraphicsId); }} style={glassButtonStyle("nano")}>
+          <button onClick={() => { openOnly("graphics"); scrollToByIdDelayed(secGraphicsId); }} style={glassButtonStyle("nano")}>
             Графика {openSecGraphics ? "▾" : "▸"}
           </button>
-          <button onClick={() => { openOnly("epitaphs"); scrollToById(secEpitaphsId); }} style={glassButtonStyle("nano")}>
+          <button onClick={() => { openOnly("epitaphs"); scrollToByIdDelayed(secEpitaphsId); }} style={glassButtonStyle("nano")}>
             Эпитафии {openSecEpitaphs ? "▾" : "▸"}
           </button>
-          <button onClick={() => { openOnly("people"); scrollToById(secPeopleId); }} style={glassButtonStyle("nano")}>
+          <button onClick={() => { openOnly("people"); scrollToByIdDelayed(secPeopleId); }} style={glassButtonStyle("nano")}>
             Усопшие {openSecPeople ? "▾" : "▸"}
           </button>
 
@@ -1620,7 +1558,11 @@ function validateDates(birth?: string, death?: string): string | null {
         <Collapsible
           open={openSecGraphics}
           header={
-            <button type="button" onClick={() => openOnly("graphics")} style={{ ...glassPanelStyle(), width: "100%", padding: "12px 14px", borderRadius: 12, cursor: "pointer" }}>
+            <button
+              type="button"
+              onClick={() => { openOnly("graphics"); scrollToByIdDelayed(secGraphicsId); }}
+              style={{ ...glassPanelStyle(), width: "100%", padding: "12px 14px", borderRadius: 12, cursor: "pointer" }}
+            >
               <strong>Графика</strong> {openSecGraphics ? "▾" : "▸"}
             </button>
           }
@@ -1764,12 +1706,16 @@ function validateDates(birth?: string, death?: string): string | null {
         </Collapsible>
       </section>
 
-      {/* ЭПИТАФИИ (панель выбора, без отдельного списка выбранных — см. блок «Выбранное» ниже) */}
+      {/* ЭПИТАФИИ */}
       <section id={secEpitaphsId} style={{ margin: "10px 0" }}>
         <Collapsible
           open={openSecEpitaphs}
           header={
-            <button type="button" onClick={() => openOnly("epitaphs")} style={{ ...glassPanelStyle(), width: "100%", padding: "12px 14px", borderRadius: 12, cursor: "pointer" }}>
+            <button
+              type="button"
+              onClick={() => { openOnly("epitaphs"); scrollToByIdDelayed(secEpitaphsId); }}
+              style={{ ...glassPanelStyle(), width: "100%", padding: "12px 14px", borderRadius: 12, cursor: "pointer" }}
+            >
               <strong>Эпитафии</strong> {openSecEpitaphs ? "▾" : "▸"}
             </button>
           }
@@ -1787,7 +1733,6 @@ function validateDates(birth?: string, death?: string): string | null {
               })}
             </div>
 
-            {/* Еще варианты */}
             <MoreEpitaphsAccordion items={MORE_EPITAPHS} selEpitaphTexts={selEpitaphTexts} onToggle={(t) => toggleEpitaphText(t)} />
 
             <div style={{ marginTop: 10, marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
@@ -1834,7 +1779,11 @@ function validateDates(birth?: string, death?: string): string | null {
         <Collapsible
           open={openSecPeople}
           header={
-            <button type="button" onClick={() => openOnly("people")} style={{ ...glassPanelStyle(), width: "100%", padding: "12px 14px", borderRadius: 12, cursor: "pointer" }}>
+            <button
+              type="button"
+              onClick={() => { openOnly("people"); scrollToByIdDelayed(secPeopleId); }}
+              style={{ ...glassPanelStyle(), width: "100%", padding: "12px 14px", borderRadius: 12, cursor: "pointer" }}
+            >
               <strong>Усопшие</strong> {openSecPeople ? "▾" : "▸"}
             </button>
           }
