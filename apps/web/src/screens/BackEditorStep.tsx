@@ -1,16 +1,17 @@
 // src/screens/BackEditorStep.tsx
 // ТЫЛЬНАЯ СТОРОНА — редактор.
 //
-// Требования:
-// - Раскладка элементов (графика/эпитафии): равномерно по вертикали, по порядку выбора (selectedOrder),
-//   не накладываются, по горизонтали выравнены строго по центру. Размеры уменьшены (w=35%).
-// - Подложка изделия: строим силуэт — выделяем непрозрачные области (или «не фон» при отсутствии альфы)
-//   и заливаем #1b1b1b; отображаем силуэт зеркально (scaleX(-1)).
-// - При открытии секции сворачиваем остальные и скроллим к секции после анимации.
-// - При переходах (Назад/Продолжить): растрируем эскиз (мини/хи) и сохраняем в драфт, затем выполняем переход.
-// - validateDates/parseFlexibleDate — локально (без импортов).
-//
-// Примечание: логику можно вынести в модули (buildCarveOverlay/renderPreview/useDnD), если потребуется.
+// Что реализовано:
+// - Элементы (графика/эпитафии) автоматически раскладываются равномерно по вертикали,
+//   в порядке добавления (selectedOrder), без наложений; по горизонтали выровнены по центру.
+//   Размер блоков уменьшен (ширина 35%).
+// - Подложка изделия: строится силуэт — непрозрачные (или «не фон») области исходника
+//   выделяются и заливаются #1b1b1b; силуэт показывается зеркально (scaleX(-1)).
+//   Если у исходника нет альфы — фон определяется по цвету углов (color-diff).
+// - При открытии секции сворачиваются остальные и выполняется прокрутка после анимации.
+// - При переходах (Назад/Продолжить) — растрируем эскиз (мини/хи) и сохраняем превью,
+//   затем выполняем переход.
+// - validateDates/parseFlexibleDate локально, без импортов.
 
 import React, {
   useCallback,
@@ -322,13 +323,13 @@ type ElType = "graphic" | "epitaph" | "photo" | "metric";
 type EditorEl = {
   id: string;
   type: ElType;
-  x: number; y: number; w: number; h: number; // проценты от контента
+  x: number; y: number; w: number; h: number; // %
   z: number;
   flipH?: boolean; // для graphic
   text?: string;   // для epitaph
   staircase?: boolean; // для epitaph (лесенка)
   personId?: string;   // для photo/metric
-  caseRest?: "lower" | "upper"; // для metric — регистр для букв (кроме первой)
+  caseRest?: "lower" | "upper"; // для metric
 };
 
 /* ===== People types ===== */
@@ -457,6 +458,9 @@ function transformCaseExceptFirstPerWord(text: string, mode: "lower" | "upper"):
     return first + (mode === "upper" ? rest.toUpperCase() : rest.toLowerCase());
   });
 }
+
+/* ===== Константы верстки ===== */
+const SKETCH_PAD = 8; // отступы контейнера контента внутри эскиза (используется и в DnD)
 
 /* ===== Component ===== */
 type Props = { onBack?: () => void; onContinue?: (payload?: any) => void; };
@@ -1279,10 +1283,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const BG_DELTA = 26;
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i + 0], g = d[i + 1], b = d[i + 2];
-        const dr = Math.abs(r - bg[0]);
-        const dg = Math.abs(g - bg[1]);
-        const db = Math.abs(b - bg[2]);
-        const diff = Math.max(dr, dg, db);
+        const drc = Math.abs(r - bg[0]);
+        const dgc = Math.abs(g - bg[1]);
+        const dbc = Math.abs(b - bg[2]);
+        const diff = Math.max(drc, dgc, dbc);
         const alpha = diff > BG_DELTA ? 255 : 0;
         md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
       }
@@ -1365,7 +1369,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elements, selGraphicIds, selEpitaphTexts, selOrder, rearMeta, item?.url, gCats, carvingOpacity, people, transientPhotoUrlById]);
 
-  /* ===== DnD внутри компонента (рамки/ручки) ===== */
+  /* ===== DnD (рамки/ручки) ===== */
   const dragRef = useRef<{
     id: string;
     mode: "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -1436,7 +1440,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     dragRef.current = null;
   };
 
-  // Сброс выделения
+  // Сброс выделения при пустых данных
   useEffect(() => {
     if (!selectedId) return;
     const sel = elements.find((e) => e.id === selectedId);
@@ -1665,7 +1669,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
                                               <button type="button" onClick={() => removeOneGraphicRear(gid)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0) }}>−</button>
                                               <span style={{ minWidth: 20, textAlign: "center", fontWeight: 600 }}>{qty}</span>
-                                              <button type="button" onClick={() => addGraphicRear(g)} disabled={qty >= 3} style={{ ...glassButtonStyle("nano", qty>=3) }}>+</button>
+                                              <button type="button" onClick={() => addGraphicRear(g)} disabled={qty >= 3} style={{ ...glassButtonStyle("nano", qty >= 3) }}>+</button>
                                             </div>
                                           </div>
                                         );
@@ -1880,7 +1884,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
           {/* Контент */}
           <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
-            <ContentOverlay />
+            <ContentOverlay elements={elements} people={people} transientPhotoUrlById={transientPhotoUrlById} findGraphic={findGraphic} />
           </div>
 
           {/* Рамки/ручки */}
@@ -2101,6 +2105,98 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         <button type="button" onClick={async () => { await rasterizeAndSave(); setOutro(true); setTimeout(() => onContinue?.(), 320); }} style={glassButtonStyle("sm")}>Продолжить</button>
       </div>
     </div>
+  );
+}
+
+/* ===== Content overlay (без рамок/ручек) ===== */
+function ContentOverlay({
+  elements,
+  people,
+  transientPhotoUrlById,
+  findGraphic
+}: {
+  elements: EditorEl[];
+  people: Person[];
+  transientPhotoUrlById: Record<string, string | null>;
+  findGraphic: (gid: string) => any | undefined;
+}) {
+  return (
+    <>
+      {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
+        if (el.type === "graphic") {
+          const parsed = parseGraphicId(el.id);
+          const gid = parsed?.gid || "";
+          const g = gid ? findGraphic(gid) : undefined;
+          const tr = el.flipH ? "scaleX(-1)" : "none";
+          return (
+            <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, pointerEvents: "none" }}>
+              {g?.url ? (
+                <img
+                  src={g.preview || g.url}
+                  alt={g.name || "Графика"}
+                  style={{ width: "100%", height: "100%", objectFit: "contain", transform: tr, filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))", userSelect: "none", pointerEvents: "none" }}
+                  draggable={false}
+                />
+              ) : null}
+            </div>
+          );
+        }
+
+        if (el.type === "photo") {
+          const pid = parsePhotoId(el.id) || el.personId;
+          const p = people.find((x) => x.id === pid);
+          const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
+          if (!photoUrl) return null;
+          return (
+            <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, pointerEvents: "none" }}>
+              <img src={photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", userSelect: "none", pointerEvents: "none" }} draggable={false} />
+            </div>
+          );
+        }
+
+        if (el.type === "metric") {
+          const pid = parseMetricId(el.id) || el.personId;
+          const p = people.find((x) => x.id === pid);
+          const lastName = p ? (p.lastName || "").trim() : "";
+          const firstPatro = p ? [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ") : "";
+          const dates = p ? [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - ") : "";
+          if (!lastName && !firstPatro && !dates) return null;
+          const mode = el.caseRest || "lower";
+          const L1 = transformCaseExceptFirstPerWord(lastName, mode);
+          const L2 = transformCaseExceptFirstPerWord(firstPatro, mode);
+          return (
+            <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, color: "#fff", textAlign: "center", pointerEvents: "none", display: "grid", placeItems: "center" }}>
+              <div style={{ width: "100%", padding: "0 4px", fontFamily: `"Century Schoolbook","Times New Roman",serif`, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                {L1 && <div style={{ fontWeight: 700 }}>{L1}</div>}
+                {L2 && <div style={{ fontWeight: 700 }}>{L2}</div>}
+                {dates && <div style={{ marginTop: 2 }}>{dates}</div>}
+              </div>
+            </div>
+          );
+        }
+
+        // Эпитафии
+        const text = el.text || "";
+        if (el.staircase && isRememberLoveMourn(text)) {
+          const { top, mid, bot } = splitRememberPreserve(text);
+          return (
+            <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, color: "#fff", fontFamily: `"Century Schoolbook","Times New Roman",serif`, textShadow: "0 1px 2px rgba(0,0,0,0.6)", pointerEvents: "none" }}>
+              <div style={{ position: "absolute", top: 0, left: 4, fontWeight: 600 }}>{top}</div>
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontWeight: 600 }}>{mid}</div>
+              <div style={{ position: "absolute", right: 4, bottom: 0, fontWeight: 600 }}>{bot}</div>
+            </div>
+          );
+        } else {
+          return (
+            <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+              <div style={{ width: "100%", padding: "0 4px", textAlign: "center", color: "#fff", fontFamily: `"Century Schoolbook","Times New Roman",serif`, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+                <div style={{ fontWeight: 600, whiteSpace: "pre-wrap" }}>{text}</div>
+              </div>
+            </div>
+          );
+        }
+      })}
+    </>
   );
 }
 
