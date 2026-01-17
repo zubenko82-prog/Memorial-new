@@ -1,17 +1,14 @@
 // src/screens/BackEditorStep.tsx
 // ТЫЛЬНАЯ СТОРОНА — редактор.
 //
-// Что реализовано:
-// - Элементы (графика/эпитафии) автоматически раскладываются равномерно по вертикали,
-//   в порядке добавления (selectedOrder), без наложений; по горизонтали выровнены по центру.
-//   Размер блоков уменьшен (ширина 35%).
-// - Подложка изделия: строится силуэт — непрозрачные (или «не фон») области исходника
-//   выделяются и заливаются #1b1b1b; силуэт показывается зеркально (scaleX(-1)).
-//   Если у исходника нет альфы — фон определяется по цвету углов (color-diff).
-// - При открытии секции сворачиваются остальные и выполняется прокрутка после анимации.
-// - При переходах (Назад/Продолжить) — растрируем эскиз (мини/хи) и сохраняем превью,
-//   затем выполняем переход.
-// - validateDates/parseFlexibleDate локально, без импортов.
+// Реализовано:
+// - Элементы (графика/эпитафии) раскладываются равномерно по вертикали, в порядке добавления (selectedOrder),
+//   без наложений; по горизонтали выровнены по центру. Размер блоков уменьшен (ширина 35%).
+// - Подложка изделия: строится силуэт (альфа- или «не фон» по углам), заливается #1b1b1b, показывается зеркально.
+// - При открытии секции сворачиваем остальные и скроллим к секции после анимации.
+// - При переходах (Назад/Продолжить) — растрируем мини/хи превью, сохраняем в драфт, затем переходим.
+// - validateDates/parseFlexibleDate локально.
+//
 
 import React, {
   useCallback,
@@ -193,29 +190,21 @@ function collectFlatEntries(root: any, base = "") {
     const rawRel = normalizeSlashes(node?.relPath || node?.path || "");
     const nameFromUrl = baseName(urlPath);
     const name = node?.name || baseName(rawRel) || nameFromUrl;
-
     const lower = urlPath.toLowerCase();
     let relFromUrl = urlPath.startsWith("/") ? urlPath.slice(1) : urlPath;
     const idxG = lower.indexOf("/graphics/");
     if (idxG >= 0) relFromUrl = urlPath.slice(idxG + 1);
-
     let rel = rawRel && rawRel.includes("/") ? rawRel : relFromUrl;
     if (!hasFileExt(baseName(rel))) rel = joinPath(rel, name);
-    if (relBase && rel.split("/").filter(Boolean).length < 2) {
-      rel = joinPath(relBase, name);
-    }
-
+    if (relBase && rel.split("/").filter(Boolean).length < 2) rel = joinPath(relBase, name);
     out.push({ url: String(url), name: String(name), relPath: rel, preview: node?.preview || node?.thumb || undefined });
   };
-
   const walk = (node: any, relBase: string) => {
     if (!node) return;
     if (Array.isArray(node)) { node.forEach((child) => walk(child, relBase)); return; }
     if (node?.url || node?.src || node?.image) { pushFile(node, relBase); return; }
-
     const nodeName = node?.name || node?.title || node?.slug || "";
     const nextBase = nodeName ? joinPath(relBase, String(nodeName)) : relBase;
-
     const childrenArrays = []
       .concat(node?.items || [])
       .concat(node?.files || [])
@@ -227,7 +216,6 @@ function collectFlatEntries(root: any, base = "") {
     if (Array.isArray(node?.categories)) node.categories.forEach((cat: any) => walk(cat, relBase));
     if (Array.isArray(node?.subcategories)) node.subcategories.forEach((sub: any) => walk(sub, nextBase));
   };
-
   if (root?.categories) {
     (root.categories || []).forEach((cat: any) => {
       const catBase = String(cat?.name || cat?.slug || "");
@@ -252,7 +240,6 @@ function collectFlatEntries(root: any, base = "") {
       walk(root, base);
     }
   }
-
   const seen = new Set();
   return out.filter((e) => {
     const key = `${e.relPath}::${e.url}`;
@@ -267,7 +254,6 @@ function buildCatsFromFlat(entries: any[]) {
     const rel = normalizeSlashes(stripProtocolHost(e.relPath)).replace(/^\.\/+/, "").replace(/^\/+/, "");
     const parts = rel.split("/").filter(Boolean);
     if (parts.length === 0) continue;
-
     const anchors = ["graphics", "catalogs", "catalog", "images", "img"];
     let startIdx = 0;
     for (const a of anchors) {
@@ -275,12 +261,10 @@ function buildCatsFromFlat(entries: any[]) {
       if (idx >= 0 && idx < parts.length - 1) { startIdx = idx + 1; break; }
     }
     if (parts.length - startIdx < 2) continue;
-
     const catName = decodeURIComponent(parts[startIdx]);
     const fileName = parts[parts.length - 1];
     const subSegments = parts.slice(startIdx + 1, parts.length - 1).map((s) => decodeURIComponent(s));
     const subKey = subSegments.join(" / ");
-
     if (!catMap.has(catName)) {
       catMap.set(catName, { name: catName, slug: toSlug(catName), items: [], subs: new Map<string, any>() });
     }
@@ -294,7 +278,6 @@ function buildCatsFromFlat(entries: any[]) {
       catName,
       catSlug: toSlug(catName)
     };
-
     if (subSegments.length > 0) {
       if (!cat.subs.has(subKey)) cat.subs.set(subKey, { name: subKey, slug: toSlug(subKey), items: [] });
       cat.subs.get(subKey).items.push(item);
@@ -302,7 +285,6 @@ function buildCatsFromFlat(entries: any[]) {
       cat.items.push(item);
     }
   }
-
   const ui = Array.from(catMap.values()).map((c, idx) => {
     const _id = `${toSlug(c.name) || "cat"}__${idx}`;
     const children = Array.from(c.subs.values()).map((s: any, j: number) => ({
@@ -313,47 +295,17 @@ function buildCatsFromFlat(entries: any[]) {
     }));
     return { _id, name: c.name, slug: c.slug, items: sortedItems(c.items), children };
   });
-
   ui.sort((a, b) => collator.compare(a.name, b.name));
   return ui;
 }
 
-/* ===== Types (elements) ===== */
+/* ===== Types (elements, people) ===== */
 type ElType = "graphic" | "epitaph" | "photo" | "metric";
-type EditorEl = {
-  id: string;
-  type: ElType;
-  x: number; y: number; w: number; h: number; // %
-  z: number;
-  flipH?: boolean; // для graphic
-  text?: string;   // для epitaph
-  staircase?: boolean; // для epitaph (лесенка)
-  personId?: string;   // для photo/metric
-  caseRest?: "lower" | "upper"; // для metric
-};
+type EditorEl = { id: string; type: ElType; x: number; y: number; w: number; h: number; z: number; flipH?: boolean; text?: string; staircase?: boolean; personId?: string; caseRest?: "lower" | "upper"; };
+type Person = { id: string; lastName?: string; firstName?: string; middleName?: string; birthDate?: string; deathDate?: string; photoUrl?: string | null; photoDataUrl?: string | null; };
+type NormalizedPerson = { id: string; lastName?: string; firstName?: string; middleName?: string; birthDate?: string; deathDate?: string; photoPreview: string | null; };
 
-/* ===== People types ===== */
-type Person = {
-  id: string;
-  lastName?: string;
-  firstName?: string;
-  middleName?: string;
-  birthDate?: string;
-  deathDate?: string;
-  photoUrl?: string | null;
-  photoDataUrl?: string | null;
-};
-type NormalizedPerson = {
-  id: string;
-  lastName?: string;
-  firstName?: string;
-  middleName?: string;
-  birthDate?: string;
-  deathDate?: string;
-  photoPreview: string | null;
-};
-
-/* ===== Text helpers ===== */
+/* ===== Helpers ===== */
 function normRemember(t?: string) { return (t || "").toLowerCase().replace(/[.,…!?:;]+/g, "").replace(/\s+/g, " ").trim(); }
 function isRememberLoveMourn(t?: string) { return normRemember(t) === "помним любим скорбим"; }
 function splitRememberPreserve(text: string) {
@@ -378,89 +330,44 @@ const fitCanvas = (() => {
   const ctx = c ? c.getContext("2d")! : null;
   const family = `"Century Schoolbook","Times New Roman",serif`;
   const LINE_H = 1.15;
-
-  function width(px: number, text: string, italic = false) {
-    if (!ctx) return text.length * px * 0.6;
-    ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.floor(px))}px ${family}`;
-    return ctx.measureText(text).width;
-  }
-  function fitOneLine(text: string, maxW: number, maxH: number, italic = false) {
-    let hi = Math.max(8, Math.floor(maxH * 0.9));
-    let lo = 8;
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi + 1) / 2);
-      const w = width(mid, text, italic);
-      if (w <= maxW) lo = mid; else hi = mid - 1;
-    }
-    return Math.max(8, lo);
-  }
+  function width(px: number, text: string, italic = false) { if (!ctx) return text.length * px * 0.6; ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.floor(px))}px ${family}`; return ctx.measureText(text).width; }
+  function fitOneLine(text: string, maxW: number, maxH: number, italic = false) { let hi = Math.max(8, Math.floor(maxH * 0.9)), lo = 8; while (lo < hi) { const mid = Math.floor((lo + hi + 1) / 2); const w = width(mid, text, italic); if (w <= maxW) lo = mid; else hi = mid - 1; } return Math.max(8, lo); }
   function wrapLines(text: string, px: number, maxW: number, italic = false): string[] {
     if (!ctx || !text) return [text];
     ctx.font = `${italic ? "italic " : ""}${Math.max(1, Math.floor(px))}px ${family}`;
-    const paras = String(text).split(/\r?\n/);
-    const out: string[] = [];
+    const paras = String(text).split(/\r?\n/); const out: string[] = [];
     for (const para of paras) {
-      const words = para.split(/\s+/);
-      let line = "";
+      const words = para.split(/\s+/); let line = "";
       const pushLine = (s: string) => out.push(s.replace(/\s+$/g, ""));
       for (const w of words) {
         if (!w) continue;
         const test = line ? line + " " + w : w;
-        if (ctx.measureText(test).width <= maxW) {
-          line = test;
-        } else {
-          if (line) pushLine(line);
-          let chunk = "";
-          for (const ch of w) {
-            const t2 = chunk + ch;
-            if (ctx.measureText(t2).width <= maxW || chunk.length === 0) {
-              chunk = t2;
-            } else {
-              pushLine(chunk);
-              chunk = ch;
-            }
-          }
-          line = chunk;
-        }
+        if (ctx.measureText(test).width <= maxW) { line = test; }
+        else { if (line) pushLine(line); let chunk = ""; for (const ch of w) { const t2 = chunk + ch; if (ctx.measureText(t2).width <= maxW || chunk.length === 0) { chunk = t2; } else { pushLine(chunk); chunk = ch; } } line = chunk; }
       }
       pushLine(line);
     }
     return out.length ? out : [""];
   }
-  function fitBlock(text: string, maxW: number, maxH: number, italic = false) {
-    let lo = 8;
-    let hi = Math.max(8, Math.floor(maxH));
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi + 1) / 2);
-      const lines = wrapLines(text, mid, Math.max(0, maxW), italic);
-      const totalH = Math.ceil(lines.length * mid * LINE_H);
-      const ok = totalH <= maxH;
-      if (ok) lo = mid; else hi = mid - 1;
-    }
-    return Math.max(8, lo);
-  }
-  function fitStair(top: string, mid: string, bot: string, maxW: number, maxH: number, italic = false) {
-    const perLineH = Math.max(8, Math.floor(maxH / 3));
-    const fTop = fitOneLine(top, Math.max(0, maxW - 8), perLineH, italic);
-    const fMid = fitOneLine(mid, Math.max(0, maxW - 8), perLineH, italic);
-    const fBot = fitOneLine(bot, Math.max(0, maxW - 8), perLineH, italic);
-    return Math.min(perLineH, fTop, fMid, fBot);
-  }
-
+  function fitBlock(text: string, maxW: number, maxH: number, italic = false) { let lo = 8, hi = Math.max(8, Math.floor(maxH)); while (lo < hi) { const mid = Math.floor((lo + hi + 1) / 2); const lines = wrapLines(text, mid, Math.max(0, maxW), italic); const totalH = Math.ceil(lines.length * mid * LINE_H); const ok = totalH <= maxH; if (ok) lo = mid; else hi = mid - 1; } return Math.max(8, lo); }
+  function fitStair(top: string, mid: string, bot: string, maxW: number, maxH: number, italic = false) { const perLineH = Math.max(8, Math.floor(maxH / 3)); const fTop = fitOneLine(top, Math.max(0, maxW - 8), perLineH, italic); const fMid = fitOneLine(mid, Math.max(0, maxW - 8), perLineH, italic); const fBot = fitOneLine(bot, Math.max(0, maxW - 8), perLineH, italic); return Math.min(perLineH, fTop, fMid, fBot); }
   return { fitOneLine, fitStair, fitBlock, wrapLines, width, family, LINE_H };
 })();
 
-/* ===== Case helpers for METRIC ===== */
+/* ===== Case helpers ===== */
 function transformCaseExceptFirstPerWord(text: string, mode: "lower" | "upper"): string {
   return text.replace(/([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё]*)/g, (m) => {
-    const first = m[0];
-    const rest = m.slice(1);
+    const first = m[0]; const rest = m.slice(1);
     return first + (mode === "upper" ? rest.toUpperCase() : rest.toLowerCase());
   });
 }
 
-/* ===== Константы верстки ===== */
-const SKETCH_PAD = 8; // отступы контейнера контента внутри эскиза (используется и в DnD)
+/* ===== Layout constants (fix undefined) ===== */
+const SKETCH_PAD = 8;           // отступы внутри эскиза
+const GRID_GAP_PX = 10;         // gap для сетки
+function twoColGrid(maxPx = 140, minPx = 100) {
+  return `repeat(auto-fill, minmax(clamp(${minPx}px, calc((100% - ${GRID_GAP_PX}px)/2), ${maxPx}px), 1fr))`;
+}
 
 /* ===== Component ===== */
 type Props = { onBack?: () => void; onContinue?: (payload?: any) => void; };
@@ -786,20 +693,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const gid = String(g.id);
     if (rearMeta[gid]) return;
     const next = {
-      id: gid,
-      name: g.name || "",
-      url: g.url || "",
-      preview: g.preview || g.url || "",
-      catName: g.catName || "",
-      catSlug: g.catSlug || "",
-      subCatName: g.subCatName || "",
-      subCatSlug: g.subCatSlug || ""
+      id: gid, name: g.name || "", url: g.url || "", preview: g.preview || g.url || "",
+      catName: g.catName || "", catSlug: g.catSlug || "", subCatName: g.subCatName || "", subCatSlug: g.subCatSlug || ""
     };
     setRearMeta((prev) => ({ ...prev, [gid]: next }));
     saveEditorBack({ graphicsMeta: { ...(rearMeta || {}), [gid]: next } });
   };
 
-  // Выбор графики: порядок
+  // Выбор графики (порядок)
   const addGraphicRear = (g: any) => {
     const gid = String(g.id);
     const cur = countsById[gid] || 0;
@@ -814,12 +715,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const removeOneGraphicRear = (gid: string) => {
     const idx = selGraphicIds.findIndex((x) => x === gid);
     if (idx === -1) return;
-    const next = selGraphicIds.slice();
-    next.splice(idx, 1);
+    const next = selGraphicIds.slice(); next.splice(idx, 1);
     setSelGraphicIds(next);
     const ord = selOrder.slice();
-    const rmIdx = ord.findIndex((t) => t === `g:${gid}`);
-    if (rmIdx >= 0) ord.splice(rmIdx, 1);
+    const rmIdx = ord.findIndex((t) => t === `g:${gid}`); if (rmIdx >= 0) ord.splice(rmIdx, 1);
     setSelOrder(ord);
     saveEditorBack({ selectedGraphicsIds: next, selectedOrder: ord });
   };
@@ -833,13 +732,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   // Эпитафии: порядок
   const epiKey = (t: string) => textKey(t);
   const toggleEpitaphText = (text: string) => {
-    const t = (text || "").trim();
-    if (!t) return;
+    const t = (text || "").trim(); if (!t) return;
     if (selEpitaphTexts.includes(t)) {
       const next = selEpitaphTexts.filter((x) => x !== t);
       setSelEpitaphTexts(next);
-      const key = epiKey(t);
-      const ord = selOrder.filter((tok) => tok !== `e:${key}`);
+      const ord = selOrder.filter((tok) => tok !== `e:${epiKey(t)}`);
       setSelOrder(ord);
       saveEditorBack({ epitaphTexts: next, selectedOrder: ord });
     } else {
@@ -874,7 +771,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     saveEditorBack({ epitaphTexts: [], selectedOrder: ord });
   };
 
-  // Согласование порядка (если разошлись)
+  // Согласование порядка
   useEffect(() => {
     const needG: Record<string, number> = {};
     selGraphicIds.forEach((gid) => { needG[gid] = (needG[gid] || 0) + 1; });
@@ -892,22 +789,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       } else if (tok.startsWith("e:")) {
         const key = tok.slice(2);
         const has = selEpitaphTexts.some((t) => epiKey(t) === key);
-        if (has && !usedE.has(key)) {
-          cleaned.push(tok);
-          usedE.add(key);
-        }
+        if (has && !usedE.has(key)) { cleaned.push(tok); usedE.add(key); }
       }
     }
-    for (const gid of selGraphicIds) {
-      while ((needG[gid] || 0) > 0) {
-        cleaned.push(`g:${gid}`);
-        needG[gid] = needG[gid] - 1;
-      }
-    }
-    for (const t of selEpitaphTexts) {
-      const key = epiKey(t);
-      if (!cleaned.includes(`e:${key}`)) cleaned.push(`e:${key}`);
-    }
+    for (const gid of selGraphicIds) while ((needG[gid] || 0) > 0) { cleaned.push(`g:${gid}`); needG[gid] = needG[gid] - 1; }
+    for (const t of selEpitaphTexts) { const key = epiKey(t); if (!cleaned.includes(`e:${key}`)) cleaned.push(`e:${key}`); }
     if (JSON.stringify(cleaned) !== JSON.stringify(selOrder)) {
       setSelOrder(cleaned);
       saveEditorBack({ selectedOrder: cleaned });
@@ -932,7 +818,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const prevMap = new Map(prev.map((e) => [e.id, e]));
       const photoMetricEls = prev.filter((e) => e.type === "photo" || e.type === "metric");
 
-      // желаемый список
       const needG: Record<string, number> = {};
       selGraphicIds.forEach((gid) => { needG[gid] = (needG[gid] || 0) + 1; });
       const usedG: Record<string, number> = {};
@@ -972,7 +857,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         }
       }
 
-      // создаём/переиспользуем
       const contentEls: EditorEl[] = wantIds.map((id, idx) => {
         const existed = prevMap.get(id);
         if (existed && (existed.type === "graphic" || existed.type === "epitaph")) {
@@ -982,18 +866,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           }
           return { ...existed, z: 100 + idx };
         }
-        const w = 35, h = 10; // уменьшенные
-        const x = (100 - w) / 2;
-        if (id.startsWith("graphic|")) {
-          return { id, type: "graphic", x, y: 10, w, h, z: 100 + idx, flipH: false };
-        } else {
-          const key = id.slice("epitaph|".length);
-          const t = selEpitaphTexts.find((tx) => epiKey(tx) === key) || "";
-          return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x, y: 10, w, h, z: 100 + idx };
-        }
+        const w = 35, h = 10; const x = (100 - w) / 2;
+        if (id.startsWith("graphic|")) return { id, type: "graphic", x, y: 10, w, h, z: 100 + idx, flipH: false };
+        const key = id.slice("epitaph|".length);
+        const t = selEpitaphTexts.find((tx) => epiKey(tx) === key) || "";
+        return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x, y: 10, w, h, z: 100 + idx };
       });
 
-      // равномерная вертикальная раскладка
       const K = contentEls.length;
       if (K > 0) {
         const top = 10, bottom = 90, gap = 3;
@@ -1017,7 +896,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selOrder, selGraphicIds, selEpitaphTexts]);
 
-  // Фото/метрики — простая сетка
+  // Фото/метрики — сетка
   useEffect(() => {
     setElements((prev) => {
       let changed = false;
@@ -1025,53 +904,41 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const filtered = prev.filter((el) => {
         if (el.type === "photo" || el.type === "metric") {
           if (!el.personId || !personIndex.has(el.personId)) {
-            changed = true;
-            if (selectedId === el.id) setSelectedId(null);
-            return false;
+            changed = true; if (selectedId === el.id) setSelectedId(null); return false;
           }
         }
         return true;
       });
-
       let maxZ = filtered.reduce((m, e) => Math.max(m, e.z), 0);
       const existing = new Set(filtered.map((e) => e.id));
       const cols = Math.max(1, people.length);
       const cw = 100 / cols;
-
       people.forEach((p, i) => {
         const pid = p.id;
         const pidPhoto = photoId(pid);
         if (!existing.has(pidPhoto)) {
-          const w = Math.min(80, cw * 0.8);
-          const h = 35;
-          const x = i * cw + (cw - w) / 2;
-          const y = 15;
-          filtered.push({ id: pidPhoto, type: "photo", personId: pid, x, y, w, h, z: ++maxZ });
-          changed = true;
+          const w = Math.min(80, cw * 0.8), h = 35;
+          const x = i * cw + (cw - w) / 2, y = 15;
+          filtered.push({ id: pidPhoto, type: "photo", personId: pid, x, y, w, h, z: ++maxZ }); changed = true;
         }
         const pidMetric = metricId(pid);
         if (!existing.has(pidMetric)) {
-          const w = Math.min(90, cw * 0.9);
-          const h = 20;
-          const x = i * cw + (cw - w) / 2;
-          const y = 15 + 35 + 4;
-          filtered.push({ id: pidMetric, type: "metric", personId: pid, x, y, w, h, z: ++maxZ, caseRest: "lower" });
-          changed = true;
+          const w = Math.min(90, cw * 0.9), h = 20;
+          const x = i * cw + (cw - w) / 2, y = 15 + 35 + 4;
+          filtered.push({ id: pidMetric, type: "metric", personId: pid, x, y, w, h, z: ++maxZ, caseRest: "lower" }); changed = true;
         }
       });
-
       if (changed) saveEditorBack({ elements: filtered });
       return changed ? filtered : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [people]);
 
-  // Удалить элемент
+  // Удаление
   const removeElement = (id: string) => {
     setElements((prev) => prev.filter((el) => el.id !== id));
     if (id.startsWith("graphic|")) {
-      const p = parseGraphicId(id);
-      if (p) removeOneGraphicRear(p.gid);
+      const p = parseGraphicId(id); if (p) removeOneGraphicRear(p.gid);
     } else if (id.startsWith("epitaph|")) {
       const key = id.slice("epitaph|".length);
       const found = selEpitaphTexts.find((t) => epiKey(t) === key);
@@ -1086,33 +953,25 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   async function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
     return new Promise((resolve) => {
       if (!src) return resolve(null);
-      const im = new Image();
-      im.crossOrigin = "anonymous";
+      const im = new Image(); im.crossOrigin = "anonymous";
       im.onload = () => resolve(im);
       im.onerror = () => resolve(null);
       im.src = src;
     });
   }
 
-  // Композит: градиент + элементы
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
     if (W <= 0 || H <= 0) return null;
     const canvas = document.createElement("canvas");
     canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-
+    const ctx = canvas.getContext("2d"); if (!ctx) return null;
     const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, "#6e6e6e"); grad.addColorStop(0.2, "#464545");
-    grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
+    grad.addColorStop(0, "#6e6e6e"); grad.addColorStop(0.2, "#464545"); grad.addColorStop(0.4, "#424242"); grad.addColorStop(0.7, "#888888"); grad.addColorStop(1.0, "#ffffff");
     ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
-
     const CX = 0, CY = 0, CW = W, CH = H;
     const els = elements.slice().sort((a, b) => a.z - b.z);
-
     for (const el of els) {
       const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
-
       if (el.type === "graphic") {
         const parsed = parseGraphicId(el.id);
         if (parsed) {
@@ -1120,17 +979,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           if (g?.url) {
             const im = await loadImageSafe(g.preview || g.url);
             if (im) {
-              const sr = im.width / im.height;
-              const dr = r.w / r.h;
+              const sr = im.width / im.height; const dr = r.w / r.h;
               let dw = r.w, dh = r.h, dx = r.x, dy = r.y;
               if (sr > dr) { dh = Math.round(r.w / sr); dy = r.y + Math.round((r.h - dh) / 2); }
               else { dw = Math.round(r.h * sr); dx = r.x + Math.round((r.w - dw) / 2); }
               ctx.save();
-              if (el.flipH) {
-                ctx.translate(dx + dw / 2, dy + dh / 2);
-                ctx.scale(-1, 1);
-                ctx.translate(-(dx + dw / 2), -(dy + dh / 2));
-              }
+              if (el.flipH) { ctx.translate(dx + dw / 2, dy + dh / 2); ctx.scale(-1, 1); ctx.translate(-(dx + dw / 2), -(dy + dh / 2)); }
               ctx.drawImage(im, dx, dy, dw, dh);
               ctx.restore();
             }
@@ -1138,12 +992,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         }
         continue;
       }
-
       if (el.type === "epitaph") {
         const text = el.text || "";
-        ctx.save();
-        ctx.fillStyle = "#fff";
-        ctx.textBaseline = "alphabetic";
+        ctx.save(); ctx.fillStyle = "#fff"; ctx.textBaseline = "alphabetic";
         if (el.staircase && isRememberLoveMourn(text)) {
           const { top, mid, bot } = splitRememberPreserve(text);
           const f = fitCanvas.fitStair(top, mid, bot, r.w - 8, r.h - 8, false);
@@ -1157,14 +1008,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           const lines = fitCanvas.wrapLines(text, f, maxW, false);
           const lh = Math.round(f * fitCanvas.LINE_H);
           let y = r.y + Math.max(0, (r.h - lines.length * lh) / 2) + f;
-          ctx.font = `${f}px ${fitCanvas.family}`;
-          ctx.textAlign = "center";
+          ctx.font = `${f}px ${fitCanvas.family}`; ctx.textAlign = "center";
           for (const line of lines) { ctx.fillText(line, r.x + r.w / 2, y); y += lh; }
         }
-        ctx.restore();
-        continue;
+        ctx.restore(); continue;
       }
-
       if (el.type === "photo") {
         const pid = parsePhotoId(el.id) || el.personId;
         const p = people.find((x) => x.id === pid);
@@ -1172,8 +1020,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         if (photo) {
           const im = await loadImageSafe(photo);
           if (im) {
-            const sr = im.width / im.height;
-            const dr = r.w / r.h;
+            const sr = im.width / im.height; const dr = r.w / r.h;
             let dw = r.w, dh = r.h, dx = r.x, dy = r.y;
             if (sr > dr) { dh = Math.round(r.w / sr); dy = r.y + Math.round((r.h - dh) / 2); }
             else { dw = Math.round(r.h * sr); dx = r.x + Math.round((r.w - dw) / 2); }
@@ -1182,7 +1029,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         }
         continue;
       }
-
       if (el.type === "metric") {
         const pid = parseMetricId(el.id) || el.personId;
         const p = people.find((x) => x.id === pid);
@@ -1190,25 +1036,17 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         const l2raw = p ? [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ") : "";
         const l3 = p ? [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - ") : "";
         if (!l1raw && !l2raw && !l3) continue;
-
         const mode = "lower";
         const L1 = transformCaseExceptFirstPerWord(l1raw, mode);
         const L2 = transformCaseExceptFirstPerWord(l2raw, mode);
-
         const maxW = r.w - 8;
         const perLineH = Math.max(8, Math.floor((r.h - 8) / 3));
         const f1 = fitCanvas.fitOneLine(L1, maxW, perLineH);
         const f2 = fitCanvas.fitOneLine(L2, maxW, perLineH);
         const f3 = fitCanvas.fitOneLine(l3, maxW, perLineH);
         const f = Math.max(8, Math.min(perLineH, f1, f2, f3));
-
-        ctx.save();
-        ctx.fillStyle = "#fff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        const cy1 = r.y + (r.h / 6);
-        const cy2 = r.y + (r.h / 2);
-        const cy3 = r.y + (r.h * 5 / 6);
+        ctx.save(); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const cy1 = r.y + (r.h / 6); const cy2 = r.y + (r.h / 2); const cy3 = r.y + (r.h * 5 / 6);
         if (L1) { ctx.font = `bold ${f}px "Times New Roman", ${fitCanvas.family}`; ctx.fillText(L1, r.x + r.w / 2, cy1, maxW); }
         if (L2) { ctx.font = `bold ${f}px "Times New Roman", ${fitCanvas.family}`; ctx.fillText(L2, r.x + r.w / 2, cy2, maxW); }
         if (l3) { ctx.font = `${Math.round(f * 0.9)}px "Times New Roman", ${fitCanvas.family}`; ctx.fillText(l3, r.x + r.w / 2, cy3, maxW); }
@@ -1219,7 +1057,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return canvas.toDataURL("image/jpeg", 0.92);
   };
 
-  // Силуэт изделия: по альфе или по «фону по углам», заливка #1b1b1b
+  // Силуэт изделия
   const [carveUrl, setCarveUrl] = useState<string | null>(null);
   const buildCarveOverlay = useCallback(async (W: number, H: number) => {
     if (!item?.url || W <= 2 || H <= 2) { setCarveUrl(null); return; }
@@ -1231,14 +1069,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const ctx2 = canvas.getContext("2d");
     if (!ctx2) { setCarveUrl(null); return; }
 
-    // cover геометрия
     const sr = baseImg.width / baseImg.height;
     const dr = W / H;
     let rw: number, rh: number, rx: number, ry: number;
     if (sr > dr) { rh = H; rw = Math.round(H * sr); ry = 0; rx = Math.round((W - rw) / 2); }
     else { rw = W; rh = Math.round(W / sr); rx = 0; ry = Math.round((H - rh) / 2); }
 
-    // offscreen
     const off = document.createElement("canvas");
     off.width = rw; off.height = rh;
     const octx = off.getContext("2d")!;
@@ -1248,7 +1084,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const id = octx.getImageData(0, 0, rw, rh);
     const d = id.data;
 
-    // Проверяем наличие альфы
     let hasUsefulAlpha = false;
     for (let i = 3; i < d.length; i += 4) {
       const A = d[i];
@@ -1268,17 +1103,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
       }
     } else {
-      // «Фон по углам»: усредняем цвет в углах и считаем «не фон»
       function pxAt(x: number, y: number) {
         const idx = (y * rw + x) * 4;
         return [d[idx], d[idx + 1], d[idx + 2]];
       }
-      const corners = [
-        pxAt(0, 0),
-        pxAt(rw - 1, 0),
-        pxAt(0, rh - 1),
-        pxAt(rw - 1, rh - 1)
-      ] as number[][];
+      const corners = [pxAt(0, 0), pxAt(rw - 1, 0), pxAt(0, rh - 1), pxAt(rw - 1, rh - 1)] as number[][];
       const bg = corners.reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]], [0, 0, 0]).map((v) => Math.round(v / 4)) as number[];
       const BG_DELTA = 26;
       for (let i = 0; i < d.length; i += 4) {
@@ -1293,7 +1122,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     }
     mctx.putImageData(mask, 0, 0);
 
-    // Силуэт: заливаем #1b1b1b и применяем маску
     const shape = document.createElement("canvas");
     shape.width = rw; shape.height = rh;
     const sctx = shape.getContext("2d")!;
@@ -1304,13 +1132,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     sctx.drawImage(maskCanvas, 0, 0);
     sctx.globalCompositeOperation = "source-over";
 
-    // Рисуем силуэт на итоговый холст (CSS зеркалим при отображении)
     ctx2.drawImage(shape, rx, ry);
 
     setCarveUrl(canvas.toDataURL("image/png"));
   }, [item?.url]);
 
-  // Генерация силуэта при первом рендере/ресайзе
+  // Генерация силуэта
   useEffect(() => {
     const wrap = previewWrapperRef.current;
     if (!wrap) return;
@@ -1324,7 +1151,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return () => ro.disconnect();
   }, [buildCarveOverlay]);
 
-  // Авто-превью (мини/хи) при изменениях
+  // Живое превью
   useEffect(() => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -1417,13 +1244,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       prev.map((el) => {
         if (el.id !== d.id) return el;
         let { x, y, w, h } = d.start;
-
         if (d.mode === "move") {
           let nx = x + dx, ny = y + dy;
           if (withSnap) { nx = snap(nx, step); ny = snap(ny, step); }
           return { ...el, ...clampPct(nx, ny, w, h) };
         }
-
         let nx = x, ny = y, nw = w, nh = h;
         if (d.mode.includes("e")) nw = w + dx;
         if (d.mode.includes("s")) nh = h + dy;
@@ -1816,7 +1641,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                     <div style={{ display: "grid", gap: 10 }}>
                       <Field label="Фамилия"><input value={p.lastName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, lastName: e.target.value } : x))} style={inputStyle()} placeholder="Иванов" /></Field>
                       <Field label="Имя"><input value={p.firstName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, firstName: e.target.value } : x))} style={inputStyle()} placeholder="Иван" /></Field>
-                      <Field label="Отчество"><input value={p.middleName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, middleName: e.target.value } : x))} style={inputStyle()} placeholder="Иванович" /></Field>
+                      <Field label="Отчество"><input value={p.middleName ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === п.id ? { ...x, middleName: e.target.value } : x))} style={inputStyle()} placeholder="Иванович" /></Field>
 
                       <Field label="Дата рождения">
                         <input value={p.birthDate ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, birthDate: e.target.value } : x))} style={{ ...inputStyle(), borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)" }} placeholder="01.01.1950" />
@@ -1828,10 +1653,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
                       <PhotoField
                         label="Фотография"
-                        value={{
-                          url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
-                          dataUrl: p.photoDataUrl ?? undefined
-                        }}
+                        value={{ url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
                         onChange={(pv) => setPersonPhotoById(p.id, pv)}
                       />
                     </div>
@@ -1894,7 +1716,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1000, pointerEvents: "none" }}
           >
             {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
-              // скрыть рамки для пустых фото/метрик
               if (el.type === "photo") {
                 const p = people.find((x) => x.id === (parsePhotoId(el.id) || el.personId));
                 const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
@@ -2069,12 +1890,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 <div>
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
                   <div style={{ display: "grid", gap: 6 }}>
-                    {selEpitaphTexts.map((t) => (
+                    {selEpitaphs.map((t) => (
                       <div key={t} style={{ ...glassPanelStyle(), borderRadius: 10, padding: 10, display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
                         <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                        <button type="button" style={glassButtonStyle("nano")} onClick={() => removeEpitaphText(t)}>
-                          Удалить
-                        </button>
+                        <button type="button" style={glassButtonStyle("nano")} onClick={() => removeEpitaphText(t)}>Удалить</button>
                       </div>
                     ))}
                   </div>
@@ -2141,7 +1960,6 @@ function ContentOverlay({
             </div>
           );
         }
-
         if (el.type === "photo") {
           const pid = parsePhotoId(el.id) || el.personId;
           const p = people.find((x) => x.id === pid);
@@ -2153,7 +1971,6 @@ function ContentOverlay({
             </div>
           );
         }
-
         if (el.type === "metric") {
           const pid = parseMetricId(el.id) || el.personId;
           const p = people.find((x) => x.id === pid);
@@ -2174,8 +1991,6 @@ function ContentOverlay({
             </div>
           );
         }
-
-        // Эпитафии
         const text = el.text || "";
         if (el.staircase && isRememberLoveMourn(text)) {
           const { top, mid, bot } = splitRememberPreserve(text);
