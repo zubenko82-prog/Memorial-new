@@ -1069,11 +1069,24 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const ctx2 = canvas.getContext("2d");
     if (!ctx2) { setCarveUrl(null); return; }
 
-    const sr = baseImg.width / baseImg.height;
-    const dr = W / H;
-    let rw: number, rh: number, rx: number, ry: number;
-    if (sr > dr) { rh = H; rw = Math.round(H * sr); ry = 0; rx = Math.round((W - rw) / 2); }
-    else { rw = W; rh = Math.round(W / sr); rx = 0; ry = Math.round((H - rh) / 2); }
+    // contain: вписываем силуэт целиком, без обрезки
+const sr = baseImg.width / baseImg.height; // source ratio
+const dr = W / H;                          // dest ratio
+let rw: number, rh: number, rx: number, ry: number;
+if (sr > dr) {
+  // источник «шире» относительно контейнера — подгоняем по ширине
+  rw = W;
+  rh = Math.round(W / sr);
+  rx = 0;
+  ry = Math.round((H - rh) / 2);
+} else {
+  // источник «выше» — подгоняем по высоте
+  rh = H;
+  rw = Math.round(H * sr);
+  ry = 0;
+  rx = Math.round((W - rw) / 2);
+}
+
 
     const off = document.createElement("canvas");
     off.width = rw; off.height = rh;
@@ -1688,15 +1701,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           {/* Силуэт изделия (маска заливки), зеркалим */}
           {carveUrl && (
             <img
-              src={carveUrl}
-              alt=""
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                transform: "scaleX(-1)",
+              ssrc={carveUrl}
+  style={{
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",
+    transform: "scaleX(-1)",
                 userSelect: "none",
                 pointerEvents: "none"
               }}
