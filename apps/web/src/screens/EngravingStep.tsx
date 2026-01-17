@@ -1,21 +1,18 @@
 // src/screens/EngravingStep.tsx
 // Шаг «Информация об усопших» (без редактора).
 //
-// Фото/драфт:
-// - Автосохранения НЕТ. Запись в драфт выполняется ТОЛЬКО:
+// Что меняем для надёжного сохранения «тяжёлых» фото:
+// - Автосохранения НЕТ. В драфт пишем только:
 //   • по кнопкам «Назад»/«Продолжить»,
-//   • при любых переходах/обновлениях: beforeunload, pagehide, hashchange, popstate,
-//     а также при скрытии вкладки (visibilitychange → hidden).
-// - Превью фото — через blob:ObjectURL (ревок при замене/очистке/анмаунте).
+//   • при переходах/обновлении/скрытии вкладки (beforeunload/pagehide/hashchange/popstate/visibility:hidden).
+// - Перед сохранением в драфт фото всегда сжимаем до «безопасного» размера,
+//   причём сжатие делаем сразу при выборе фото (только в локальном state, не в драфт).
+//   Это гарантирует, что при переходе запись в localStorage (драфт) не упадёт по квоте.
+// - Храним в драфте компактный dataURL (JPEG), достаточный для предпросмотра и TopBar.
+// - Если фото пришло как внешний URL (CORS не даёт читать), сохраняем именно URL (без dataURL).
 //
-// Навигация:
-// - Внутренняя навигация — липкая (sticky).
-// - «Компактный вид ☰» — сворачивает все аккордеоны (показываем, если > 1 усопшего).
-//
-// Прочее:
-// - validateDates/parseFlexibleDate — локально (исключаем ReferenceError).
-// - Общий SketchTemplate (эскиз). Эпитафии передаём из драфта/initial.
-// - ПОДСКАЗКА: при отсутствии фото выводим подсказку над «Прикрепить фото».
+// Навигация: липкая. «Компактный вид ☰» — сворачивает все аккордеоны, показывается если > 1 усопшего.
+// Эскиз: общий SketchTemplate, передаём peopleBlocks и эпитафии.
 
 import React, {
   useCallback,
@@ -152,6 +149,89 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
+/* ===== Image compression (для безопасного сохранения в localStorage) ===== */
+// Целим ~0.6 МБ на фото (достаточно для предпросмотра и укладывается в квоту даже при нескольких людях)
+const DRAFT_IMG_MAX_BYTES = 600 * 1024; // 600 KiB
+const DRAFT_IMG_MAX_DIM = 1600; // длинная сторона, px
+const JPEG_Q_START = 0.9;
+const JPEG_Q_MIN = 0.55;
+const JPEG_Q_STEP = 0.08;
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ""));
+    fr.onerror = () => reject(new Error("read blob"));
+    fr.readAsDataURL(blob);
+  });
+}
+async function loadImageFromBlob(b: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(b);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = (e) => reject(e);
+      im.src = url;
+    });
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_BYTES): Promise<string> {
+  const img = await loadImageFromBlob(input);
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  const r = iw / ih;
+
+  let tw = iw, th = ih;
+  if (Math.max(iw, ih) > DRAFT_IMG_MAX_DIM) {
+    if (r >= 1) { tw = DRAFT_IMG_MAX_DIM; th = Math.round(DRAFT_IMG_MAX_DIM / r); }
+    else { th = DRAFT_IMG_MAX_DIM; tw = Math.round(DRAFT_IMG_MAX_DIM * r); }
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(tw));
+  canvas.height = Math.max(1, Math.round(th));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return await blobToDataUrl(input);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  let q = JPEG_Q_START;
+  let out: Blob = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+  if (out.size <= maxBytes) return await blobToDataUrl(out);
+
+  while (q > JPEG_Q_MIN && out.size > maxBytes) {
+    q = Math.max(JPEG_Q_MIN, q - JPEG_Q_STEP);
+    out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+  }
+  if (out.size <= maxBytes) return await blobToDataUrl(out);
+
+  // если не уложились — ещё уменьшаем габариты
+  let scale = 0.9;
+  for (let i = 0; i < 4 && out.size > maxBytes; i++) {
+    const nw = Math.max(1, Math.round(canvas.width * scale));
+    const nh = Math.max(1, Math.round(canvas.height * scale));
+    const c2 = document.createElement("canvas");
+    c2.width = nw; c2.height = nh;
+    const x2 = c2.getContext("2d");
+    if (!x2) break;
+    x2.drawImage(canvas, 0, 0, nw, nh);
+    canvas.width = nw; canvas.height = nh;
+    ctx.drawImage(c2, 0, 0);
+
+    q = JPEG_Q_START;
+    out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+    while (q > JPEG_Q_MIN && out.size > maxBytes) {
+      q = Math.max(JPEG_Q_MIN, q - JPEG_Q_STEP);
+      out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+    }
+    scale *= 0.9;
+  }
+  return await blobToDataUrl(out);
+}
+
 /* ===== Component ===== */
 type Props = {
   item: any;
@@ -170,7 +250,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
   // Снимок драфта при входе (без лайв-подписок)
   const draftSnapRef = useRef<OrderDraft>(loadOrderDraft());
 
-  // Persons — только локально, сохраняем в драфт по событиям перехода/обновления
+  // Persons — локально, в драфт пишем при переходах
   const personsFromDraft = draftPersonsToLocal(draftSnapRef.current?.engraving?.persons as any);
   const [persons, setPersons] = useState<Person[]>(
     personsFromDraft.length
@@ -199,17 +279,18 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     };
   }, [transientPhotoUrlById]);
 
-  // Блоки для эскиза (люди)
+  // Блоки для эскиза
   const peopleBlocks = useMemo(
-    () => persons.map((p) => {
-      const t = transientPhotoUrlById[p.id];
-      const stable = p.photoDataUrl ?? p.photoUrl ?? null;
-      return { id: p.id, lines: linesFromPerson(p), photo: t ?? stable };
-    }),
+    () =>
+      persons.map((p) => {
+        const t = transientPhotoUrlById[p.id];
+        const stable = p.photoDataUrl ?? p.photoUrl ?? null;
+        return { id: p.id, lines: linesFromPerson(p), photo: t ?? stable };
+      }),
     [persons, transientPhotoUrlById]
   );
 
-  // Валидность
+  // Валидность дат
   const dateErrors = useMemo(() => {
     const errs: Record<string, string | null> = {};
     persons.forEach((p) => (errs[p.id] = validateDates(p.birthDate, p.deathDate)));
@@ -217,7 +298,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
   }, [persons]);
   const canContinue = useMemo(() => Object.values(dateErrors).every((e) => !e), [dateErrors]);
 
-  // Открыто/закрыто
+  // Открытие/закрытие аккордеонов
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(
     () => Object.fromEntries(persons.map((p) => [p.id, true]))
   );
@@ -243,64 +324,84 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
   const moveDown = (idx: number) =>
     setPersons((prev) => (idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))));
 
-  /* ===== Фото локально (без мгновенного сохранения драфта) ===== */
+  /* ===== Фото локально (с безопасным сжатием) ===== */
   const photoSeqByIdRef = useRef<Record<string, number>>({});
-  const fileToDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const rd = new FileReader();
-      rd.onload = () => resolve(String(rd.result ?? ""));
-      rd.onerror = () => reject(new Error("read error"));
-      rd.readAsDataURL(file);
-    });
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
   const setPersonPhotoById = (personId: string, pv: PhotoValue | null) => {
     const nextSeq = (photoSeqByIdRef.current[personId] || 0) + 1;
     photoSeqByIdRef.current[personId] = nextSeq;
     const isCurrentSeq = () => photoSeqByIdRef.current[personId] === nextSeq;
+
     const commitLocal = (patch: Partial<Person>) => {
       if (!isCurrentSeq()) return;
       setTransientFor(personId, null);
       setPersons((prev) => prev.map((p) => (p.id === personId ? { ...p, ...patch } : p)));
     };
 
+    // Очистка фото
     if (!pv) {
       setTransientFor(personId, null);
       commitLocal({ photoUrl: null, photoDataUrl: null });
       return;
     }
+
+    // Источник: готовый dataUrl
     if ((pv as any)?.dataUrl) {
       const dataUrl = (pv as any).dataUrl as string;
-      setTransientFor(personId, null);
-      commitLocal({ photoDataUrl: dataUrl, photoUrl: (pv as any).url ?? dataUrl });
+      (async () => {
+        try {
+          const blob = await (await fetch(dataUrl)).blob();
+          const safe = await compressBlobToJpegDataUrl(blob, DRAFT_IMG_MAX_BYTES);
+          commitLocal({ photoDataUrl: safe, photoUrl: safe });
+        } catch {
+          // если не смогли сжать — используем как есть (м.б. «лёгкое» фото)
+          commitLocal({ photoDataUrl: dataUrl, photoUrl: (pv as any).url ?? dataUrl });
+        }
+      })();
       return;
     }
+
+    // Источник: File
     const maybeFile: File | undefined = (pv as any)?.file;
     if (maybeFile instanceof File) {
+      // Мгновенное превью
       const tempUrl = URL.createObjectURL(maybeFile);
       setTransientFor(personId, tempUrl);
-      fileToDataUrl(maybeFile)
-        .then((d) => {
-          if (!isCurrentSeq()) return;
+      (async () => {
+        try {
+          const safe = await compressBlobToJpegDataUrl(maybeFile, DRAFT_IMG_MAX_BYTES);
           try { URL.revokeObjectURL(tempUrl); } catch {}
-          commitLocal({ photoDataUrl: d, photoUrl: d });
-        })
-        .catch(() => {
-          if (!isCurrentSeq()) return;
+          commitLocal({ photoDataUrl: safe, photoUrl: safe });
+        } catch {
           try { URL.revokeObjectURL(tempUrl); } catch {}
-        });
+          // Фолбек: используем blob: как prev (не будет сохранён в драфт!), но пользователь видит превью.
+          // При сохранении (переходе) фото не попадёт в драфт, если останется только blob:
+          // поэтому лучше предложить перезагрузить фото или уменьшить.
+          commitLocal({ photoUrl: tempUrl, photoDataUrl: null });
+        }
+      })();
       return;
     }
+
+    // Источник: url
     if ((pv as any)?.url) {
       const url = (pv as any).url as string;
       if (isBlobUrl(url)) {
+        // blob: — превращаем в сжатый dataURL, чтобы можно было сохранить
         setTransientFor(personId, url);
-        fetch(url)
-          .then((res) => res.blob())
-          .then((blob) => fileToDataUrl(new File([blob], "photo", { type: blob.type || "image/*" })))
-          .then((d) => { if (isCurrentSeq()) commitLocal({ photoDataUrl: d, photoUrl: d }); })
-          .catch(() => { if (isCurrentSeq()) commitLocal({ photoUrl: url, photoDataUrl: null }); });
+        (async () => {
+          try {
+            const blob = await (await fetch(url)).blob();
+            const safe = await compressBlobToJpegDataUrl(blob, DRAFT_IMG_MAX_BYTES);
+            commitLocal({ photoDataUrl: safe, photoUrl: safe });
+          } catch {
+            // Оставим blob: только как превью (в драфт не пойдёт)
+            commitLocal({ photoUrl: url, photoDataUrl: null });
+          }
+        })();
       } else {
+        // внешний URL (в драфт пишем URL, без dataURL — экономим квоту)
         setTransientFor(personId, null);
         commitLocal({ photoUrl: url, photoDataUrl: null });
       }
@@ -348,10 +449,10 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     if (persons.length > 0) scrollToForm(persons[0].id);
   }, [persons]);
 
-  // Сохранение драфта (только по кнопкам/переходам/обновлению)
+  // Запись в драфт (ТОЛЬКО по событиям перехода/обновления)
   const flushSaveNow = useCallback(() => {
     const norm = normalizePersonsForSave(persons);
-    const stored = saveOrderDraft({ engraving: { persons: norm } }); // ПАТЧ (merge внутри saveOrderDraft)
+    const stored = saveOrderDraft({ engraving: { persons: norm } }); // ПАТЧ (merge в saveOrderDraft)
     onSaveDraft?.({ persons: norm });
     draftSnapRef.current = stored;
   }, [persons, onSaveDraft]);
@@ -366,7 +467,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     window.addEventListener("popstate", saveNow);
     window.addEventListener("visibilitychange", onVisibility);
     return () => {
-      saveNow(); // на всякий случай при размонтировании
+      saveNow();
       window.removeEventListener("beforeunload", saveNow);
       window.removeEventListener("pagehide", saveNow);
       window.removeEventListener("hashchange", saveNow);
@@ -391,7 +492,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     setTimeout(() => onDone?.({ persons, sketchDataUrl: null }), 200);
   }, [canContinue, flushSaveNow, onDone, persons]);
 
-  /* ===== Оверлеи из снапшота драфта (на входе) ===== */
+  /* ===== Данные для эскиза из снапшота ===== */
   const selectedGraphics = useMemo(() => (draftSnapRef.current?.graphics || []) as any[], []);
   const selectedCrosses = useMemo(
     () => selectedGraphics.filter((g) => (g.catName || "").toLowerCase().includes("крест") || (g.catSlug || "").toLowerCase().includes("cross")),
@@ -461,10 +562,9 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
               justifyContent: "flex-start"
             }}
           >
-            {/* Список ☰ — только если > 1 */}
             {persons.length > 1 && (
               <a href="#" onClick={(e) => { e.preventDefault(); collapseAll(); }} style={linkLikeStyle()} title="Свернуть все — компактный вид">
-                Список ☰
+                Компактный вид ☰
               </a>
             )}
 
@@ -486,7 +586,6 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
         <section>
           <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
 
-          {/* Подсказка — только если больше одного усопшего */}
           {persons.length > 1 && (
             <div style={{ margin: "0 0 8px 0", textAlign: "left" }}>
               Для изменения порядка нажмите (▲/▼) напротив имени.{" "}
@@ -533,15 +632,9 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
                     <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
                       <div style={{ display: "grid", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                          <Field label="Фамилия">
-                            <input value={p.lastName ?? ""} onChange={(e) => updatePerson(idx, { lastName: e.target.value })} style={inputStyle()} placeholder="Иванов" />
-                          </Field>
-                          <Field label="Имя">
-                            <input value={p.firstName ?? ""} onChange={(e) => updatePerson(idx, { firstName: e.target.value })} style={inputStyle()} placeholder="Иван" />
-                          </Field>
-                          <Field label="Отчество">
-                            <input value={p.middleName ?? ""} onChange={(e) => updatePerson(idx, { middleName: e.target.value })} style={inputStyle()} placeholder="Иванович" />
-                          </Field>
+                          <Field label="Фамилия"><input value={p.lastName ?? ""} onChange={(e) => updatePerson(idx, { lastName: e.target.value })} style={inputStyle()} placeholder="Иванов" /></Field>
+                          <Field label="Имя"><input value={p.firstName ?? ""} onChange={(e) => updatePerson(idx, { firstName: e.target.value })} style={inputStyle()} placeholder="Иван" /></Field>
+                          <Field label="Отчество"><input value={p.middleName ?? ""} onChange={(e) => updatePerson(idx, { middleName: e.target.value })} style={inputStyle()} placeholder="Иванович" /></Field>
                         </div>
 
                         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
@@ -591,17 +684,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
         </section>
 
         {/* Пояснение */}
-        <div
-          style={{
-            color: "#fff",
-            opacity: 0.9,
-            fontSize: 15,
-            lineHeight: 1.25,
-            margin: "6px 0 8px",
-            textAlign: "center",
-            fontWeight: 400
-          }}
-        >
+        <div style={{ color: "#fff", opacity: 0.9, fontSize: 15, lineHeight: 1.25, margin: "6px 0 8px", textAlign: "center", fontWeight: 400 }}>
           Это визуализация состава заказа; не является эскизом или макетом для гравировки. Возможны наложения объектов. Макет для гравировки подготовит специалист.
         </div>
 
