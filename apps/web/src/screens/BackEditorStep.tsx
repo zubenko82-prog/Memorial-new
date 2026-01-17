@@ -1890,7 +1890,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 <div>
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
                   <div style={{ display: "grid", gap: 6 }}>
-                    {selEpitaphs.map((t) => (
+                    {selEpitaphTexts.map((t) => (
                       <div key={t} style={{ ...glassPanelStyle(), borderRadius: 10, padding: 10, display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
                         <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
                         <button type="button" style={glassButtonStyle("nano")} onClick={() => removeEpitaphText(t)}>Удалить</button>
