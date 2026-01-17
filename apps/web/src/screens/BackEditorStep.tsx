@@ -1,16 +1,19 @@
 // src/screens/BackEditorStep.tsx
-// ТЫЛЬНАЯ СТОРОНА — отдельный редактор.
+// ТЫЛЬНАЯ СТОРОНА — редактор.
 //
-// По задаче:
-// - При добавлении элементов (графика/эпитафии) размещаем их по центру эскиза.
-//   Используем порядок выбора (selectedOrder), последний выбранный выше по Z.
-// - При переходах (Назад/Продолжить) выполняем растрирование (генерацию превью)
-//   и сохраняем его в драфт, затем только выполняем переход.
-// - Липкая навигация. При открытии секции — сворачиваем остальные и скроллим к секции
-//   после анимации сворачивания.
-// - Подложка изделия: строим силуэт изделия, выделяя непрозрачные пиксели исходника
-//   и заливая их цветом #1b1b1b, плюс зеркалим (scaleX(-1)).
-// - validateDates/parseFlexibleDate — локально (без импорта, исключает ReferenceError).
+// Что делаем:
+// - Раскладка элементов (графика/эпитафии) — равномерно по вертикали, без наложений,
+//   в порядке добавления (selectedOrder), по горизонтали — строго по центру.
+//   Размеры контент‑элементов оставляем уменьшенными (ширина ~35%).
+// - Подложка изделия: строим силуэт — выделяем непрозрачные (или «нефоновые») области
+//   и заливаем цветом #1b1b1b; показываем силуэт зеркально (scaleX(-1)).
+//   Если в исходнике нет альфы, используем «фон по углам» (color-diff) как маску фона.
+// - При открытии секций сворачиваем остальные и скроллим к секции после анимации.
+// - При переходах (Назад/Продолжить) растрируем эскиз и сохраняем превью в драфт.
+//
+// Примечания:
+// - validateDates/parseFlexibleDate — локальные функции (без импортов).
+// - Если нужно разгрузить файл: вынесите buildCarveOverlay/renderPreview/useDnD в отдельные модули.
 
 import React, {
   useCallback,
@@ -163,7 +166,7 @@ function Collapsible({
   );
 }
 
-/* ===== Каталог helpers ===== */
+/* ===== Catalog helpers ===== */
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 function sortedItems(items: any[]) {
   return items.slice().sort((a, b) => {
@@ -483,7 +486,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   const item = draft?.item || null;
 
-  /* ===== Sticky навигация и скролл ===== */
+  /* ===== Sticky / scroll ===== */
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState(56);
   useLayoutEffect(() => {
@@ -526,7 +529,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     }
   };
 
-  /* ===== Каталог ===== */
+  /* ===== Catalog ===== */
   const [gLoading, setGLoading] = useState(false);
   const [gError, setGError] = useState("");
   const [gCats, setGCats] = useState<any[]>([]);
@@ -569,7 +572,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const toggleCat = useCallback((id: string) => setOpenCats((s) => ({ ...s, [id]: !s[id] })), []);
   const toggleSub = useCallback((id: string) => setOpenSubs((s) => ({ ...s, [id]: !s[id] })), []);
 
-  /* ===== REAR STORE ===== */
+  /* ===== Rear store ===== */
   const [selGraphicIds, setSelGraphicIds] = useState<string[]>(
     () => (draft as any)?.editorBack?.selectedGraphicsIds || []
   );
@@ -582,7 +585,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editorBack?.wishes || "");
   const [carvingOpacity, setCarvingOpacity] = useState<number>(() => (draft as any)?.editorBack?.carvingOpacity ?? 0.85);
 
-  // Порядок выбора (для порядка добавления/слоя)
+  // Порядок выбора
   const [selOrder, setSelOrder] = useState<string[]>(
     () => (draft as any)?.editorBack?.selectedOrder || []
   );
@@ -625,7 +628,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }
 
-  // Dates helpers (локально)
+  // Dates helpers
   function parseFlexibleDate(input?: string): Date | null {
     const s = (input || "").trim();
     if (!s) return null;
@@ -653,7 +656,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     peopleFromDraft.length ? peopleFromDraft : [makeBlankPerson("p-0")]
   );
 
-  // Сохранение editorBack (debounce)
+  // Debounced save
   const saveTimerRef = useRef<number | null>(null);
   const saveEditorBack = (payload: Partial<any>) => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
@@ -679,7 +682,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   };
   useEffect(() => () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); }, []);
 
-  // Transient blob urls
+  // Transient photo urls
   const [transientPhotoUrlById, setTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const setTransientFor = useCallback((id: string, url: string | null) => {
@@ -802,7 +805,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     saveEditorBack({ graphicsMeta: { ...(rearMeta || {}), [gid]: next } });
   };
 
-  // Выбор графики: добавляем и фиксируем порядок
+  // Выбор графики: порядок
   const addGraphicRear = (g: any) => {
     const gid = String(g.id);
     const cur = countsById[gid] || 0;
@@ -877,7 +880,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     saveEditorBack({ epitaphTexts: [], selectedOrder: ord });
   };
 
-  // Согласование порядка (если diverged)
+  // Согласование порядка (если разошлись)
   useEffect(() => {
     const need: Record<string, number> = {};
     selGraphicIds.forEach((gid) => { need[gid] = (need[gid] || 0) + 1; });
@@ -887,16 +890,34 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     for (const tok of selOrder) {
       if (tok.startsWith("g:")) {
         const gid = tok.slice(2);
-        if ((need[gid] || 0) > 0) { cleaned.push(tok); need[gid] = need[gid] - 1; usedG[gid] = (usedG[gid] || 0) + 1; }
+        if ((need[gid] || 0) > 0) {
+          cleaned.push(tok);
+          need[gid] = need[gid] - 1;
+          usedG[gid] = (usedG[gid] || 0) + 1;
+        }
       } else if (tok.startsWith("e:")) {
         const key = tok.slice(2);
         const has = selEpitaphTexts.some((t) => epiKey(t) === key);
-        if (has && !usedE.has(key)) { cleaned.push(tok); usedE.add(key); }
+        if (has && !usedE.has(key)) {
+          cleaned.push(tok);
+          usedE.add(key);
+        }
       }
     }
-    for (const gid of selGraphicIds) while ((need[gid] || 0) > 0) { cleaned.push(`g:${gid}`); need[gid] = need[gid] - 1; }
-    for (const t of selEpitaphTexts) { const key = epiKey(t); if (!cleaned.includes(`e:${key}`)) cleaned.push(`e:${key}`); }
-    if (JSON.stringify(cleaned) !== JSON.stringify(selOrder)) { setSelOrder(cleaned); saveEditorBack({ selectedOrder: cleaned }); }
+    for (const gid of selGraphicIds) {
+      while ((need[gid] || 0) > 0) {
+        cleaned.push(`g:${gid}`);
+        need[gid] = need[gid] - 1;
+      }
+    }
+    for (const t of selEpitaphTexts) {
+      const key = epiKey(t);
+      if (!cleaned.includes(`e:${key}`)) cleaned.push(`e:${key}`);
+    }
+    if (JSON.stringify(cleaned) !== JSON.stringify(selOrder)) {
+      setSelOrder(cleaned);
+      saveEditorBack({ selectedOrder: cleaned });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selGraphicIds, selEpitaphTexts]);
 
@@ -911,48 +932,53 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [customEpi, setCustomEpi] = useState<string>("");
 
-  // Ориентация (не критично здесь)
-  const isPortraitCanvas = useMemo(() => {
-    if (imgWH && imgWH.w > 0 && imgWH.h > 0) return imgWH.h >= imgWH.w;
-    const w = previewWrapperRef.current?.clientWidth || 1;
-    const h = previewWrapperRef.current?.clientHeight || 1;
-    return h >= w;
-  }, [imgWH]);
-
-  // Автолейаут КОНТЕНТ-элементов: размещаем по центру
+  // Автолейаут контент‑элементов: равномерно по вертикали, центр по X
   useEffect(() => {
     setElements((prev) => {
       const prevMap = new Map(prev.map((e) => [e.id, e]));
       const photoMetricEls = prev.filter((e) => e.type === "photo" || e.type === "metric");
 
-      // desired list from order
+      // Собираем желаемый список в порядке selOrder
       const needG: Record<string, number> = {};
       selGraphicIds.forEach((gid) => { needG[gid] = (needG[gid] || 0) + 1; });
       const usedG: Record<string, number> = {};
-      const usedEKeys = new Set<string>();
+      const usedE = new Set<string>();
       const wantIds: string[] = [];
+
       for (const tok of selOrder) {
         if (tok.startsWith("g:")) {
           const gid = tok.slice(2);
           if ((needG[gid] || 0) > 0) {
             const cnt = (usedG[gid] || 0) + 1;
-            usedG[gid] = cnt; needG[gid] = needG[gid] - 1;
+            usedG[gid] = cnt;
+            needG[gid] = need[gid] = needG[gid] - 1;
             wantIds.push(graphicId(gid, cnt));
           }
         } else if (tok.startsWith("e:")) {
           const key = tok.slice(2);
-          if (!usedEKeys.has(key) && selEpitaphTexts.some((t) => epiKey(t) === key)) {
-            wantIds.push(epitaphId(key)); usedEKeys.add(key);
+          if (!usedE.has(key) && selEpitaphTexts.some((t) => epiKey(t) === key)) {
+            usedE.add(key);
+            wantIds.push(epitaphId(key));
           }
         }
       }
-      for (const gid of Object.keys(needG)) while ((needG[gid] || 0) > 0) {
-        const cnt = (usedG[gid] || 0) + 1; usedG[gid] = cnt; needG[gid] = needG[gid] - 1;
-        wantIds.push(graphicId(gid, cnt));
+      for (const gid of Object.keys(needG)) {
+        while ((needG[gid] || 0) > 0) {
+          const cnt = (usedG[gid] || 0) + 1;
+          usedG[gid] = cnt;
+          needG[gid] = needG[gid] - 1;
+          wantIds.push(graphicId(gid, cnt));
+        }
       }
-      for (const t of selEpitaphTexts) { const key = epiKey(t); if (!usedEKeys.has(key)) { wantIds.push(epitaphId(key)); usedEKeys.add(key); } }
+      for (const t of selEpitaphTexts) {
+        const key = epiKey(t);
+        if (!usedE.has(key)) {
+          usedE.add(key);
+          wantIds.push(epitaphId(key));
+        }
+      }
 
-      // build new/keep existing; позиционируем по центру
+      // Создаём/переиспользуем элементы
       const contentEls: EditorEl[] = wantIds.map((id, idx) => {
         const existed = prevMap.get(id);
         if (existed && (existed.type === "graphic" || existed.type === "epitaph")) {
@@ -962,16 +988,33 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           }
           return { ...existed, z: 100 + idx };
         }
-        // центрируем: 35% ширина, 10% высота
-        const w = 35, h = 10, x = (100 - w) / 2, y = (100 - h) / 2;
+        // Новые: размеры уменьшены, выравниваем по центру X — позже равномерно разложим по Y
+        const w = 35, h = 10;
+        const x = (100 - w) / 2;
         if (id.startsWith("graphic|")) {
-          return { id, type: "graphic", x, y, w, h, z: 100 + idx, flipH: false };
+          return { id, type: "graphic", x, y: 10, w, h, z: 100 + idx, flipH: false };
         } else {
           const key = id.slice("epitaph|".length);
           const t = selEpitaphTexts.find((tx) => epiKey(tx) === key) || "";
-          return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x, y, w, h, z: 100 + idx };
+          return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x, y: 10, w, h, z: 100 + idx };
         }
       });
+
+      // Равномерная вертикальная раскладка
+      const K = contentEls.length;
+      if (K > 0) {
+        const top = 10, bottom = 90, gap = 3;
+        const usable = Math.max(10, bottom - top);
+        const blockH = Math.max(6, Math.min(20, Math.floor((usable - gap * (K - 1)) / K)));
+        const totalH = K * blockH + gap * (K - 1);
+        const startY = Math.max(0, (100 - totalH) / 2);
+        contentEls.forEach((el, i) => {
+          el.x = (100 - el.w) / 2;
+          el.y = startY + i * (blockH + gap);
+          el.h = blockH;
+          el.z = 100 + i;
+        });
+      }
 
       const next = [...photoMetricEls, ...contentEls];
       const changed = JSON.stringify(next) !== JSON.stringify(prev);
@@ -981,7 +1024,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selOrder, selGraphicIds, selEpitaphTexts]);
 
-  // Фото/метрики раскладываем как было (простая сетка)
+  // Фото/метрики — как раньше (простая сетка)
   useEffect(() => {
     setElements((prev) => {
       let changed = false;
@@ -1030,7 +1073,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [people]);
 
-  // Удаление элемента
+  // Удалить элемент
   const removeElement = (id: string) => {
     setElements((prev) => prev.filter((el) => el.id !== id));
     if (id.startsWith("graphic|")) {
@@ -1044,7 +1087,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     saveEditorBack({ elements: elements.filter((el) => el.id !== id) });
   };
 
-  /* ===== Превью (mini/hi) + растрирование ===== */
+  /* ===== Превью (mini/hi) ===== */
   const previewTimerRef = useRef<number | null>(null);
 
   async function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
@@ -1058,7 +1101,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     });
   }
 
-  // Композит контента (без фона) — с градиентом (как сейчас), рисуем элементы
+  // Композит контента (градиент + элементы)
   const renderPreview = async (W: number, H: number): Promise<string | null> => {
     if (W <= 0 || H <= 0) return null;
     const canvas = document.createElement("canvas");
@@ -1076,7 +1119,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
     for (const el of els) {
       const r = { x: CX + (el.x / 100) * CW, y: CY + (el.y / 100) * CH, w: (el.w / 100) * CW, h: (el.h / 100) * CH };
-
       if (el.type === "graphic") {
         const parsed = parseGraphicId(el.id);
         if (parsed) {
@@ -1102,7 +1144,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         }
         continue;
       }
-
       if (el.type === "epitaph") {
         const text = el.text || "";
         ctx.save();
@@ -1128,7 +1169,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         ctx.restore();
         continue;
       }
-
       if (el.type === "photo") {
         const pid = parsePhotoId(el.id) || el.personId;
         const p = people.find((x) => x.id === pid);
@@ -1146,7 +1186,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         }
         continue;
       }
-
       if (el.type === "metric") {
         const pid = parseMetricId(el.id) || el.personId;
         const p = people.find((x) => x.id === pid);
@@ -1154,19 +1193,15 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         const l2raw = p ? [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ") : "";
         const l3 = p ? [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - ") : "";
         if (!l1raw && !l2raw && !l3) continue;
-
         const mode = "lower";
         const L1 = transformCaseExceptFirstPerWord(l1raw, mode);
         const L2 = transformCaseExceptFirstPerWord(l2raw, mode);
-
         const maxW = r.w - 8;
-        const maxH = r.h - 8;
-        const perLineH = Math.max(8, Math.floor(maxH / 3));
+        const perLineH = Math.max(8, Math.floor((r.h - 8) / 3));
         const f1 = fitCanvas.fitOneLine(L1, maxW, perLineH);
         const f2 = fitCanvas.fitOneLine(L2, maxW, perLineH);
         const f3 = fitCanvas.fitOneLine(l3, maxW, perLineH);
         const f = Math.max(8, Math.min(perLineH, f1, f2, f3));
-
         ctx.save();
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center";
@@ -1184,7 +1219,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return canvas.toDataURL("image/jpeg", 0.92);
   };
 
-  // Силуэт изделия: выделяем непрозрачное, заливаем #1b1b1b и зеркалим
+  // Силуэт изделия: маска по альфе ИЛИ по «фоновому» цвету (по углам)
   const [carveUrl, setCarveUrl] = useState<string | null>(null);
   const buildCarveOverlay = useCallback(async (W: number, H: number) => {
     if (!item?.url || W <= 2 || H <= 2) { setCarveUrl(null); return; }
@@ -1196,35 +1231,69 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const ctx2 = canvas.getContext("2d");
     if (!ctx2) { setCarveUrl(null); return; }
 
-    // cover размещение
+    // cover геометрия
     const sr = baseImg.width / baseImg.height;
     const dr = W / H;
     let rw: number, rh: number, rx: number, ry: number;
     if (sr > dr) { rh = H; rw = Math.round(H * sr); ry = 0; rx = Math.round((W - rw) / 2); }
     else { rw = W; rh = Math.round(W / sr); rx = 0; ry = Math.round((H - rh) / 2); }
 
-    // исходник в offscreen
+    // offscreen
     const off = document.createElement("canvas");
     off.width = rw; off.height = rh;
     const octx = off.getContext("2d")!;
     octx.clearRect(0, 0, rw, rh);
     octx.drawImage(baseImg, 0, 0, rw, rh);
 
-    // Маска: A>10 -> 255, иначе 0
     const id = octx.getImageData(0, 0, rw, rh);
     const d = id.data;
+
+    // Проверим альфу: если есть прозрачность — используем её; иначе — цвет фона по углам
+    let hasUsefulAlpha = false;
+    for (let i = 3; i < d.length; i += 4) {
+      const A = d[i];
+      if (A !== 255) { hasUsefulAlpha = true; break; }
+    }
+
     const maskCanvas = document.createElement("canvas");
     maskCanvas.width = rw; maskCanvas.height = rh;
     const mctx = maskCanvas.getContext("2d")!;
     const mask = mctx.createImageData(rw, rh);
     const md = mask.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const A = d[i + 3];
-      md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = A > 10 ? 255 : 0;
+
+    if (hasUsefulAlpha) {
+      for (let i = 0; i < d.length; i += 4) {
+        const A = d[i + 3];
+        const alpha = A > 10 ? 255 : 0;
+        md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
+      }
+    } else {
+      // Фон — средний цвет по углам
+      function pxAt(x: number, y: number) {
+        const idx = (y * rw + x) * 4;
+        return [d[idx], d[idx + 1], d[idx + 2]];
+      }
+      const corners = [
+        pxAt(0, 0),
+        pxAt(rw - 1, 0),
+        pxAt(0, rh - 1),
+        pxAt(rw - 1, rh - 1)
+      ] as number[][];
+      const bg = corners.reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]], [0, 0, 0]).map((v) => Math.round(v / 4)) as number[];
+      const BG_DELTA = 26; // порог отличия от фона
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i + 0], g = d[i + 1], b = d[i + 2];
+        const dr = Math.abs(r - bg[0]);
+        const dg = Math.abs(g - bg[1]);
+        const db = Math.abs(b - bg[2]);
+        const diff = Math.max(dr, dg, db);
+        const alpha = diff > BG_DELTA ? 255 : 0;
+        md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
+      }
     }
     mctx.putImageData(mask, 0, 0);
 
-    // Силуэт: заливаем #1b1b1b и применяем маску
+    // Силуэт
     const shape = document.createElement("canvas");
     shape.width = rw; shape.height = rh;
     const sctx = shape.getContext("2d")!;
@@ -1235,13 +1304,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     sctx.drawImage(maskCanvas, 0, 0);
     sctx.globalCompositeOperation = "source-over";
 
-    // Рисуем на холст; зеркалим по X transform'ом на итоговом рендере <img>, тут просто кладём
+    // Кладём силуэт (в реальном <img> зеркалим через CSS transform)
     ctx2.drawImage(shape, rx, ry);
 
     setCarveUrl(canvas.toDataURL("image/png"));
   }, [item?.url]);
 
-  // Build silhouette on resize/first render
+  // Первичная генерация силуэта и при ресайзе
   useEffect(() => {
     const wrap = previewWrapperRef.current;
     if (!wrap) return;
@@ -1255,7 +1324,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return () => ro.disconnect();
   }, [buildCarveOverlay]);
 
-  // Автогенерация мини/хи превью при изменениях (для живого превью)
+  // Живое превью (мини/хи)
   useEffect(() => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(async () => {
@@ -1300,7 +1369,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elements, selGraphicIds, selEpitaphTexts, selOrder, rearMeta, item?.url, gCats, carvingOpacity, people, transientPhotoUrlById]);
 
-  /* ===== Content overlay: рамки/ручки и мини-toolbar ===== */
+  /* ===== DnD / frames ===== */
+  const { onPointerDownBox, onPointerMove, onPointerUp } = useDnD(elements, setElements);
+
   function MiniToolbar({ el }: { el: EditorEl }) {
     const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "4px 8px", fontSize: 13 };
     const isEpitaph = el.type === "epitaph";
@@ -1399,7 +1470,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             if (!photoUrl) return null;
             return (
               <div key={el.id} style={{ position: "absolute", left: `${el.x}%`, top: `${el.y}%`, width: `${el.w}%`, height: `${el.h}%`, pointerEvents: "none" }}>
-                <img src={photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", userSelect: "none", pointerEvents: "none", willChange: "transform", transform: "translateZ(0)" }} draggable={false} />
+                <img src={photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", userSelect: "none", pointerEvents: "none" }} draggable={false} />
               </div>
             );
           }
@@ -1426,7 +1497,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             );
           }
 
-          // epitaph
+          // Эпитафии
           const text = el.text || "";
           if (el.staircase && isRememberLoveMourn(text)) {
             const { top, mid, bot } = splitRememberPreserve(text);
@@ -1451,7 +1522,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     );
   }
 
-  // Сброс выделения
+  // Сброс выделения при «пустых» данных
   useEffect(() => {
     if (!selectedId) return;
     const sel = elements.find((e) => e.id === selectedId);
@@ -1471,9 +1542,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     }
   }, [selectedId, elements, people, transientPhotoUrlById]);
 
-  /* ===== Растрирование при переходах ===== */
+  /* ===== Растрирование и переходы ===== */
   const rasterizeAndSave = useCallback(async () => {
-    // Если есть размеры wrapper — используем их, иначе дефолты
     const rect = previewWrapperRef.current?.getBoundingClientRect();
     const miniW = rect ? Math.max(320, Math.floor(rect.width)) : 800;
     const miniH = rect ? Math.max(320, Math.floor(rect.height)) : 600;
@@ -1507,7 +1577,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return next;
   }, [elements, selGraphicIds, selEpitaphTexts, selOrder, rearMeta, carvingOpacity, people, wishes]);
 
-  /* ===== Навигация (кнопки) ===== */
   const handleBack = async () => {
     await rasterizeAndSave();
     setOutro(true);
@@ -1853,7 +1922,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                         <input value={p.birthDate ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, birthDate: e.target.value } : x))} style={{ ...inputStyle(), borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)" }} placeholder="01.01.1950" />
                       </Field>
                       <Field label="Дата смерти">
-                        <input value={p.deathDate ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === p.id ? { ...x, deathDate: e.target.value } : x))} style={{ ...inputStyle(), borderColor: err && (err.includes("смерти") || err.includes("раньше")) ? "salmon" : "rgba(255,255,255,0.18)" }} placeholder="01.01.2024" />
+                        <input value={p.deathDate ?? ""} onChange={(e) => setPeople((prev) => prev.map((x) => x.id === п.id ? { ...x, deathDate: e.target.value } : x))} style={{ ...inputStyle(), borderColor: err && (err.includes("смерти") || err.includes("раньше")) ? "salmon" : "rgba(255,255,255,0.18)" }} placeholder="01.01.2024" />
                       </Field>
                       {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
 
@@ -1894,7 +1963,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             minHeight: aspect ? undefined : 540
           }}
         >
-          {/* Слой силуэта изделия (маска непрозрачного, залитая #1b1b1b), зеркалим */}
+          {/* Силуэт изделия (маска заливки), зеркалим */}
           {carveUrl && (
             <img
               src={carveUrl}
@@ -1907,14 +1976,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 objectFit: "cover",
                 transform: "scaleX(-1)",
                 userSelect: "none",
-                pointerEvents: "none",
-                opacity: 1
+                pointerEvents: "none"
               }}
               draggable={false}
               onLoad={(e) => {
                 if (!imgWH) {
                   const im = e.currentTarget;
-                  // приблизительные пропорции — уже рассчитаны ранее, оставим imgWH как есть
+                  // Пропорции уже учтены cover‑геометрией в buildCarveOverlay.
                 }
               }}
             />
@@ -1925,16 +1993,69 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             <ContentOverlay />
           </div>
 
-          {/* Рамки/ручки (движение/ресайз) */}
-          <EditorFrames
-            elements={elements}
-            people={people}
-            transientPhotoUrlById={transientPhotoUrlById}
-            selectedId={selectedId}
-            setSelectedId={setSelectedId}
-            setElements={setElements}
-            removeElement={removeElement}
-          />
+          {/* Рамки/ручки */}
+          <div
+            onPointerMove={onPointerMove as any}
+            onPointerUp={onPointerUp as any}
+            style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1000, pointerEvents: "none" }}
+          >
+            {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
+              // скрыть рамки для пустых фото/метрик
+              if (el.type === "photo") {
+                const p = people.find((x) => x.id === (parsePhotoId(el.id) || el.personId));
+                const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
+                if (!photoUrl) return null;
+              } else if (el.type === "metric") {
+                const p = people.find((x) => x.id === (parseMetricId(el.id) || el.personId));
+                const hasL1 = !!p?.lastName?.trim();
+                const hasL2 = !!([p?.firstName, p?.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" "));
+                const hasL3 = !!([p?.birthDate, p?.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - "));
+                if (!hasL1 && !hasL2 && !hasL3) return null;
+              }
+
+              const selected = el.id === selectedId;
+              const HIT = 36, DOT = 20;
+              const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
+                position: "absolute", left, top, width: HIT, height: HIT, transform: "translate(-50%, -50%)", cursor, pointerEvents: "auto", display: "grid", placeItems: "center"
+              });
+              const dotInner: React.CSSProperties = { width: DOT, height: DOT, background: "#fff", border: "1px solid #000", borderRadius: 4, boxShadow: "0 1px 2px rgba(0,0,0,0.35)" };
+
+              return (
+                <div
+                  key={el.id}
+                  onPointerDown={(ev) => { (onPointerDownBox as any)(ev, el.id, "move"); setSelectedId(el.id); }}
+                  style={{
+                    position: "absolute",
+                    left: `${el.x}%`,
+                    top: `${el.y}%`,
+                    width: `${el.w}%`,
+                    height: `${el.h}%`,
+                    border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
+                    borderRadius: 6,
+                    background: "transparent",
+                    pointerEvents: "auto",
+                    cursor: "move",
+                    touchAction: "none"
+                  }}
+                  title={el.id}
+                >
+                  {selected && <MiniToolbar el={el} />}
+                  {selected && (
+                    <>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "n")}  style={handleDot("50%", 0, "ns-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "e")}  style={handleDot("100%", "50%", "ew-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "s")}  style={handleDot("50%", "100%", "ns-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")}><div style={dotInner} /></div>
+                      <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "w")}  style={handleDot(0, "50%", "ew-resize")}><div style={dotInner} /></div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -2030,168 +2151,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   );
 }
 
-/* ===== Frames/Handles layer ===== */
-function EditorFrames({
-  elements,
-  people,
-  transientPhotoUrlById,
-  selectedId,
-  setSelectedId,
-  setElements,
-  removeElement
-}: {
-  elements: EditorEl[];
-  people: Person[];
-  transientPhotoUrlById: Record<string, string | null>;
-  selectedId: string | null;
-  setSelectedId: (id: string | null) => void;
-  setElements: React.Dispatch<React.SetStateAction<EditorEl[]>>;
-  removeElement: (id: string) => void;
-}) {
-  const { onPointerDownBox, onPointerMove, onPointerUp } = useDnD(elements, setElements);
-
-  const HIT = 36, DOT = 20;
-  const handleDot = (left: number | string, top: number | string, cursor: string): React.CSSProperties => ({
-    position: "absolute", left, top, width: HIT, height: HIT, transform: "translate(-50%, -50%)", cursor, pointerEvents: "auto", display: "grid", placeItems: "center"
-  });
-  const dotInner: React.CSSProperties = { width: DOT, height: DOT, background: "#fff", border: "1px solid #000", borderRadius: 4, boxShadow: "0 1px 2px rgba(0,0,0,0.35)" };
-
-  return (
-    <div
-      onPointerMove={onPointerMove as any}
-      onPointerUp={onPointerUp as any}
-      style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, zIndex: 1000, pointerEvents: "none" }}
-    >
-      {elements.slice().sort((a, b) => a.z - b.z).map((el) => {
-        // скрыть рамки для пустых фото/метрик
-        if (el.type === "photo") {
-          const p = people.find((x) => x.id === (parsePhotoId(el.id) || el.personId));
-          const photoUrl = p ? (transientPhotoUrlById[p.id] ?? p.photoUrl ?? p.photoDataUrl ?? undefined) : undefined;
-          if (!photoUrl) return null;
-        } else if (el.type === "metric") {
-          const p = people.find((x) => x.id === (parseMetricId(el.id) || el.personId));
-          const hasL1 = !!p?.lastName?.trim();
-          const hasL2 = !!([p?.firstName, p?.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" "));
-          const hasL3 = !!([p?.birthDate, p?.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" - "));
-          if (!hasL1 && !hasL2 && !hasL3) return null;
-        }
-
-        const selected = el.id === selectedId;
-        return (
-          <div
-            key={el.id}
-            onPointerDown={(ev) => { (onPointerDownBox as any)(ev, el.id, "move"); setSelectedId(el.id); }}
-            style={{
-              position: "absolute",
-              left: `${el.x}%`,
-              top: `${el.y}%`,
-              width: `${el.w}%`,
-              height: `${el.h}%`,
-              border: selected ? "2px solid #8ab4ff" : "1px dashed rgba(255,255,255,0.85)",
-              borderRadius: 6,
-              background: "transparent",
-              pointerEvents: "auto",
-              cursor: "move",
-              touchAction: "none"
-            }}
-            title={el.id}
-          >
-            {selected && <MiniToolbarInternal el={el} setElements={setElements} removeElement={removeElement} />}
-            {selected && (
-              <>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "nw")} style={handleDot(0, 0, "nwse-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "n")}  style={handleDot("50%", 0, "ns-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "ne")} style={handleDot("100%", 0, "nesw-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "e")}  style={handleDot("100%", "50%", "ew-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "se")} style={handleDot("100%", "100%", "nwse-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "s")}  style={handleDot("50%", "100%", "ns-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "sw")} style={handleDot(0, "100%", "nesw-resize")}><div style={dotInner} /></div>
-                <div onPointerDown={(ev) => (onPointerDownBox as any)(ev, el.id, "w")}  style={handleDot(0, "50%", "ew-resize")}><div style={dotInner} /></div>
-              </>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function MiniToolbarInternal({
-  el,
-  setElements,
-  removeElement
-}: {
-  el: EditorEl;
-  setElements: React.Dispatch<React.SetStateAction<EditorEl[]>>;
-  removeElement: (id: string) => void;
-}) {
-  const btn: React.CSSProperties = { ...glassButtonStyle("nano"), padding: "4px 8px", fontSize: 13 };
-  const isEpitaph = el.type === "epitaph";
-  const isGraphic = el.type === "graphic";
-  const isMetric = el.type === "metric";
-  const canStair = isEpitaph && isRememberLoveMourn(el.text || "");
-  const caseMode = el.caseRest || "lower";
-  return (
-    <div
-      onPointerDown={(ev) => ev.stopPropagation()}
-      style={{
-        position: "absolute",
-        left: 0,
-        top: -38,
-        display: "flex",
-        gap: 8,
-        background: "rgba(0,0,0,0.6)",
-        border: "1px solid rgba(255,255,255,0.25)",
-        borderRadius: 8,
-        padding: "4px 8px",
-        alignItems: "center",
-        pointerEvents: "auto",
-        zIndex: 3000
-      }}
-    >
-      {isEpitaph && canStair && (
-        <button
-          type="button"
-          style={btn}
-          title={el.staircase ? "Показать в одну строку" : "Показать лесенкой"}
-          onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, staircase: !e.staircase } : e)))}
-        >
-          {el.staircase ? "В строку" : "Лесенкой"}
-        </button>
-      )}
-      {isGraphic && (
-        <button
-          type="button"
-          style={btn}
-          title="Отразить по горизонтали"
-          onClick={() => setElements((prev) => prev.map((e) => (e.id === el.id ? { ...e, flipH: !e.flipH } : e)))}
-        >
-          Отразить ⇄
-        </button>
-      )}
-      {isMetric && (
-        <button
-          type="button"
-          style={btn}
-          title="Строчные/ПРОПИСНЫЕ"
-          onClick={() =>
-            setElements((prev) =>
-              prev.map((e) =>
-                e.id === el.id ? { ...e, caseRest: (e.caseRest || "lower") === "lower" ? "upper" : "lower" } : e
-              )
-            )
-          }
-        >
-          {caseMode === "upper" ? "строчные" : "ПРОПИСНЫЕ"}
-        </button>
-      )}
-      <button type="button" style={btn} title="Удалить элемент" onClick={() => removeElement(el.id)}>
-        Удалить
-      </button>
-    </div>
-  );
-}
-
+/* ===== DnD helpers ===== */
 function useDnD(
   elements: EditorEl[],
   setElements: React.Dispatch<React.SetStateAction<EditorEl[]>>
@@ -2204,7 +2164,9 @@ function useDnD(
   } | null>(null);
 
   const contentWH = () => {
-    const wrap = (document.querySelector("#rear-preview")?.parentElement?.querySelector("div[style*='position: relative']") as HTMLElement) || null;
+    // Поиск контейнера контента
+    const holder = document.getElementById("rear-preview");
+    const wrap = holder?.closest("section")?.querySelector("div[style*='position: relative']") as HTMLElement | null;
     const r = wrap?.getBoundingClientRect();
     if (!r) return { w: 1, h: 1 };
     const w = Math.max(1, r.width - SKETCH_PAD * 2);
