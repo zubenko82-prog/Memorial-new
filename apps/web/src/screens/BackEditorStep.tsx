@@ -622,6 +622,28 @@ function makeBlankPerson(id?: string): Person {
   };
 }
 
+// === Date helpers (локально для шага тыльной стороны) ===
+function parseFlexibleDate(input?: string): Date | null {
+  const s = (input || "").trim();
+  if (!s) return null;
+  const m = s.match(/\d+/g);
+  if (!m || m.length < 3) return null;
+  const d = +m[0], mo = +m[1], y = +m[2];
+  if (!d || !mo || !y || y < 100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+function validateDates(birth?: string, death?: string): string | null {
+  const bd = parseFlexibleDate(birth);
+  const dd = parseFlexibleDate(death);
+  if (!bd && !dd) return null;
+  if (birth && !bd) return "Некорректная дата рождения";
+  if (death && !dd) return "Некорректная дата смерти";
+  if (bd && dd && dd.getTime() < bd.getTime()) return "Дата смерти раньше даты рождения";
+  return null;
+}
+
 
   // Люди
   const peopleFromDraft = draftPersonsToLocal(((draft as any)?.editorBack?.people as NormalizedPerson[]) || []);
