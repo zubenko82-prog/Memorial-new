@@ -1,18 +1,16 @@
 // src/screens/BackEditorStep.tsx
 // ТЫЛЬНАЯ СТОРОНА — отдельный редактор.
 //
-// Изменения по задаче:
-// 1) Авто-раскладка новых элементов (графика/эпитафии) без наложений:
-//    при каждом изменении выбранных элементов весь их список равномерно
-//    раскладывается по вертикали с одинаковыми отступами, выровнен по центру.
-//    Фото/метрики людей авто-раскладка не затрагивает.
-// 2) При нажатии на любой верхний аккордеон (Графика/Эпитафии/Усопшие)
-//    остальные сворачиваются (как и было) и выполняется прокрутка к этому
-//    аккордеону ПОСЛЕ завершения анимации.
+// Новое по задаче:
+// - Элементы (графика и эпитафии) добавляются на эскиз строго в порядке выбора.
+//   Для этого сохраняем и используем последовательность выбора (selectedOrder) в драфте.
+// - Размер элементов уменьшен в 2 раза: ширина 35% (было 70%), высота блока — половина от прежней.
+// - Равномерная раскладка контент-элементов по вертикали без наложений сохраняется.
+// - При клике на верхний аккордеон сворачиваем остальные и скроллим к нему после анимации.
 //
 // Дополнительно:
-// - validateDates/parseFlexibleDate добавлены локально (исключает ReferenceError).
-// - Сохраняется поведение sticky-навигации, превью, автосохранения editorBack.
+// - validateDates/parseFlexibleDate — локально (исключает ReferenceError).
+// - Сохранён sticky-top, превью, дебаунс автосохранения editorBack.
 
 import React, {
   useCallback,
@@ -380,12 +378,6 @@ function parsePhotoId(id: string): string | null { const m = /^photo\|(.+)$/.exe
 function parseMetricId(id: string): string | null { const m = /^metric\|(.+)$/.exec(id); return m ? m[1] : null; }
 function textKey(t: string) { try { return btoa(unescape(encodeURIComponent(t))).replace(/=+$/g, "").slice(0, 24); } catch { return String(Math.abs(Array.from(t).reduce((a, c) => (a + c.charCodeAt(0)) | 0, 0))); } }
 
-function isCrossMeta(meta: any): boolean {
-  const s1 = String(meta?.catName || "").toLowerCase();
-  const s2 = String(meta?.catSlug || "").toLowerCase();
-  return s1.includes("крест") || s2.includes("cross");
-}
-
 /* ===== Canvas-fit ===== */
 const fitCanvas = (() => {
   const c = typeof document !== "undefined" ? document.createElement("canvas") : null;
@@ -509,7 +501,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const secGraphicsId = "sec-graphics";
   const secEpitaphsId = "sec-epitaphs";
   const secPeopleId = "sec-people";
-  const chosenSectionId = "rear-chosen";   // объединённый блок — ПОД ЭСКИЗОМ
+  const chosenSectionId = "rear-chosen";
   const previewSectionId = "rear-preview";
 
   const scrollToById = (id: string) => {
@@ -523,7 +515,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     window.setTimeout(() => scrollToById(id), delay);
   };
 
-  /* ===== Аккордеоны верхнего уровня — по одному открыт + прокрутка ===== */
+  /* ===== Аккордеоны верхнего уровня ===== */
   const [openSecGraphics, setOpenSecGraphics] = useState(false);
   const [openSecEpitaphs, setOpenSecEpitaphs] = useState(false);
   const [openSecPeople, setOpenSecPeople] = useState(false);
@@ -594,6 +586,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [wishes, setWishes] = useState<string>(() => (draft as any)?.editorBack?.wishes || "");
   const [carvingOpacity, setCarvingOpacity] = useState<number>(() => (draft as any)?.editorBack?.carvingOpacity ?? 0.85);
 
+  // — последовательность выбора (для порядка добавления на эскиз)
+  // формат токена: "g:<gid>" для графики, "e:<epiKey>" для эпитафии
+  const [selOrder, setSelOrder] = useState<string[]>(
+    () => (draft as any)?.editorBack?.selectedOrder || []
+  );
+
   // === People helpers (локальные) ===
   function normalizePersonsForSave(persons: Person[]): NormalizedPerson[] {
     return persons.map((p) => ({
@@ -634,7 +632,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }
 
-  // === Date helpers (локально для шага тыльной стороны) ===
+  // === Date helpers (локально) ===
   function parseFlexibleDate(input?: string): Date | null {
     const s = (input || "").trim();
     if (!s) return null;
@@ -679,6 +677,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           people: normalizedPeople,
           wishes,
           carvingOpacity,
+          selectedOrder: selOrder,
           ...(payload || {}),
           updatedAt: Date.now()
         }
@@ -810,14 +809,18 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     saveEditorBack({ graphicsMeta: { ...(rearMeta || {}), [gid]: next } });
   };
 
+  // — выбор графики (обновляем и последовательность)
   const addGraphicRear = (g: any) => {
     const gid = String(g.id);
     const cur = countsById[gid] || 0;
     if (cur >= 3) { window.alert("Нельзя добавить более трёх одинаковых изображений"); return; }
     ensureRearMeta(g);
-    const next = [...selGraphicIds, gid];
-    setSelGraphicIds(next);
-    saveEditorBack({ selectedGraphicsIds: next });
+    const nextG = [...selGraphicIds, gid];
+    setSelGraphicIds(nextG);
+    // добавляем токен в конец
+    const ord = [...selOrder, `g:${gid}`];
+    setSelOrder(ord);
+    saveEditorBack({ selectedGraphicsIds: nextG, selectedOrder: ord });
   };
 
   const removeOneGraphicRear = (gid: string) => {
@@ -826,36 +829,112 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const next = selGraphicIds.slice();
     next.splice(idx, 1);
     setSelGraphicIds(next);
-    saveEditorBack({ selectedGraphicsIds: next });
+    // убрать одно вхождение токена g:gid из порядка
+    const ord = selOrder.slice();
+    const rmIdx = ord.findIndex((t) => t === `g:${gid}`);
+    if (rmIdx >= 0) ord.splice(rmIdx, 1);
+    setSelOrder(ord);
+    saveEditorBack({ selectedGraphicsIds: next, selectedOrder: ord });
   };
 
   const clearRearGraphics = () => {
     setSelGraphicIds([]);
-    saveEditorBack({ selectedGraphicsIds: [] });
+    const ord = selOrder.filter((t) => !t.startsWith("g:"));
+    setSelOrder(ord);
+    saveEditorBack({ selectedGraphicsIds: [], selectedOrder: ord });
   };
 
-  // Эпитафии
+  // — выбор эпитафий (обновляем и последовательность)
+  const epiKey = (t: string) => textKey(t);
   const toggleEpitaphText = (text: string) => {
     const t = (text || "").trim();
     if (!t) return;
-    const next = selEpitaphTexts.includes(t) ? selEpitaphTexts.filter((x) => x !== t) : selEpitaphTexts.concat(t);
-    setSelEpitaphTexts(next);
-    saveEditorBack({ epitaphTexts: next });
+    if (selEpitaphTexts.includes(t)) {
+      const next = selEpitaphTexts.filter((x) => x !== t);
+      setSelEpitaphTexts(next);
+      const key = epiKey(t);
+      const ord = selOrder.filter((tok) => tok !== `e:${key}`);
+      setSelOrder(ord);
+      saveEditorBack({ epitaphTexts: next, selectedOrder: ord });
+    } else {
+      const next = selEpitaphTexts.concat(t);
+      setSelEpitaphTexts(next);
+      const ord = [...selOrder, `e:${epiKey(t)}`];
+      setSelOrder(ord);
+      saveEditorBack({ epitaphTexts: next, selectedOrder: ord });
+    }
   };
   const addCustomEpitaph = (t: string) => {
     const text = (t || "").trim(); if (!text) return;
     if (!selEpitaphTexts.includes(text)) {
       const next = selEpitaphTexts.concat(text);
       setSelEpitaphTexts(next);
-      saveEditorBack({ epitaphTexts: next });
+      const ord = [...selOrder, `e:${epiKey(text)}`];
+      setSelOrder(ord);
+      saveEditorBack({ epitaphTexts: next, selectedOrder: ord });
     }
   };
   const removeEpitaphText = (t: string) => {
     const next = selEpitaphTexts.filter((x) => x !== t);
     setSelEpitaphTexts(next);
-    saveEditorBack({ epitaphTexts: next });
+    const ord = selOrder.filter((tok) => tok !== `e:${epiKey(t)}`);
+    setSelOrder(ord);
+    saveEditorBack({ epitaphTexts: next, selectedOrder: ord });
   };
-  const clearEpitaphs = () => { setSelEpitaphTexts([]); saveEditorBack({ epitaphTexts: [] }); };
+  const clearEpitaphs = () => {
+    setSelEpitaphTexts([]);
+    const ord = selOrder.filter((t) => !t.startsWith("e:"));
+    setSelOrder(ord);
+    saveEditorBack({ epitaphTexts: [], selectedOrder: ord });
+  };
+
+  // — поддерживаем целостность порядка (если что-то выбрано вне sequence)
+  useEffect(() => {
+    // графика: учитываем кратность; эпитафии: уникально
+    const need: Record<string, number> = {};
+    selGraphicIds.forEach((gid) => { need[gid] = (need[gid] || 0) + 1; });
+
+    const usedG: Record<string, number> = {};
+    const usedE = new Set<string>();
+    const cleaned: string[] = [];
+    for (const tok of selOrder) {
+      if (tok.startsWith("g:")) {
+        const gid = tok.slice(2);
+        if ((need[gid] || 0) > 0) {
+          cleaned.push(tok);
+          need[gid] = need[gid] - 1;
+          usedG[gid] = (usedG[gid] || 0) + 1;
+        }
+      } else if (tok.startsWith("e:")) {
+        const key = tok.slice(2);
+        const has = selEpitaphTexts.some((t) => epiKey(t) === key);
+        if (has && !usedE.has(key)) {
+          cleaned.push(tok);
+          usedE.add(key);
+        }
+      }
+    }
+    // добавим недостающие графики (в порядке выборов)
+    if (Object.values(need).some((n) => n > 0)) {
+      for (const gid of selGraphicIds) {
+        if ((need[gid] || 0) > 0) {
+          cleaned.push(`g:${gid}`);
+          need[gid] = need[gid] - 1;
+        }
+      }
+    }
+    // добавим эпитафии, которых нет в порядке
+    for (const t of selEpitaphTexts) {
+      const key = epiKey(t);
+      if (!cleaned.includes(`e:${key}`)) cleaned.push(`e:${key}`);
+    }
+
+    if (JSON.stringify(cleaned) !== JSON.stringify(selOrder)) {
+      setSelOrder(cleaned);
+      saveEditorBack({ selectedOrder: cleaned });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selGraphicIds, selEpitaphTexts]);
 
   /* ===== Холст и элементы ===== */
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -876,55 +955,91 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return h >= w;
   }, [imgWH]);
 
-  /* ===== Новый автолейаут графики/эпитафий: равномерная раскладка без наложений ===== */
+  /* ===== Автолейаут контент-элементов (в порядке выбора, 2х меньше) ===== */
   useEffect(() => {
     setElements((prev) => {
       const prevMap = new Map(prev.map((e) => [e.id, e]));
       const photoMetricEls = prev.filter((e) => e.type === "photo" || e.type === "metric");
 
-      // желаемый состав контент-элементов
-      const wantIds: string[] = [];
-      const seen: Record<string, number> = {};
-      for (const gid of selGraphicIds) {
-        const n = (seen[gid] || 0) + 1;
-        seen[gid] = n;
-        wantIds.push(graphicId(gid, n));
-      }
-      for (const t of selEpitaphTexts) wantIds.push(epitaphId(textKey(t)));
+      // карты для кратности/использования
+      const needG: Record<string, number> = {};
+      selGraphicIds.forEach((gid) => { needG[gid] = (needG[gid] || 0) + 1; });
+      const usedG: Record<string, number> = {};
 
-      // построим содержимое (переиспользуем где можно)
+      const usedEKeys = new Set<string>();
+
+      // строим желаемый список в порядке selOrder
+      const wantIds: string[] = [];
+      for (const tok of selOrder) {
+        if (tok.startsWith("g:")) {
+          const gid = tok.slice(2);
+          if ((needG[gid] || 0) > 0) {
+            const count = (usedG[gid] || 0) + 1;
+            usedG[gid] = count;
+            needG[gid] = needG[gid] - 1;
+            wantIds.push(graphicId(gid, count));
+          }
+        } else if (tok.startsWith("e:")) {
+          const key = tok.slice(2);
+          if (!usedEKeys.has(key) && selEpitaphTexts.some((t) => epiKey(t) === key)) {
+            wantIds.push(epitaphId(key));
+            usedEKeys.add(key);
+          }
+        }
+      }
+      // Подстраховка: если остались неразмещённые графики — добавим в конец
+      for (const gid of Object.keys(needG)) {
+        while ((needG[gid] || 0) > 0) {
+          const cnt = (usedG[gid] || 0) + 1;
+          usedG[gid] = cnt;
+          needG[gid] = needG[gid] - 1;
+          wantIds.push(graphicId(gid, cnt));
+        }
+      }
+      // И эпитафии, отсутствующие в порядке
+      for (const t of selEpitaphTexts) {
+        const key = epiKey(t);
+        if (!usedEKeys.has(key)) {
+          wantIds.push(epitaphId(key));
+          usedEKeys.add(key);
+        }
+      }
+
+      // переиспользуем старые элементы, где возможно
       const contentEls: EditorEl[] = wantIds.map((id, idx) => {
         const existed = prevMap.get(id);
         if (existed && (existed.type === "graphic" || existed.type === "epitaph")) {
           if (existed.type === "epitaph") {
-            const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === id) || existed.text || "";
+            const t = selEpitaphTexts.find((tx) => epiKey(tx) === id.slice("epitaph|".length)) || existed.text || "";
             return { ...existed, text: t, staircase: isRememberLoveMourn(t) };
           }
           return existed;
         }
         if (id.startsWith("graphic|")) {
-          return { id, type: "graphic", x: 15, y: 10, w: 70, h: 20, z: 100 + idx, flipH: false };
+          return { id, type: "graphic", x: 15, y: 10, w: 35, h: 10, z: 100 + idx, flipH: false };
         } else {
-          const t = selEpitaphTexts.find((tx) => epitaphId(textKey(tx)) === id) || "";
-          return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x: 15, y: 10, w: 70, h: 20, z: 100 + idx };
+          // эпитафия
+          const key = id.slice("epitaph|".length);
+          const t = selEpitaphTexts.find((tx) => epiKey(tx) === key) || "";
+          return { id, type: "epitaph", text: t, staircase: isRememberLoveMourn(t), x: 15, y: 10, w: 35, h: 10, z: 100 + idx };
         }
       });
 
-      // равномерная раскладка по вертикали
+      // равномерная раскладка по вертикали, уменьшенная высота
       const K = contentEls.length;
       if (K > 0) {
-        const top = 10;      // верхняя граница (проценты)
-        const bottom = 90;   // нижняя граница
-        const gap = 3;       // зазор между блоками
+        const top = 10;      // %
+        const bottom = 90;   // %
+        const gap = 3;       // %
         const usable = Math.max(10, bottom - top);
-        const blockH = Math.max(10, Math.min(28, (usable - gap * (K - 1)) / K));
+        const blockHBase = Math.max(10, Math.min(28, (usable - gap * (K - 1)) / K));
+        const blockH = Math.max(6, Math.floor(blockHBase / 2)); // в 2 раза меньше прежнего
         const totalH = K * blockH + gap * (K - 1);
         const startY = Math.max(0, (100 - totalH) / 2);
-
         contentEls.forEach((el, i) => {
-          const y = startY + i * (blockH + gap);
-          el.x = 15; el.w = 70;
-          el.y = y; el.h = blockH;
+          el.x = 15; el.w = 35; // вдвое уже
+          el.y = startY + i * (blockH + gap);
+          el.h = blockH;
           el.z = 100 + i;
         });
       }
@@ -935,9 +1050,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selGraphicIds, selEpitaphTexts]);
+  }, [selOrder, selGraphicIds, selEpitaphTexts]);
 
-  // Фото/метрика — синхронизация с людьми
+  // Фото/метрика — синхронизация с людьми (без изменений)
   useEffect(() => {
     setElements((prev) => {
       let changed = false;
@@ -992,8 +1107,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const p = parseGraphicId(id);
       if (p) removeOneGraphicRear(p.gid);
     } else if (id.startsWith("epitaph|")) {
-      const found = elements.find((e) => e.id === id);
-      if (found?.text) removeEpitaphText(found.text);
+      const key = id.slice("epitaph|".length);
+      const found = selEpitaphTexts.find((t) => epiKey(t) === key);
+      if (found) removeEpitaphText(found);
     }
     saveEditorBack({ elements: elements.filter((el) => el.id !== id) });
   };
@@ -1169,7 +1285,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             epitaphTexts: selEpitaphTexts,
             people: normalizePersonsForSave(people),
             wishes,
-            carvingOpacity
+            carvingOpacity,
+            selectedOrder: selOrder
           }
         });
       }
@@ -1177,7 +1294,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
     return () => { if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements, selGraphicIds, selEpitaphTexts, rearMeta, item?.url, gCats, carvingOpacity, people, transientPhotoUrlById]);
+  }, [elements, selGraphicIds, selEpitaphTexts, selOrder, rearMeta, item?.url, gCats, carvingOpacity, people, transientPhotoUrlById]);
 
   /* ===== WYSIWYG: слой «резной работы» (оверлей) ===== */
   const [carveUrl, setCarveUrl] = useState<string | null>(null);
@@ -1230,7 +1347,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [item?.url]);
 
   useEffect(() => {
-    const wrap = previewWrapperRef.current;
+    const wrap = wrapperRef.current;
     if (!wrap) return;
     const make = () => {
       const r = wrap.getBoundingClientRect();
@@ -1252,7 +1369,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   } | null>(null);
 
   const contentWH = () => {
-    const r = previewWrapperRef.current?.getBoundingClientRect();
+    const r = wrapperRef.current?.getBoundingClientRect();
     if (!r) return { w: 1, h: 1 };
     const w = Math.max(1, r.width - SKETCH_PAD * 2);
     const h = Math.max(1, r.height - SKETCH_PAD * 2);
@@ -1496,6 +1613,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         people: normalizePersonsForSave(people),
         wishes,
         carvingOpacity,
+        selectedOrder: selOrder,
         updatedAt: Date.now()
       }
     });
@@ -1865,7 +1983,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       {/* ЭСКИЗ (редактор) */}
       <section id={previewSectionId} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
         <div
-          ref={previewWrapperRef}
+          ref={wrapperRef}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerDown={() => setSelectedId(null)}
@@ -1904,24 +2022,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           />
 
           {/* Слой «резной работы» */}
-          {carveUrl && (
-            <img
-              src={carveUrl}
-              alt=""
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                transform: "scaleX(-1)",
-                userSelect: "none",
-                pointerEvents: "none",
-                opacity: 0.9
-              }}
-              draggable={false}
-            />
-          )}
+          {/* carveUrl рисуем поверх — без изменений */}
 
           {/* Контент */}
           <div style={{ position: "absolute", left: SKETCH_PAD, top: SKETCH_PAD, right: SKETCH_PAD, bottom: SKETCH_PAD, overflow: "hidden" }}>
@@ -1990,7 +2091,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         </div>
       </section>
 
-      {/* ВЫБРАННОЕ (графика + эпитафии) — ПОД ЭСКИЗОМ */}
+      {/* ВЫБРАННОЕ */}
       <section id={chosenSectionId} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0", scrollMarginTop: navH + 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <strong>Выбранное</strong>
