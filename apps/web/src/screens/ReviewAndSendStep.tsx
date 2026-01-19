@@ -1,10 +1,4 @@
 // src/screens/ReviewAndSendStep.tsx
-// Шаг «Обзор и подтверждение»
-//
-// Изменения по требованиям:
-// - Топбар разворачиваем на этой странице (и перед скриншотом), блок с номером/контактами под топбаром не показываем.
-// - Эскиз тыльной стороны: убираем прежний способ, показываем ТОЛЬКО растр из шага «Тыльная сторона» (editorBack.previewHiUrl/previewUrl).
-// - Скриншот топбара делаем по нажатию «Отправить», он не обрезается и отправляется БЕЗ подписи (caption).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -73,25 +67,8 @@ const sectionBox: React.CSSProperties = {
 };
 function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) {
   return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: 10,
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "transparent",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
-        boxSizing: "border-box"
-      }}
-    >
-      {url ? (
-        <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
-      ) : (
-        <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
-      )}
+    <div style={{ width: size, height: size, borderRadius: 10, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxSizing: "border-box" }}>
+      {url ? <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
     </div>
   );
 }
@@ -121,9 +98,7 @@ function toParagraphs(input?: string | string[] | null): string[] {
   const blocks = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
   return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
 }
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 
 /* ========= Accordion ========= */
 function LoudAccordion({ title, open, onToggle, children }: { title: React.ReactNode; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
@@ -138,24 +113,7 @@ function LoudAccordion({ title, open, onToggle, children }: { title: React.React
   }, [children]);
   return (
     <div style={{ ...glassPanelStyle(), padding: 0 }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          width: "100%",
-          textAlign: "left",
-          padding: "12px 14px",
-          background: "rgba(255,255,255,0.06)",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          fontSize: 15,
-          fontWeight: 700
-        }}
-      >
+      <button type="button" onClick={onToggle} style={{ width: "100%", textAlign: "left", padding: "12px 14px", background: "rgba(255,255,255,0.06)", border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 15, fontWeight: 700 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{title}</span>
         <span aria-hidden>{open ? "▾" : "▸"}</span>
       </button>
@@ -266,11 +224,7 @@ function PlateBlock(props: {
   const markDirty = () => onDirty?.();
 
   const plateTitle = (
-    <label
-      style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
-      onClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
       <input
         type="checkbox"
         checked={extraPlate}
@@ -583,45 +537,39 @@ function dataUrlToFile(dataUrl: string, name = "image.png"): File {
 export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
-  const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
 
-  const afterHintRef = useRef<HTMLDivElement | null>(null);
-
-  // Топбар: разворачиваем АВТОМАТИЧЕСКИ на этой странице
+  // Разворачиваем топбар на этой странице
   useEffect(() => {
     try { window.dispatchEvent(new Event("memorial:openTopBarPanel")); } catch {}
+    // Фолбэк: пытаемся кликнуть по кнопке топбара, если не раскрылся по событию.
+    setTimeout(() => {
+      const btn = document.querySelector('#topbar-capture button[aria-expanded]') as HTMLButtonElement | null;
+      if (btn && btn.getAttribute("aria-expanded") === "false") btn.click();
+    }, 50);
   }, []);
 
-  // Обновления по драфту
+  // Следим за драфтом
   useEffect(() => {
     const refresh = () => {
       setDraft(loadOrderDraft());
       setIntroState(loadIntroState());
     };
-    const markDirtyOnDraft = () => {
-      // если уже отправляли — помечаем, что есть изменения после отправки
-      if (sentOk) setIsDirtyAfterSend(true);
-      refresh();
-    };
-    window.addEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
-    refresh();
-    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
+    window.addEventListener(DRAFT_UPDATED_EVENT, refresh as any);
+    return () => window.removeEventListener(DRAFT_UPDATED_EVENT, refresh as any);
   }, []);
 
-  // Лицевая: исходник + пропорции
+  // Лицевая — пропорции по исходной картинке
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspectFront, setAspectFront] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!itemUrl) return;
     const im = new Image();
-    im.onload = () => {
-      if (im.naturalWidth && im.naturalHeight) setAspectFront(`${im.naturalWidth} / ${im.naturalHeight}`);
-    };
+    im.onload = () => { if (im.naturalWidth && im.naturalHeight) setAspectFront(`${im.naturalWidth} / ${im.naturalHeight}`); };
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Эскиз тыльной стороны — ТОЛЬКО растрированный (из BackEditor)
+  // Тыльная — ТОЛЬКО растр из BackEditor
   function getBackSketchUrl(d: any): string | null {
     const eb = (d || {}).editorBack || {};
     const raw = String(eb.previewHiUrl || eb.previewUrl || "").trim();
@@ -636,33 +584,27 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     if (!url) { setAspectBack(undefined); return; }
     const im = new Image();
     im.crossOrigin = "anonymous";
-    im.onload = () => {
-      if (im.naturalWidth && im.naturalHeight) setAspectBack(`${im.naturalWidth} / ${im.naturalHeight}`);
-    };
+    im.onload = () => { if (im.naturalWidth && im.naturalHeight) setAspectBack(`${im.naturalWidth} / ${im.naturalHeight}`); };
     im.src = url;
   }, [draft]);
   const showBack = !!backCandidateUrl;
 
-  // Люди (лицевая)
+  // People / graphics / epitaphs (front)
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(
     () => frontPersons.map((p: any, i: number) => ({ id: p.id || `p-${i}`, lines: personLines(p), photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null })),
     [frontPersons]
   );
-
-  // Графика лицевой
   const allFrontGraphics: any[] = ((draft as any)?.graphics as any[])?.filter(Boolean) || [];
   const isCross = (g: any) => (g?.catName || "").toLowerCase().includes("крест") || (g?.catSlug || "").toLowerCase().includes("cross");
   const selectedCrosses = useMemo(() => allFrontGraphics.filter(isCross), [allFrontGraphics]);
   const selectedOthers = useMemo(() => allFrontGraphics.filter((g) => !isCross(g)), [allFrontGraphics]);
-
-  // Эпитафии лицевой
   const frontEpitaphs: string[] = useMemo(() => {
     const engr: any = draft?.engraving || {};
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита — состояния
+  // Плита
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -677,7 +619,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Каталог для плиты
+  // Каталог
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -725,10 +667,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     const uniq = Array.from(new Set(plateIds));
     return uniq.map((gid) => plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta, cats]);
-
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // Отправка и статусы
+  /* ========= Отправка и статусы ========= */
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -744,137 +685,33 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  async function sendMessage(text: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      const resp = await fetch("/api/tg-send-message", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text })
-      });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
-      return { ok: !!(resp.ok && json?.ok), error: json?.error || raw || resp.statusText };
-    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
-  }
-  function startMarkerText(no: string): string { return `🪦 НАЧАЛО ЗАЯВКИ №${no || "—"}`; }
-  function endMarkerText(no: string): string { return `🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${no || "—"}`; }
-
-  function extractPlateWidthText(): string {
-    const effective = (plateSize === "Свой вариант" ? plateCustomSize : plateSize || "").trim();
-    if (!effective) return "—";
-    const m = effective.match(/(\d+)\s*[×xX]\s*(\d+)/);
-    if (m) return `${m[2]} см`;
-    const n = effective.match(/(\d+)\s*см/);
-    if (n) return `${n[1]} см`;
-    return effective;
-  }
-
-  function buildOrderText(): string {
-    const d = loadOrderDraft();
-    const introObj = loadIntroState();
-
-    const persons = (((d?.engraving?.persons as any[]) || []).filter(Boolean)).map((p: any) => ({
-      last: (p?.lastName || "").trim(),
-      namePatr: [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
-      dates: [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ")
-    }));
-
-    const gfxFront = (((d as any)?.graphics || []) as any[]).map((g) => g?.name || g?.id || g?.relPath || g?.url).filter(Boolean);
-
-    const rearIds: string[] = (((d as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
-    const rearMeta: Record<string, any> = ((d as any)?.editorBack?.graphicsMeta || {});
-    const rearCounts: Record<string, number> = {};
-    (rearIds || []).forEach(id => rearCounts[id] = (rearCounts[id] || 0) + 1);
-    const gfxRear = Array.from(new Set(rearIds || [])).map(id => (rearMeta?.[id]?.name || id));
-
-    const epsFront = toParagraphs((d?.engraving as any)?.epitaphs ?? (d?.engraving as any)?.epitaphText);
-    const epsRear = toParagraphs(((d as any)?.editorBack?.epitaphTexts || []).join("\n\n"));
-
-    const pSize = plateSize === "Свой вариант" ? (plateCustomSize || plateSize) : plateSize;
-    const pThick = plateThickness || "";
-    const pOrient = plateOrientation === "horizontal" ? "горизонтально" : plateOrientation === "vertical" ? "вертикально" : "";
-    const pWidth = extractPlateWidthText();
-    const plateUnique = Array.from(new Set(plateIds));
-    const plateNames = plateUnique.map(id => plateMeta[id]?.name || id);
-    const plateEps = toParagraphs(plateEpitaph);
-
-    const flowerbed = !!(d as any)?.extras?.flowerbed;
-    const tumba = (d as any)?.extras?.tumba ?? true;
-    const vase = !!(d as any)?.extras?.vase;
-
-    const notes = String((d as any)?.extras?.orderNotes || "").trim();
-    const itemName = String((d as any)?.item?.name || "").trim();
-
-    const lines: string[] = [];
-    const orderNoLine = introState?.orderNumber ? `Заявка №${introState.orderNumber}` : "Заявка";
-    lines.push(orderNoLine, "");
-    lines.push("Клиент:");
-    lines.push(`- Имя: ${(introObj?.intro?.customerName || "").trim() || "—"}`);
-    lines.push(`- Телефон: ${(introObj?.intro?.customerPhone || "").trim() || "—"}`);
-    if ((introObj?.intro?.customerNotes || "").trim()) lines.push(`- Примечание: ${(introObj?.intro?.customerNotes || "").trim()}`);
-    lines.push("");
-    if (itemName) { lines.push("Изделие:"); lines.push(`- Модель: ${itemName}`); lines.push(""); }
-    lines.push("Люди:");
-    if (persons.length === 0) lines.push("- —"); else {
-      persons.forEach((p) => {
-        const fio = [p.last, p.namePatr].filter(Boolean).join(" ");
-        lines.push(`- ${fio || "—"}`);
-        if (p.dates) lines.push(`  ${p.dates}`);
-      });
-    }
-    lines.push("");
-    if (epsFront.length) { lines.push("Эпитафии (лицевая):"); epsFront.forEach((ep) => lines.push(`- ${ep}`)); lines.push(""); }
-    if (epsRear.length) { lines.push("Эпитафии (тыльная):"); epsRear.forEach((ep) => lines.push(`- ${ep}`)); lines.push(""); }
-    if (gfxFront.length) { lines.push("Графика (лицевая):"); gfxFront.forEach((n) => lines.push(`- ${n}`)); lines.push(""); }
-    if (gfxRear.length) {
-      lines.push("Графика (тыльная):");
-      gfxRear.forEach((n) => {
-        const id = (rearIds || []).find(id0 => (rearMeta[id0]?.name || id0) === n) || "";
-        const count = rearCounts[id] || 1;
-        lines.push(`- ${n}${count > 1 ? ` ×${count}` : ""}`);
-      });
-      lines.push("");
-    }
-    if (extraPlate) {
-      lines.push("Надгробная плита:");
-      if (pSize) lines.push(`- Размер: ${pSize}`);
-      if (pWidth) lines.push(`- Ширина: ${pWidth}`);
-      if (pThick) lines.push(`- Толщина: ${pThick}`);
-      if (pOrient) lines.push(`- Ориентация: ${pOrient}`);
-      if (plateNames.length) { lines.push("- Графика:"); plateNames.forEach((n) => lines.push(` • ${n}`)); }
-      if (plateEps.length) { lines.push("- Эпитафии:"); plateEps.forEach((ep) => lines.push(` • ${ep}`)); }
-      lines.push("");
-    }
-    lines.push("Дополнительно:");
-    lines.push(`- Цветник: ${flowerbed ? "да" : "нет"}`);
-    lines.push(`- Тумба: ${tumba ? "да" : "нет"}`);
-    lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
-    lines.push("");
-    if (notes) { lines.push("Комментарий к заказу:"); lines.push(notes, ""); }
-
-    return lines.join("\n");
-  }
-
   const TARGET_FILE_BYTES = Math.floor(2.7 * 1024 * 1024);
 
   async function sendLargeText(fullText: string): Promise<{ ok: boolean; errors: string[] }> {
     const TELEGRAM_CHUNK_SIZE = 3500;
     const parts: string[] = [];
     let cursor = 0;
-    while (cursor < fullText.length) {
-      parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE));
-      cursor += TELEGRAM_CHUNK_SIZE;
-    }
+    while (cursor < fullText.length) { parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE)); cursor += TELEGRAM_CHUNK_SIZE; }
     const errors: string[] = [];
     for (let i = 0; i < parts.length; i++) {
       const resp = await fetch("/api/tg-send-message", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: parts[i] }) });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      const raw = await resp.text().catch(() => ""); let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
       if (!resp.ok || !json?.ok) errors.push(json?.error || raw || resp.statusText);
       await sleep(150);
     }
     return { ok: errors.length === 0, errors };
   }
 
-  // Снимок узла как фото (без подписи)
+  async function ensureTopbarOpenAndReady() {
+    try { window.dispatchEvent(new Event("memorial:openTopBarPanel")); } catch {}
+    window.scrollTo({ top: 0, behavior: "auto" });
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    // фолбэк «кликнуть» по кнопке, если всё ещё закрыт
+    const btn = document.querySelector('#topbar-capture button[aria-expanded]') as HTMLButtonElement | null;
+    if (btn && btn.getAttribute("aria-expanded") === "false") btn.click();
+    await sleep(160);
+  }
+
   async function sendNodeShotNoCaption(nodeId: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const el = document.getElementById(nodeId);
@@ -882,37 +719,26 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       const dataUrl = await elementToPngDataUrl(el, { pixelRatio: 2, bg: "#ffffff" });
       if (!dataUrl) return { ok: false, error: "toPng failed" };
       const file = dataUrlToFile(dataUrl, `${nodeId}.png`);
-      const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
-        maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08
-      });
+      const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, { maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08 });
       const fd = new FormData();
       fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
-      // ВАЖНО: не добавляем caption — «не подписываем»
       const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
-      if (resp.ok && json?.ok) return { ok: true };
-      return { ok: false, error: json?.error || raw || resp.statusText };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
+      const raw = await resp.text().catch(() => ""); let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      return { ok: !!(resp.ok && json?.ok), error: json?.error || raw || resp.statusText };
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   }
 
-  // Отправка URL картинки (без подписи)
   async function sendPhotoByUrlNoCaption(url: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const fd = new FormData();
       fd.append("url", url);
-      // не добавляем caption
       const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-      const raw = await r.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      const raw = await r.text().catch(() => ""); let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
       return { ok: !!(r.ok && json?.ok), error: json?.error || raw || r.statusText };
     } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   }
 
-  // Эскиз лицевой — DOM→PNG (допускаем подпись по умолчанию)
-  async function sendFrontSketch(): Promise<{ ok: boolean; error?: string }> {
+  async function sendFrontSketchNoCaption(): Promise<{ ok: boolean; error?: string }> {
     try {
       const el = document.getElementById("pdf-front-sketch");
       if (!el) return { ok: false, error: "front node not found" };
@@ -922,39 +748,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, { maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08 });
       const fd = new FormData();
       fd.append("file", new File([compressed], "front.jpg", { type: "image/jpeg" }));
-      // можем не подписывать и здесь, чтобы везде было единообразно:
       const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      const raw = await resp.text().catch(() => ""); let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
       return { ok: !!(resp.ok && json?.ok), error: json?.error || raw || resp.statusText };
     } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   }
-
-  // Перед скриншотом топбара — раскрыть и дождаться отрисовки
-  async function ensureTopbarOpenAndReady() {
-    try { window.dispatchEvent(new Event("memorial:openTopBarPanel")); } catch {}
-    window.scrollTo({ top: 0, behavior: "auto" });
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    await sleep(160);
-  }
-
-  const [isSendingInner, setIsSendingInner] = useState(false);
-  const [sentOk, setSentOk] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [deliveryVisible, setDeliveryVisible] = useState(false);
-  const [textDelivered, setTextDeliveredState] = useState<boolean | null>(null);
-  const [topbarDelivered, setTopbarDeliveredState] = useState<boolean | null>(null);
-  const [frontSketchDelivered, setFrontSketchDeliveredState] = useState<boolean | null>(null);
-  const [backSketchDelivered, setBackSketchDeliveredState] = useState<boolean | null>(null);
-  const [photosDelivered, setPhotosDeliveredState] = useState(0);
-  const [photosTotal, setPhotosTotalState] = useState(0);
-  const [lastWarnings, setLastWarnings] = useState<string[]>([]);
-
-  function setTextDelivered(v: boolean | null) { setTextDeliveredState(v); }
-  function setTopbarDelivered(v: boolean | null) { setTopbarDeliveredState(v); }
-  function setFrontSketchDelivered(v: boolean | null) { setFrontSketchDeliveredState(v); }
-  function setBackSketchDelivered(v: boolean | null) { setBackSketchDeliveredState(v); }
 
   async function sendOrderDirect(showBackInner: boolean, backUrlInner: string | null) {
     setUploading(true);
@@ -965,62 +763,51 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     setTopbarDelivered(null);
     setFrontSketchDelivered(null);
     setBackSketchDelivered(showBackInner ? null : null);
-    setPhotosDeliveredState(0);
+    setPhotosDelivered(0);
 
     const warnings: string[] = [];
     try {
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
 
-      await sendMessage(startMarkerText(orderNoCur));
+      await sendMessage(`🪦 НАЧАЛО ЗАЯВКИ №${orderNoCur || "—"}`);
 
-      // Скриншот топбара (без подписи)
       await ensureTopbarOpenAndReady();
       const tbRes = await sendNodeShotNoCaption("topbar-capture");
       setTopbarDelivered(tbRes.ok);
       if (!tbRes.ok && tbRes.error) warnings.push(`Шапка не отправлена: ${tbRes.error}`);
 
-      // Текст заявки
       const full = buildOrderText();
       const tRes = await sendLargeText(full);
       setTextDelivered(tRes.ok);
       if (!tRes.ok) warnings.push(`Текст не отправлен: ${tRes.errors.join(" | ")}`);
 
-      // Эскиз (лицевая)
-      const fRes = await sendFrontSketch();
+      const fRes = await sendFrontSketchNoCaption();
       setFrontSketchDelivered(fRes.ok);
       if (!fRes.ok && fRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${fRes.error}`);
 
-      // Эскиз (тыльная) — отправляем по URL (без подписи)
       if (showBackInner && backUrlInner) {
         const bRes = await sendPhotoByUrlNoCaption(backUrlInner);
         setBackSketchDelivered(bRes.ok);
         if (!bRes.ok && bRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${bRes.error}`);
       }
 
-      // Фото персон
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
-      setPhotosTotalState(photos.length);
+      setPhotosTotal(photos.length);
       let delivered = 0;
       for (let i = 0; i < photos.length; i++) {
         const ph = photos[i];
         const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, { maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08 });
         const fd = new FormData();
         fd.append("file", new File([compressed], ph.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
-        // без подписи — но тут можно оставить подпись, если хотите; по требованию — не подписываем:
         const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-        const raw = await r.text().catch(() => "");
-        let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
-        if (!r.ok || !json?.ok) {
-          warnings.push(`Фото не отправлено (${ph.name}): ${json?.error || raw || r.statusText}`);
-        } else {
-          delivered += 1;
-          setPhotosDeliveredState(delivered);
-        }
+        const raw = await r.text().catch(() => ""); let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+        if (!r.ok || !json?.ok) { warnings.push(`Фото не отправлено (${ph.name}): ${json?.error || raw || r.statusText}`); }
+        else { delivered += 1; setPhotosDelivered(delivered); }
         setUploadProgress(Math.round(((i + 1) / Math.max(1, photos.length)) * 100));
         await sleep(200);
       }
 
-      await sendMessage(endMarkerText(orderNoCur));
+      await sendMessage(`🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${orderNoCur || "—"}`);
 
       setSentOk(true);
       if (warnings.length) setLastWarnings(warnings);
@@ -1038,7 +825,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         draft: loadOrderDraft(),
         intro: loadIntroState(),
         frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: null, // тыльный берем как готовый растр
+        backNode: null,
         backUrlFallback: backCandidateUrl,
         includeAttachedPhotos: true
       });
@@ -1052,45 +839,40 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   }
 
   async function handleSend() {
-    if (isSendingInner) return;
+    if (isSending) return;
     try {
-      setIsSendingInner(true);
+      setIsSending(true);
       await sendOrderDirect(showBack, backCandidateUrl);
       setConfirmOpen(false);
-      setIsDirtyAfterSend(false);
       setTimeout(() => {
-        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        const el = document.getElementById("after-hint");
+        el?.scrollIntoView({ behavior: "smooth", block: "end" });
       }, 150);
     } finally {
-      setIsSendingInner(false);
+      setIsSending(false);
     }
   }
 
   const overlayText =
     uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%`
-      : isSendingInner ? "Отправляем заказ…"
+      : isSending ? "Отправляем заказ…"
       : isSaving ? "Формируем PDF…"
       : "";
 
   return (
     <div style={safeRoot()}>
-      {/* Топбар: развёрнут (TopBarWithIntro слушает событие memorial:openTopBarPanel) */}
+      {/* Топбар (разворачиваем на этой странице) */}
       <div id="topbar-capture">
         <TopBarWithIntro title="Memorial" />
       </div>
 
-      {/* Блок с номером заказа и контактами — НЕ показываем по требованию */}
+      {/* Блок с номером заказа и контактами — НЕ показываем */}
 
       {/* Плита / Дополнительно */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
           extraPlate={extraPlate}
-          setExtraPlate={(v) => {
-            setExtraPlate(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: v }, updatedAt: Date.now() });
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
+          setExtraPlate={(v) => { setExtraPlate(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: v }, updatedAt: Date.now() }); }}
           plateSize={plateSize}
           setPlateSize={setPlateSize}
           plateCustomSize={plateCustomSize}
@@ -1112,42 +894,25 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             const gid = String(g.id || g.relPath || g.url || g.name);
             const nextIds = [...plateIds, gid];
             const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-            setPlateIds(nextIds);
-            setPlateMeta(nextMeta);
+            setPlateIds(nextIds); setPlateMeta(nextMeta);
             const prev = loadOrderDraft();
             saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta }, updatedAt: Date.now() });
-            if (sentOk) setIsDirtyAfterSend(true);
           }}
           removePlateGraphic={(gid) => {
             const idx = plateIds.findIndex((x) => x === gid);
             if (idx === -1) return;
-            const nextIds = plateIds.slice();
-            nextIds.splice(idx, 1);
-            setPlateIds(nextIds);
+            const nextIds = plateIds.slice(); nextIds.splice(idx, 1); setPlateIds(nextIds);
             const prev = loadOrderDraft();
             saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta }, updatedAt: Date.now() });
-            if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateIds={plateIds}
           hasPedestal={hasPedestal}
-          setHasPedestal={(v) => {
-            setHasPedestal(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, tumba: v }, updatedAt: Date.now() });
-          }}
+          setHasPedestal={(v) => { setHasPedestal(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, tumba: v }, updatedAt: Date.now() }); }}
           hasFlowerbed={hasFlowerbed}
-          setHasFlowerbed={(v) => {
-            setHasFlowerbed(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, flowerbed: v }, updatedAt: Date.now() });
-          }}
+          setHasFlowerbed={(v) => { setHasFlowerbed(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, flowerbed: v }, updatedAt: Date.now() }); }}
           hasVase={hasVase}
-          setHasVase={(v) => {
-            setHasVase(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, vase: v }, updatedAt: Date.now() });
-          }}
-          onDirty={() => sentOk && setIsDirtyAfterSend(true)}
+          setHasVase={(v) => { setHasVase(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, vase: v }, updatedAt: Date.now() }); }}
+          onDirty={() => {}}
         />
       </section>
 
@@ -1166,13 +931,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspectBack || "4 / 3", width: "100%", overflow: "hidden" }}>
-            <img
-              id="pdf-back-sketch"
-              src={backCandidateUrl}
-              crossOrigin="anonymous"
-              alt=""
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-            />
+            <img id="pdf-back-sketch" src={backCandidateUrl} crossOrigin="anonymous" alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
           </div>
         </section>
       )}
@@ -1184,16 +943,22 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
               <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
-              <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
+              <div><strong>Ширина:</strong> {(() => {
+                const eff = (plateSize === "Свой вариант" ? plateCustomSize : plateSize || "").trim();
+                if (!eff) return "—";
+                const m = eff.match(/(\d+)\s*[×xX]\s*(\d+)/);
+                if (m) return `${m[2]} см`;
+                const n = eff.match(/(\d+)\s*см/);
+                if (n) return `${n[1]} см`;
+                return eff;
+              })()}</div>
             </div>
             {chosenPlateList.length > 0 && (
               <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {g.name || g.id}
-                    </div>
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
                   </div>
                 ))}
               </div>
@@ -1211,26 +976,25 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </section>
       )}
 
-      {/* Кнопки отправки */}
-      {(!sentOk || isDirtyAfterSend) && (
-        <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
-          <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
-          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Отправить менеджеру</button>
-        </div>
-      )}
+      {/* Кнопки */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
+        <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
+        <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Отправить менеджеру</button>
+        <button type="button" onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>{isSaving ? "Формируем PDF…" : "Скачать PDF"}</button>
+      </div>
 
       {/* Подтверждение */}
       {confirmOpen && (
-        <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onPointerUp={() => { if (!isSendingInner && !uploading) setConfirmOpen(false); }}>
+        <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onPointerUp={() => { if (!isSending && !uploading) setConfirmOpen(false); }}>
           <div onPointerUp={(e) => e.stopPropagation()} onClick={(e) => (e.stopPropagation() as any)} style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#fff", color: "#111", borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16, boxShadow: "0 -20px 60px rgba(0,0,0,0.45)", transform: "translateY(8px)", opacity: 0, animation: "sheetIn 180ms ease forwards" }}>
             <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
             <div style={{ position: "absolute", top: 8, right: 8 }}>
-              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть" className="btn" disabled={isSendingInner || uploading}>×</button>
+              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть" className="btn" disabled={isSending || uploading}>×</button>
             </div>
             <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам в Telegram?</div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="btn" onPointerUp={handleSend} onClick={handleSend} disabled={isSendingInner || uploading} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
-                {isSendingInner || uploading ? "Отправляем…" : "Отправить"}
+              <button className="btn" onPointerUp={async () => { if (isSending) return; setIsSending(true); await sendOrderDirect(showBack, backCandidateUrl); setIsSending(false); setConfirmOpen(false); }} onClick={async () => { if (isSending) return; setIsSending(true); await sendOrderDirect(showBack, backCandidateUrl); setIsSending(false); setConfirmOpen(false); }} disabled={isSending || uploading} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
+                {isSending || uploading ? "Отправляем…" : "Отправить"}
               </button>
             </div>
           </div>
@@ -1238,8 +1002,8 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       )}
 
       {/* Статусы */}
-      {(deliveryVisible || sentOk) && (
-        <div ref={afterHintRef}>
+      <div id="after-hint">
+        {(deliveryVisible || sentOk) && (
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
             <div style={{ opacity: 0.92, marginBottom: 10 }}>Спасибо! Сохраните PDF заказа при необходимости.</div>
@@ -1266,24 +1030,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 </details>
               )}
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(textDelivered === false || topbarDelivered === false || frontSketchDelivered === false || (showBack && backSketchDelivered === false) || (photosTotal > 0 && photosDelivered < photosTotal)) && (
-                <button type="button" onClick={() => sendOrderDirect(showBack, backCandidateUrl)} disabled={uploading || isSendingInner} style={glassButtonStyle("sm", uploading || isSendingInner)}>
-                  {uploading ? "Повторяем…" : "Повторить отправку"}
-                </button>
-              )}
-              <button type="button" onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>
-                {isSaving ? "Формируем PDF…" : "Скачать PDF"}
-              </button>
-            </div>
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-              Если часть данных не доставилась, скачайте PDF и отправьте менеджеру вручную (в Telegram или по почте).
-            </div>
           </section>
-        </div>
-      )}
+        )}
+      </div>
 
-      {(isSendingInner || isSaving || uploading) && <BusyOverlay text={overlayText} />}
+      {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
     </div>
   );
 }
