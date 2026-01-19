@@ -1,5 +1,5 @@
 // src/components/StepNav.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 export type StepDef = { id: string; title: string; icon?: React.ReactNode };
 
@@ -19,7 +19,8 @@ export type StepNavProps = {
   enabled?: boolean;
   triggerId?: string | string[];
   persistKey?: string | null;
-  activateOnFinish?: boolean; // совместимость с App.tsx (может приходить)
+
+  activateOnFinish?: boolean; // совместимость
 };
 
 const defaultSteps: StepDef[] = [
@@ -91,7 +92,7 @@ function normId(id?: string | null): string {
 
 function isReviewReached(currentId: string, trigger?: string | string[]): boolean {
   const cur = normId(currentId);
-  const defaults = ["review", "review-and-send", "reviewandsend", "reviewandsendstep"];
+  const defaults = ["review", "finish", "review-and-send", "reviewandsend", "reviewandsendstep"];
   const trg = Array.isArray(trigger) ? trigger : (trigger ? [trigger] : defaults);
   const trgNorm = trg.map(normId);
   return trgNorm.includes(cur);
@@ -107,7 +108,7 @@ export default function StepNav({
   hint,
   linkForId,
   sticky = true,
-  topOffset = 0,
+  topOffset = 6, // небольшой отступ сверху по умолчанию
   enabled: enabledProp,
   triggerId,
   persistKey = "memorial.navEnabled.reviewOnly"
@@ -151,6 +152,31 @@ export default function StepNav({
     return 0;
   }, [curIdComputed, ids, current, steps.length]);
 
+  // NEW: измеряем высоту nav и кладём в CSS переменную (для sticky внутри шагов)
+  const navRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!enabled) {
+      try { document.documentElement.style.setProperty("--stepnav-h", "0px"); } catch {}
+      return;
+    }
+    const el = navRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height || 0);
+      try { document.documentElement.style.setProperty("--stepnav-h", `${h}px`); } catch {}
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro.disconnect();
+    };
+  }, [enabled, steps.length]);
+
   const stickyTopValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
 
   const containerStyle: React.CSSProperties = sticky
@@ -164,6 +190,7 @@ export default function StepNav({
   return (
     <div style={containerStyle}>
       <nav
+        ref={navRef as any}
         aria-label="Навигация по шагам"
         style={{
           maxWidth: 600,
@@ -223,7 +250,9 @@ export default function StepNav({
         })}
       </nav>
 
-      {hint && <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, pointerEvents: "auto" }}>{hint}</div>}
+      {hint && (
+        <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, pointerEvents: "auto" }}>{hint}</div>
+      )}
     </div>
   );
 }

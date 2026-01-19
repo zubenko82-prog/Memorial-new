@@ -303,7 +303,8 @@ export default function App() {
           overflowX: "hidden",
           WebkitOverflowScrolling: "touch",
           overscrollBehavior: "contain",
-          position: "relative"
+          position: "relative",
+          scrollPaddingTop: "calc(var(--stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))"
         }}
       >
         {step !== "done" && navUnlocked && (

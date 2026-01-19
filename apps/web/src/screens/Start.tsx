@@ -600,7 +600,7 @@ export default function Start({
           ref={navRef}
           style={{
             position: "sticky",
-            top: 0, // липко относительно скролл-контейнера App
+            top: "calc(var(--stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))", // липко относительно скролл-контейнера App
             zIndex: 50,
             paddingTop: "env(safe-area-inset-top)",
             ...glassPanelStyle(),
