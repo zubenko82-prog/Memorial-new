@@ -201,10 +201,9 @@ export default function StepNav({
   }, [curIdComputed, ids, current, steps.length]);
 
   // Стили
-  const stickyTopValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
   const containerStyle: React.CSSProperties = sticky
-    ? { position: "sticky", top: stickyTopValue, zIndex: 1000, display: "grid", gap: 6 }
-    : { display: "grid", gap: 6 };
+  ? { position: "sticky", top: stickyTopValue, zIndex: 1000, display: "grid", gap: 6, pointerEvents: "none" }
+  : { display: "grid", gap: 6, pointerEvents: "none" };
 
   const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/${encodeURIComponent(id)}`);
 
@@ -231,7 +230,8 @@ export default function StepNav({
           WebkitBackdropFilter: sticky ? "blur(6px)" : undefined,
           boxShadow: sticky ? "0 4px 20px rgba(0,0,0,0.20)" : undefined,
           width: "100%",
-          boxSizing: "border-box"
+          boxSizing: "border-box",
+          pointerEvents: "auto"
         }}
       >
         {steps.map((s, idx) => {
