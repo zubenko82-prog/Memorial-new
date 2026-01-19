@@ -146,7 +146,6 @@ export default function App() {
   const [decor, setDecor] = useState<any>({});
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // Восстановление прогресса
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -163,7 +162,6 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Синхронизация c URL при входе
   useEffect(() => {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
@@ -176,7 +174,6 @@ export default function App() {
     }
   }, []);
 
-  // back/forward
   useEffect(() => {
     const onChange = () => {
       const id = getStepIdFromLocation();
@@ -197,7 +194,7 @@ export default function App() {
     };
   }, []);
 
-  // NEW: глобальный сброс (вызывается из TopBarWithIntro при "Очистить всё")
+  // NEW: сброс из TopBar ("Очистить всё")
   useEffect(() => {
     const onResetAll = () => {
       try {
@@ -216,7 +213,6 @@ export default function App() {
     return () => window.removeEventListener("memorial:resetAll", onResetAll as any);
   }, []);
 
-  // Сохранение прогресса
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -227,7 +223,6 @@ export default function App() {
     } catch {}
   }, [step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked]);
 
-  // Guards
   useEffect(() => {
     if (!selectedItem && step !== "start") {
       setStep("start");
@@ -243,7 +238,6 @@ export default function App() {
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
-  // Скролл вверх при смене шага — только scrollRef
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -256,7 +250,6 @@ export default function App() {
     };
   }, [step]);
 
-  // hash sync + unlock
   useEffect(() => {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
@@ -269,14 +262,12 @@ export default function App() {
     }
   }, [step]);
 
-  // Переход из StepNav
   const handleNavSelect = (_idx: number, id: string) => {
     if (!isStepId(id)) return;
     setStep(localStepFromId(id as StepId));
     setHashForStep(id as StepId);
   };
 
-  // Колбэки шагов
   const onStartConfirm = (item: any) => {
     setSelectedItem(item);
     setStep("size");
@@ -396,7 +387,9 @@ export default function App() {
         {step === "done" && (
           <div style={{ padding: 16 }}>
             <h2 style={{ marginTop: 0 }}>Заявка отправлена менеджерам</h2>
-            <div style={{ opacity: 0.9, marginBottom: 12 }}>Спасибо! Менеджер свяжется с вами. Вы можете начать заново.</div>
+            <div style={{ opacity: 0.9, marginBottom: 12 }}>
+              Спасибо! Менеджер свяжется с вами. Вы можете начать заново.
+            </div>
             <button style={glassButtonStyle("sm")} onClick={resetAll}>
               Начать заново
             </button>
