@@ -1,7 +1,10 @@
 // src/components/TopBarWithIntro.tsx
-// PATCH:
-// - При "Очистить всё" дополнительно диспатчим событие "memorial:resetAll"
-//   чтобы App сбросил прогресс и выключил глобальную StepNav (navUnlocked + LS ключ).
+// FIXES:
+// - Чтобы StepNav (fixed) не наползала на топбар, делаем топбар sticky и сдвигаем его вниз
+//   на высоту глобальной панели через CSS var --global-stepnav-h.
+// - Также добавляем небольшой динамический paddingTop контейнеру, чтобы верхнее содержимое
+//   не оказалось под fixed-оверлеем, когда страница в самом верху.
+// - При "Очистить всё" диспатчим "memorial:resetAll".
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
@@ -233,29 +236,23 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
   const compact = useCompact(420);
 
-  // Интро и номер
   const [introData, setIntroData] = useState(() => loadIntroState());
   const intro = introData.intro;
   const orderNumber = introData.orderNumber || "—";
 
-  // Драфт
   const [order, setOrder] = useState<OrderDraft>(() => loadOrderDraft());
 
-  // Поля редактирования
   const [name, setName] = useState(intro?.customerName || "");
   const [phone, setPhone] = useState(intro?.customerPhone || "");
   const [contactNotes, setContactNotes] = useState(intro?.customerNotes || "");
   const [sizeNotes, setSizeNotes] = useState(order.size?.notes || "");
   const [epitaphsText, setEpitaphsText] = useState(
-    (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) ||
-      order.engraving?.epitaphText ||
-      ""
+    (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) || order.engraving?.epitaphText || ""
   );
   const [orderNotes, setOrderNotes] = useState(order.notes || "");
   const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
   const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
 
-  // refreshAll: без JSON-сравнения (гарантированно подтягиваем актуальные значения)
   const refreshAll = React.useCallback((opts?: { force?: boolean }) => {
     const freshOrder = loadOrderDraft();
     const freshIntroState = loadIntroState();
@@ -280,7 +277,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     }
   }, [editing]);
 
-  // СЛУШАЕМ СОБЫТИЕ ДЛЯ ПРОГРАММНОГО ОТКРЫТИЯ (из ReviewAndSendStep)
   useEffect(() => {
     const openTop = () => {
       setOpen(true);
@@ -292,9 +288,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
   useEffect(() => {
     const onAny = () => refreshAll();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refreshAll({ force: true });
-    };
+    const onVisible = () => { if (document.visibilityState === "visible") refreshAll({ force: true }); };
 
     window.addEventListener("storage", onAny);
     window.addEventListener("memorial:orderDraftUpdated", onAny as any);
@@ -318,27 +312,20 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     if (open) refreshAll({ force: true });
   }, [open, refreshAll]);
 
-  // Телефонная строка
   const phoneLine = useMemo(() => {
     const b = (editing ? phone : intro?.customerPhone) || "";
     return b;
   }, [editing, phone, intro?.customerPhone]);
 
-  // Графика (лицевая/тыльная)
   const frontGraphics = (order.graphics || []) as any[];
   const frontCountsById = useMemo(() => {
     const m: Record<string, number> = {};
-    frontGraphics.forEach((g: any) => {
-      if (g?.id) m[g.id] = (m[g.id] || 0) + 1;
-    });
+    frontGraphics.forEach((g: any) => { if (g?.id) m[g.id] = (m[g.id] || 0) + 1; });
     return m;
   }, [frontGraphics]);
   const frontUnique = useMemo(() => {
     const first: Record<string, any> = {};
-    frontGraphics.forEach((g: any) => {
-      const id = g?.id;
-      if (id && !first[id]) first[id] = g;
-    });
+    frontGraphics.forEach((g: any) => { const id = g?.id; if (id && !first[id]) first[id] = g; });
     return Object.values(first);
   }, [frontGraphics]);
 
@@ -346,9 +333,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCountsById = useMemo(() => {
     const m: Record<string, number> = {};
-    (rearSelectedIds || []).forEach((id) => {
-      m[id] = (m[id] || 0) + 1;
-    });
+    (rearSelectedIds || []).forEach((id) => { m[id] = (m[id] || 0) + 1; });
     return m;
   }, [rearSelectedIds]);
   const rearUnique = useMemo(() => {
@@ -356,7 +341,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
   }, [rearSelectedIds, rearMeta]);
 
-  // Эпитафии (по сторонам)
   const frontEpitaphs: string[] = useMemo(() => {
     const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
     if (arr.length) return arr;
@@ -377,7 +361,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     (rearEpitaphs && rearEpitaphs.length > 0) ||
     (backWishes && backWishes.trim().length > 0);
 
-  // Extras (плита)
   const extras: any = (order as any)?.extras || {};
   const plateEnabled: boolean = !!extras.headstonePlate;
   const plateIds: string[] = (extras.plateGraphicsIds as string[]) || [];
@@ -391,12 +374,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta]);
 
-  // Сохранение (патч)
   const saveAll = () => {
-    const epLines = (epitaphsText || "")
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
     const introNext: Intro = {
       customerName: (name || "").trim(),
       customerPhone: (phone || "").trim(),
@@ -428,10 +407,20 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const panelId = "order-panel";
   const p = palette(theme);
 
+  // NEW: sticky offset under global StepNav
+  const stickyTop = "calc(var(--global-stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))";
+
   return (
     <div
       style={{
-        marginTop: compact ? 1 : 10,
+        // NEW: держим топбар сверху при скролле и гарантируем, что он ниже StepNav
+        position: "sticky",
+        top: stickyTop,
+        zIndex: 2000,
+
+        // NEW: чтобы при самом верху страницы кнопка не оказалась под fixed StepNav
+        paddingTop: stickyTop,
+
         marginLeft: compact ? 1 : 0,
         marginRight: compact ? 1 : 0,
         marginBottom: compact ? 8 : 10
@@ -465,30 +454,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         </div>
 
         <div style={{ display: "grid", gap: 3, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
-          <div
-            style={{
-              fontSize: compact ? 14 : 16,
-              fontWeight: 700,
-              whiteSpace: "nowrap",
-              maxWidth: "56vw",
-              overflow: "hidden",
-              textOverflow: "ellipsis"
-            }}
-          >
+          <div style={{ fontSize: compact ? 14 : 16, fontWeight: 700, whiteSpace: "nowrap", maxWidth: "56vw", overflow: "hidden", textOverflow: "ellipsis" }}>
             {(editing ? name : intro?.customerName) || "—"}
           </div>
           {phoneLine && (
-            <div
-              style={{
-                fontSize: compact ? 12 : 13,
-                opacity: 0.92,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: compact ? "56vw" : "50vw"
-              }}
-              title={phoneLine}
-            >
+            <div style={{ fontSize: compact ? 12 : 13, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: compact ? "56vw" : "50vw" }} title={phoneLine}>
               {phoneLine}
             </div>
           )}
@@ -502,43 +472,13 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         ref={coll.ref}
         style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
       >
-        <section
-          style={{
-            background: p.panelBg,
-            border: p.panelBorder,
-            borderRadius: compact ? 10 : 12,
-            color: p.text,
-            ...paperShadow(theme),
-            padding: compact ? 8 : 12,
-            display: "grid",
-            gap: compact ? 8 : 10
-          }}
-        >
+        <section style={{ background: p.panelBg, border: p.panelBorder, borderRadius: compact ? 10 : 12, color: p.text, ...paperShadow(theme), padding: compact ? 8 : 12, display: "grid", gap: compact ? 8 : 10 }}>
           {/* Действия */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                const next: ThemeMode = theme === "dark" ? "light" : "dark";
-                setTheme(next);
-                saveTheme(next);
-              }}
-              style={linkButtonStyle(theme)}
-              className="link-like"
-            >
+            <button type="button" onClick={(e) => { e.stopPropagation(); const next: ThemeMode = theme === "dark" ? "light" : "dark"; setTheme(next); saveTheme(next); }} style={linkButtonStyle(theme)} className="link-like">
               {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
             </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (editing) saveAll();
-                setEditing((v) => !v);
-              }}
-              style={linkButtonStyle(theme)}
-              className="link-like"
-            >
+            <button type="button" onClick={(e) => { e.stopPropagation(); if (editing) saveAll(); setEditing((v) => !v); }} style={linkButtonStyle(theme)} className="link-like">
               {editing ? "Сохранить" : "Редактировать"}
             </button>
           </div>
@@ -546,7 +486,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           {/* Номер заказа */}
           <div style={{ fontSize: 13, opacity: 0.9 }}>№ {orderNumber}</div>
 
-          {/* ... остальная часть файла без изменений ... */}
+          {/* ... дальше файл без изменений ... */}
 
           {/* Очистить всё */}
           <div style={{ marginTop: 2, paddingTop: 10, borderTop: p.divider, display: "flex", justifyContent: "center" }}>
@@ -561,18 +501,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 setEditing(false);
                 setOpen(false);
                 setOrder({ graphics: [], updatedAt: Date.now() } as any);
-                setName("");
-                setPhone("");
-                setContactNotes("");
-                setSizeNotes("");
-                setEpitaphsText("");
-                setOrderNotes("");
-                setFrontWishes("");
-                setBackWishes("");
+                setName(""); setPhone(""); setContactNotes(""); setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
+                setFrontWishes(""); setBackWishes("");
                 try {
                   window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
                   window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-                  // NEW:
                   window.dispatchEvent(new Event("memorial:resetAll"));
                 } catch {}
               }}
