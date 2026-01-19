@@ -1,11 +1,12 @@
 // src/screens/ReviewAndSendStep.tsx
 // Шаг «Обзор и подтверждение»
 //
-// По задаче:
-// - Тыльная сторона: используем уже растрированный эскиз (draft.editorBack.previewHiUrl/previewUrl) и показываем его (img).
-// - Эпитафии плиты сохраняем в draft.extras → отображаются в TopBar.
-// - Аккордеон «Надгробная плита»: клик по заголовку в закрытом состоянии включает чекбокс и разворачивает.
-// - Делаем скриншот топбара (вместе с кнопкой) и отправляем отдельной картинкой в Telegram.
+// Что делает:
+// - Тыльная сторона: показывает уже растрированный эскиз из draft.editorBack.previewHiUrl/previewUrl (его должен сохранять BackEditorStep при переходах).
+// - Эпитафии плиты и параметры сохраняем в draft.extras — TopBar их видит.
+// - Аккордеон «Надгробная плита»: при клике по заголовку в закрытом состоянии включает чекбокс и разворачивается.
+// - Скриншот топбара делаем НЕ сразу, а по нажатию «Отправить»: перед снимком разворачиваем TopBar, скроллим к верху и ждём стабилизации, чтобы в кадр попали и кнопка, и номер заявки.
+// - В Telegram отправляем: маркеры начала/конца, текст, эскиз(ы), скриншот топбара и фото персон (каждое отдельно).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -46,13 +47,11 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): 
     padding: pad,
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.28)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
+    background: "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
     color: "#fff",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
-    boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
     opacity: disabled ? 0.6 : 1
   };
 }
@@ -74,7 +73,6 @@ const sectionBox: React.CSSProperties = {
   borderRadius: 10,
   padding: 10
 };
-
 function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) {
   return (
     <div
@@ -92,11 +90,7 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
       }}
     >
       {url ? (
-        <img
-          src={url}
-          alt={alt}
-          style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }}
-        />
+        <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
       ) : (
         <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
       )}
@@ -105,41 +99,9 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
 }
 function BusyOverlay({ text = "Идёт обработка…" }: { text?: string }) {
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 20000,
-        background: "rgba(0,0,0,0.45)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center"
-      }}
-    >
-      <div
-        style={{
-          background: "#111",
-          color: "#fff",
-          padding: 16,
-          borderRadius: 12,
-          border: "1px solid rgba(255,255,255,0.2)",
-          minWidth: 220,
-          textAlign: "center",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.5)"
-        }}
-      >
-        <div
-          className="spinner"
-          style={{
-            margin: "0 auto 10px",
-            width: 28,
-            height: 28,
-            border: "3px solid rgba(255,255,255,0.35)",
-            borderTopColor: "#fff",
-            borderRadius: "50%",
-            animation: "spin 0.8s linear infinite"
-          }}
-        />
+    <div style={{ position: "fixed", inset: 0, zIndex: 20000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#111", color: "#fff", padding: 16, borderRadius: 12, border: "1px solid rgba(255,255,255,0.2)", minWidth: 220, textAlign: "center", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
+        <div className="spinner" style={{ margin: "0 auto 10px", width: 28, height: 28, border: "3px solid rgba(255,255,255,0.35)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
         <div>{text}</div>
         <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
       </div>
@@ -166,35 +128,14 @@ function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 /* ========= Top hint ========= */
 function TopHintNotice() {
   return (
-    <div
-      role="note"
-      aria-live="polite"
-      style={{
-        margin: "10px 0",
-        padding: "10px 12px",
-        borderRadius: 12,
-        background: "rgba(255,255,255,0.06)",
-        border: "1px solid rgba(255,255,255,0.25)",
-        color: "#ddd",
-        fontWeight: 400,
-        fontStyle: "italic"
-      }}
-    >
+    <div role="note" aria-live="polite" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.25)", color: "#ddd", fontWeight: 400, fontStyle: "italic" }}>
       Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.
     </div>
   );
 }
 
 /* ========= Header summary ========= */
-function EditableOrderSummary({
-  orderNo,
-  onOpenTop,
-  onDirty
-}: {
-  orderNo: string;
-  onOpenTop: () => void;
-  onDirty?: () => void;
-}) {
+function EditableOrderSummary({ orderNo, onOpenTop, onDirty }: { orderNo: string; onOpenTop: () => void; onDirty?: () => void; }) {
   const introInitial = loadIntroState().intro || {};
   const [name, setName] = useState<string>(introInitial.customerName || "");
   const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
@@ -223,17 +164,7 @@ function EditableOrderSummary({
 }
 
 /* ========= Accordion ========= */
-function LoudAccordion({
-  title,
-  open,
-  onToggle,
-  children
-}: {
-  title: React.ReactNode;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
+function LoudAccordion({ title, open, onToggle, children }: { title: React.ReactNode; open: boolean; onToggle: () => void; children: React.ReactNode; }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
   useEffect(() => {
@@ -274,17 +205,7 @@ function LoudAccordion({
 }
 
 /* ========= Graphics grid ========= */
-function CatGrid({
-  items,
-  plateIds,
-  addGraphic,
-  removeGraphic
-}: {
-  items: any[];
-  plateIds: string[];
-  addGraphic: (g: any) => void;
-  removeGraphic: (gid: string) => void;
-}) {
+function CatGrid({ items, plateIds, addGraphic, removeGraphic }: { items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void; }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
   useEffect(() => {
@@ -306,81 +227,20 @@ function CatGrid({
         const thumbUrl = g.preview || g.url || "";
         const name = g.name || gid;
         return (
-          <div
-            key={gid}
-            aria-selected={selected}
-            style={{
-              ...glassPanelStyle(),
-              padding: 8,
-              borderRadius: 12,
-              position: "relative",
-              borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
-              boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
-            }}
-          >
-            <div
-              aria-hidden
-              style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                display: selected ? "inline-flex" : "none",
-                alignItems: "center",
-                gap: 4,
-                background: "rgba(10,127,46,0.95)",
-                color: "#fff",
-                borderRadius: 999,
-                padding: "0 6px",
-                fontSize: 11,
-                lineHeight: "18px",
-                height: 18
-              }}
-              title={`Выбрано: ${qty}`}
-            >
-              <span>✓</span>
-              <span>{qty}</span>
+          <div key={gid} aria-selected={selected} style={{ ...glassPanelStyle(), padding: 8, borderRadius: 12, position: "relative", borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)", boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined }}>
+            <div aria-hidden style={{ position: "absolute", top: 8, right: 8, display: selected ? "inline-flex" : "none", alignItems: "center", gap: 4, background: "rgba(10,127,46,0.95)", color: "#fff", borderRadius: 999, padding: "0 6px", fontSize: 11, lineHeight: "18px", height: 18 }} title={`Выбрано: ${qty}`}>
+              <span>✓</span><span>{qty}</span>
             </div>
-            <div
-              role="button"
-              title={name}
-              onClick={() => addGraphic(g)}
-              style={{
-                borderRadius: 10,
-                overflow: "hidden",
-                background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
-                aspectRatio: "1/1",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
-                cursor: "pointer",
-                outline: "none"
-              }}
-            >
-              {thumbUrl ? (
-                <img
-                  src={thumbUrl}
-                  alt={name}
-                  style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
-                />
-              ) : (
-                <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
-              )}
+            <div role="button" title={name} onClick={() => addGraphic(g)} style={{ borderRadius: 10, overflow: "hidden", background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)", aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center", border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)", cursor: "pointer", outline: "none" }}>
+              {thumbUrl ? <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} /> : <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>}
             </div>
-            <div
-              title={name}
-              style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}
-            >
+            <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
               {name}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
-                −
-              </button>
+              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>−</button>
               <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
-                +
-              </button>
+              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>+</button>
             </div>
           </div>
         );
@@ -442,10 +302,7 @@ function PlateBlock(props: {
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
-  useEffect(() => {
-    if (!extraPlate) setAccPlateOpen(false);
-  }, [extraPlate]);
-
+  useEffect(() => { if (!extraPlate) setAccPlateOpen(false); }, [extraPlate]);
   const markDirty = () => onDirty?.();
 
   const plateTitle = (
@@ -462,11 +319,7 @@ function PlateBlock(props: {
           if (e.target.checked) setAccPlateOpen(true);
           markDirty();
           const prev = loadOrderDraft();
-          saveOrderDraft({
-            ...prev,
-            extras: { ...(prev as any).extras, headstonePlate: e.target.checked },
-            updatedAt: Date.now()
-          });
+          saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: e.target.checked }, updatedAt: Date.now() });
         }}
         onClick={(e) => e.stopPropagation()}
       />
@@ -574,9 +427,7 @@ function PlateBlock(props: {
               {plateSize === "Свой вариант" && (
                 <input
                   value={plateCustomSize}
-                  onChange={(e) => {
-                    setPlateCustomSize(e.target.value);
-                  }}
+                  onChange={(e) => { setPlateCustomSize(e.target.value); }}
                   onBlur={(e) => {
                     const v = e.target.value.trim();
                     const prev = loadOrderDraft();
@@ -657,12 +508,8 @@ function PlateBlock(props: {
                   <textarea
                     rows={3}
                     value={plateEpitaph}
-                    onChange={(e) => {
-                      setPlateEpitaph(e.target.value);
-                    }}
-                    onBlur={(e) => {
-                      persistPlateEpitaph(e.target.value);
-                    }}
+                    onChange={(e) => { setPlateEpitaph(e.target.value); }}
+                    onBlur={(e) => { persistPlateEpitaph(e.target.value); }}
                     placeholder="Введите текст…"
                     style={{ ...inputStyle(), resize: "vertical" }}
                   />
@@ -710,14 +557,8 @@ function PlateBlock(props: {
                         <CatGrid
                           items={cat.items || []}
                           plateIds={plateIds}
-                          addGraphic={(g) => {
-                            addPlateGraphic(g);
-                            markDirty();
-                          }}
-                          removeGraphic={(gid) => {
-                            removePlateGraphic(gid);
-                            markDirty();
-                          }}
+                          addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
+                          removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
                         />
                         {(cat.children || []).map((sub: any, j: number) => (
                           <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
@@ -725,14 +566,8 @@ function PlateBlock(props: {
                             <CatGrid
                               items={sub.items || []}
                               plateIds={plateIds}
-                              addGraphic={(g) => {
-                                addPlateGraphic(g);
-                                markDirty();
-                              }}
-                              removeGraphic={(gid) => {
-                                removePlateGraphic(gid);
-                                markDirty();
-                              }}
+                              addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
+                              removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
                             />
                           </div>
                         ))}
@@ -771,6 +606,8 @@ async function ensureHtmlToImage(): Promise<any> {
 async function elementToPngDataUrl(node: HTMLElement | null, opts?: { pixelRatio?: number; bg?: string }): Promise<string | null> {
   if (!node) return null;
   const hti = await ensureHtmlToImage();
+  // дождаться раскладки
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   return await hti.toPng(node, {
     backgroundColor: opts?.bg || "#ffffff",
     pixelRatio: Math.max(1, Math.min(2, opts?.pixelRatio || 2)),
@@ -795,7 +632,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
 
-  // REF на топбар (для скриншота)
+  // Контейнер топбара для скриншота
   const topbarRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -812,19 +649,18 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
   }, []);
 
-  // Back: уже растрированный эскиз
+  // Тыльный эскиз берем из editorBack.previewHiUrl/previewUrl (BackEditorStep обязан это сохранять)
   function getBackSketchUrl(d: any): string | null {
-    const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
+    const eb = (d || {}).editorBack || {};
+    const raw = String(eb.previewHiUrl || eb.previewUrl || "").trim();
     if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
     return raw;
   }
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
-  useEffect(() => {
-    setBackCandidateUrl(getBackSketchUrl(draft));
-  }, [draft]);
+  useEffect(() => { setBackCandidateUrl(getBackSketchUrl(draft)); }, [draft]);
   const showBack = !!backCandidateUrl;
 
-  // Front
+  // Лицевая: исходник + пропорции
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
   const [aspect, setAspect] = useState<string | undefined>(undefined);
@@ -837,15 +673,10 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     im.src = itemUrl;
   }, [itemUrl]);
 
-  // Люди (лицевая)
+  // Люди (на лицевой)
   const frontPersons = ((draft.engraving?.persons as any[]) || []).filter(Boolean);
   const peopleBlocks = useMemo(
-    () =>
-      frontPersons.map((p: any, i: number) => ({
-        id: p.id || `p-${i}`,
-        lines: personLines(p),
-        photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null
-      })),
+    () => frontPersons.map((p: any, i: number) => ({ id: p.id || `p-${i}`, lines: personLines(p), photo: p.photoPreview || p.photoDataUrl || p.photoUrl || p.photo || null })),
     [frontPersons]
   );
 
@@ -861,16 +692,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита — состояния
+  // Плита — состояния (extras)
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
   const [plateCustomSize, setPlateCustomSize] = useState<string>(extras0.plateCustomSize || "");
   const [plateThickness, setPlateThickness] = useState<string>(extras0.plateThickness || "5 см");
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
-  const [plateOrientation, setPlateOrientation] = useState<string>(
-    extras0.plateOrientation || ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
-  );
+  const [plateOrientation, setPlateOrientation] = useState<string>(extras0.plateOrientation || ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical"));
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
@@ -915,12 +744,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
-      const collect = (arr: any[]) =>
-        (arr || []).forEach((it: any) => {
-          const id = String(it.id || it.relPath || it.url || it.name || "");
-          if (!id) return;
-          if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
-        });
+      const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
+        const id = String(it.id || it.relPath || it.url || it.name || "");
+        if (!id) return;
+        if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
+      });
       collect(cat.items || []);
       (cat.children || []).forEach((sub: any) => collect(sub.items || []));
     });
@@ -938,7 +766,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [deliveryVisible, setDeliveryVisible] = useState(false);
-
   const [textDelivered, setTextDelivered] = useState<boolean | null>(null);
   const [topbarDelivered, setTopbarDelivered] = useState<boolean | null>(null);
   const [frontSketchDelivered, setFrontSketchDelivered] = useState<boolean | null>(null);
@@ -947,20 +774,15 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
+  // Маркеры и текст
   async function sendMessage(text: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      const resp = await fetch("/api/tg-send-message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
-      });
+      const resp = await fetch("/api/tg-send-message", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       const raw = await resp.text().catch(() => "");
       let json: any = null;
       try { json = raw ? JSON.parse(raw) : null; } catch {}
       return { ok: !!(resp.ok && json?.ok), error: json?.error || raw || resp.statusText };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   }
   function startMarkerText(no: string): string { return `🪦 НАЧАЛО ЗАЯВКИ №${no || "—"}`; }
   function endMarkerText(no: string): string { return `🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${no || "—"}`; }
@@ -1016,22 +838,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     const lines: string[] = [];
     const orderNoLine = introObj?.orderNumber ? `Заявка №${introObj.orderNumber}` : "Заявка";
     lines.push(orderNoLine, "");
-
     lines.push("Клиент:");
     lines.push(`- Имя: ${(introObj?.intro?.customerName || "").trim() || "—"}`);
     lines.push(`- Телефон: ${(introObj?.intro?.customerPhone || "").trim() || "—"}`);
     if ((introObj?.intro?.customerNotes || "").trim()) lines.push(`- Примечание: ${(introObj?.intro?.customerNotes || "").trim()}`);
     lines.push("");
-
-    if (itemName) {
-      lines.push("Изделие:");
-      lines.push(`- Модель: ${itemName}`);
-      lines.push("");
-    }
-
+    if (itemName) { lines.push("Изделие:"); lines.push(`- Модель: ${itemName}`); lines.push(""); }
     lines.push("Люди:");
-    if (persons.length === 0) lines.push("- —");
-    else {
+    if (persons.length === 0) lines.push("- —"); else {
       persons.forEach((p) => {
         const fio = [p.last, p.namePatr].filter(Boolean).join(" ");
         lines.push(`- ${fio || "—"}`);
@@ -1039,22 +853,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       });
     }
     lines.push("");
-
-    if (epsFront.length) {
-      lines.push("Эпитафии (лицевая):");
-      epsFront.forEach((ep) => lines.push(`- ${ep}`));
-      lines.push("");
-    }
-    if (epsRear.length) {
-      lines.push("Эпитафии (тыльная):");
-      epsRear.forEach((ep) => lines.push(`- ${ep}`));
-      lines.push("");
-    }
-    if (gfxFront.length) {
-      lines.push("Графика (лицевая):");
-      gfxFront.forEach((n) => lines.push(`- ${n}`));
-      lines.push("");
-    }
+    if (epsFront.length) { lines.push("Эпитафии (лицевая):"); epsFront.forEach((ep) => lines.push(`- ${ep}`)); lines.push(""); }
+    if (epsRear.length) { lines.push("Эпитафии (тыльная):"); epsRear.forEach((ep) => lines.push(`- ${ep}`)); lines.push(""); }
+    if (gfxFront.length) { lines.push("Графика (лицевая):"); gfxFront.forEach((n) => lines.push(`- ${n}`)); lines.push(""); }
     if (gfxRear.length) {
       lines.push("Графика (тыльная):");
       gfxRear.forEach((n) => {
@@ -1064,34 +865,22 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       });
       lines.push("");
     }
-
     if (extraPlate) {
       lines.push("Надгробная плита:");
       if (pSize) lines.push(`- Размер: ${pSize}`);
       if (pWidth) lines.push(`- Ширина: ${pWidth}`);
       if (pThick) lines.push(`- Толщина: ${pThick}`);
       if (pOrient) lines.push(`- Ориентация: ${pOrient}`);
-      if (plateNames.length) {
-        lines.push("- Графика:");
-        plateNames.forEach((n) => lines.push(` • ${n}`));
-      }
-      if (plateEps.length) {
-        lines.push("- Эпитафии:");
-        plateEps.forEach((ep) => lines.push(` • ${ep}`));
-      }
+      if (plateNames.length) { lines.push("- Графика:"); plateNames.forEach((n) => lines.push(` • ${n}`)); }
+      if (plateEps.length) { lines.push("- Эпитафии:"); plateEps.forEach((ep) => lines.push(` • ${ep}`)); }
       lines.push("");
     }
-
     lines.push("Дополнительно:");
     lines.push(`- Цветник: ${flowerbed ? "да" : "нет"}`);
     lines.push(`- Тумба: ${tumba ? "да" : "нет"}`);
     lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
     lines.push("");
-
-    if (notes) {
-      lines.push("Комментарий к заказу:");
-      lines.push(notes, "");
-    }
+    if (notes) { lines.push("Комментарий к заказу:"); lines.push(notes, ""); }
 
     return lines.join("\n");
   }
@@ -1099,20 +888,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   async function sendLargeText(fullText: string): Promise<{ ok: boolean; errors: string[] }> {
     const parts: string[] = [];
     let cursor = 0;
-    while (cursor < fullText.length) {
-      parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE));
-      cursor += TELEGRAM_CHUNK_SIZE;
-    }
+    while (cursor < fullText.length) { parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE)); cursor += TELEGRAM_CHUNK_SIZE; }
     const errors: string[] = [];
     for (let i = 0; i < parts.length; i++) {
-      const resp = await fetch("/api/tg-send-message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: parts[i] })
-      });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch {}
+      const resp = await fetch("/api/tg-send-message", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: parts[i] }) });
+      const raw = await resp.text().catch(() => ""); let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
       if (!resp.ok || !json?.ok) errors.push(json?.error || raw || resp.statusText);
       await sleep(150);
     }
@@ -1126,21 +906,13 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         const dataUrl = await elementToPngDataUrl(el, { pixelRatio: 2, bg: opts?.bg || "#ffffff" });
         if (dataUrl) {
           const file = dataUrlToFile(dataUrl, `${nodeId}.png`);
-          const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
-            maxWidth: 2000,
-            maxHeight: 2000,
-            mime: "image/jpeg",
-            qualityStart: 0.9,
-            qualityMin: 0.55,
-            qualityStep: 0.08
-          });
+          const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, { maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08 });
           const fd = new FormData();
           fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
           fd.append("caption", caption);
           const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
           const raw = await resp.text().catch(() => "");
-          let json: any = null;
-          try { json = raw ? JSON.parse(raw) : null; } catch {}
+          let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
           if (resp.ok && json?.ok) return { ok: true };
           return { ok: false, error: json?.error || raw || resp.statusText };
         }
@@ -1158,27 +930,17 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         const dataUrl = await elementToPngDataUrl(el, { pixelRatio: 2, bg: "#ffffff" });
         if (dataUrl) {
           const file = dataUrlToFile(dataUrl, `${nodeId}.png`);
-          const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
-            maxWidth: 2000,
-            maxHeight: 2000,
-            mime: "image/jpeg",
-            qualityStart: 0.9,
-            qualityMin: 0.55,
-            qualityStep: 0.08
-          });
+          const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, { maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08 });
           const fd = new FormData();
           fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
           fd.append("caption", caption);
           const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
           const raw = await resp.text().catch(() => "");
-          let json: any = null;
-          try { json = raw ? JSON.parse(raw) : null; } catch {}
+          let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
           if (resp.ok && json?.ok) return { ok: true };
         }
       }
-    } catch (e) {
-      // ignore, пойдём по URL
-    }
+    } catch (e) {}
     try {
       if (fallbackUrl) {
         const fd2 = new FormData();
@@ -1186,14 +948,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         fd2.append("caption", caption);
         const r2 = await fetch("/api/tg-send-photo", { method: "POST", body: fd2 });
         const raw2 = await r2.text().catch(() => "");
-        let j2: any = null;
-        try { j2 = raw2 ? JSON.parse(raw2) : null; } catch {}
+        let j2: any = null; try { j2 = raw2 ? JSON.parse(raw2) : null; } catch {}
         if (r2.ok && j2?.ok) return { ok: true };
         return { ok: false, error: j2?.error || raw2 || r2.statusText };
       }
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
     return { ok: false, error: "Не удалось отправить эскиз" };
   }
 
@@ -1220,6 +979,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return out;
   }
 
+  // Гарантированно разворачиваем TopBar перед снимком
+  async function ensureTopbarOpenAndReady() {
+    try { window.dispatchEvent(new Event("memorial:openTopBarPanel")); } catch {}
+    window.scrollTo({ top: 0, behavior: "auto" });
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await sleep(140);
+  }
+
   const sendOrderDirect = async (showBackInner: boolean, backUrlInner: string | null) => {
     setUploading(true);
     setUploadProgress(0);
@@ -1232,19 +999,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     setPhotosDelivered(0);
 
     const warnings: string[] = [];
-
     try {
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
 
       // Стартовый маркер
       await sendMessage(startMarkerText(orderNoCur));
 
-      // Скриншот топбара
-      const tbRes = await sendNodeShot("topbar-capture", `Заявка №${orderNoCur} — шапка`);
+      // Скриншот топбара делаем именно сейчас: разворачиваем + ждём
+      await ensureTopbarOpenAndReady();
+      const tbRes = await sendNodeShot("topbar-capture", `Заявка №${orderNoCur || "—"} — шапка`);
       setTopbarDelivered(tbRes.ok);
       if (!tbRes.ok && tbRes.error) warnings.push(`Шапка не отправлена: ${tbRes.error}`);
 
-      // Текст
+      // Текст заявки
       const full = buildOrderText();
       const tRes = await sendLargeText(full);
       setTextDelivered(tRes.ok);
@@ -1255,34 +1022,26 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // Эскиз (тыльная)
+      // Эскиз (тыльная) — готовый растр из editorBack.*, отображается как <img>, а для отправки используем DOM→PNG (как fallback URL)
       if (showBackInner && backUrlInner) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backUrlInner);
         setBackSketchDelivered(backRes.ok);
         if (!backRes.ok && backRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${backRes.error}`);
       }
 
-      // Фото
+      // Фото персон
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
       let delivered = 0;
       for (let i = 0; i < photos.length; i++) {
         const ph = photos[i];
-        const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, {
-          maxWidth: 2000,
-          maxHeight: 2000,
-          mime: "image/jpeg",
-          qualityStart: 0.9,
-          qualityMin: 0.55,
-          qualityStep: 0.08
-        });
+        const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, { maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08 });
         const fd = new FormData();
         fd.append("file", new File([compressed], ph.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
         fd.append("caption", ph.caption);
         const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
         const raw = await r.text().catch(() => "");
-        let json: any = null;
-        try { json = raw ? JSON.parse(raw) : null; } catch {}
+        let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
         if (!r.ok || !json?.ok) {
           warnings.push(`Фото не отправлено (${ph.name}): ${json?.error || raw || r.statusText}`);
         } else {
@@ -1332,19 +1091,18 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       await sendOrderDirect(showBack, backCandidateUrl);
       setConfirmOpen(false);
       setIsDirtyAfterSend(false);
-      setTimeout(() => {
-        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      }, 150);
+      setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
     } finally {
       setIsSending(false);
     }
   }
 
+  // UI: overlay text
   const overlayText =
     uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%`
-    : isSending ? "Отправляем заказ…"
-    : isSaving ? "Формируем PDF…"
-    : "";
+      : isSending ? "Отправляем заказ…"
+      : isSaving ? "Формируем PDF…"
+      : "";
 
   return (
     <div style={safeRoot()}>
@@ -1356,11 +1114,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       </div>
 
       {/* Контакты и № заказа */}
-      <EditableOrderSummary
-        orderNo={orderNo}
-        onOpenTop={() => {}}
-        onDirty={() => sentOk && setIsDirtyAfterSend(true)}
-      />
+      <EditableOrderSummary orderNo={orderNo} onOpenTop={() => {}} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
 
       {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
@@ -1437,30 +1191,17 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
         <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
           <div id="pdf-front-sketch" style={{ position: "absolute", inset: 0 }}>
-            <SketchTemplate
-              item={item}
-              peopleBlocks={peopleBlocks}
-              crosses={selectedCrosses}
-              others={selectedOthers}
-              epitaphs={frontEpitaphs}
-              carvingOpacity={0.4}
-            />
+            <SketchTemplate item={item} peopleBlocks={peopleBlocks} crosses={selectedCrosses} others={selectedOthers} epitaphs={frontEpitaphs} carvingOpacity={0.4} />
           </div>
         </div>
       </section>
 
-      {/* Эскиз тыльной */}
+      {/* Эскиз тыльной — готовый растр из BackEditor */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-            <img
-              id="pdf-back-sketch"
-              src={backCandidateUrl}
-              crossOrigin="anonymous"
-              alt=""
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-            />
+            <img id="pdf-back-sketch" src={backCandidateUrl} crossOrigin="anonymous" alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
           </div>
         </section>
       )}
@@ -1479,9 +1220,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 {chosenPlateList.map((g, i) => (
                   <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {g.name || g.id}
-                    </div>
+                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
                   </div>
                 ))}
               </div>
@@ -1501,9 +1240,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       {/* Комментарий к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-        <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>
-          Комментарий к заказу
-        </label>
+        <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>Комментарий к заказу</label>
         <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
           Не беспокойтесь: даже при отсутствии нужного пункта финальное подтверждение — по телефону или лично.
         </div>
@@ -1523,63 +1260,25 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         />
       </section>
 
-      {/* Кнопки */}
+      {/* Кнопки отправки */}
       {(!sentOk || isDirtyAfterSend) && (
         <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
-          <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>
-            Назад
-          </button>
-          <button
-            type="button"
-            onPointerUp={() => setConfirmOpen(true)}
-            onClick={() => setConfirmOpen(true)}
-            style={glassButtonStyle("sm")}
-          >
-            Отправить менеджеру
-          </button>
+          <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>Назад</button>
+          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>Отправить менеджеру</button>
         </div>
       )}
 
       {/* Подтверждение */}
       {confirmOpen && (
-        <div
-          role="dialog"
-          aria-modal
-          style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }}
-          onPointerUp={() => { if (!isSending && !uploading) setConfirmOpen(false); }}
-        >
-          <div
-            onPointerUp={(e) => e.stopPropagation()}
-            onClick={(e) => (e.stopPropagation() as any)}
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: "#fff",
-              color: "#111",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              padding: 16,
-              boxShadow: "0 -20px 60px rgba(0,0,0,0.45)",
-              transform: "translateY(8px)",
-              opacity: 0,
-              animation: "sheetIn 180ms ease forwards"
-            }}
-          >
+        <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onPointerUp={() => { if (!isSending && !uploading) setConfirmOpen(false); }}>
+          <div onPointerUp={(e) => e.stopPropagation()} onClick={(e) => (e.stopPropagation() as any)} style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "#fff", color: "#111", borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16, boxShadow: "0 -20px 60px rgba(0,0,0,0.45)", transform: "translateY(8px)", opacity: 0, animation: "sheetIn 180ms ease forwards" }}>
             <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
             <div style={{ position: "absolute", top: 8, right: 8 }}>
               <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть" className="btn" disabled={isSending || uploading}>×</button>
             </div>
             <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам в Telegram?</div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                className="btn"
-                onPointerUp={handleSend}
-                onClick={handleSend}
-                disabled={isSending || uploading}
-                style={{ background: "#e5ffe5", borderColor: "#99d199" }}
-              >
+              <button className="btn" onPointerUp={handleSend} onClick={handleSend} disabled={isSending || uploading} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
                 {isSending || uploading ? "Отправляем…" : "Отправить"}
               </button>
             </div>
@@ -1587,57 +1286,22 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
-      {/* Нижний блок: статусы */}
+      {/* Нижний объединённый блок: статусы */}
       {(deliveryVisible || sentOk) && (
         <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
-            <div style={{ opacity: 0.92, marginBottom: 10 }}>
-              {`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}
-            </div>
+            <div style={{ opacity: 0.92, marginBottom: 10 }}>{`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}</div>
             <div style={{ ...sectionBox, marginBottom: 10 }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Статус доставки</div>
               <div style={{ display: "grid", gap: 6 }}>
-                <div>
-                  <span style={{ opacity: 0.85 }}>Шапка — </span>
-                  <strong style={{ color: topbarDelivered == null ? "#ccc" : topbarDelivered ? "#7dffa0" : "#ffb4b4" }}>
-                    {topbarDelivered == null ? "—" : topbarDelivered ? "да" : "нет"}
-                  </strong>
-                </div>
-                <div>
-                  <span style={{ opacity: 0.85 }}>Текст — </span>
-                  <strong style={{ color: textDelivered == null ? "#ccc" : textDelivered ? "#7dffa0" : "#ffb4b4" }}>
-                    {textDelivered == null ? "—" : textDelivered ? "да" : "нет"}
-                  </strong>
-                </div>
-                <div>
-                  <span style={{ opacity: 0.85 }}>Эскиз (лицевая) — </span>
-                  <strong style={{ color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
-                    {frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}
-                  </strong>
-                </div>
-                {showBack && (
-                  <div>
-                    <span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span>
-                    <strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
-                      {backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}
-                    </strong>
-                  </div>
-                )}
+                <div><span style={{ opacity: 0.85 }}>Шапка — </span><strong style={{ color: topbarDelivered == null ? "#ccc" : topbarDelivered ? "#7dffa0" : "#ffb4b4" }}>{topbarDelivered == null ? "—" : topbarDelivered ? "да" : "нет"}</strong></div>
+                <div><span style={{ opacity: 0.85 }}>Текст — </span><strong style={{ color: textDelivered == null ? "#ccc" : textDelivered ? "#7dffa0" : "#ffb4b4" }}>{textDelivered == null ? "—" : textDelivered ? "да" : "нет"}</strong></div>
+                <div><span style={{ opacity: 0.85 }}>Эскиз (лицевая) — </span><strong style={{ color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>{frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}</strong></div>
+                {showBack && (<div><span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span><strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>{backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}</strong></div>)}
                 <div>
                   <span style={{ opacity: 0.85 }}>Фото — </span>
-                  <strong
-                    style={{
-                      color:
-                        photosDelivered === photosTotal
-                          ? "#7dffa0"
-                          : photosDelivered > 0
-                            ? "#ffd666"
-                            : photosTotal === 0
-                              ? "#ccc"
-                              : "#ffb4b4"
-                    }}
-                  >
+                  <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : photosTotal === 0 ? "#ccc" : "#ffb4b4" }}>
                     {photosTotal > 0 ? `${photosDelivered} из ${photosTotal}` : "—"}
                   </strong>
                 </div>
@@ -1645,32 +1309,17 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
               {lastWarnings.length > 0 && (
                 <details style={{ marginTop: 8 }}>
                   <summary style={{ cursor: "pointer" }}>Подробности</summary>
-                  <ul style={{ margin: "6px 0 0 20px" }}>
-                    {lastWarnings.map((w, i) => (<li key={`w-${i}`} style={{ marginBottom: 4 }}>{w}</li>))}
-                  </ul>
+                  <ul style={{ margin: "6px 0 0 20px" }}>{lastWarnings.map((w, i) => (<li key={`w-${i}`} style={{ marginBottom: 4 }}>{w}</li>))}</ul>
                 </details>
               )}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(
-                (textDelivered === false) ||
-                (topbarDelivered === false) ||
-                (frontSketchDelivered === false) ||
-                (showBack && backSketchDelivered === false) ||
-                (photosTotal > 0 && photosDelivered < photosTotal)
-              ) && (
-                <button
-                  type="button"
-                  onClick={() => sendOrderDirect(showBack, backCandidateUrl)}
-                  disabled={uploading || isSending}
-                  style={glassButtonStyle("sm", uploading || isSending)}
-                >
+              {(textDelivered === false || topbarDelivered === false || frontSketchDelivered === false || (showBack && backSketchDelivered === false) || (photosTotal > 0 && photosDelivered < photosTotal)) && (
+                <button type="button" onClick={() => sendOrderDirect(showBack, backCandidateUrl)} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
               )}
-              <button type="button" onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>
-                {isSaving ? "Формируем PDF…" : "Скачать PDF"}
-              </button>
+              <button type="button" onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>{isSaving ? "Формируем PDF…" : "Скачать PDF"}</button>
             </div>
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
               Если часть данных не доставилась, скачайте PDF и отправьте менеджеру вручную (в Telegram или по почте).

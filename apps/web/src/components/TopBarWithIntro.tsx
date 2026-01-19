@@ -624,7 +624,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
                 <span style={chip(theme)}>Люди на памятнике</span>
-                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона есть</span>}
+                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"), gap: 16 }}>
