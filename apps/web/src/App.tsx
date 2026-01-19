@@ -1,10 +1,4 @@
 // src/App.tsx
-// - Глобальная StepNav теперь FIXED (не ломает sticky-меню внутри шагов).
-// - Внутренние меню внутри шагов остаются sticky как раньше.
-// - scrollRef остаётся (overflow:auto), чтобы sticky работал внутри одного скролл-контейнера.
-// - Добавлен scrollPaddingTop под fixed StepNav (через CSS переменную --global-stepnav-h).
-// - Скролл при смене шага сбрасываем только у scrollRef.
-
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Start from "./screens/Start";
 import SizeStep from "./screens/SizeStep";
@@ -51,56 +45,36 @@ function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false) {
   } as React.CSSProperties;
 }
 
-// Скрываем из StepNav «extras» и «editor»
 const NAV_STEPS = STEPS.filter((s) => s.id !== "extras" && s.id !== "editor");
 const STEP_IDS = NAV_STEPS.map((s) => s.id);
 const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
 const localStepFromId = (id: StepId): Step => {
   switch (id) {
-    case "item":
-      return "start";
-    case "params":
-      return "size";
-    case "persons":
-      return "inscription";
-    case "graphics":
-      return "graphics";
-    case "epitaph":
-      return "epitaph";
-    case "editor":
-      return "editorBack";
-    case "rear":
-      return "editorBack";
-    case "extras":
-      return "review";
-    case "finish":
-      return "review";
-    default:
-      return "start";
+    case "item": return "start";
+    case "params": return "size";
+    case "persons": return "inscription";
+    case "graphics": return "graphics";
+    case "epitaph": return "epitaph";
+    case "editor": return "editorBack";
+    case "rear": return "editorBack";
+    case "extras": return "review";
+    case "finish": return "review";
+    default: return "start";
   }
 };
 
 const idFromLocalStep = (s: Step): StepId => {
   switch (s) {
-    case "start":
-      return "item";
-    case "size":
-      return "params";
-    case "inscription":
-      return "persons";
-    case "graphics":
-      return "graphics";
-    case "epitaph":
-      return "epitaph";
-    case "editorBack":
-      return "rear";
-    case "review":
-      return "finish";
-    case "done":
-      return "finish";
-    default:
-      return "item";
+    case "start": return "item";
+    case "size": return "params";
+    case "inscription": return "persons";
+    case "graphics": return "graphics";
+    case "epitaph": return "epitaph";
+    case "editorBack": return "rear";
+    case "review": return "finish";
+    case "done": return "finish";
+    default: return "item";
   }
 };
 
@@ -110,11 +84,6 @@ function getStepIdFromLocation(win: Window = window): StepId {
     const hparts = hash.split(/[/?#]/).filter(Boolean);
     for (let i = hparts.length - 1; i >= 0; i--) {
       const token = decodeURIComponent(hparts[i]);
-      if (isStepId(token)) return token as StepId;
-    }
-    const pparts = (win.location.pathname || "").split("/").filter(Boolean);
-    for (let i = pparts.length - 1; i >= 0; i--) {
-      const token = decodeURIComponent(pparts[i]);
       if (isStepId(token)) return token as StepId;
     }
     const sp = new URLSearchParams(win.location.search);
@@ -158,7 +127,6 @@ export default function App() {
   const [decor, setDecor] = useState<any>({});
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // restore progress
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -175,7 +143,6 @@ export default function App() {
     } catch {}
   }, []);
 
-  // sync with URL at mount
   useEffect(() => {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
@@ -186,7 +153,6 @@ export default function App() {
     }
   }, []);
 
-  // back/forward
   useEffect(() => {
     const onChange = () => {
       const id = getStepIdFromLocation();
@@ -205,7 +171,6 @@ export default function App() {
     };
   }, []);
 
-  // persist progress
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -216,7 +181,6 @@ export default function App() {
     } catch {}
   }, [step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked]);
 
-  // guards
   useEffect(() => {
     if (!selectedItem && step !== "start") { setStep("start"); return; }
     if (step !== "start" && !sizeResult) { setStep("size"); return; }
@@ -226,7 +190,6 @@ export default function App() {
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
-  // scroll to top on step change (inside scroll container)
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -236,7 +199,6 @@ export default function App() {
     return () => { clearTimeout(t0); clearTimeout(t1); };
   }, [step]);
 
-  // hash sync + unlock
   useEffect(() => {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
@@ -253,7 +215,6 @@ export default function App() {
     setHashForStep(id as StepId);
   };
 
-  // callbacks
   const onStartConfirm = (item: any) => { setSelectedItem(item); setStep("size"); };
 
   const onSizeBack = () => setStep("start");
@@ -304,11 +265,9 @@ export default function App() {
           WebkitOverflowScrolling: "touch",
           overscrollBehavior: "contain",
           position: "relative",
-          // учитываем fixed StepNav при скролле к якорям/внутренним sticky
           scrollPaddingTop: "calc(var(--global-stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))"
         }}
       >
-        {/* Шаги */}
         {step === "start" && <Start onConfirm={onStartConfirm} />}
 
         {step === "size" && selectedItem && (
@@ -363,7 +322,7 @@ export default function App() {
         )}
       </div>
 
-      {/* Глобальная StepNav поверх всего (fixed), появляется после unlock */}
+      {/* FIXED StepNav overlay (не перекрывает клики вне панели) */}
       {step !== "done" && navUnlocked && (
         <StepNav
           steps={NAV_STEPS}
@@ -372,7 +331,7 @@ export default function App() {
           enabled={true}
           mode="fixed"
           topOffset={6}
-          cssVarKey="--global-stepnav-h"
+          heightCssVar="--global-stepnav-h"
         />
       )}
     </div>

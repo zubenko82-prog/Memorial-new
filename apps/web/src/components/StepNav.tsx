@@ -13,18 +13,17 @@ export type StepNavProps = {
   linkForId?: (id: string) => string;
   hint?: string;
 
-  // Positioning
-  sticky?: boolean; // legacy, kept for compatibility
-  topOffset?: number;
+  // Позиционирование
+  topOffset?: number; // px
+  mode?: "sticky" | "fixed"; // NEW: fixed для глобальной навигации
 
-  // Show/hide
+  // Показ
   enabled?: boolean;
   triggerId?: string | string[];
   persistKey?: string | null;
 
-  // NEW
-  mode?: "sticky" | "fixed"; // fixed = global overlay, no scroll conflicts
-  cssVarKey?: string; // default: --global-stepnav-h
+  // CSS var с высотой панели (для внутренних sticky в шагах)
+  heightCssVar?: string; // default: --global-stepnav-h
 };
 
 const defaultSteps: StepDef[] = [
@@ -75,14 +74,6 @@ function detectIdFromLocation(stepIds: string[]): string | null {
     const token = decodeURIComponent(parts[i]);
     if (stepIds.includes(token)) return token;
   }
-  const pathParts = (window.location.pathname || "").split("/").filter(Boolean);
-  for (let i = pathParts.length - 1; i >= 0; i--) {
-    const token = decodeURIComponent(pathParts[i]);
-    if (stepIds.includes(token)) return token;
-  }
-  const sp = new URLSearchParams(window.location.search);
-  const qp = sp.get("step");
-  if (qp && stepIds.includes(qp)) return qp;
   return null;
 }
 
@@ -94,10 +85,10 @@ function normId(id?: string | null): string {
     .replace(/[^a-z0-9-]/g, "");
 }
 
+// Важно: в App для review используется StepId="finish"
 function isReviewReached(currentId: string, trigger?: string | string[]): boolean {
   const cur = normId(currentId);
-  // В вашем App текущий id для review = "finish"
-  const defaults = ["review", "finish", "review-and-send", "reviewandsend", "reviewandsendstep"];
+  const defaults = ["finish", "review", "review-and-send", "reviewandsend", "reviewandsendstep"];
   const trg = Array.isArray(trigger) ? trigger : (trigger ? [trigger] : defaults);
   const trgNorm = trg.map(normId);
   return trgNorm.includes(cur);
@@ -112,13 +103,12 @@ export default function StepNav({
   onSelect,
   hint,
   linkForId,
-  sticky = true,
   topOffset = 6,
+  mode = "fixed",
   enabled: enabledProp,
   triggerId,
   persistKey = "memorial.navEnabled.reviewOnly",
-  mode,
-  cssVarKey = "--global-stepnav-h"
+  heightCssVar = "--global-stepnav-h"
 }: StepNavProps) {
   const ids = useMemo(() => steps.map((s) => s.id), [steps]);
 
@@ -159,16 +149,17 @@ export default function StepNav({
     return 0;
   }, [curIdComputed, ids, current, steps.length]);
 
-  const effectiveMode: "sticky" | "fixed" = mode ?? (sticky ? "sticky" : "sticky");
+  const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/${encodeURIComponent(id)}`);
+
   const topValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
 
-  // measure height -> css var
+  // измеряем высоту nav -> CSS var (чтобы внутренние sticky могли сдвигаться)
   const navRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (typeof document === "undefined") return;
 
     if (!enabled) {
-      try { document.documentElement.style.setProperty(cssVarKey, "0px"); } catch {}
+      try { document.documentElement.style.setProperty(heightCssVar, "0px"); } catch {}
       return;
     }
 
@@ -177,7 +168,7 @@ export default function StepNav({
 
     const measure = () => {
       const h = Math.ceil(el.getBoundingClientRect().height || 0);
-      try { document.documentElement.style.setProperty(cssVarKey, `${h}px`); } catch {}
+      try { document.documentElement.style.setProperty(heightCssVar, `${h}px`); } catch {}
     };
 
     measure();
@@ -188,10 +179,10 @@ export default function StepNav({
       window.removeEventListener("resize", measure);
       ro.disconnect();
     };
-  }, [enabled, steps.length, cssVarKey]);
+  }, [enabled, steps.length, heightCssVar]);
 
   const containerStyle: React.CSSProperties =
-    effectiveMode === "fixed"
+    mode === "fixed"
       ? {
           position: "fixed",
           top: topValue,
@@ -200,7 +191,7 @@ export default function StepNav({
           zIndex: 30000,
           display: "grid",
           gap: 6,
-          pointerEvents: "none"
+          pointerEvents: "none" // не перекрываем клики под собой
         }
       : {
           position: "sticky",
@@ -210,8 +201,6 @@ export default function StepNav({
           gap: 6,
           pointerEvents: "none"
         };
-
-  const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/${encodeURIComponent(id)}`);
 
   if (!enabled) return null;
 
@@ -237,7 +226,7 @@ export default function StepNav({
           boxShadow: "0 4px 20px rgba(0,0,0,0.20)",
           width: "100%",
           boxSizing: "border-box",
-          pointerEvents: "auto"
+          pointerEvents: "auto" // кликаем только по самой панели
         }}
       >
         {steps.map((s, idx) => {
@@ -268,9 +257,6 @@ export default function StepNav({
                 willChange: "transform",
                 padding: 2
               }}
-              onPointerDown={(el) => ((el.currentTarget as HTMLAnchorElement).style.transform = "scale(0.96)")}
-              onPointerUp={(el) => ((el.currentTarget as HTMLAnchorElement).style.transform = "")}
-              onPointerLeave={(el) => ((el.currentTarget as HTMLAnchorElement).style.transform = "")}
             >
               {s.icon ?? <Icon id={s.id} />}
             </a>
@@ -278,9 +264,7 @@ export default function StepNav({
         })}
       </nav>
 
-      {hint && (
-        <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, pointerEvents: "auto" }}>{hint}</div>
-      )}
+      {hint && <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, pointerEvents: "auto" }}>{hint}</div>}
     </div>
   );
 }
