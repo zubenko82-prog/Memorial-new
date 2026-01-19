@@ -13,14 +13,18 @@ export type StepNavProps = {
   linkForId?: (id: string) => string;
   hint?: string;
 
-  sticky?: boolean;
+  // Positioning
+  sticky?: boolean; // legacy, kept for compatibility
   topOffset?: number;
 
+  // Show/hide
   enabled?: boolean;
   triggerId?: string | string[];
   persistKey?: string | null;
 
-  activateOnFinish?: boolean; // совместимость
+  // NEW
+  mode?: "sticky" | "fixed"; // fixed = global overlay, no scroll conflicts
+  cssVarKey?: string; // default: --global-stepnav-h
 };
 
 const defaultSteps: StepDef[] = [
@@ -92,6 +96,7 @@ function normId(id?: string | null): string {
 
 function isReviewReached(currentId: string, trigger?: string | string[]): boolean {
   const cur = normId(currentId);
+  // В вашем App текущий id для review = "finish"
   const defaults = ["review", "finish", "review-and-send", "reviewandsend", "reviewandsendstep"];
   const trg = Array.isArray(trigger) ? trigger : (trigger ? [trigger] : defaults);
   const trgNorm = trg.map(normId);
@@ -108,10 +113,12 @@ export default function StepNav({
   hint,
   linkForId,
   sticky = true,
-  topOffset = 6, // небольшой отступ сверху по умолчанию
+  topOffset = 6,
   enabled: enabledProp,
   triggerId,
-  persistKey = "memorial.navEnabled.reviewOnly"
+  persistKey = "memorial.navEnabled.reviewOnly",
+  mode,
+  cssVarKey = "--global-stepnav-h"
 }: StepNavProps) {
   const ids = useMemo(() => steps.map((s) => s.id), [steps]);
 
@@ -152,19 +159,25 @@ export default function StepNav({
     return 0;
   }, [curIdComputed, ids, current, steps.length]);
 
-  // NEW: измеряем высоту nav и кладём в CSS переменную (для sticky внутри шагов)
+  const effectiveMode: "sticky" | "fixed" = mode ?? (sticky ? "sticky" : "sticky");
+  const topValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
+
+  // measure height -> css var
   const navRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
+    if (typeof document === "undefined") return;
+
     if (!enabled) {
-      try { document.documentElement.style.setProperty("--stepnav-h", "0px"); } catch {}
+      try { document.documentElement.style.setProperty(cssVarKey, "0px"); } catch {}
       return;
     }
+
     const el = navRef.current;
     if (!el) return;
 
     const measure = () => {
       const h = Math.ceil(el.getBoundingClientRect().height || 0);
-      try { document.documentElement.style.setProperty("--stepnav-h", `${h}px`); } catch {}
+      try { document.documentElement.style.setProperty(cssVarKey, `${h}px`); } catch {}
     };
 
     measure();
@@ -175,13 +188,28 @@ export default function StepNav({
       window.removeEventListener("resize", measure);
       ro.disconnect();
     };
-  }, [enabled, steps.length]);
+  }, [enabled, steps.length, cssVarKey]);
 
-  const stickyTopValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
-
-  const containerStyle: React.CSSProperties = sticky
-    ? { position: "sticky", top: stickyTopValue, zIndex: 1000, display: "grid", gap: 6, pointerEvents: "none" }
-    : { display: "grid", gap: 6, pointerEvents: "none" };
+  const containerStyle: React.CSSProperties =
+    effectiveMode === "fixed"
+      ? {
+          position: "fixed",
+          top: topValue,
+          left: 0,
+          right: 0,
+          zIndex: 30000,
+          display: "grid",
+          gap: 6,
+          pointerEvents: "none"
+        }
+      : {
+          position: "sticky",
+          top: topValue,
+          zIndex: 1000,
+          display: "grid",
+          gap: 6,
+          pointerEvents: "none"
+        };
 
   const hrefOf = (id: string) => (linkForId ? linkForId(id) : `#/${encodeURIComponent(id)}`);
 
@@ -204,9 +232,9 @@ export default function StepNav({
           border: "1px solid rgba(255,255,255,0.14)",
           background:
             "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%), rgba(20,20,24,0.55)",
-          backdropFilter: sticky ? "blur(6px)" : undefined,
-          WebkitBackdropFilter: sticky ? "blur(6px)" : undefined,
-          boxShadow: sticky ? "0 4px 20px rgba(0,0,0,0.20)" : undefined,
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.20)",
           width: "100%",
           boxSizing: "border-box",
           pointerEvents: "auto"

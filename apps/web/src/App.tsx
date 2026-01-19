@@ -1,8 +1,9 @@
 // src/App.tsx
-// - StepNav липкая внутри scroll-контейнера.
-// - StepNav появляется только после первого достижения review (navUnlocked).
-// - Убрали paddingTop под StepNav: перекрытие кликов решаем в StepNav через pointer-events.
-// - Скролл при смене шага сбрасываем только у scroll-контейнера (scrollRef), чтобы не ломать WebView.
+// - Глобальная StepNav теперь FIXED (не ломает sticky-меню внутри шагов).
+// - Внутренние меню внутри шагов остаются sticky как раньше.
+// - scrollRef остаётся (overflow:auto), чтобы sticky работал внутри одного скролл-контейнера.
+// - Добавлен scrollPaddingTop под fixed StepNav (через CSS переменную --global-stepnav-h).
+// - Скролл при смене шага сбрасываем только у scrollRef.
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Start from "./screens/Start";
@@ -157,7 +158,7 @@ export default function App() {
   const [decor, setDecor] = useState<any>({});
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // Восстановление прогресса
+  // restore progress
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -174,7 +175,7 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Синхронизация c URL при входе
+  // sync with URL at mount
   useEffect(() => {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
@@ -204,7 +205,7 @@ export default function App() {
     };
   }, []);
 
-  // Сохранение прогресса
+  // persist progress
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -215,7 +216,7 @@ export default function App() {
     } catch {}
   }, [step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked]);
 
-  // Guards
+  // guards
   useEffect(() => {
     if (!selectedItem && step !== "start") { setStep("start"); return; }
     if (step !== "start" && !sizeResult) { setStep("size"); return; }
@@ -225,7 +226,7 @@ export default function App() {
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
-  // Скролл вверх при смене шага — ТОЛЬКО scrollRef
+  // scroll to top on step change (inside scroll container)
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -246,14 +247,13 @@ export default function App() {
     }
   }, [step]);
 
-  // Переход из StepNav
   const handleNavSelect = (_idx: number, id: string) => {
     if (!isStepId(id)) return;
     setStep(localStepFromId(id as StepId));
     setHashForStep(id as StepId);
   };
 
-  // Колбэки шагов
+  // callbacks
   const onStartConfirm = (item: any) => { setSelectedItem(item); setStep("size"); };
 
   const onSizeBack = () => setStep("start");
@@ -304,21 +304,11 @@ export default function App() {
           WebkitOverflowScrolling: "touch",
           overscrollBehavior: "contain",
           position: "relative",
-          scrollPaddingTop: "calc(var(--stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))"
+          // учитываем fixed StepNav при скролле к якорям/внутренним sticky
+          scrollPaddingTop: "calc(var(--global-stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))"
         }}
       >
-        {step !== "done" && navUnlocked && (
-          <StepNav
-            steps={NAV_STEPS}
-            currentId={currentWizardId}
-            onSelect={handleNavSelect}
-            sticky={true}
-            enabled={true}
-            activateOnFinish={false}
-            topOffset={0}
-          />
-        )}
-
+        {/* Шаги */}
         {step === "start" && <Start onConfirm={onStartConfirm} />}
 
         {step === "size" && selectedItem && (
@@ -372,6 +362,19 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Глобальная StepNav поверх всего (fixed), появляется после unlock */}
+      {step !== "done" && navUnlocked && (
+        <StepNav
+          steps={NAV_STEPS}
+          currentId={currentWizardId}
+          onSelect={handleNavSelect}
+          enabled={true}
+          mode="fixed"
+          topOffset={6}
+          cssVarKey="--global-stepnav-h"
+        />
+      )}
     </div>
   );
 }
