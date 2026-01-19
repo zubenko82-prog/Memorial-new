@@ -1,5 +1,19 @@
 // src/components/StepNav.tsx
+// Компактная навигация по шагам.
+//
+// Требование: панель должна появляться ТОЛЬКО после достижения шага ReviewAndSendStep,
+// а не сразу. После первого достижения — можно показывать на остальных шагах.
+//
+// Фиксы:
+// - Добавлен режим mode="fixed" (по умолчанию fixed).
+// - Для fixed-режима рендерим через portal в document.body, чтобы fixed не ломался
+//   из-за transform/filter/overflow-контейнеров (особенно в iOS/Telegram WebView).
+// - Контейнер pointer-events:none, nav pointer-events:auto (не перекрываем клики вне иконок).
+// - Измеряем высоту nav и пишем CSS-переменную (по умолчанию --global-stepnav-h),
+//   чтобы внутренние sticky меню в шагах могли корректно выставлять top.
+
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export type StepDef = { id: string; title: string; icon?: React.ReactNode };
 
@@ -13,17 +27,18 @@ export type StepNavProps = {
   linkForId?: (id: string) => string;
   hint?: string;
 
-  // Позиционирование
   topOffset?: number; // px
-  mode?: "sticky" | "fixed"; // NEW: fixed для глобальной навигации
+  mode?: "sticky" | "fixed";
 
-  // Показ
   enabled?: boolean;
   triggerId?: string | string[];
   persistKey?: string | null;
 
-  // CSS var с высотой панели (для внутренних sticky в шагах)
   heightCssVar?: string; // default: --global-stepnav-h
+
+  // совместимость с вашим App (если передаётся)
+  sticky?: boolean;
+  activateOnFinish?: boolean;
 };
 
 const defaultSteps: StepDef[] = [
@@ -74,6 +89,14 @@ function detectIdFromLocation(stepIds: string[]): string | null {
     const token = decodeURIComponent(parts[i]);
     if (stepIds.includes(token)) return token;
   }
+  const pathParts = (window.location.pathname || "").split("/").filter(Boolean);
+  for (let i = pathParts.length - 1; i >= 0; i--) {
+    const token = decodeURIComponent(pathParts[i]);
+    if (stepIds.includes(token)) return token;
+  }
+  const sp = new URLSearchParams(window.location.search);
+  const qp = sp.get("step");
+  if (qp && stepIds.includes(qp)) return qp;
   return null;
 }
 
@@ -85,7 +108,7 @@ function normId(id?: string | null): string {
     .replace(/[^a-z0-9-]/g, "");
 }
 
-// Важно: в App для review используется StepId="finish"
+// В вашем App шаг review мапится на StepId="finish"
 function isReviewReached(currentId: string, trigger?: string | string[]): boolean {
   const cur = normId(currentId);
   const defaults = ["finish", "review", "review-and-send", "reviewandsend", "reviewandsendstep"];
@@ -103,11 +126,14 @@ export default function StepNav({
   onSelect,
   hint,
   linkForId,
+
   topOffset = 6,
   mode = "fixed",
+
   enabled: enabledProp,
   triggerId,
   persistKey = "memorial.navEnabled.reviewOnly",
+
   heightCssVar = "--global-stepnav-h"
 }: StepNavProps) {
   const ids = useMemo(() => steps.map((s) => s.id), [steps]);
@@ -120,6 +146,7 @@ export default function StepNav({
     return "";
   }, [current, currentId, activeId, active, ids, steps]);
 
+  // enabled: по умолчанию false, включаем по достижению review/finish
   const [enabled, setEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return !!enabledProp;
     if (typeof enabledProp === "boolean") return enabledProp;
@@ -153,7 +180,7 @@ export default function StepNav({
 
   const topValue = `calc(${Number(topOffset) || 0}px + env(safe-area-inset-top, 0px))`;
 
-  // измеряем высоту nav -> CSS var (чтобы внутренние sticky могли сдвигаться)
+  // Измеряем высоту nav и кладём в CSS var
   const navRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (typeof document === "undefined") return;
@@ -175,6 +202,7 @@ export default function StepNav({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     window.addEventListener("resize", measure);
+
     return () => {
       window.removeEventListener("resize", measure);
       ro.disconnect();
@@ -191,7 +219,7 @@ export default function StepNav({
           zIndex: 30000,
           display: "grid",
           gap: 6,
-          pointerEvents: "none" // не перекрываем клики под собой
+          pointerEvents: "none"
         }
       : {
           position: "sticky",
@@ -204,7 +232,7 @@ export default function StepNav({
 
   if (!enabled) return null;
 
-  return (
+  const content = (
     <div style={containerStyle}>
       <nav
         ref={navRef as any}
@@ -226,7 +254,7 @@ export default function StepNav({
           boxShadow: "0 4px 20px rgba(0,0,0,0.20)",
           width: "100%",
           boxSizing: "border-box",
-          pointerEvents: "auto" // кликаем только по самой панели
+          pointerEvents: "auto"
         }}
       >
         {steps.map((s, idx) => {
@@ -257,6 +285,9 @@ export default function StepNav({
                 willChange: "transform",
                 padding: 2
               }}
+              onPointerDown={(ev) => ((ev.currentTarget as HTMLAnchorElement).style.transform = "scale(0.96)")}
+              onPointerUp={(ev) => ((ev.currentTarget as HTMLAnchorElement).style.transform = "")}
+              onPointerLeave={(ev) => ((ev.currentTarget as HTMLAnchorElement).style.transform = "")}
             >
               {s.icon ?? <Icon id={s.id} />}
             </a>
@@ -264,7 +295,73 @@ export default function StepNav({
         })}
       </nav>
 
-      {hint && <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, pointerEvents: "auto" }}>{hint}</div>}
+      {hint && (
+        <div style={{ textAlign: "center", fontSize: 12, opacity: 0.9, pointerEvents: "auto" }}>{hintstart" && <Start onConfirm={onStartConfirm} />}
+
+        {step === "size" && selectedItem && (
+          <SizeStep item={selectedItem} initial={sizeResult || undefined} onBack={onSizeBack} onDone={onSizeDone} />
+        )}
+
+        {step === "inscription" && selectedItem && sizeResult && (
+          <EngravingStep
+            item={selectedItem}
+            sizeResult={sizeResult}
+            initial={engraving || undefined}
+            onBack={onEngravingBack}
+            onSaveDraft={onEngravingSave}
+            onDone={onEngravingDone}
+          />
+        )}
+
+        {step === "graphics" && selectedItem && sizeResult && engraving && (
+          <GraphicsStep
+            item={selectedItem}
+            engraving={engraving}
+            initial={decor || undefined}
+            onBack={onGraphicsBack}
+            onSaveDraft={onGraphicsSave}
+            onDone={onGraphicsDone}
+          />
+        )}
+
+        {step === "epitaph" && selectedItem && sizeResult && engraving && (
+          <EpitaphStep
+            item={selectedItem}
+            engraving={engraving}
+            initial={decor || undefined}
+            onBack={onEpitaphBack}
+            onSaveDraft={onEpitaphSave}
+            onDone={onEpitaphDone}
+          />
+        )}
+
+        {step === "editorBack" && (
+          <BackEditorStep onBack={onBackEditorBack} onContinue={(payload) => onBackEditorDone(payload)} />
+        )}
+
+        {step "review" && <ReviewAndSendStep onBack={onReviewBack} onSend={onReviewSend} />}
+
+        {step === "done" && (
+          <div style={{ padding: 16 }}>
+            <h2 style={{ marginTop: 0 }}>Заявка отправлена менеджерам</h2>
+            <div style={{ opacity: 0.9, marginBottom: 12 }}>Спасибо! Менеджер свяжется с вами. Вы можете начать заново.</div>
+            <button style={glassButtonStyle("sm")} onClick={resetAll}>Начать заново</button>
+          </div>
+        )}
+      </div>
+
+      {/* Глобальная навигация фиксированная (порталится в body внутри StepNav) */}
+      {step !== "done" && navUnlocked && (
+        <StepNav
+          steps={NAV_STEPS}
+          currentId={currentWizardId}
+          onSelect={handleNavSelect}
+          enabled={true}
+          mode="fixed"
+          topOffset={6}
+          heightCssVar="--global-stepnav-h"
+        />
+      )}
     </div>
   );
 }

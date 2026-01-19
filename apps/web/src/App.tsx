@@ -51,30 +51,49 @@ const isStepId = (x: string): x is StepId => STEP_IDS.includes(x as StepId);
 
 const localStepFromId = (id: StepId): Step => {
   switch (id) {
-    case "item": return "start";
-    case "params": return "size";
-    case "persons": return "inscription";
-    case "graphics": return "graphics";
-    case "epitaph": return "epitaph";
-    case "editor": return "editorBack";
-    case "rear": return "editorBack";
-    case "extras": return "review";
-    case "finish": return "review";
-    default: return "start";
+    case "item":
+      return "start";
+    case "params":
+      return "size";
+    case "persons":
+      return "inscription";
+    case "graphics":
+      return "graphics";
+    case "epitaph":
+      return "epitaph";
+    case "editor":
+      return "editorBack";
+    case "rear":
+      return "editorBack";
+    case "extras":
+      return "review";
+    case "finish":
+      return "review";
+    default:
+      return "start";
   }
 };
 
 const idFromLocalStep = (s: Step): StepId => {
   switch (s) {
-    case "start": return "item";
-    case "size": return "params";
-    case "inscription": return "persons";
-    case "graphics": return "graphics";
-    case "epitaph": return "epitaph";
-    case "editorBack": return "rear";
-    case "review": return "finish";
-    case "done": return "finish";
-    default: return "item";
+    case "start":
+      return "item";
+    case "size":
+      return "params";
+    case "inscription":
+      return "persons";
+    case "graphics":
+      return "graphics";
+    case "epitaph":
+      return "epitaph";
+    case "editorBack":
+      return "rear";
+    case "review":
+      return "finish";
+    case "done":
+      return "finish";
+    default:
+      return "item";
   }
 };
 
@@ -127,6 +146,7 @@ export default function App() {
   const [decor, setDecor] = useState<any>({});
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
+  // Восстановление прогресса
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -143,16 +163,20 @@ export default function App() {
     } catch {}
   }, []);
 
+  // Синхронизация c URL при входе
   useEffect(() => {
     const id = getStepIdFromLocation();
     const s = localStepFromId(id);
     setStep(s);
     if (s === "review" || s === "done") {
       setNavUnlocked(true);
-      try { localStorage.setItem(NAV_UNLOCK_KEY, "1"); } catch {}
+      try {
+        localStorage.setItem(NAV_UNLOCK_KEY, "1");
+      } catch {}
     }
   }, []);
 
+  // back/forward
   useEffect(() => {
     const onChange = () => {
       const id = getStepIdFromLocation();
@@ -160,7 +184,9 @@ export default function App() {
       setStep(s);
       if (s === "review" || s === "done") {
         setNavUnlocked(true);
-        try { localStorage.setItem(NAV_UNLOCK_KEY, "1"); } catch {}
+        try {
+          localStorage.setItem(NAV_UNLOCK_KEY, "1");
+        } catch {}
       }
     };
     window.addEventListener("hashchange", onChange);
@@ -171,6 +197,26 @@ export default function App() {
     };
   }, []);
 
+  // NEW: глобальный сброс (вызывается из TopBarWithIntro при "Очистить всё")
+  useEffect(() => {
+    const onResetAll = () => {
+      try {
+        localStorage.removeItem(LS_KEY);
+        localStorage.removeItem(NAV_UNLOCK_KEY);
+      } catch {}
+      setSelectedItem(null);
+      setSizeResult(null);
+      setEngraving(null);
+      setDecor({});
+      setEditorBackState(null);
+      setNavUnlocked(false);
+      setStep("start");
+    };
+    window.addEventListener("memorial:resetAll", onResetAll as any);
+    return () => window.removeEventListener("memorial:resetAll", onResetAll as any);
+  }, []);
+
+  // Сохранение прогресса
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -181,59 +227,93 @@ export default function App() {
     } catch {}
   }, [step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked]);
 
+  // Guards
   useEffect(() => {
-    if (!selectedItem && step !== "start") { setStep("start"); return; }
-    if (step !== "start" && !sizeResult) { setStep("size"); return; }
+    if (!selectedItem && step !== "start") {
+      setStep("start");
+      return;
+    }
+    if (step !== "start" && !sizeResult) {
+      setStep("size");
+      return;
+    }
     if ((step === "graphics" || step === "epitaph" || step === "editorBack" || step === "review") && !engraving) {
       setStep("inscription");
       return;
     }
   }, [step, selectedItem, sizeResult, engraving]);
 
+  // Скролл вверх при смене шага — только scrollRef
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: 0, left: 0, behavior: "auto" });
     const t0 = setTimeout(() => el.scrollTo({ top: 0, left: 0, behavior: "auto" }), 0);
     const t1 = setTimeout(() => el.scrollTo({ top: 0, left: 0, behavior: "auto" }), 150);
-    return () => { clearTimeout(t0); clearTimeout(t1); };
+    return () => {
+      clearTimeout(t0);
+      clearTimeout(t1);
+    };
   }, [step]);
 
+  // hash sync + unlock
   useEffect(() => {
     const id = idFromLocalStep(step);
     const need = `#/wizard/${encodeURIComponent(id)}`;
     if (window.location.hash !== need) setHashForStep(id, true);
     if (step === "review" || step === "done") {
       setNavUnlocked(true);
-      try { localStorage.setItem(NAV_UNLOCK_KEY, "1"); } catch {}
+      try {
+        localStorage.setItem(NAV_UNLOCK_KEY, "1");
+      } catch {}
     }
   }, [step]);
 
+  // Переход из StepNav
   const handleNavSelect = (_idx: number, id: string) => {
     if (!isStepId(id)) return;
     setStep(localStepFromId(id as StepId));
     setHashForStep(id as StepId);
   };
 
-  const onStartConfirm = (item: any) => { setSelectedItem(item); setStep("size"); };
+  // Колбэки шагов
+  const onStartConfirm = (item: any) => {
+    setSelectedItem(item);
+    setStep("size");
+  };
 
   const onSizeBack = () => setStep("start");
-  const onSizeDone = (data: any) => { setSizeResult(data); setStep("inscription"); };
+  const onSizeDone = (data: any) => {
+    setSizeResult(data);
+    setStep("inscription");
+  };
 
   const onEngravingBack = () => setStep("size");
   const onEngravingSave = (data: any) => setEngraving(data);
-  const onEngravingDone = (data: any) => { setEngraving(data); setStep("graphics"); };
+  const onEngravingDone = (data: any) => {
+    setEngraving(data);
+    setStep("graphics");
+  };
 
   const onGraphicsBack = () => setStep("inscription");
   const onGraphicsSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
-  const onGraphicsDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep("epitaph"); };
+  const onGraphicsDone = (data: any) => {
+    setDecor((prev: any) => ({ ...(prev || {}), ...data }));
+    setStep("epitaph");
+  };
 
   const onEpitaphBack = () => setStep("graphics");
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
-  const onEpitaphDone = (data: any) => { setDecor((prev: any) => ({ ...(prev || {}), ...data })); setStep("editorBack"); };
+  const onEpitaphDone = (data: any) => {
+    setDecor((prev: any) => ({ ...(prev || {}), ...data }));
+    setStep("editorBack");
+  };
 
   const onBackEditorBack = () => setStep("epitaph");
-  const onBackEditorDone = (payload: any) => { setEditorBackState(payload); setStep("review"); };
+  const onBackEditorDone = (payload: any) => {
+    setEditorBackState(payload);
+    setStep("review");
+  };
 
   const onReviewBack = () => setStep("editorBack");
   const onReviewSend = () => setStep("done");
@@ -317,12 +397,13 @@ export default function App() {
           <div style={{ padding: 16 }}>
             <h2 style={{ marginTop: 0 }}>Заявка отправлена менеджерам</h2>
             <div style={{ opacity: 0.9, marginBottom: 12 }}>Спасибо! Менеджер свяжется с вами. Вы можете начать заново.</div>
-            <button style={glassButtonStyle("sm")} onClick={resetAll}>Начать заново</button>
+            <button style={glassButtonStyle("sm")} onClick={resetAll}>
+              Начать заново
+            </button>
           </div>
         )}
       </div>
 
-      {/* FIXED StepNav overlay (не перекрывает клики вне панели) */}
       {step !== "done" && navUnlocked && (
         <StepNav
           steps={NAV_STEPS}
