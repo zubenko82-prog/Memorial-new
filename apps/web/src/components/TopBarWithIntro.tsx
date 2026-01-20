@@ -1,19 +1,21 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
-//
-// По задаче:
-// - В шапке (сверху) вместо номера показываем имя.
-// - Номер заказа показываем внутри раскрытой панели — под кнопками «Стиль» и «Редактировать».
-// - Внизу панели добавляем блок «Надгробная плита — выбрано» с элементами, выбранными на шаге ReviewAndSendStep.tsx.
-// - Гарантированная синхронизация драфта и интро.
-//
-// ВАЖНО (для ReviewAndSendStep):
-// - Слушаем событие "memorial:openTopBarPanel" и раскрываем панель.
-// - На контейнер панели добавлен data-topbar-panel="1" (для корректного скриншота без обрезания).
+// Эпитафии теперь отображаются в разделе «Элементы эскиза» (для лицевой и тыльной сторон).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
-import { loadOrderDraft, saveOrderDraft, clearOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
+import {
+  loadIntroState,
+  saveIntro,
+  type Intro,
+  clearIntroAll
+} from "../lib/intro";
+import {
+  loadOrderDraft,
+  saveOrderDraft,
+  clearOrderDraft,
+  type OrderDraft,
+  DRAFT_UPDATED_EVENT
+} from "../lib/order";
 
 /* ===== Темизация ===== */
 type ThemeMode = "dark" | "light";
@@ -99,7 +101,7 @@ function useCompact(breakpoint = 420): boolean {
   return compact;
 }
 
-/* ===== UI-хелперы и стили ===== */
+/* ===== UI-хелперы/стили ===== */
 function inputStyle(theme: ThemeMode): React.CSSProperties {
   const p = palette(theme);
   return {
@@ -116,7 +118,8 @@ function inputStyle(theme: ThemeMode): React.CSSProperties {
 function galleryThumbBoxStyle(): React.CSSProperties {
   const grad: React.CSSProperties = {
     backgroundColor: "#000000",
-    backgroundImage: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+    backgroundImage:
+      "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   };
   return {
     ...grad,
@@ -246,7 +249,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const intro = introData.intro;
   const orderNumber = introData.orderNumber || "—";
 
-  // Драфт
+  // Драфт заказа
   const [order, setOrder] = useState<OrderDraft>(() => loadOrderDraft());
 
   // Поля редактирования
@@ -259,11 +262,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       order.engraving?.epitaphText ||
       ""
   );
-  const [orderNotes, setOrderNotes] = useState(order.notes || "");
+  const [orderNotes, setOrderNotes] = useState((order as any).notes || "");
   const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
   const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
 
-  // refreshAll: без JSON-сравнения (гарантированно подтягиваем актуальные значения)
+  // Единая синхронизация (всегда подтягиваем актуальные значения)
   const refreshAll = React.useCallback((opts?: { force?: boolean }) => {
     const freshOrder = loadOrderDraft();
     const freshIntroState = loadIntroState();
@@ -276,28 +279,18 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       setName(i.customerName || "");
       setPhone(i.customerPhone || "");
       setContactNotes(i.customerNotes || "");
+
       setSizeNotes(freshOrder.size?.notes || "");
       setEpitaphsText(
         (freshOrder.engraving?.epitaphs && freshOrder.engraving!.epitaphs!.join("\n")) ||
           freshOrder.engraving?.epitaphText ||
           ""
       );
-      setOrderNotes(freshOrder.notes || "");
+      setOrderNotes((freshOrder as any).notes || "");
       setFrontWishes((freshOrder as any)?.editor?.wishes || "");
       setBackWishes((freshOrder as any)?.editorBack?.wishes || "");
     }
   }, [editing]);
-
-  // СЛУШАЕМ СОБЫТИЕ ДЛЯ ПРОГРАММНОГО ОТКРЫТИЯ (из ReviewAndSendStep)
-  useEffect(() => {
-    const openTop = () => {
-      setOpen(true);
-      // подтянем актуальные данные, чтобы номер и плита были видны сразу
-      refreshAll({ force: true });
-    };
-    window.addEventListener("memorial:openTopBarPanel", openTop as any);
-    return () => window.removeEventListener("memorial:openTopBarPanel", openTop as any);
-  }, [refreshAll]);
 
   useEffect(() => {
     const onAny = () => refreshAll();
@@ -325,7 +318,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     if (open) refreshAll({ force: true });
   }, [open, refreshAll]);
 
-  // Телефонная строка
+  // Линия контактная (только телефон)
   const phoneLine = useMemo(() => {
     const b = (editing ? phone : intro?.customerPhone) || "";
     return b;
@@ -356,7 +349,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
   }, [rearSelectedIds, rearMeta]);
 
-  // Эпитафии (по сторонам)
+  // Эпитафии (фронт/тыл)
   const frontEpitaphs: string[] = useMemo(() => {
     const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
     if (arr.length) return arr;
@@ -391,7 +384,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta]);
 
-  // Сохранение (патч)
+  // Сохранение (патч + принудительный refresh)
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
     const introNext: Intro = {
@@ -399,27 +392,74 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       customerPhone: (phone || "").trim(),
       customerNotes: (contactNotes || "").trim() || undefined
     };
-    saveIntro(introNext, { lock: false });
+    const lock = !introData.orderNumber;
+    saveIntro(introNext, { lock });
 
     const patch: Partial<OrderDraft> = {
-      size: { ...(order.size || {}), notes: sizeNotes?.trim() || undefined } as any,
+      size: { notes: sizeNotes?.trim() || undefined },
       engraving: {
-        ...(order.engraving || {}),
         epitaphs: epLines.length ? epLines : undefined,
         epitaphText: epLines.length === 1 ? epLines[0] : undefined
       } as any,
-      editor: { ...(order as any).editor, wishes: (frontWishes || "").trim() || undefined } as any,
-      editorBack: { ...(order as any).editorBack, wishes: (backWishes || "").trim() || undefined } as any,
-      notes: orderNotes?.trim() || undefined
+      editor: { wishes: (frontWishes || "").trim() || undefined } as any,
+      editorBack: { wishes: (backWishes || "").trim() || undefined } as any,
+      ...(orderNotes?.trim() ? { notes: orderNotes.trim() } : {})
     };
+
     const stored = saveOrderDraft(patch);
     setOrder(stored);
+    refreshAll({ force: true });
 
     try {
       window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
       window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
     } catch {}
   };
+
+  // Очистка
+  const [isClearing, setIsClearing] = useState(false);
+  function makeEmptyDraft(): OrderDraft {
+    return {
+      item: null as any,
+      size: {},
+      engraving: { persons: [], epitaphs: undefined, epitaphText: undefined } as any,
+      editor: {} as any,
+      editorBack: {} as any,
+      graphics: [],
+      notes: undefined,
+      extras: {},
+      updatedAt: Date.now()
+    } as OrderDraft;
+  }
+  async function handleClearAll() {
+    if (isClearing) return;
+    const ok = window.confirm("Очистить ВСЕ данные заказа, включая номер заявки и усопших? Действие необратимо.");
+    if (!ok) return;
+    setIsClearing(true);
+    try {
+      await clearOrderDraft();
+      clearIntroAll();
+      try {
+        localStorage.removeItem("memorial.navEnabled");
+        localStorage.removeItem("memorial.navEnabled.reviewOnly");
+      } catch {}
+      setEditing(false);
+      setOpen(false);
+      const blank = makeEmptyDraft();
+      setOrder(blank);
+      setIntroData({ intro: {}, orderNumber: undefined } as any);
+      setName(""); setPhone(""); setContactNotes("");
+      setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
+      setFrontWishes(""); setBackWishes("");
+      try {
+        window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+        window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+      } catch {}
+      setTimeout(() => refreshAll({ force: true }), 0);
+    } finally {
+      setIsClearing(false);
+    }
+  }
 
   const coll = useCollapse(open, 280);
   const panelId = "order-panel";
@@ -435,18 +475,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         title={open ? "Скрыть данные заказа" : "Показать данные заказа"}
         onClick={() => setOpen((v) => !v)}
         style={{
-          width: "100%",
-          textAlign: "left",
+          width: "100%", textAlign: "left",
           padding: compact ? "8px 8px" : "12px 14px",
           borderRadius: compact ? 10 : 12,
-          border: p.headerBorder,
-          background: p.headerBg,
-          color: p.headerText,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: compact ? 8 : 12,
-          cursor: "pointer",
+          border: p.headerBorder, background: p.headerBg, color: p.headerText,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: compact ? 8 : 12, cursor: "pointer",
           ...paperShadow(theme)
         }}
       >
@@ -454,6 +487,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           <span style={{ fontSize: compact ? 18 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
         </div>
 
+        {/* Справа — ИМЯ + телефон */}
         <div style={{ display: "grid", gap: 3, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
           <div style={{ fontSize: compact ? 14 : 16, fontWeight: 700, whiteSpace: "nowrap", maxWidth: "56vw", overflow: "hidden", textOverflow: "ellipsis" }}>
             {(editing ? name : intro?.customerName) || "—"}
@@ -467,19 +501,14 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       </button>
 
       {/* Панель */}
-      <div
-        id={panelId}
-        data-topbar-panel="1"
-        ref={coll.ref}
-        style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
-      >
+      <div id={panelId} ref={coll.ref} style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}>
         <section style={{ background: p.panelBg, border: p.panelBorder, borderRadius: compact ? 10 : 12, color: p.text, ...paperShadow(theme), padding: compact ? 8 : 12, display: "grid", gap: compact ? 8 : 10 }}>
           {/* Действия */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
             <button type="button" onClick={(e) => { e.stopPropagation(); const next: ThemeMode = theme === "dark" ? "light" : "dark"; setTheme(next); saveTheme(next); }} style={linkButtonStyle(theme)} className="link-like">
               {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
             </button>
-            <button type="button" onClick={(e) => { e.stopPropagation(); if (editing) saveAll(); setEditing((v) => !v); }} style={linkButtonStyle(theme)} className="link-like">
+            <button type="button" onClick={(e) => { e.stopPropagation(); if (editing) { saveAll(); } setEditing((v) => !v); }} style={linkButtonStyle(theme)} className="link-like">
               {editing ? "Сохранить" : "Редактировать"}
             </button>
           </div>
@@ -500,9 +529,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: 8 }}>
-                    <Row label="Имя" theme={theme} compact={compact}><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} /></Row>
-                    <Row label="Телефон" theme={theme} compact={compact}><input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} inputMode="tel" /></Row>
-                    <Row label="Примечание" theme={theme} compact={compact}><input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} /></Row>
+                    <Row label="Имя" theme={theme} compact={compact}><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" /></Row>
+                    <Row label="Телефон" theme={theme} compact={compact}><input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" /></Row>
+                    <Row label="Примечание" theme={theme} compact={compact}><input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" /></Row>
                   </div>
                 )
               ) : (
@@ -519,7 +548,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
                   {order.item?.url ? (
                     <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
-                  ) : <div style={{ color: p.subText, fontSize: 12 }}>нет</div>}
+                  ) : <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>}
                 </div>
                 <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
@@ -534,7 +563,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 {(editing || sizeNotes.trim()) && (
                   <div>
                     {editing ? (
-                      <textarea value={sizeNotes} onChange={(e) => setSizeNotes(e.target.value)} rows={compact ? 2 : 3} style={{ ...inputStyle(theme), resize: "vertical" }} />
+                      <textarea value={sizeNotes} onChange={(e) => setSizeNotes(e.target.value)} rows={compact ? 2 : 3} placeholder="Примечание по размерам…" style={{ ...inputStyle(theme), resize: "vertical" }} />
                     ) : (
                       sizeNotes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{sizeNotes.trim()}</div>
                     )}
@@ -544,6 +573,78 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </div>
           </section>
 
+          {/* Люди */}
+          {(order.engraving?.persons?.length || 0) > 0 && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
+                <span style={chip(theme)}>Люди на памятнике</span>
+                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона есть</span>}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"), gap: 16 }}>
+                {/* Лицевая */}
+                <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
+                  {order.engraving?.persons?.length ? (
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
+                        const last = idx === (order.engraving?.persons?.length || 0) - 1;
+                        const fio1 = (ppl.lastName || "").trim();
+                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+                        return (
+                          <div key={ppl.id || `person-front-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                              {ppl.photoPreview ? (
+                                <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                              ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                            </div>
+                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ color: palette(theme).subText }}>—</div>
+                  )}
+                </div>
+
+                {/* Тыльная */}
+                {(order as any)?.editorBack?.people?.length > 0 && (
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
+                        const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
+                        const fio1 = (ppl.lastName || "").trim();
+                        const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+                        return (
+                          <div key={ppl.id || `person-back-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                              {ppl.photoPreview ? (
+                                <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                              ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                            </div>
+                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* Элементы эскиза */}
           {(frontHasSketch || rearHasSketch) && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
@@ -552,25 +653,94 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"), gap: 16 }}>
+                {/* Лицевая */}
                 {frontHasSketch && (
-                  <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
+
+                    {/* Графика (лицевая) */}
+                    {frontGraphics.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
+                        {frontUnique.map((g: any) => {
+                          const qty = g?.id ? (frontCountsById[g.id] || 0) : 0;
+                          return (
+                            <div key={`fg-${g.id || Math.random()}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                              <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
+                                {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                                <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                                  {g.name || fileNameFromUrl(g.url) || g.id || "—"}
+                                </div>
+                                {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: palette(theme).subText }}>×{qty}</div>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Эпитафии (лицевая) */}
                     {frontEpitaphs.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
                         <div style={{ whiteSpace: "pre-wrap" }}>{frontEpitaphs.join("\n")}</div>
+                      </div>
+                    )}
+
+                    {/* Пожелания (лицевая) */}
+                    {frontWishes.trim() && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes.trim()}</div>
                       </div>
                     )}
                   </div>
                 )}
 
+                {/* Тыльная */}
                 {rearHasSketch && (
-                  <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
+
+                    {/* Графика (тыльная) */}
+                    {rearUnique.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
+                        {rearUnique.map((g: any, i: number) => {
+                          const gid = g?.id || g?.relPath || g?.url || g?.name || `rear-${i}`;
+                          const qty = rearCountsById[gid] || 0;
+                          return (
+                            <div key={`rg-${gid}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                              <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
+                                {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                                <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                                  {g.name || fileNameFromUrl(g.url) || gid}
+                                </div>
+                                {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: palette(theme).subText }}>×{qty}</div>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Эпитафии (тыльная) */}
                     {rearEpitaphs.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
                         <div style={{ whiteSpace: "pre-wrap" }}>{rearEpitaphs.join("\n")}</div>
+                      </div>
+                    )}
+
+                    {/* Пожелания (тыльная) */}
+                    {backWishes.trim() && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{backWishes.trim()}</div>
                       </div>
                     )}
                   </div>
@@ -579,11 +749,10 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </section>
           )}
 
-          {/* Плита */}
-          {plateEnabled && (
+          {/* Плита (extras) */}
+          {(!!plateEnabled) && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита — выбрано</div>
-
               {(plateSize || plateThickness || plateOrientation) && (
                 <div style={{ marginBottom: 8, opacity: 0.95 }}>
                   {plateSize && <div>Размер: {plateSize}</div>}
@@ -591,7 +760,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   {plateOrientation && <div>Ориентация: {plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
                 </div>
               )}
-
               <div style={{ display: "grid", gap: 8 }}>
                 {plateChosen.length > 0 ? (
                   plateChosen.map((g: any, i: number) => (
@@ -599,7 +767,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
                         {g.url ? (
                           <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-                        ) : <div style={{ color: p.subText, fontSize: 11 }}>нет</div>}
+                        ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
                       </div>
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {g.name || g.id}
@@ -607,10 +775,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                     </div>
                   ))
                 ) : (
-                  <div style={{ color: p.subText }}>Графика не выбрана</div>
+                  <div style={{ color: palette(theme).subText }}>Графика не выбрана</div>
                 )}
               </div>
-
               {plateEpitaph?.trim() && (
                 <div style={{ ...accentPanelStyle(theme), marginTop: 10 }}>
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
@@ -621,29 +788,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           )}
 
           {/* Очистить всё */}
-          <div style={{ marginTop: 2, paddingTop: 10, borderTop: p.divider, display: "flex", justifyContent: "center" }}>
-            <button
-              type="button"
-              onClick={async (e) => {
-                e.stopPropagation();
-                const ok = window.confirm("Очистить ВСЕ данные заказа, включая номер заявки? Действие необратимо.");
-                if (!ok) return;
-                await clearOrderDraft();
-                clearIntroAll();
-                setEditing(false);
-                setOpen(false);
-                setOrder({ graphics: [], updatedAt: Date.now() } as any);
-                setName(""); setPhone(""); setContactNotes(""); setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
-                setFrontWishes(""); setBackWishes("");
-                try {
-                  window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
-                  window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-                } catch {}
-              }}
-              style={linkButtonStyle(theme, "danger")}
-              disabled={false}
-            >
-              Очистить всё
+          <div style={{ marginTop: 2, paddingTop: 10, borderTop: palette(theme).divider, display: "flex", justifyContent: "center" }}>
+            <button type="button" onClick={(e) => { e.stopPropagation(); void handleClearAll(); }} style={linkButtonStyle(theme, "danger", isClearing)} className="link-like" title="Очистить все данные (с подтверждением)" disabled={isClearing}>
+              {isClearing ? "Очищаем…" : "Очистить всё"}
             </button>
           </div>
         </section>
