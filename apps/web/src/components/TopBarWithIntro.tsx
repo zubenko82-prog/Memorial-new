@@ -1,14 +1,15 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
 //
-// Обновлено по задаче:
+// По задаче:
 // - В шапке (сверху) вместо номера показываем имя.
 // - Номер заказа показываем внутри раскрытой панели — под кнопками «Стиль» и «Редактировать».
-// - Добавлены блоки: усопшие, графика (лицевая/тыльная), усопшие (тыльная если есть в draft), эпитафии на плите.
-// - Плита: показываем выбранную графику + эпитафии.
+// - Внизу панели добавляем блок «Надгробная плита — выбрано» с элементами, выбранными на шаге ReviewAndSendStep.tsx.
 // - Гарантированная синхронизация драфта и интро.
+//
+// ВАЖНО (для ReviewAndSendStep):
 // - Слушаем событие "memorial:openTopBarPanel" и раскрываем панель.
-// - На контейнер панели data-topbar-panel="1" (для корректного скриншота без обрезания).
+// - На контейнер панели добавлен data-topbar-panel="1" (для корректного скриншота без обрезания).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
@@ -232,25 +233,6 @@ function cmValue(n?: number): string {
   if (typeof n !== "number" || !isFinite(n)) return "—";
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
 }
-function joinFio(p: any): string {
-  const last = String(p?.lastName || "").trim();
-  const first = String(p?.firstName || "").trim();
-  const mid = String(p?.middleName || "").trim();
-  return [last, [first, mid].filter(Boolean).join(" ")].filter(Boolean).join(" ").trim();
-}
-function joinDates(p: any): string {
-  const b = String(p?.birthDate || "").trim();
-  const d = String(p?.deathDate || "").trim();
-  return [b, d].filter(Boolean).join(" — ").trim();
-}
-function normalizeLines(input: any): string[] {
-  if (!input) return [];
-  if (Array.isArray(input)) return input.map((s) => String(s || "").trim()).filter(Boolean);
-  const t = String(input || "").replace(/\r\n?/g, "\n").trim();
-  if (!t) return [];
-  // допускаем "параграфы"
-  return t.split(/\n{1,2}/g).map((s) => s.trim()).filter(Boolean);
-}
 
 /* ===== Компонент ===== */
 export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
@@ -310,6 +292,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   useEffect(() => {
     const openTop = () => {
       setOpen(true);
+      // подтянем актуальные данные, чтобы номер и плита были видны сразу
       refreshAll({ force: true });
     };
     window.addEventListener("memorial:openTopBarPanel", openTop as any);
@@ -348,134 +331,67 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return b;
   }, [editing, phone, intro?.customerPhone]);
 
-  // ===== УСОПШИЕ (общие) =====
-  const personsMain: any[] = useMemo(() => {
-    const arr = (((order as any)?.engraving?.persons || []) as any[]).filter(Boolean);
-    return Array.isArray(arr) ? arr : [];
-  }, [order]);
-  const personsMainLines = useMemo(() => {
-    return personsMain.map((p) => {
-      const fio = joinFio(p);
-      const dates = joinDates(p);
-      return { fio: fio || "—", dates: dates || "" };
-    });
-  }, [personsMain]);
-
-  // ===== УСОПШИЕ (тыльная) — если есть в editorBack =====
-  const personsBack: any[] = useMemo(() => {
-    const eb: any = (order as any)?.editorBack || {};
-    const candidates = [
-      eb.persons,
-      eb.people,
-      eb.deadPersons,
-      eb.deceased
-    ];
-    for (const c of candidates) {
-      if (Array.isArray(c)) return c.filter(Boolean);
-    }
-    return [];
-  }, [order]);
-  const personsBackLines = useMemo(() => {
-    return personsBack.map((p) => {
-      const fio = joinFio(p);
-      const dates = joinDates(p);
-      return { fio: fio || "—", dates: dates || "" };
-    });
-  }, [personsBack]);
-
-  // ===== ГРАФИКА (лицевая) =====
+  // Графика (лицевая/тыльная)
   const frontGraphics = (order.graphics || []) as any[];
   const frontCountsById = useMemo(() => {
     const m: Record<string, number> = {};
-    frontGraphics.forEach((g: any) => {
-      const id = String(g?.id || g?.relPath || g?.url || g?.name || "").trim();
-      if (!id) return;
-      m[id] = (m[id] || 0) + 1;
-    });
+    frontGraphics.forEach((g: any) => { if (g?.id) m[g.id] = (m[g.id] || 0) + 1; });
     return m;
   }, [frontGraphics]);
-  const frontGraphicsList = useMemo(() => {
+  const frontUnique = useMemo(() => {
     const first: Record<string, any> = {};
-    frontGraphics.forEach((g: any) => {
-      const id = String(g?.id || g?.relPath || g?.url || g?.name || "").trim();
-      if (!id) return;
-      if (!first[id]) first[id] = g;
-    });
-    return Object.keys(first).map((id) => {
-      const g = first[id];
-      const name = g?.name || id;
-      const count = frontCountsById[id] || 1;
-      return { id, name, count };
-    });
-  }, [frontGraphics, frontCountsById]);
+    frontGraphics.forEach((g: any) => { const id = g?.id; if (id && !first[id]) first[id] = g; });
+    return Object.values(first);
+  }, [frontGraphics]);
 
-  // ===== ГРАФИКА (тыльная) =====
-  const rearSelectedIds: string[] = ((((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]) || []).map(String);
+  const rearSelectedIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCountsById = useMemo(() => {
     const m: Record<string, number> = {};
     (rearSelectedIds || []).forEach((id) => { m[id] = (m[id] || 0) + 1; });
     return m;
   }, [rearSelectedIds]);
-  const rearGraphicsList = useMemo(() => {
+  const rearUnique = useMemo(() => {
     const ids = Array.from(new Set(rearSelectedIds || []));
-    return ids.map((id) => {
-      const meta = rearMeta?.[id] || {};
-      const name = meta?.name || id;
-      const count = rearCountsById[id] || 1;
-      return { id, name, count };
-    });
-  }, [rearSelectedIds, rearMeta, rearCountsById]);
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
+  }, [rearSelectedIds, rearMeta]);
 
-  // ===== ЭПИТАФИИ: лицевая/тыльная =====
+  // Эпитафии (по сторонам)
   const frontEpitaphs: string[] = useMemo(() => {
     const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
     if (arr.length) return arr;
     if (order.engraving?.epitaphText?.trim()) return [order.engraving!.epitaphText!.trim()];
     return [];
   }, [order.engraving]);
-
   const rearEpitaphs: string[] = useMemo(
     () => (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean),
     [order]
   );
 
-  // ===== ПЛИТА =====
+  const frontHasSketch =
+    (frontUnique && frontUnique.length > 0) ||
+    (frontEpitaphs && frontEpitaphs.length > 0) ||
+    (frontWishes && frontWishes.trim().length > 0);
+  const rearHasSketch =
+    (rearUnique && rearUnique.length > 0) ||
+    (rearEpitaphs && rearEpitaphs.length > 0) ||
+    (backWishes && backWishes.trim().length > 0);
+
+  // Extras (плита)
   const extras: any = (order as any)?.extras || {};
   const plateEnabled: boolean = !!extras.headstonePlate;
   const plateIds: string[] = (extras.plateGraphicsIds as string[]) || [];
   const plateMeta: Record<string, any> = (extras.plateGraphicsMeta as Record<string, any>) || {};
+  const plateEpitaph: string = (extras.plateEpitaph as string) || "";
   const plateSize = extras.plateSize as string | undefined;
   const plateThickness = extras.plateThickness as string | undefined;
   const plateOrientation = extras.plateOrientation as string | undefined;
-
-  // Эпитафии плиты: поддержим разные форматы
-  const plateEpitaphLines = useMemo(() => {
-    const a = normalizeLines(extras.plateEpitaphs);
-    const b = normalizeLines(extras.plateEpitaphTexts);
-    const c = normalizeLines(extras.plateEpitaph);
-    const merged = [...a, ...b, ...c].map((s) => s.trim()).filter(Boolean);
-    // uniq по тексту
-    return Array.from(new Set(merged));
-  }, [extras.plateEpitaphs, extras.plateEpitaphTexts, extras.plateEpitaph]);
-
   const plateChosen = useMemo(() => {
     const uniq = Array.from(new Set(plateIds || []));
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta]);
 
-  const frontHasSketch =
-    (frontGraphicsList && frontGraphicsList.length > 0) ||
-    (frontEpitaphs && frontEpitaphs.length > 0) ||
-    (frontWishes && frontWishes.trim().length > 0);
-
-  const rearHasSketch =
-    (rearGraphicsList && rearGraphicsList.length > 0) ||
-    (rearEpitaphs && rearEpitaphs.length > 0) ||
-    (backWishes && backWishes.trim().length > 0) ||
-    (personsBackLines && personsBackLines.length > 0);
-
-  // Сохранение (патч) — оставлено как было
+  // Сохранение (патч)
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
     const introNext: Intro = {
@@ -560,50 +476,16 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         <section style={{ background: p.panelBg, border: p.panelBorder, borderRadius: compact ? 10 : 12, color: p.text, ...paperShadow(theme), padding: compact ? 8 : 12, display: "grid", gap: compact ? 8 : 10 }}>
           {/* Действия */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                const next: ThemeMode = theme === "dark" ? "light" : "dark";
-                setTheme(next);
-                saveTheme(next);
-              }}
-              style={linkButtonStyle(theme)}
-            >
+            <button type="button" onClick={(e) => { e.stopPropagation(); const next: ThemeMode = theme === "dark" ? "light" : "dark"; setTheme(next); saveTheme(next); }} style={linkButtonStyle(theme)} className="link-like">
               {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
             </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (editing) saveAll();
-                setEditing((v) => !v);
-              }}
-              style={linkButtonStyle(theme)}
-            >
+            <button type="button" onClick={(e) => { e.stopPropagation(); if (editing) saveAll(); setEditing((v) => !v); }} style={linkButtonStyle(theme)} className="link-like">
               {editing ? "Сохранить" : "Редактировать"}
             </button>
           </div>
 
           {/* Номер заказа */}
           <div style={{ fontSize: 13, opacity: 0.9 }}>№ {orderNumber}</div>
-
-          {/* УСОПШИЕ (основные) */}
-          <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие</div>
-            {personsMainLines.length ? (
-              <div style={{ display: "grid", gap: 6 }}>
-                {personsMainLines.map((x, i) => (
-                  <div key={`p-${i}`} style={{ ...accentPanelStyle(theme) }}>
-                    <div style={{ fontWeight: 700 }}>{x.fio}</div>
-                    {x.dates ? <div style={{ opacity: 0.95 }}>{x.dates}</div> : null}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ color: p.subText }}>—</div>
-            )}
-          </section>
 
           {/* Контакты */}
           {(editing || contactNotes.trim() || compact) && (
@@ -637,9 +519,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
                   {order.item?.url ? (
                     <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
-                  ) : (
-                    <div style={{ color: p.subText, fontSize: 12 }}>нет</div>
-                  )}
+                  ) : <div style={{ color: p.subText, fontSize: 12 }}>нет</div>}
                 </div>
                 <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
@@ -671,90 +551,26 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 <span style={chip(theme)}>Элементы эскиза</span>
               </div>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"),
-                  gap: 16
-                }}
-              >
-                {/* Лицевая */}
+              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"), gap: 16 }}>
                 {frontHasSketch && (
                   <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
-
-                    {frontGraphicsList.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
-                        <ul style={{ margin: 0, paddingLeft: 18 }}>
-                          {frontGraphicsList.map((g) => (
-                            <li key={`fg-${g.id}`} style={{ marginBottom: 3 }}>
-                              {g.name}{g.count > 1 ? ` ×${g.count}` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
                     {frontEpitaphs.length > 0 && (
                       <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
                         <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
                         <div style={{ whiteSpace: "pre-wrap" }}>{frontEpitaphs.join("\n")}</div>
                       </div>
                     )}
-
-                    {frontWishes?.trim() && (
-                      <div style={{ ...accentPanelStyle(theme) }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
-                        <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes.trim()}</div>
-                      </div>
-                    )}
                   </div>
                 )}
 
-                {/* Тыльная */}
                 {rearHasSketch && (
                   <div style={{ border: p.divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
-
-                    {personsBackLines.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Усопшие (тыльная)</div>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          {personsBackLines.map((x, i) => (
-                            <div key={`bp-${i}`}>
-                              <div style={{ fontWeight: 700 }}>{x.fio}</div>
-                              {x.dates ? <div style={{ opacity: 0.95 }}>{x.dates}</div> : null}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {rearGraphicsList.length > 0 && (
-                      <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Графика</div>
-                        <ul style={{ margin: 0, paddingLeft: 18 }}>
-                          {rearGraphicsList.map((g) => (
-                            <li key={`rg-${g.id}`} style={{ marginBottom: 3 }}>
-                              {g.name}{g.count > 1 ? ` ×${g.count}` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
                     {rearEpitaphs.length > 0 && (
                       <div style={{ ...accentPanelStyle(theme), marginBottom: 8 }}>
                         <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
                         <div style={{ whiteSpace: "pre-wrap" }}>{rearEpitaphs.join("\n")}</div>
-                      </div>
-                    )}
-
-                    {backWishes?.trim() && (
-                      <div style={{ ...accentPanelStyle(theme) }}>
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Пожелания</div>
-                        <div style={{ whiteSpace: "pre-wrap" }}>{backWishes.trim()}</div>
                       </div>
                     )}
                   </div>
@@ -783,9 +599,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
                         {g.url ? (
                           <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-                        ) : (
-                          <div style={{ color: p.subText, fontSize: 11 }}>нет</div>
-                        )}
+                        ) : <div style={{ color: p.subText, fontSize: 11 }}>нет</div>}
                       </div>
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {g.name || g.id}
@@ -797,11 +611,10 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 )}
               </div>
 
-              {/* Эпитафии плиты */}
-              {plateEpitaphLines.length > 0 && (
+              {plateEpitaph?.trim() && (
                 <div style={{ ...accentPanelStyle(theme), marginTop: 10 }}>
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                  <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaphLines.join("\n")}</div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaph.trim()}</div>
                 </div>
               )}
             </section>
@@ -825,7 +638,6 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                 try {
                   window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
                   window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-                  window.dispatchEvent(new Event("memorial:resetAll"));
                 } catch {}
               }}
               style={linkButtonStyle(theme, "danger")}
