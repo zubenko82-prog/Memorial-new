@@ -350,8 +350,9 @@ export default function App() {
 
   // NEW: "невидимый" верхний отступ под fixed StepNav только когда она активна
   const topCompensation = navUnlocked
-    ? "calc(var(--global-stepnav-h, 0px) + 8px + env(safe-area-inset-top, 0px))"
-    : "0px";
+  ? "calc(var(--global-stepnav-h, 0px) + 4px + env(safe-area-inset-top, 0px))"
+  : "0px";
+
 
   return (
     <div
