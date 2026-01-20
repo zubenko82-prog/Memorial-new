@@ -658,7 +658,15 @@ function PlateBlock(props: {
                     rows={3}
                     value={plateEpitaph}
                     onChange={(e) => setPlateEpitaph(e.target.value)}
-                    onBlur={() => markDirty()}
+                    onBlur={() => {
+  // мгновенно сохраняем в draft, чтобы точно не потерялось
+  const prev = loadOrderDraft();
+  const nextExtras: any = { ...(prev as any).extras, plateEpitaph: (plateEpitaph || "").trim() || "" };
+  saveOrderDraft({ ...prev, extras: nextExtras, updatedAt: Date.now() });
+
+  markDirty();
+}}
+
                     placeholder="Введите текст…"
                     style={{ ...inputStyle(), resize: "vertical" }}
                   />
@@ -892,6 +900,25 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
   );
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
+  const plateEpitaphDebounceRef = useRef<number | null>(null);
+
+useEffect(() => {
+  if (plateEpitaphDebounceRef.current) window.clearTimeout(plateEpitaphDebounceRef.current);
+
+  plateEpitaphDebounceRef.current = window.setTimeout(() => {
+    const prev = loadOrderDraft();
+    const nextExtras: any = { ...(prev as any).extras, plateEpitaph: (plateEpitaph || "").trim() || "" };
+
+    // Важно: не затираем другие поля extras
+    saveOrderDraft({ ...prev, extras: nextExtras, updatedAt: Date.now() });
+    setDraft(loadOrderDraft());
+  }, 350);
+
+  return () => {
+    if (plateEpitaphDebounceRef.current) window.clearTimeout(plateEpitaphDebounceRef.current);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [plateEpitaph]);
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
   const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
@@ -1125,16 +1152,16 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     await sleep(420);
   }
 
-  function findTopBarPanelNode(): HTMLElement | null {
-    // TopBarWithIntro ставит data-topbar-panel="1" на контейнер панели
-    return (document.querySelector('[data-topbar-panel="1"]') as HTMLElement | null) || null;
-  }
+  function findTopBarShotRootNode(): HTMLElement | null {
+  return document.getElementById("topbar-shot-root");
+}
+
 
   async function sendExpandedTopBarPanelShot(): Promise<{ ok: boolean; error?: string }> {
     try {
       await ensureTopBarPanelOpenForShot();
 
-      const node = findTopBarPanelNode();
+      const node = findTopBarShotRootNode();
       if (!node) return { ok: false, error: "TopBar panel node not found" };
 
       const dataUrl = await elementToPngDataUrl(node, { pixelRatio: 2, bg: "#111111" });
@@ -1379,10 +1406,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       <TopHintNotice />
 
       {/* TopBarWithIntro: нужен на странице, чтобы можно было раскрыть и снять панель */}
-      <TopBarWithIntro title="Memorial" />
-
-      {/* Контакты и № заказа */}
-      <EditableOrderSummary orderNo={orderNo} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
+      <div id="topbar-shot-root">
+  <TopBarWithIntro title="Обзор и отправка" />
+</div>
 
       {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
