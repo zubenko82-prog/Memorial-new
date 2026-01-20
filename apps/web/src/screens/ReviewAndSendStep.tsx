@@ -2,17 +2,26 @@
 //
 // Шаг «Обзор и подтверждение»
 //
-// Обновление (по вашему ТЗ):
-// - Если эскиз тыльной стороны пустой — не показываем.
-// - При входе на экран разворачиваем WebApp (Telegram.WebApp.expand()).
-// - Делаем скриншот "топбара" (ваш TopBarWithIntro, т.е. кнопка‑заголовок сверху) и отправляем в Telegram-чат БЕЗ подписи.
-//   Важно: нативный верхний бар Telegram (UI клиента) в скриншот не попадает — только DOM вашего приложения.
-// - Фотографии отправляем с подписью (ФИО + даты) — уже было, оставлено.
-// - После успешной отправки заявки пытаемся отправить пользователю DM:
-//   "Заявка №... отправлена. Спасибо, (имя)! ... (телефон). + Telegram user/id"
-//   (Сработает только если пользователь уже запускал бота /start и бот может писать ему.)
+// ВАЖНО про Telegram:
+// - Telegram.WebApp.expand() расширяет ВЫСОТУ WebView, но НЕ "разворачивает" нативный заголовок Telegram.
+// - Скриншот можно сделать только DOM (ваш TopBarWithIntro), нативный header Telegram в кадр не попадает.
 //
-// Требуется бэкенд endpoint: POST /api/tg-send-dm  { userId, text }.
+// Обновление под текущую схему деплоя на Vercel Hobby:
+// - Убираем вызовы /api/tg-send-message и /api/tg-send-photo (у вас они 404).
+// - Используем ОДНУ универсальную функцию: POST /api/tg
+//   * action=manager_message (JSON) — отправить текст в менеджерские чаты
+//   * action=manager_photo (multipart) — отправить фото/файл/URL в менеджерские чаты
+//   * action=dm (JSON) — отправить ЛС пользователю
+//
+// Требуется backend function: api/tg.ts (unified), которую я давал ранее.
+//
+// ТЗ, учтено:
+// - Если эскиз тыльной стороны пустой — не показываем вовсе (showBack=false).
+// - При переходе на страницу делаем expand() (высота WebView).
+// - Делаем скриншот DOM-топбара (TopBarWithIntro) и отправляем в чат БЕЗ подписи.
+// - Фотографии подписываем: ФИО и даты.
+// - Пользователю (по tg user id) отправляем уведомление:
+//   "Заявка №... отправлена. Спасибо, (имя из заказа)! ... (телефон). + Telegram username + ID"
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -224,21 +233,8 @@ function EditableOrderSummary({
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={saveOnBlur}
-          placeholder="Имя"
-          style={inputStyle()}
-        />
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          onBlur={saveOnBlur}
-          placeholder="+7..."
-          inputMode="tel"
-          style={inputStyle()}
-        />
+        <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
       </div>
       <input
         value={contactNotes}
@@ -393,11 +389,7 @@ function CatGrid({
               }}
             >
               {thumbUrl ? (
-                <img
-                  src={thumbUrl}
-                  alt={name}
-                  style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
-                />
+                <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
               ) : (
                 <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
               )}
@@ -416,12 +408,7 @@ function CatGrid({
               {name}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button
-                type="button"
-                onClick={() => removeGraphic(gid)}
-                disabled={qty === 0}
-                style={glassButtonStyle("nano", qty === 0)}
-              >
+              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
                 −
               </button>
               <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
@@ -532,7 +519,6 @@ function PlateBlock(props: {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      {/* Дополнительно */}
       <LoudAccordion title="Дополнительно" open={accExtrasOpen} onToggle={() => setAccExtrasOpen((v) => !v)}>
         <div style={{ ...sectionBox }}>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -573,11 +559,9 @@ function PlateBlock(props: {
         </div>
       </LoudAccordion>
 
-      {/* Надгробная плита */}
       <LoudAccordion title={plateTitle} open={accPlateOpen} onToggle={() => setAccPlateOpen((v) => !v)}>
         {extraPlate && (
           <div style={{ display: "grid", gap: 12 }}>
-            {/* Размер */}
             <div style={{ ...sectionBox }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -612,7 +596,6 @@ function PlateBlock(props: {
               )}
             </div>
 
-            {/* Толщина */}
             <div style={{ ...sectionBox }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Толщина</div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -647,7 +630,6 @@ function PlateBlock(props: {
               )}
             </div>
 
-            {/* Ориентация */}
             <div style={{ ...sectionBox }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Ориентация</div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -668,7 +650,6 @@ function PlateBlock(props: {
               </div>
             </div>
 
-            {/* Эпитафии */}
             <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ ...sectionBox }}>
@@ -676,9 +657,7 @@ function PlateBlock(props: {
                   <textarea
                     rows={3}
                     value={plateEpitaph}
-                    onChange={(e) => {
-                      setPlateEpitaph(e.target.value);
-                    }}
+                    onChange={(e) => setPlateEpitaph(e.target.value)}
                     onBlur={() => markDirty()}
                     placeholder="Введите текст…"
                     style={{ ...inputStyle(), resize: "vertical" }}
@@ -696,8 +675,7 @@ function PlateBlock(props: {
                           const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
                           const exists = list.some((s) => norm(s) === norm(t));
                           const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
-                          const joined = next.join("\n\n");
-                          setPlateEpitaph(joined);
+                          setPlateEpitaph(next.join("\n\n"));
                           markDirty();
                         }}
                         style={glassButtonStyle("nano")}
@@ -711,7 +689,6 @@ function PlateBlock(props: {
               </div>
             </LoudAccordion>
 
-            {/* Графика */}
             <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
               {catsLoading && <div>Загрузка каталога…</div>}
               {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
@@ -814,12 +791,26 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
 
-  // Expand WebApp on enter (разворачиваем "топбар" Telegram WebApp)
+  // Развернуть WebApp при переходе на экран (высота webview)
   useEffect(() => {
-    try {
-      (window as any)?.Telegram?.WebApp?.ready?.();
-      (window as any)?.Telegram?.WebApp?.expand?.();
-    } catch {}
+    // Пробуем несколько раз: иногда Telegram отдает viewport/ready с задержкой
+    let alive = true;
+    const tick = (delay: number) => {
+      setTimeout(() => {
+        if (!alive) return;
+        try {
+          (window as any)?.Telegram?.WebApp?.ready?.();
+          (window as any)?.Telegram?.WebApp?.expand?.();
+        } catch {}
+      }, delay);
+    };
+    tick(0);
+    tick(120);
+    tick(400);
+    tick(900);
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -903,7 +894,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Каталог (для блока «Выбрано для плиты»)
+  // Каталог
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -973,20 +964,20 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  // ---- Telegram send helpers ----
+  // ---- Telegram: unified API /api/tg ----
   async function sendMessage(text: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      const resp = await fetch("/api/tg-send-message", {
+      const resp = await fetch("/api/tg", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ action: "manager_message", text })
       });
       const raw = await resp.text().catch(() => "");
       let json: any = null;
       try {
         json = raw ? JSON.parse(raw) : null;
       } catch {}
-      return { ok: !!(resp.ok && json?.ok), error: json?.error || raw || resp.statusText };
+      return { ok: !!(resp.ok && json?.ok), error: json?.error || json?.description || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
     }
@@ -1138,29 +1129,33 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       parts.push(fullText.slice(cursor, cursor + TELEGRAM_CHUNK_SIZE));
       cursor += TELEGRAM_CHUNK_SIZE;
     }
+
     const errors: string[] = [];
     for (let i = 0; i < parts.length; i++) {
-      const resp = await fetch("/api/tg-send-message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: parts[i] })
-      });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {}
-      if (!resp.ok || !json?.ok) errors.push(json?.error || raw || resp.statusText);
+      const r = await sendMessage(parts[i]);
+      if (!r.ok) errors.push(r.error || "send error");
       await sleep(150);
     }
     return { ok: errors.length === 0, errors };
   }
 
-  async function sendSketchFromNode(
-    nodeId: string,
-    caption: string | undefined,
-    fallbackUrl?: string | null
-  ): Promise<{ ok: boolean; error?: string }> {
+  async function sendPhotoForm(fd: FormData): Promise<{ ok: boolean; error?: string }> {
+    try {
+      fd.append("action", "manager_photo");
+      const resp = await fetch("/api/tg", { method: "POST", body: fd });
+      const raw = await resp.text().catch(() => "");
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {}
+      if (resp.ok && json?.ok) return { ok: true };
+      return { ok: false, error: json?.error || json?.description || raw || resp.statusText };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  async function sendSketchFromNode(nodeId: string, caption: string | undefined, fallbackUrl?: string | null): Promise<{ ok: boolean; error?: string }> {
     // 1) DOM → PNG
     try {
       const el = document.getElementById(nodeId) as HTMLElement | null;
@@ -1176,40 +1171,28 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             qualityMin: 0.55,
             qualityStep: 0.08
           });
+
           const fd = new FormData();
           fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
           if (caption) fd.append("caption", caption);
 
-          const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-          const raw = await resp.text().catch(() => "");
-          let json: any = null;
-          try {
-            json = raw ? JSON.parse(raw) : null;
-          } catch {}
-          if (resp.ok && json?.ok) return { ok: true };
+          const r = await sendPhotoForm(fd);
+          if (r.ok) return { ok: true };
         }
       }
     } catch {
-      // ignore, fallback to URL
+      // ignore, try URL
     }
 
     // 2) URL fallback
-    try {
-      if (fallbackUrl) {
-        const fd2 = new FormData();
-        fd2.append("url", fallbackUrl);
-        if (caption) fd2.append("caption", caption);
-        const r2 = await fetch("/api/tg-send-photo", { method: "POST", body: fd2 });
-        const raw2 = await r2.text().catch(() => "");
-        let j2: any = null;
-        try {
-          j2 = raw2 ? JSON.parse(raw2) : null;
-        } catch {}
-        if (r2.ok && j2?.ok) return { ok: true };
-        return { ok: false, error: j2?.error || raw2 || r2.statusText };
-      }
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
+    if (fallbackUrl) {
+      const fd2 = new FormData();
+      fd2.append("url", fallbackUrl);
+      if (caption) fd2.append("caption", caption);
+
+      const r2 = await sendPhotoForm(fd2);
+      if (r2.ok) return { ok: true };
+      return { ok: false, error: r2.error || "url send failed" };
     }
 
     return { ok: false, error: "Не удалось отправить эскиз" };
@@ -1235,16 +1218,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       const fd = new FormData();
       fd.append("file", new File([compressed], `topbar.jpg`, { type: "image/jpeg" }));
-      // caption НЕ добавляем
+      // без caption
 
-      const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {}
-      if (resp.ok && json?.ok) return { ok: true };
-      return { ok: false, error: json?.error || raw || resp.statusText };
+      return await sendPhotoForm(fd);
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
     }
@@ -1295,17 +1271,17 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         `Telegram: ${full || "—"}\n` +
         `ID: ${userId}`;
 
-      await fetch("/api/tg-send-dm", {
+      await fetch("/api/tg", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, text })
+        body: JSON.stringify({ action: "dm", userId, text })
       });
     } catch {
       // ignore
     }
   }
 
-  // Основная отправка (маркеры + topbar-shot + текст + эскизы + фото)
+  // Основная отправка
   const sendOrderDirect = async (showBackInner: boolean, backUrlInner: string | null) => {
     setUploading(true);
     setUploadProgress(0);
@@ -1324,7 +1300,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       // Маркер начала
       await sendMessage(startMarkerText(orderNoCur));
 
-      // Скриншот "топбара" (TopBarWithIntro), без подписи
+      // Скриншот DOM-топбара (TopBarWithIntro), без подписи
       const topShot = await sendTopBarShot();
       if (!topShot.ok && topShot.error) warnings.push(`Скриншот топбара не отправлен: ${topShot.error}`);
 
@@ -1339,17 +1315,18 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // Эскиз (тыльная) — только если есть (DOM→PNG, иначе URL)
+      // Эскиз (тыльная) — только если есть
       if (showBackInner && backUrlInner) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backUrlInner);
         setBackSketchDelivered(backRes.ok);
         if (!backRes.ok && backRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${backRes.error}`);
       }
 
-      // Портретные фото (с подписью: ФИО + даты)
+      // Портретные фото
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
       let delivered = 0;
+
       for (let i = 0; i < photos.length; i++) {
         const ph = photos[i];
         const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, {
@@ -1360,22 +1337,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           qualityMin: 0.55,
           qualityStep: 0.08
         });
+
         const fd = new FormData();
         fd.append("file", new File([compressed], ph.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
         fd.append("caption", ph.caption);
 
-        const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
-        const raw = await r.text().catch(() => "");
-        let json: any = null;
-        try {
-          json = raw ? JSON.parse(raw) : null;
-        } catch {}
-        if (!r.ok || !json?.ok) {
-          warnings.push(`Фото не отправлено (${ph.name}): ${json?.error || raw || r.statusText}`);
+        const r = await sendPhotoForm(fd);
+        if (!r.ok) {
+          warnings.push(`Фото не отправлено (${ph.name}): ${r.error || "send failed"}`);
         } else {
           delivered += 1;
           setPhotosDelivered(delivered);
         }
+
         setUploadProgress(Math.round(((i + 1) / Math.max(1, photos.length)) * 100));
         await sleep(200);
       }
@@ -1387,7 +1361,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       if (warnings.length) setLastWarnings(warnings);
       setUploadProgress(100);
 
-      // DM пользователю
+      // Уведомление пользователю (DM)
       await sendUserConfirmation(orderNoCur);
     } finally {
       setUploading(false);
@@ -1443,17 +1417,12 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     <div style={safeRoot()}>
       <TopHintNotice />
 
-      {/* ВАЖНО: этот контейнер будет скриншотиться и отправляться в Telegram без подписи */}
+      {/* Этот блок скриншотится и отправляется в Telegram (DOM‑топбар) */}
       <div id="tg-topbar-shot" style={{ marginBottom: 10 }}>
-        <TopBarWithIntro title="Обзор и отправка" />
+        <TopBarWithIntro title="Memorial" />
       </div>
 
-      {/* Контакты и № заказа */}
-      <EditableOrderSummary
-        orderNo={orderNo}
-        onOpenTop={() => {}}
-        onDirty={() => sentOk && setIsDirtyAfterSend(true)}
-      />
+      <EditableOrderSummary orderNo={orderNo} onOpenTop={() => {}} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
 
       {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
@@ -1489,11 +1458,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             setPlateIds(nextIds);
             setPlateMeta(nextMeta);
             const prev = loadOrderDraft();
-            saveOrderDraft({
-              ...prev,
-              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta },
-              updatedAt: Date.now()
-            });
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta }, updatedAt: Date.now() });
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           removePlateGraphic={(gid) => {
@@ -1503,11 +1468,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             nextIds.splice(idx, 1);
             setPlateIds(nextIds);
             const prev = loadOrderDraft();
-            saveOrderDraft({
-              ...prev,
-              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
-              updatedAt: Date.now()
-            });
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta }, updatedAt: Date.now() });
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateIds={plateIds}
@@ -1533,7 +1494,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         />
       </section>
 
-      {/* Эскиз лицевой (с фото) */}
+      {/* Эскиз лицевой */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
         <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
@@ -1550,7 +1511,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       </section>
 
-      {/* Эскиз тыльной — только если реально есть URL */}
+      {/* Эскиз тыльной — только если реально есть */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
@@ -1566,7 +1527,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </section>
       )}
 
-      {/* Выбрано для плиты — над комментарием */}
+      {/* Выбрано для плиты */}
       {extraPlate && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ ...sectionBox }}>
@@ -1582,10 +1543,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             {chosenPlateList.length > 0 && (
               <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
-                  <div
-                    key={`${g.id || g.url || i}`}
-                    style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}
-                  >
+                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
                     <Thumb url={g.url} />
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.name || g.id}
@@ -1607,7 +1565,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </section>
       )}
 
-      {/* Комментарий к заказу */}
+      {/* Комментарий */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>
           Комментарий к заказу
@@ -1637,12 +1595,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
-          <button
-            type="button"
-            onPointerUp={() => setConfirmOpen(true)}
-            onClick={() => setConfirmOpen(true)}
-            style={glassButtonStyle("sm")}
-          >
+          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>
             Отправить менеджеру
           </button>
         </div>
@@ -1679,13 +1632,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           >
             <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
             <div style={{ position: "absolute", top: 8, right: 8 }}>
-              <button
-                onPointerUp={() => setConfirmOpen(false)}
-                onClick={() => setConfirmOpen(false)}
-                title="Закрыть"
-                className="btn"
-                disabled={isSending || uploading}
-              >
+              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть" className="btn" disabled={isSending || uploading}>
                 ×
               </button>
             </div>
@@ -1705,7 +1652,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
-      {/* Нижний объединённый блок: «Заявка отправлена» + «Статус доставки» */}
+      {/* Статус */}
       {(deliveryVisible || sentOk) && (
         <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
@@ -1725,40 +1672,21 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 </div>
                 <div>
                   <span style={{ opacity: 0.85 }}>Эскиз (лицевая) — </span>
-                  <strong
-                    style={{
-                      color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4"
-                    }}
-                  >
+                  <strong style={{ color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}
                   </strong>
                 </div>
                 {showBack && (
                   <div>
                     <span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span>
-                    <strong
-                      style={{
-                        color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4"
-                      }}
-                    >
+                    <strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
                       {backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}
                     </strong>
                   </div>
                 )}
                 <div>
                   <span style={{ opacity: 0.85 }}>Фото — </span>
-                  <strong
-                    style={{
-                      color:
-                        photosDelivered === photosTotal
-                          ? "#7dffa0"
-                          : photosDelivered > 0
-                            ? "#ffd666"
-                            : photosTotal === 0
-                              ? "#ccc"
-                              : "#ffb4b4"
-                    }}
-                  >
+                  <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : photosTotal === 0 ? "#ccc" : "#ffb4b4" }}>
                     {photosTotal > 0 ? `${photosDelivered} из ${photosTotal}` : "—"}
                   </strong>
                 </div>
@@ -1783,12 +1711,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 frontSketchDelivered === false ||
                 (showBack && backSketchDelivered === false) ||
                 (photosTotal > 0 && photosDelivered < photosTotal)) && (
-                <button
-                  type="button"
-                  onClick={() => sendOrderDirect(showBack, backCandidateUrl)}
-                  disabled={uploading || isSending}
-                  style={glassButtonStyle("sm", uploading || isSending)}
-                >
+                <button type="button" onClick={() => sendOrderDirect(showBack, backCandidateUrl)} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
               )}
@@ -1798,8 +1721,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             </div>
 
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-              Если часть данных не доставилась, скачайте PDF и отправьте менеджеру вручную (в Telegram или по почте).
-              Укажите номер заказа и приложите фотографии, подписав к каждому фото ФИО и даты.
+              Если часть данных не доставилась, скачайте PDF и отправьте менеджеру вручную (в Telegram или по почте). Укажите номер заказа и приложите фотографии.
             </div>
           </section>
         </div>
