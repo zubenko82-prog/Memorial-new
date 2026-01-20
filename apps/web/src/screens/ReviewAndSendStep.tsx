@@ -2,21 +2,30 @@
 //
 // Шаг «Обзор и подтверждение»
 //
-// ВАЖНО:
-// - Root Directory на Vercel = apps/web (API работает по /api/*)
-// - Скриншот должен захватывать И КНОПКУ TopBarWithIntro, И раскрытую панель.
-//   Для этого TopBarWithIntro обёрнут в #topbar-shot-root, а перед скриншотом мы раскрываем панель
-//   через событие "memorial:openTopBarPanel" и снимаем именно #topbar-shot-root.
+// ИСПРАВЛЕНИЯ ПО ЗАПРОСУ:
+// 1) Топбар открывается при входе на шаг и держится открытым:
+//    - делаем "force open" через событие memorial:openTopBarPanel в цикле
+//    - цикл останавливаем, когда видим, что в DOM появился раскрытый panel ([data-topbar-panel="1"])
+//    - на focus/visibilitychange снова принудительно открываем
+//    ВАЖНО: это не требует изменения TopBarWithIntro и не зависит от ack-события.
 //
-// - Эпитафии на плите реализованы как список (как в EpitaphStep):
-//   * многострочная эпитафия = ОДИН элемент
-//   * toggle/add/remove/clear с нормализацией
-//   * сохранение в draft.extras:
-//       - 1 эпитафия: extras.plateEpitaph (string)
-//       - >1: extras.plateEpitaphs (string[])
-//       - 0: оба ключа удаляются
+// 2) Блок «Выбрано для плиты» переносим ПОД аккордеон «Надгробная плита» (внутрь PlateBlock),
+//    выделяем обводкой красной толщины 1px (как прочие).
+//    Добавляем возможность удалить выбранную графику (кнопка × у элемента).
 //
-// - Блок “Заказ № …” под топбаром скрыт: EditableOrderSummary НЕ рендерится.
+// 3) Исправляем удаление эпитафий на плите:
+//    - раньше удаление могло не работать из-за key={t} (для одинаковых строк) и/или рассинхронизации.
+//    - теперь key стабильный: `${idx}-${normEpitaph(t)}`
+//    - persist в draft.extras всегда обновляет extras.plateEpitaph/plateEpitaphs и диспатчит DRAFT_UPDATED_EVENT
+//
+// 4) Топбар теперь видит изменения эпитафий плиты и графики, потому что мы:
+//    - сохраняем в localStorage через saveOrderDraft
+//    - диспатчим DRAFT_UPDATED_EVENT после каждого save (TopBarWithIntro слушает его)
+//
+// 5) Скриншот включает и кнопку TopBarWithIntro, и раскрытую панель:
+//    - TopBarWithIntro обёрнут в #topbar-shot-root
+//    - снимаем #topbar-shot-root
+//    - перед скрином дополнительно принудительно открываем и ждём появления data-topbar-panel="1"
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -197,6 +206,13 @@ function uniqueByNorm(list: string[]): string[] {
   return out;
 }
 
+function dispatchDraftUpdated() {
+  try {
+    window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+    window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+  } catch {}
+}
+
 /* ========= Top hint ========= */
 function TopHintNotice() {
   return (
@@ -275,7 +291,7 @@ function LoudAccordion({
   );
 }
 
-/* ========= PlateBlock (sync checkbox <-> accordion) ========= */
+/* ========= PlateBlock ========= */
 function PlateBlock(props: {
   extraPlate: boolean;
   setExtraPlate: (v: boolean) => void;
@@ -293,7 +309,7 @@ function PlateBlock(props: {
   plateOrientation: string;
   setPlateOrientation: (v: string) => void;
 
-  // NEW: epitaph list UI (как EpitaphStep)
+  // Epitaph list UI
   plateSelectedEpitaphs: string[];
   setPlateSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
   plateShowMore: boolean;
@@ -313,12 +329,19 @@ function PlateBlock(props: {
   removePlateGraphic: (gid: string) => void;
   plateIds: string[];
 
+  chosenPlateList: any[];
+  onRemoveChosenPlateItem: (gid: string) => void;
+
+  plateEpitaphList: string[];
+
   hasPedestal: boolean;
   setHasPedestal: (v: boolean) => void;
   hasFlowerbed: boolean;
   setHasFlowerbed: (v: boolean) => void;
   hasVase: boolean;
   setHasVase: (v: boolean) => void;
+
+  extractPlateWidthText: () => string;
 
   onDirty?: () => void;
 }) {
@@ -355,12 +378,19 @@ function PlateBlock(props: {
     removePlateGraphic,
     plateIds,
 
+    chosenPlateList,
+    onRemoveChosenPlateItem,
+    plateEpitaphList,
+
     hasPedestal,
     setHasPedestal,
     hasFlowerbed,
     setHasFlowerbed,
     hasVase,
     setHasVase,
+
+    extractPlateWidthText,
+
     onDirty
   } = props;
 
@@ -564,6 +594,58 @@ function PlateBlock(props: {
       >
         {extraPlate && (
           <div style={{ display: "grid", gap: 12 }}>
+            {/* ПОД АККОРДЕОНОМ "НАДГРОБНАЯ ПЛИТА" — блок выбранного (с красной рамкой) */}
+            <div
+              style={{
+                ...sectionBox,
+                border: "1px solid rgba(255,80,80,0.95)" // красная, толщина 1px
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
+                <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
+              </div>
+
+              {chosenPlateList.length > 0 && (
+                <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
+                  {chosenPlateList.map((g, i) => {
+                    const gid = String(g.id || g.url || i);
+                    return (
+                      <div key={`chosen-${gid}-${i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
+                        <Thumb url={g.url} />
+                        <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {g.name || g.id}
+                        </div>
+                        <button
+                          type="button"
+                          title="Удалить"
+                          onClick={() => onRemoveChosenPlateItem(String(g.id || g.name || g.url || ""))}
+                          style={{
+                            ...glassButtonStyle("nano"),
+                            padding: "6px 10px",
+                            borderColor: "rgba(255,80,80,0.9)"
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {plateEpitaphList.length > 0 && (
+                <div style={{ display: "grid", gap: 6 }}>
+                  {plateEpitaphList.map((t, idx) => (
+                    <div key={`plate-ep-preview-${idx}-${normEpitaph(t)}`} style={{ ...sectionBox, padding: 8 }}>
+                      <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div style={{ ...sectionBox }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Размер</div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -646,7 +728,7 @@ function PlateBlock(props: {
               </div>
             </div>
 
-            {/* ===== Эпитафии на плите (как EpitaphStep) ===== */}
+            {/* ===== Эпитафии на плите ===== */}
             <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ ...sectionBox }}>
@@ -677,11 +759,7 @@ function PlateBlock(props: {
 
                 <div style={{ ...sectionBox }}>
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
-                  <button
-                    type="button"
-                    onClick={() => setPlateShowMore((v) => !v)}
-                    style={glassButtonStyle("nano")}
-                  >
+                  <button type="button" onClick={() => setPlateShowMore((v) => !v)} style={glassButtonStyle("nano")}>
                     {plateShowMore ? "Свернуть список" : "Развернуть список"}
                   </button>
 
@@ -699,7 +777,7 @@ function PlateBlock(props: {
                         const active = hasByNorm(plateSelectedEpitaphs, t);
                         return (
                           <button
-                            key={idx}
+                            key={`more-${idx}-${normEpitaph(t)}`}
                             type="button"
                             onClick={() => {
                               onTogglePlateEpitaph(t);
@@ -769,9 +847,9 @@ function PlateBlock(props: {
                   <div style={{ ...sectionBox }}>
                     <div style={{ marginBottom: 6, textAlign: "left" }}>Выбранные эпитафии:</div>
                     <div style={{ display: "grid", gap: 6 }}>
-                      {plateSelectedEpitaphs.map((t) => (
+                      {plateSelectedEpitaphs.map((t, idx) => (
                         <div
-                          key={t}
+                          key={`sel-${idx}-${normEpitaph(t)}`}
                           style={{
                             ...glassPanelStyle(),
                             borderRadius: 10,
@@ -853,7 +931,6 @@ async function ensureHtmlToImage(): Promise<any> {
   if (!(window as any).htmlToImage) throw new Error("html-to-image unavailable");
   return (window as any).htmlToImage;
 }
-
 async function elementToPngDataUrl(node: HTMLElement | null, opts?: { pixelRatio?: number; bg?: string }): Promise<string | null> {
   if (!node) return null;
   const hti = await ensureHtmlToImage();
@@ -863,7 +940,6 @@ async function elementToPngDataUrl(node: HTMLElement | null, opts?: { pixelRatio
     cacheBust: true
   });
 }
-
 function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   const arr = dataUrl.split(",");
   const mime = (arr[0].match(/data:(.*);base64/) || [])[1] || "image/png";
@@ -920,50 +996,41 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
   }, []);
 
-// Держим TopBarWithIntro раскрытым на этом шаге (для клиента и для скриншота)
-useEffect(() => {
-  let alive = true;
-  let opened = false;
+  // ===== Force open TopBarWithIntro & keep open (DOM-based) =====
+  useEffect(() => {
+    let alive = true;
 
-  const openTopbar = () => {
-    try {
-      window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-    } catch {}
-  };
+    const isOpen = () => !!document.querySelector('[data-topbar-panel="1"]');
+    const openTopbar = () => {
+      try {
+        window.dispatchEvent(new Event("memorial:openTopBarPanel"));
+      } catch {}
+    };
 
-  const onOpened = () => {
-    opened = true;
-  };
-
-  window.addEventListener("memorial:topbarOpened", onOpened as any);
-
-  // Пытаемся открыть до тех пор, пока TopBar не подтвердит что открылся
-  openTopbar();
-  const timer = window.setInterval(() => {
-    if (!alive) return;
-    if (opened) return;
+    // Запускаем частые попытки, пока не увидим DOM-панель
     openTopbar();
-  }, 200);
+    const timer = window.setInterval(() => {
+      if (!alive) return;
+      if (isOpen()) return;
+      openTopbar();
+    }, 120);
 
-  // На случай возврата в приложение — снова откроем
-  const onFocus = () => openTopbar();
-  const onVisible = () => {
-    if (document.visibilityState === "visible") openTopbar();
-  };
+    const onFocus = () => openTopbar();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") openTopbar();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
 
-  window.addEventListener("focus", onFocus);
-  document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
-  return () => {
-    alive = false;
-    window.removeEventListener("memorial:topbarOpened", onOpened as any);
-    window.removeEventListener("focus", onFocus);
-    document.removeEventListener("visibilitychange", onVisible);
-    clearInterval(timer);
-  };
-}, []);
-
-// ===== Back sketch: detect "empty" by actual image size =====
+  // ===== Back sketch: detect "empty" by actual image size =====
   function getBackSketchUrl(d: any): string | null {
     const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
     if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
@@ -1053,7 +1120,7 @@ useEffect(() => {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // ===== Plate epitaphs (как EpitaphStep) =====
+  // ===== Plate epitaphs =====
   const initialPlateSelected = useMemo(() => {
     const d = loadOrderDraft();
     const ex: any = (d as any)?.extras || {};
@@ -1068,7 +1135,9 @@ useEffect(() => {
   const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
 
-  // Persist plate epitaphs to draft.extras
+  const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
+
+  // Persist plate epitaphs to draft.extras (+ dispatch event so TopBar refreshes)
   const prevPlateEpiJsonRef = useRef<string>("");
   useEffect(() => {
     const list = uniqueByNorm(plateSelectedEpitaphs);
@@ -1089,45 +1158,11 @@ useEffect(() => {
     if (snapshot !== prevPlateEpiJsonRef.current) {
       prevPlateEpiJsonRef.current = snapshot;
       saveOrderDraft({ ...prevAll, extras: exNext, updatedAt: Date.now() });
+      dispatchDraftUpdated();
       setDraft(loadOrderDraft());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plateSelectedEpitaphs]);
-
-  const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
-
-  // Keep local plate states in sync when draft updates externally
-  useEffect(() => {
-    const ex: any = (draft as any)?.extras || {};
-
-    setExtraPlate(!!ex.headstonePlate);
-    setPlateSize(ex.plateSize || "100×50 см");
-    setPlateCustomSize(ex.plateCustomSize || "");
-    setPlateThickness(ex.plateThickness || "5 см");
-    setPlateCustomThickness(ex.plateCustomThickness || "");
-    setPlateOrientation(
-      ex.plateOrientation ||
-        ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
-    );
-    setPlateIds((ex.plateGraphicsIds as string[]) || []);
-    setPlateMeta((ex.plateGraphicsMeta as Record<string, any>) || {});
-    setHasPedestal(ex.tumba ?? true);
-    setHasFlowerbed(!!ex.flowerbed);
-    setHasVase(!!ex.vase);
-
-    // синхронизируем выбранные эпитафии плиты из draft, если они там есть
-    const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
-    const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
-    const nextSelected = uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
-    // обновляем только если реально отличается (по норме)
-    const same =
-      nextSelected.length === plateSelectedEpitaphs.length &&
-      nextSelected.every((x, i) => normEpitaph(x) === normEpitaph(plateSelectedEpitaphs[i]));
-    if (!same && nextSelected.length > 0) {
-      setPlateSelectedEpitaphs(nextSelected);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
 
   // ===== Catalog for plate graphics =====
   const [catsLoading, setCatsLoading] = useState(false);
@@ -1198,6 +1233,17 @@ useEffect(() => {
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
+  // ===== Helpers =====
+  function extractPlateWidthText(): string {
+    const effective = (plateSize === "Свой вариант" ? plateCustomSize : plateSize || "").trim();
+    if (!effective) return "—";
+    const m = effective.match(/(\d+)\s*[×xX]\s*(\d+)/);
+    if (m) return `${m[2]} см`;
+    const n = effective.match(/(\d+)\s*см/);
+    if (n) return `${n[1]} см`;
+    return effective;
+  }
+
   // ===== Telegram API (/api/tg) =====
   async function sendManagerMessage(text: string): Promise<{ ok: boolean; error?: string }> {
     try {
@@ -1252,16 +1298,6 @@ useEffect(() => {
   function endMarkerText(no: string): string {
     const n = no || "—";
     return `🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${n}`;
-  }
-
-  function extractPlateWidthText(): string {
-    const effective = (plateSize === "Свой вариант" ? plateCustomSize : plateSize || "").trim();
-    if (!effective) return "—";
-    const m = effective.match(/(\d+)\s*[×xX]\s*(\d+)/);
-    if (m) return `${m[2]} см`;
-    const n = effective.match(/(\d+)\s*см/);
-    if (n) return `${n[1]} см`;
-    return effective;
   }
 
   function buildOrderText(): string {
@@ -1346,12 +1382,25 @@ useEffect(() => {
   }
 
   async function ensureTopBarPanelOpenForShot(): Promise<void> {
-  try {
-    window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-  } catch {}
-  await sleep(420);
-}
+    const openTopbar = () => {
+      try {
+        window.dispatchEvent(new Event("memorial:openTopBarPanel"));
+      } catch {}
+    };
+    const isOpen = () => !!document.querySelector('[data-topbar-panel="1"]');
 
+    openTopbar();
+
+    const start = Date.now();
+    while (Date.now() - start < 900) {
+      if (isOpen()) break;
+      await sleep(120);
+      openTopbar();
+    }
+
+    // небольшой запас под анимацию/перерисовку
+    await sleep(150);
+  }
 
   function findTopBarShotRootNode(): HTMLElement | null {
     return document.getElementById("topbar-shot-root");
@@ -1491,22 +1540,22 @@ useEffect(() => {
 
       await sendManagerMessage(startMarkerText(orderNoCur));
 
-      // Скриншот топбара (кнопка + панель)
+      // 1) Скриншот топбара (кнопка + панель)
       const topRes = await sendTopbarShotWithHeaderAndPanel();
       setTopbarDelivered(topRes.ok);
       if (!topRes.ok && topRes.error) warnings.push(`Топбар не отправлен: ${topRes.error}`);
 
-      // Текст заявки
+      // 2) Текст заявки
       const tRes = await sendLargeText(buildOrderText());
       setTextDelivered(tRes.ok);
       if (!tRes.ok) warnings.push(`Текст не отправлен: ${tRes.errors.join(" | ")}`);
 
-      // Эскиз (лицевая)
+      // 3) Эскиз (лицевая)
       const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)", null);
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // Эскиз (тыльная) — только если showBack=true
+      // 4) Эскиз (тыльная) — только если showBack=true
       if (showBack && backCandidateUrl) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backCandidateUrl);
         setBackSketchDelivered(backRes.ok);
@@ -1515,7 +1564,7 @@ useEffect(() => {
         setBackSketchDelivered(null);
       }
 
-      // Фото портретов
+      // 5) Фото портретов
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
 
@@ -1597,6 +1646,28 @@ useEffect(() => {
     isSending ? "Отправляем заказ…" :
     isSaving ? "Формируем PDF…" : "";
 
+  // ===== Remove chosen plate graphic from selection (remove ONE occurrence) =====
+  const removeChosenPlateOne = (gidRaw: string) => {
+    const gid = String(gidRaw || "").trim();
+    if (!gid) return;
+
+    const idx = plateIds.findIndex((x) => x === gid);
+    if (idx === -1) return;
+
+    const nextIds = plateIds.slice();
+    nextIds.splice(idx, 1);
+    setPlateIds(nextIds);
+
+    const prev = loadOrderDraft();
+    saveOrderDraft({
+      ...prev,
+      extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
+      updatedAt: Date.now()
+    });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+  };
+
   return (
     <div style={safeRoot()}>
       <TopHintNotice />
@@ -1606,8 +1677,6 @@ useEffect(() => {
         <TopBarWithIntro title="Обзор и отправка" />
       </div>
 
-      {/* EditableOrderSummary скрыт по требованию */}
-
       {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
@@ -1616,18 +1685,44 @@ useEffect(() => {
             setExtraPlate(v);
             const prev = loadOrderDraft();
             saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateSize={plateSize}
-          setPlateSize={setPlateSize}
+          setPlateSize={(v) => {
+            setPlateSize(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateSize: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
+          }}
           plateCustomSize={plateCustomSize}
-          setPlateCustomSize={setPlateCustomSize}
+          setPlateCustomSize={(v) => {
+            setPlateCustomSize(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateCustomSize: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
+          }}
           plateThickness={plateThickness}
-          setPlateThickness={setPlateThickness}
+          setPlateThickness={(v) => {
+            setPlateThickness(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateThickness: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
+          }}
           plateCustomThickness={plateCustomThickness}
-          setPlateCustomThickness={setPlateCustomThickness}
+          setPlateCustomThickness={(v) => {
+            setPlateCustomThickness(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateCustomThickness: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
+          }}
           plateOrientation={plateOrientation}
-          setPlateOrientation={setPlateOrientation}
+          setPlateOrientation={(v) => {
+            setPlateOrientation(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateOrientation: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
+          }}
           plateSelectedEpitaphs={plateSelectedEpitaphs}
           setPlateSelectedEpitaphs={setPlateSelectedEpitaphs}
           plateShowMore={plateShowMore}
@@ -1640,7 +1735,7 @@ useEffect(() => {
             setPlateSelectedEpitaphs((prev) => {
               const idx = indexOfByNorm(prev, t);
               if (idx !== -1) return prev.filter((_, i) => i !== idx);
-              return prev.concat([text]); // сохраняем исходный многострочный текст
+              return prev.concat([text]);
             });
           }}
           onAddPlateCustom={() => {
@@ -1674,6 +1769,8 @@ useEffect(() => {
               extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta },
               updatedAt: Date.now()
             });
+            dispatchDraftUpdated();
+            setDraft(loadOrderDraft());
 
             if (sentOk) setIsDirtyAfterSend(true);
           }}
@@ -1691,28 +1788,37 @@ useEffect(() => {
               extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
               updatedAt: Date.now()
             });
+            dispatchDraftUpdated();
+            setDraft(loadOrderDraft());
 
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateIds={plateIds}
+          chosenPlateList={chosenPlateList}
+          onRemoveChosenPlateItem={removeChosenPlateOne}
+          plateEpitaphList={plateEpitaphList}
           hasPedestal={hasPedestal}
           setHasPedestal={(v) => {
             setHasPedestal(v);
             const prev = loadOrderDraft();
             saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, tumba: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
           }}
           hasFlowerbed={hasFlowerbed}
           setHasFlowerbed={(v) => {
             setHasFlowerbed(v);
             const prev = loadOrderDraft();
             saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, flowerbed: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
           }}
           hasVase={hasVase}
           setHasVase={(v) => {
             setHasVase(v);
             const prev = loadOrderDraft();
             saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, vase: v }, updatedAt: Date.now() });
+            dispatchDraftUpdated();
           }}
+          extractPlateWidthText={extractPlateWidthText}
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
       </section>
@@ -1750,42 +1856,6 @@ useEffect(() => {
         </section>
       )}
 
-      {/* Выбрано для плиты — над комментарием */}
-      {extraPlate && (
-        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-          <div style={{ ...sectionBox }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-              <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
-              <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
-            </div>
-
-            {chosenPlateList.length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
-                {chosenPlateList.map((g, i) => (
-                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
-                    <Thumb url={g.url} />
-                    <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {g.name || g.id}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {plateEpitaphList.length > 0 && (
-              <div style={{ display: "grid", gap: 6 }}>
-                {plateEpitaphList.map((t, idx) => (
-                  <div key={`plate-ep-${idx}`} style={{ ...sectionBox, padding: 8 }}>
-                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
       {/* Комментарий к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>
@@ -1802,6 +1872,7 @@ useEffect(() => {
             const prev = loadOrderDraft();
             const extras: any = { ...(prev as any).extras, orderNotes: (e.target.value || "").trim() || undefined };
             saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+            dispatchDraftUpdated();
             setDraft(loadOrderDraft());
             if (sentOk) setIsDirtyAfterSend(true);
           }}

@@ -140,7 +140,21 @@ function epitaphBackdropStyle(theme: ThemeMode): React.CSSProperties {
     color: p.text
   };
 }
+function epitaphItemStyle(theme: ThemeMode): React.CSSProperties {
+  const p = palette(theme);
+  return {
+    background: theme === "light" ? "rgba(255, 232, 170, 0.85)" : "rgba(255, 232, 170, 0.22)",
+    border: theme === "light" ? "1px solid rgba(160, 110, 0, 0.35)" : "1px solid rgba(255,255,255,0.22)",
+    borderRadius: 10,
+    padding: 8,
+    color: p.text
+  };
+}
 
+// 2) (опционально) контейнер списка эпитафий
+function epitaphListStyle(): React.CSSProperties {
+  return { display: "grid", gap: 6 };
+}
 function galleryThumbBoxStyle(): React.CSSProperties {
   const grad: React.CSSProperties = {
     backgroundColor: "#000000",
@@ -792,11 +806,18 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
                     {/* Эпитафии (лицевая) — подложка насыщеннее */}
                     {frontEpitaphs.length > 0 && (
-                      <div style={{ ...epitaphBackdropStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                        <div style={{ whiteSpace: "pre-wrap" }}>{frontEpitaphs.join("\n")}</div>
-                      </div>
-                    )}
+  <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+    <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+    <div style={epitaphListStyle()}>
+      {frontEpitaphs.map((t, idx) => (
+        <div key={`front-ep-${idx}`} style={epitaphItemStyle(theme)}>
+          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
 
                     {/* Пожелания (лицевая) */}
                     {frontWishes.trim() && (
@@ -844,11 +865,18 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
                     {/* Эпитафии (тыльная) — подложка насыщеннее */}
                     {rearEpitaphs.length > 0 && (
-                      <div style={{ ...epitaphBackdropStyle(theme), marginBottom: 8 }}>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
-                        <div style={{ whiteSpace: "pre-wrap" }}>{rearEpitaphs.join("\n")}</div>
-                      </div>
-                    )}
+  <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+    <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+    <div style={epitaphListStyle()}>
+      {rearEpitaphs.map((t, idx) => (
+        <div key={`rear-ep-${idx}`} style={epitaphItemStyle(theme)}>
+          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
 
                     {/* Пожелания (тыльная) */}
                     {backWishes.trim() && (
@@ -897,11 +925,18 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
               {/* Эпитафии плиты — добавлено, подложка насыщеннее */}
               {plateEpitaphLines.length > 0 && (
-                <div style={{ ...epitaphBackdropStyle(theme), marginTop: 10 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
-                  <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaphLines.join("\n")}</div>
-                </div>
-              )}
+  <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
+    <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
+    <div style={epitaphListStyle()}>
+      {plateEpitaphLines.map((t, idx) => (
+        <div key={`plate-ep-${idx}`} style={epitaphItemStyle(theme)}>
+          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
 
               {/* Дополнительно — строка */}
               <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
