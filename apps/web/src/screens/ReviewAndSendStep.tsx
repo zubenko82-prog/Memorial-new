@@ -985,7 +985,7 @@ useEffect(() => {
     window.removeEventListener("focus", onFocus);
     document.removeEventListener("visibilitychange", onVisible);
   };
-}, []);
+} []);
 
   // ===== Back sketch: detect "empty" by actual image size =====
   function getBackSketchUrl(d: any): string | null {
