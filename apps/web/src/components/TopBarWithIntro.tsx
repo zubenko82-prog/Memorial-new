@@ -900,19 +900,19 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
   <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>
     Тумба: {extrasParts.tumba ? "да" : "нет"}
-  </span>
+  . </span>
 
   <span style={{ opacity: 0.7 }}>{"  "}</span>
 
   <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>
     Цветник: {extrasParts.flowerbed ? "да" : "нет"}
-  </span>
+  . </span>
 
   <span style={{ opacity: 0.7 }}>{"  "}</span>
 
   <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>
     Ваза: {extrasParts.vase ? "да" : "нет"}
-  </span>
+  .</span>
 </div>
             </section>
           )}
