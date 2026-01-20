@@ -1,4 +1,29 @@
 // src/screens/ReviewAndSendStep.tsx
+//
+// Шаг «Обзор и подтверждение»
+//
+// Требования (учтены):
+// 1) Root Directory на Vercel = apps/web → backend функции должны быть в apps/web/api/* (у вас /api/tg уже работает).
+// 2) Скриншот нужен ИМЕННО раскрытой панели TopBarWithIntro:
+//    - диспатчим "memorial:openTopBarPanel"
+//    - ждём анимацию раскрытия
+//    - делаем скриншот элемента с data-topbar-panel="1"
+//    - отправляем в Telegram БЕЗ подписи
+// 3) Если тыльный эскиз “пустой” — не показываем вовсе (проверка по фактическому размеру загруженного изображения).
+// 4) Аккордеон «Надгробная плита» синхронизирован с чекбоксом: checked ⇄ open.
+// 5) Отправка идёт через единый endpoint POST /api/tg
+//    - action=manager_message (JSON)
+//    - action=manager_photo (multipart)
+//    - action=dm (JSON)
+// 6) Фотографии подписываем: ФИО и даты.
+// 7) Пользователю (tg id) отправляем уведомление: Заявка №... отправлена... (имя, телефон) + username + id.
+//
+// Важно про Telegram:
+// - Telegram.WebApp.expand() влияет на высоту webview, а не на раскрытие вашей панели TopBarWithIntro.
+// - “Развернуть топбар” в вашем смысле = раскрыть TopBarWithIntro через событие.
+//
+// Примечание: этот файл сам НЕ добавляет больше данных в TopBarWithIntro — это делается в компоненте.
+// Здесь мы только гарантируем, что панель открыта и попадёт в скриншот.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -188,7 +213,6 @@ function EditableOrderSummary({
   const [name, setName] = useState<string>(introInitial.customerName || "");
   const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
   const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
-
   const saveOnBlur = () => {
     const next: Intro = {
       customerName: name.trim(),
@@ -269,136 +293,27 @@ function LoudAccordion({
   );
 }
 
-/* ========= Graphics grid ========= */
-function CatGrid({
-  items,
-  plateIds,
-  addGraphic,
-  removeGraphic
-}: {
-  items: any[];
-  plateIds: string[];
-  addGraphic: (g: any) => void;
-  removeGraphic: (gid: string) => void;
-}) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [cols, setCols] = useState<number>(2);
-
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
-      setCols(Math.max(2, Math.floor(w / 160)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  return (
-    <div ref={rootRef} style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 12 }}>
-      {items.map((g: any, idx: number) => {
-        const gid = String(g.id || g.relPath || g.url || g.name || idx);
-        const qty = plateIds.filter((x) => x === gid).length;
-        const selected = qty > 0;
-        const thumbUrl = g.preview || g.url || "";
-        const name = g.name || gid;
-        return (
-          <div
-            key={gid}
-            aria-selected={selected}
-            style={{
-              ...glassPanelStyle(),
-              padding: 8,
-              borderRadius: 12,
-              position: "relative",
-              borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
-              boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
-            }}
-          >
-            <div
-              aria-hidden
-              style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                display: selected ? "inline-flex" : "none",
-                alignItems: "center",
-                gap: 4,
-                background: "rgba(10,127,46,0.95)",
-                color: "#fff",
-                borderRadius: 999,
-                padding: "0 6px",
-                fontSize: 11,
-                lineHeight: "18px",
-                height: 18
-              }}
-              title={`Выбрано: ${qty}`}
-            >
-              <span>✓</span>
-              <span>{qty}</span>
-            </div>
-
-            <div
-              role="button"
-              title={name}
-              onClick={() => addGraphic(g)}
-              style={{
-                borderRadius: 10,
-                overflow: "hidden",
-                background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
-                aspectRatio: "1/1",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
-                cursor: "pointer",
-                outline: "none"
-              }}
-            >
-              {thumbUrl ? (
-                <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
-              ) : (
-                <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
-              )}
-            </div>
-
-            <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
-              {name}
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
-                −
-              </button>
-              <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-              <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
-                +
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ========= PlateBlock ========= */
+/* ========= PlateBlock (sync checkbox <-> accordion) ========= */
 function PlateBlock(props: {
   extraPlate: boolean;
   setExtraPlate: (v: boolean) => void;
+
   plateSize: string;
   setPlateSize: (v: string) => void;
   plateCustomSize: string;
   setPlateCustomSize: (v: string) => void;
+
   plateThickness: string;
   setPlateThickness: (v: string) => void;
   plateCustomThickness: string;
   setPlateCustomThickness: (v: string) => void;
+
   plateOrientation: string;
   setPlateOrientation: (v: string) => void;
+
   plateEpitaph: string;
   setPlateEpitaph: (v: string) => void;
+
   catsLoading: boolean;
   catsError: string;
   cats: any[];
@@ -407,12 +322,14 @@ function PlateBlock(props: {
   addPlateGraphic: (g: any) => void;
   removePlateGraphic: (gid: string) => void;
   plateIds: string[];
+
   hasPedestal: boolean;
   setHasPedestal: (v: boolean) => void;
   hasFlowerbed: boolean;
   setHasFlowerbed: (v: boolean) => void;
   hasVase: boolean;
   setHasVase: (v: boolean) => void;
+
   onDirty?: () => void;
 }) {
   const {
@@ -451,10 +368,134 @@ function PlateBlock(props: {
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
-  // ВАЖНО: открытость "Надгробная плита" = extraPlate (синхронно с чекбоксом)
-  const accPlateOpen = extraPlate;
-
+  const plateOpen = extraPlate;
   const markDirty = () => onDirty?.();
+
+  // сетка каталога графики
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [cols, setCols] = useState<number>(2);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
+      setCols(Math.max(2, Math.floor(w / 160)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  function CatGrid({
+    items
+  }: {
+    items: any[];
+  }) {
+    return (
+      <div ref={rootRef} style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 12 }}>
+        {items.map((g: any, idx: number) => {
+          const gid = String(g.id || g.relPath || g.url || g.name || idx);
+          const qty = plateIds.filter((x) => x === gid).length;
+          const selected = qty > 0;
+          const thumbUrl = g.preview || g.url || "";
+          const name = g.name || gid;
+
+          return (
+            <div
+              key={gid}
+              aria-selected={selected}
+              style={{
+                ...glassPanelStyle(),
+                padding: 8,
+                borderRadius: 12,
+                position: "relative",
+                borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
+                boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
+              }}
+            >
+              <div
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  display: selected ? "inline-flex" : "none",
+                  alignItems: "center",
+                  gap: 4,
+                  background: "rgba(10,127,46,0.95)",
+                  color: "#fff",
+                  borderRadius: 999,
+                  padding: "0 6px",
+                  fontSize: 11,
+                  lineHeight: "18px",
+                  height: 18
+                }}
+                title={`Выбрано: ${qty}`}
+              >
+                <span>✓</span>
+                <span>{qty}</span>
+              </div>
+
+              <div
+                role="button"
+                title={name}
+                onClick={() => {
+                  addPlateGraphic(g);
+                  markDirty();
+                }}
+                style={{
+                  borderRadius: 10,
+                  overflow: "hidden",
+                  background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
+                  aspectRatio: "1/1",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
+                  cursor: "pointer",
+                  outline: "none"
+                }}
+              >
+                {thumbUrl ? (
+                  <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
+                ) : (
+                  <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
+                )}
+              </div>
+
+              <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
+                {name}
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    removePlateGraphic(gid);
+                    markDirty();
+                  }}
+                  disabled={qty === 0}
+                  style={glassButtonStyle("nano", qty === 0)}
+                >
+                  −
+                </button>
+                <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    addPlateGraphic(g);
+                    markDirty();
+                  }}
+                  style={glassButtonStyle("nano")}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   const plateTitle = (
     <label
@@ -519,8 +560,7 @@ function PlateBlock(props: {
 
       <LoudAccordion
         title={plateTitle}
-        open={accPlateOpen}
-        // кликом по заголовку тоже переключаем чекбокс
+        open={plateOpen}
         onToggle={() => {
           setExtraPlate(!extraPlate);
           markDirty();
@@ -659,35 +699,14 @@ function PlateBlock(props: {
                     const catKey = String(cat._id || cat.name || idx);
                     const open = !!(catOpen || {})[catKey];
                     const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
+
                     return (
                       <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                        <CatGrid
-                          items={cat.items || []}
-                          plateIds={plateIds}
-                          addGraphic={(g) => {
-                            addPlateGraphic(g);
-                            markDirty();
-                          }}
-                          removeGraphic={(gid) => {
-                            removePlateGraphic(gid);
-                            markDirty();
-                          }}
-                        />
+                        <CatGrid items={cat.items || []} />
                         {(cat.children || []).map((sub: any, j: number) => (
                           <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
                             <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                            <CatGrid
-                              items={sub.items || []}
-                              plateIds={plateIds}
-                              addGraphic={(g) => {
-                                addPlateGraphic(g);
-                                markDirty();
-                              }}
-                              removeGraphic={(gid) => {
-                                removePlateGraphic(gid);
-                                markDirty();
-                              }}
-                            />
+                            <CatGrid items={sub.items || []} />
                           </div>
                         ))}
                       </LoudAccordion>
@@ -740,6 +759,7 @@ function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   return new File([u8], name, { type: mime });
 }
 
+/* ========= Main component ========= */
 export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
@@ -749,7 +769,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
 
-  // "Развернуть" (expand webview) при переходе на экран — повторяем несколько раз
+  // Telegram expand (высота webview) при переходе
   useEffect(() => {
     let alive = true;
     const run = () => {
@@ -787,7 +807,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
   }, []);
 
-  // ---- Back: detect empty image by size ----
+  // ===== Back sketch: detect "empty" by actual image size =====
   function getBackSketchUrl(d: any): string | null {
     const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
     if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
@@ -796,7 +816,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
   useEffect(() => setBackCandidateUrl(getBackSketchUrl(draft)), [draft]);
 
-  // Проверяем, реально ли картинка "не пустая"
   const [backIsRenderable, setBackIsRenderable] = useState(false);
   useEffect(() => {
     setBackIsRenderable(false);
@@ -808,9 +827,8 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       if (!alive) return;
       const w = img.naturalWidth || 0;
       const h = img.naturalHeight || 0;
-      // Отсекаем пустышки типа 1×1, 2×2, 10×10 и т.п.
-      const ok = w >= 50 && h >= 50;
-      setBackIsRenderable(ok);
+      // отсекаем пустышки
+      setBackIsRenderable(w >= 50 && h >= 50);
     };
     img.onerror = () => {
       if (!alive) return;
@@ -880,12 +898,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Каталог
+  // Каталог графики (для блока «Выбрано для плиты»)
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
   const [catOpen, setCatOpen] = useState<Record<string, boolean>>({});
-
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -906,7 +923,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       alive = false;
     };
   }, []);
-
   useEffect(() => {
     if (!cats.length) return;
     setCatOpen((prev) => {
@@ -937,7 +953,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
   const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
-  // ---- Delivery states ----
+  // ===== Sending state =====
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -946,13 +962,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [deliveryVisible, setDeliveryVisible] = useState(false);
   const [textDelivered, setTextDelivered] = useState<boolean | null>(null);
+  const [topbarDelivered, setTopbarDelivered] = useState<boolean | null>(null);
   const [frontSketchDelivered, setFrontSketchDelivered] = useState<boolean | null>(null);
   const [backSketchDelivered, setBackSketchDelivered] = useState<boolean | null>(null);
   const [photosDelivered, setPhotosDelivered] = useState(0);
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  // ===== API: /api/tg =====
+  // ===== Telegram API (/api/tg) =====
   async function sendManagerMessage(text: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const resp = await fetch("/api/tg", {
@@ -987,6 +1004,18 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
   }
 
+  async function sendDmToUser(userId: number, text: string): Promise<void> {
+    try {
+      await fetch("/api/tg", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dm", userId, text })
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   function startMarkerText(no: string): string {
     const n = no || "—";
     return `🪦 НАЧАЛО ЗАЯВКИ №${n}`;
@@ -1018,11 +1047,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
     const lines: string[] = [];
     lines.push(intro?.orderNumber ? `Заявка №${intro.orderNumber}` : "Заявка", "");
+
     lines.push("Клиент:");
     lines.push(`- Имя: ${(intro?.intro?.customerName || "").trim() || "—"}`);
     lines.push(`- Телефон: ${(intro?.intro?.customerPhone || "").trim() || "—"}`);
     if ((intro?.intro?.customerNotes || "").trim()) lines.push(`- Примечание: ${(intro?.intro?.customerNotes || "").trim()}`);
     lines.push("");
+
+    const itemName = String((d as any)?.item?.name || "").trim();
+    if (itemName) {
+      lines.push("Изделие:");
+      lines.push(`- Модель: ${itemName}`);
+      lines.push("");
+    }
 
     lines.push("Люди:");
     if (persons.length === 0) lines.push("- —");
@@ -1035,13 +1072,33 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
     lines.push("");
 
-    // Плита (кратко)
     if (extraPlate) {
+      const pSize = plateSize === "Свой вариант" ? (plateCustomSize || "—") : plateSize || "—";
+      const pThick = plateThickness === "Свой вариант" ? (plateCustomThickness || "—") : plateThickness || "—";
+      const pOrient = plateOrientation === "horizontal" ? "горизонтально" : "вертикально";
+      const pWidth = extractPlateWidthText();
+
       lines.push("Надгробная плита:");
-      lines.push(`- Размер: ${plateSize === "Свой вариант" ? plateCustomSize || "—" : plateSize || "—"}`);
-      lines.push(`- Толщина: ${plateThickness === "Свой вариант" ? plateCustomThickness || "—" : plateThickness || "—"}`);
-      lines.push(`- Ориентация: ${plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}`);
+      lines.push(`- Размер: ${pSize}`);
+      lines.push(`- Ширина: ${pWidth}`);
+      lines.push(`- Толщина: ${pThick}`);
+      lines.push(`- Ориентация: ${pOrient}`);
+
+      if (chosenPlateList.length) {
+        lines.push("- Графика:");
+        chosenPlateList.forEach((g) => lines.push(`  • ${g.name || g.id}`));
+      }
+      if (plateEpitaphList.length) {
+        lines.push("- Эпитафии:");
+        plateEpitaphList.forEach((t) => lines.push(`  • ${t}`));
+      }
       lines.push("");
+    }
+
+    const notes = String((d as any)?.extras?.orderNotes || "").trim();
+    if (notes) {
+      lines.push("Комментарий к заказу:");
+      lines.push(notes, "");
     }
 
     return lines.join("\n");
@@ -1059,27 +1116,48 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return { ok: errors.length === 0, errors };
   }
 
-  async function sendTopBarShot(): Promise<{ ok: boolean; error?: string }> {
-    const node = document.getElementById("tg-topbar-shot") as HTMLElement | null;
-    if (!node) return { ok: false, error: "topbar node not found" };
+  async function ensureTopBarPanelOpenForShot(): Promise<void> {
+    try {
+      // Открываем панель (ваш TopBarWithIntro слушает это событие)
+      window.dispatchEvent(new Event("memorial:openTopBarPanel"));
+    } catch {}
+    // ждём анимацию useCollapse (в компоненте ~280ms) + запас
+    await sleep(420);
+  }
 
-    const dataUrl = await elementToPngDataUrl(node, { pixelRatio: 2, bg: "#111111" });
-    if (!dataUrl) return { ok: false, error: "topbar shot failed" };
+  function findTopBarPanelNode(): HTMLElement | null {
+    // TopBarWithIntro ставит data-topbar-panel="1" на контейнер панели
+    return (document.querySelector('[data-topbar-panel="1"]') as HTMLElement | null) || null;
+  }
 
-    const file = dataUrlToFile(dataUrl, "topbar.png");
-    const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
-      maxWidth: 1400,
-      maxHeight: 600,
-      mime: "image/jpeg",
-      qualityStart: 0.9,
-      qualityMin: 0.55,
-      qualityStep: 0.08
-    });
+  async function sendExpandedTopBarPanelShot(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await ensureTopBarPanelOpenForShot();
 
-    const fd = new FormData();
-    fd.append("file", new File([compressed], `topbar.jpg`, { type: "image/jpeg" }));
-    // caption НЕ добавляем
-    return await sendManagerPhoto(fd);
+      const node = findTopBarPanelNode();
+      if (!node) return { ok: false, error: "TopBar panel node not found" };
+
+      const dataUrl = await elementToPngDataUrl(node, { pixelRatio: 2, bg: "#111111" });
+      if (!dataUrl) return { ok: false, error: "TopBar panel shot failed" };
+
+      const file = dataUrlToFile(dataUrl, "topbar-panel.png");
+      const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
+        maxWidth: 1600,
+        maxHeight: 2600,
+        mime: "image/jpeg",
+        qualityStart: 0.9,
+        qualityMin: 0.55,
+        qualityStep: 0.08
+      });
+
+      const fd = new FormData();
+      fd.append("file", new File([compressed], "topbar-panel.jpg", { type: "image/jpeg" }));
+      // caption НЕ добавляем
+
+      return await sendManagerPhoto(fd);
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
   }
 
   async function sendSketchFromNode(nodeId: string, caption: string | undefined, fallbackUrl?: string | null): Promise<{ ok: boolean; error?: string }> {
@@ -1151,48 +1229,36 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return out;
   }
 
-  async function sendUserConfirmation(orderNoCur: string) {
-    try {
-      const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
-      const userId = tgUser?.id;
-      if (!userId) return;
+  async function notifyUserAfterSend(orderNoCur: string) {
+    const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
+    const userId = Number(tgUser?.id);
+    if (!Number.isFinite(userId) || userId <= 0) return;
 
-      const intro = loadIntroState();
-      const name = (intro?.intro?.customerName || "").trim() || "—";
-      const phone = (intro?.intro?.customerPhone || "").trim() || "—";
-      const uname = tgUser?.username ? `@${tgUser.username}` : "";
-      const full = [uname, tgUser?.first_name, tgUser?.last_name].filter(Boolean).join(" ").trim();
+    const intro = loadIntroState();
+    const name = (intro?.intro?.customerName || "").trim() || "—";
+    const phone = (intro?.intro?.customerPhone || "").trim() || "—";
+    const uname = tgUser?.username ? `@${tgUser.username}` : "";
+    const full = [uname, tgUser?.first_name, tgUser?.last_name].filter(Boolean).join(" ").trim();
 
-      const text =
-        `Заявка №${orderNoCur || "—"} отправлена.\n` +
-        `Спасибо, ${name}! Наш менеджер свяжется с вами по указанному номеру ${phone}.\n\n` +
-        `Telegram: ${full || "—"}\n` +
-        `ID: ${userId}`;
+    const text =
+      `Заявка №${orderNoCur || "—"} отправлена.\n` +
+      `Спасибо, ${name}! Наш менеджер свяжется с вами по указанному номеру ${phone}.\n\n` +
+      `Telegram: ${full || "—"}\n` +
+      `ID: ${userId}`;
 
-      await fetch("/api/tg", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "dm", userId, text })
-      });
-    } catch {
-      // ignore
-    }
+    await sendDmToUser(userId, text);
   }
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [sentOk, setSentOk] = useState(false);
-
-  // основной отправщик
+  // ===== Main send =====
   const sendOrderDirect = async () => {
     setUploading(true);
     setUploadProgress(0);
     setDeliveryVisible(true);
     setLastWarnings([]);
     setTextDelivered(null);
+    setTopbarDelivered(null);
     setFrontSketchDelivered(null);
-    setBackSketchDelivered(showBack ? null : null);
+    setBackSketchDelivered(null);
     setPhotosDelivered(0);
 
     const warnings: string[] = [];
@@ -1202,24 +1268,31 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       await sendManagerMessage(startMarkerText(orderNoCur));
 
-      // topbar shot
-      const topShot = await sendTopBarShot();
-      if (!topShot.ok && topShot.error) warnings.push(`Скриншот топбара не отправлен: ${topShot.error}`);
+      // 1) Скриншот раскрытой панели TopBarWithIntro (без подписи)
+      const topRes = await sendExpandedTopBarPanelShot();
+      setTopbarDelivered(topRes.ok);
+      if (!topRes.ok && topRes.error) warnings.push(`Топбар (панель) не отправлен: ${topRes.error}`);
 
+      // 2) Текст заявки
       const tRes = await sendLargeText(buildOrderText());
       setTextDelivered(tRes.ok);
       if (!tRes.ok) warnings.push(`Текст не отправлен: ${tRes.errors.join(" | ")}`);
 
+      // 3) Эскиз (лицевая)
       const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)", null);
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
+      // 4) Эскиз (тыльная) — только если showBack=true
       if (showBack && backCandidateUrl) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backCandidateUrl);
         setBackSketchDelivered(backRes.ok);
         if (!backRes.ok && backRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${backRes.error}`);
+      } else {
+        setBackSketchDelivered(null);
       }
 
+      // 5) Фото портретов (с подписью ФИО+даты)
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
 
@@ -1256,7 +1329,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       if (warnings.length) setLastWarnings(warnings);
       setUploadProgress(100);
 
-      await sendUserConfirmation(orderNoCur);
+      await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
     }
@@ -1296,22 +1369,22 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
   }
 
-  // UI overlay
   const overlayText =
-    uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%` : isSending ? "Отправляем заказ…" : isSaving ? "Формируем PDF…" : "";
+    uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%` :
+    isSending ? "Отправляем заказ…" :
+    isSaving ? "Формируем PDF…" : "";
 
   return (
     <div style={safeRoot()}>
       <TopHintNotice />
 
-      {/* Этот блок будет скриншотиться (DOM). Если вам нужно больше инфы в топбаре — править TopBarWithIntro */}
-      <div id="tg-topbar-shot" style={{ marginBottom: 10 }}>
-        <TopBarWithIntro title="Memorial" />
-      </div>
+      {/* TopBarWithIntro: нужен на странице, чтобы можно было раскрыть и снять панель */}
+      <TopBarWithIntro title="Memorial" />
 
+      {/* Контакты и № заказа */}
       <EditableOrderSummary orderNo={orderNo} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
 
-      {/* Аккордеоны */}
+      {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
           extraPlate={extraPlate}
@@ -1346,18 +1419,29 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             setPlateMeta(nextMeta);
 
             const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta }, updatedAt: Date.now() });
+            saveOrderDraft({
+              ...prev,
+              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta },
+              updatedAt: Date.now()
+            });
+
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           removePlateGraphic={(gid) => {
             const idx = plateIds.findIndex((x) => x === gid);
             if (idx === -1) return;
+
             const nextIds = plateIds.slice();
             nextIds.splice(idx, 1);
             setPlateIds(nextIds);
 
             const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta }, updatedAt: Date.now() });
+            saveOrderDraft({
+              ...prev,
+              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
+              updatedAt: Date.now()
+            });
+
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateIds={plateIds}
@@ -1388,12 +1472,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
         <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
           <div id="pdf-front-sketch" style={{ position: "absolute", inset: 0 }}>
-            <SketchTemplate item={item} peopleBlocks={peopleBlocks} crosses={selectedCrosses} others={selectedOthers} epitaphs={frontEpitaphs} carvingOpacity={0.4} />
+            <SketchTemplate
+              item={item}
+              peopleBlocks={peopleBlocks}
+              crosses={selectedCrosses}
+              others={selectedOthers}
+              epitaphs={frontEpitaphs}
+              carvingOpacity={0.4}
+            />
           </div>
         </div>
       </section>
 
-      {/* Эскиз тыльной — показываем ТОЛЬКО если backIsRenderable=true */}
+      {/* Эскиз тыльной — только если не пустой */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
@@ -1409,18 +1500,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </section>
       )}
 
-      {/* Выбрано для плиты */}
+      {/* Выбрано для плиты — над комментарием */}
       {extraPlate && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-              <div>
-                <strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}
-              </div>
-              <div>
-                <strong>Ширина:</strong> {extractPlateWidthText()}
-              </div>
+              <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
+              <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
             </div>
 
             {chosenPlateList.length > 0 && (
@@ -1449,7 +1536,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </section>
       )}
 
-      {/* Комментарий */}
+      {/* Комментарий к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <label htmlFor="order-notes" style={{ display: "block", marginBottom: 6 }}>
           Комментарий к заказу
@@ -1460,7 +1547,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <textarea
           id="order-notes"
           rows={3}
-          defaultValue={(extras0.orderNotes || "").trim()}
+          defaultValue={String((extras0.orderNotes || "")).trim()}
           onBlur={(e) => {
             const prev = loadOrderDraft();
             const extras: any = { ...(prev as any).extras, orderNotes: (e.target.value || "").trim() || undefined };
@@ -1522,7 +1609,13 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             </div>
             <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам в Telegram?</div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="btn" onPointerUp={handleSend} onClick={handleSend} disabled={isSending || uploading} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
+              <button
+                className="btn"
+                onPointerUp={handleSend}
+                onClick={handleSend}
+                disabled={isSending || uploading}
+                style={{ background: "#e5ffe5", borderColor: "#99d199" }}
+              >
                 {isSending || uploading ? "Отправляем…" : "Отправить"}
               </button>
             </div>
@@ -1535,11 +1628,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
-            <div style={{ opacity: 0.92, marginBottom: 10 }}>{`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}</div>
+            <div style={{ opacity: 0.92, marginBottom: 10 }}>
+              {`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}
+            </div>
 
             <div style={{ ...sectionBox, marginBottom: 10 }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Статус доставки</div>
               <div style={{ display: "grid", gap: 6 }}>
+                <div>
+                  <span style={{ opacity: 0.85 }}>Топбар (панель) — </span>
+                  <strong style={{ color: topbarDelivered == null ? "#ccc" : topbarDelivered ? "#7dffa0" : "#ffb4b4" }}>
+                    {topbarDelivered == null ? "—" : topbarDelivered ? "да" : "нет"}
+                  </strong>
+                </div>
                 <div>
                   <span style={{ opacity: 0.85 }}>Текст — </span>
                   <strong style={{ color: textDelivered == null ? "#ccc" : textDelivered ? "#7dffa0" : "#ffb4b4" }}>
@@ -1583,7 +1684,8 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(textDelivered === false ||
+              {(topbarDelivered === false ||
+                textDelivered === false ||
                 frontSketchDelivered === false ||
                 (showBack && backSketchDelivered === false) ||
                 (photosTotal > 0 && photosDelivered < photosTotal)) && (
