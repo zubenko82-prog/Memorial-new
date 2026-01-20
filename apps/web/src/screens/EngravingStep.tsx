@@ -541,7 +541,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
           ref={navRef}
           style={{
             position: "sticky",
-            top: 2,
+            top: "calc(var(--global-stepnav-h, 0px) + 4px + env(safe-area-inset-top, 0px))",
             zIndex: 50,
             paddingTop: "env(safe-area-inset-top)",
             background: "rgba(0,0,0,0.96)",
