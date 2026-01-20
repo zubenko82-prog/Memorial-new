@@ -1,21 +1,16 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
 // Эпитафии теперь отображаются в разделе «Элементы эскиза» (для лицевой и тыльной сторон).
+//
+// ИЗМЕНЕНИЯ ТОЛЬКО ПО ОФОРМЛЕНИЮ + ДОБАВЛЕНО (НЕ УДАЛЯЯ ЭЛЕМЕНТЫ):
+// 1) Добавлено отображение эпитафий надгробной плиты (extras.plateEpitaph / plateEpitaphs / plateEpitaphTexts)
+// 2) Ниже добавлена строка "Дополнительно: Цветник: ... · Тумба: ... · Ваза: ..."
+// 3) Все эпитафии (лицевая/тыльная/плита) выделены более насыщенной подложкой
+// 4) Подложка под миниатюрами изображений: rgba(0,0,0,0.4)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  loadIntroState,
-  saveIntro,
-  type Intro,
-  clearIntroAll
-} from "../lib/intro";
-import {
-  loadOrderDraft,
-  saveOrderDraft,
-  clearOrderDraft,
-  type OrderDraft,
-  DRAFT_UPDATED_EVENT
-} from "../lib/order";
+import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
+import { loadOrderDraft, saveOrderDraft, clearOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
 /* ===== Темизация ===== */
 type ThemeMode = "dark" | "light";
@@ -115,11 +110,41 @@ function inputStyle(theme: ThemeMode): React.CSSProperties {
     boxSizing: "border-box"
   };
 }
+
+// ПОДЛОЖКА ПОД МИНИАТЮРЫ: rgba(0,0,0,0.4)
+function thumbBackdropStyle(theme: ThemeMode): React.CSSProperties {
+  const p = palette(theme);
+  return {
+    borderRadius: 10,
+    background: "rgba(0,0,0,0.4)",
+    border: tEq(theme, "light") ? "1px solid rgba(0,0,0,0.18)" : "1px solid rgba(255,255,255,0.14)",
+    padding: 4,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box"
+  };
+
+  function tEq(a: ThemeMode, b: ThemeMode) { return a === b; }
+}
+
+// БОЛЕЕ НАСЫЩЕННАЯ ПОДЛОЖКА ДЛЯ ЭПИТАФИЙ
+function epitaphBackdropStyle(theme: ThemeMode): React.CSSProperties {
+  const p = palette(theme);
+  // немного насыщеннее, чем accentBg: делаем чуть более плотный фон и контур
+  return {
+    background: theme === "light" ? "rgba(255, 232, 170, 0.85)" : "rgba(255, 232, 170, 0.22)",
+    border: theme === "light" ? "1px solid rgba(160, 110, 0, 0.35)" : "1px solid rgba(255,255,255,0.22)",
+    borderRadius: 10,
+    padding: 8,
+    color: p.text
+  };
+}
+
 function galleryThumbBoxStyle(): React.CSSProperties {
   const grad: React.CSSProperties = {
     backgroundColor: "#000000",
-    backgroundImage:
-      "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+    backgroundImage: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   };
   return {
     ...grad,
@@ -235,6 +260,15 @@ function mmToCm(mm?: number): number | undefined {
 function cmValue(n?: number): string {
   if (typeof n !== "number" || !isFinite(n)) return "—";
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
+}
+
+// Нормализация эпитафий плиты (поддержим строку и массив)
+function normalizeEpitaphLines(input: any): string[] {
+  if (!input) return [];
+  if (Array.isArray(input)) return input.map((s) => String(s || "").trim()).filter(Boolean);
+  const t = String(input || "").replace(/\r\n?/g, "\n").trim();
+  if (!t) return [];
+  return t.split(/\n{1,2}/g).map((s) => s.trim()).filter(Boolean);
 }
 
 /* ===== Компонент ===== */
@@ -384,6 +418,23 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta]);
 
+  // NEW: Эпитафии плиты (поддержим несколько полей)
+  const plateEpitaphLines = useMemo(() => {
+    const a = normalizeEpitaphLines(plateEpitaph);
+    const b = normalizeEpitaphLines(extras.plateEpitaphs);
+    const c = normalizeEpitaphLines(extras.plateEpitaphTexts);
+    const merged = [...a, ...b, ...c].map((s) => s.trim()).filter(Boolean);
+    return Array.from(new Set(merged));
+  }, [plateEpitaph, extras.plateEpitaphs, extras.plateEpitaphTexts]);
+
+  // NEW: Дополнительно строкой
+  const extrasLine = useMemo(() => {
+    const flowerbed = !!extras.flowerbed;
+    const tumba = (extras.tumba ?? true) ? true : false;
+    const vase = !!extras.vase;
+    return `Дополнительно: Цветник: ${flowerbed ? "да" : "нет"} · Тумба: ${tumba ? "да" : "нет"} · Ваза: ${vase ? "да" : "нет"}`;
+  }, [extras.flowerbed, extras.tumba, extras.vase]);
+
   // Сохранение (патч + принудительный refresh)
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -475,11 +526,18 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         title={open ? "Скрыть данные заказа" : "Показать данные заказа"}
         onClick={() => setOpen((v) => !v)}
         style={{
-          width: "100%", textAlign: "left",
+          width: "100%",
+          textAlign: "left",
           padding: compact ? "8px 8px" : "12px 14px",
           borderRadius: compact ? 10 : 12,
-          border: p.headerBorder, background: p.headerBg, color: p.headerText,
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: compact ? 8 : 12, cursor: "pointer",
+          border: p.headerBorder,
+          background: p.headerBg,
+          color: p.headerText,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: compact ? 8 : 12,
+          cursor: "pointer",
           ...paperShadow(theme)
         }}
       >
@@ -501,14 +559,38 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       </button>
 
       {/* Панель */}
-      <div id={panelId} ref={coll.ref} style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}>
+      <div
+        id={panelId}
+        data-topbar-panel="1"
+        ref={coll.ref}
+        style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
+      >
         <section style={{ background: p.panelBg, border: p.panelBorder, borderRadius: compact ? 10 : 12, color: p.text, ...paperShadow(theme), padding: compact ? 8 : 12, display: "grid", gap: compact ? 8 : 10 }}>
           {/* Действия */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
-            <button type="button" onClick={(e) => { e.stopPropagation(); const next: ThemeMode = theme === "dark" ? "light" : "dark"; setTheme(next); saveTheme(next); }} style={linkButtonStyle(theme)} className="link-like">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const next: ThemeMode = theme === "dark" ? "light" : "dark";
+                setTheme(next);
+                saveTheme(next);
+              }}
+              style={linkButtonStyle(theme)}
+              className="link-like"
+            >
               {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
             </button>
-            <button type="button" onClick={(e) => { e.stopPropagation(); if (editing) { saveAll(); } setEditing((v) => !v); }} style={linkButtonStyle(theme)} className="link-like">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (editing) { saveAll(); }
+                setEditing((v) => !v);
+              }}
+              style={linkButtonStyle(theme)}
+              className="link-like"
+            >
               {editing ? "Сохранить" : "Редактировать"}
             </button>
           </div>
@@ -529,9 +611,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: 8 }}>
-                    <Row label="Имя" theme={theme} compact={compact}><input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" /></Row>
-                    <Row label="Телефон" theme={theme} compact={compact}><input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" /></Row>
-                    <Row label="Примечание" theme={theme} compact={compact}><input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" /></Row>
+                    <Row label="Имя" theme={theme} compact={compact}>
+                      <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" />
+                    </Row>
+                    <Row label="Телефон" theme={theme} compact={compact}>
+                      <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" />
+                    </Row>
+                    <Row label="Примечание" theme={theme} compact={compact}>
+                      <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" />
+                    </Row>
                   </div>
                 )
               ) : (
@@ -595,9 +683,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                         return (
                           <div key={ppl.id || `person-front-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
                             <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                              {ppl.photoPreview ? (
-                                <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                              ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                              {/* подложка под миниатюру */}
+                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                                {ppl.photoPreview ? (
+                                  <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }} />
+                                ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                              </div>
                             </div>
                             <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
                               {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
@@ -626,9 +717,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                         return (
                           <div key={ppl.id || `person-back-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
                             <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                              {ppl.photoPreview ? (
-                                <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                              ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                                {ppl.photoPreview ? (
+                                  <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }} />
+                                ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                              </div>
                             </div>
                             <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
                               {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
@@ -666,9 +759,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                           const qty = g?.id ? (frontCountsById[g.id] || 0) : 0;
                           return (
                             <div key={`fg-${g.id || Math.random()}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
-                              <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
-                                {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
+                              {/* подложка под миниатюру */}
+                              <div style={{ ...thumbBackdropStyle(theme), width: 64, height: 64 }}>
+                                {g.url ? (
+                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block", objectFit: "contain", borderRadius: 8 }} />
+                                ) : (
+                                  <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
+                                )}
                               </div>
+
                               <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                                 <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
                                   {g.name || fileNameFromUrl(g.url) || g.id || "—"}
@@ -681,9 +780,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       </div>
                     )}
 
-                    {/* Эпитафии (лицевая) */}
+                    {/* Эпитафии (лицевая) — подложка насыщеннее */}
                     {frontEpitaphs.length > 0 && (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                      <div style={{ ...epitaphBackdropStyle(theme), marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
                         <div style={{ whiteSpace: "pre-wrap" }}>{frontEpitaphs.join("\n")}</div>
                       </div>
@@ -713,9 +812,14 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                           const qty = rearCountsById[gid] || 0;
                           return (
                             <div key={`rg-${gid}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
-                              <div style={{ borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.04)", padding: 2 }}>
-                                {g.url ? <img src={g.url} alt={g.name || ""} style={{ maxWidth: 55, maxHeight: 55, width: "auto", height: "auto", display: "block", objectFit: "contain" }} /> : <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />}
+                              <div style={{ ...thumbBackdropStyle(theme), width: 64, height: 64 }}>
+                                {g.url ? (
+                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block", objectFit: "contain", borderRadius: 8 }} />
+                                ) : (
+                                  <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
+                                )}
                               </div>
+
                               <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                                 <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
                                   {g.name || fileNameFromUrl(g.url) || gid}
@@ -728,9 +832,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                       </div>
                     )}
 
-                    {/* Эпитафии (тыльная) */}
+                    {/* Эпитафии (тыльная) — подложка насыщеннее */}
                     {rearEpitaphs.length > 0 && (
-                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                      <div style={{ ...epitaphBackdropStyle(theme), marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
                         <div style={{ whiteSpace: "pre-wrap" }}>{rearEpitaphs.join("\n")}</div>
                       </div>
@@ -765,9 +869,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   plateChosen.map((g: any, i: number) => (
                     <div key={`plate-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
                       <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                        {g.url ? (
-                          <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-                        ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                        <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                          {g.url ? (
+                            <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
+                          ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                        </div>
                       </div>
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {g.name || g.id}
@@ -778,18 +884,35 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   <div style={{ color: palette(theme).subText }}>Графика не выбрана</div>
                 )}
               </div>
-              {plateEpitaph?.trim() && (
-                <div style={{ ...accentPanelStyle(theme), marginTop: 10 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии</div>
-                  <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaph.trim()}</div>
+
+              {/* Эпитафии плиты — добавлено, подложка насыщеннее */}
+              {plateEpitaphLines.length > 0 && (
+                <div style={{ ...epitaphBackdropStyle(theme), marginTop: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{plateEpitaphLines.join("\n")}</div>
                 </div>
               )}
+
+              {/* Дополнительно — строка */}
+              <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
+                {extrasLine}
+              </div>
             </section>
           )}
 
           {/* Очистить всё */}
           <div style={{ marginTop: 2, paddingTop: 10, borderTop: palette(theme).divider, display: "flex", justifyContent: "center" }}>
-            <button type="button" onClick={(e) => { e.stopPropagation(); void handleClearAll(); }} style={linkButtonStyle(theme, "danger", isClearing)} className="link-like" title="Очистить все данные (с подтверждением)" disabled={isClearing}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleClearAll();
+              }}
+              style={linkButtonStyle(theme, "danger", isClearing)}
+              className="link-like"
+              title="Очистить все данные (с подтверждением)"
+              disabled={isClearing}
+            >
               {isClearing ? "Очищаем…" : "Очистить всё"}
             </button>
           </div>
