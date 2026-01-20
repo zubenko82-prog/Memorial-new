@@ -352,6 +352,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     if (open) refreshAll({ force: true });
   }, [open, refreshAll]);
 
+
+  useEffect(() => {
+  if (!open) return;
+  try {
+    window.dispatchEvent(new Event("memorial:topbarOpened"));
+  } catch {}
+}, [open]);
+
+
   // Линия контактная (только телефон)
   const phoneLine = useMemo(() => {
     const b = (editing ? phone : intro?.customerPhone) || "";

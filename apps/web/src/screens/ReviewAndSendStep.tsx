@@ -923,12 +923,45 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 // Держим TopBarWithIntro раскрытым на этом шаге (для клиента и для скриншота)
 useEffect(() => {
   let alive = true;
+  let opened = false;
 
   const openTopbar = () => {
     try {
       window.dispatchEvent(new Event("memorial:openTopBarPanel"));
     } catch {}
   };
+
+  const onOpened = () => {
+    opened = true;
+  };
+
+  window.addEventListener("memorial:topbarOpened", onOpened as any);
+
+  // Пытаемся открыть до тех пор, пока TopBar не подтвердит что открылся
+  openTopbar();
+  const timer = window.setInterval(() => {
+    if (!alive) return;
+    if (opened) return;
+    openTopbar();
+  }, 200);
+
+  // На случай возврата в приложение — снова откроем
+  const onFocus = () => openTopbar();
+  const onVisible = () => {
+    if (document.visibilityState === "visible") openTopbar();
+  };
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisible);
+
+  return () => {
+    alive = false;
+    window.removeEventListener("memorial:topbarOpened", onOpened as any);
+    window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisible);
+    clearInterval(timer);
+  };
+}, []);
+
 
   // Сразу и с повтором (чтобы пережить задержки рендера/гидратации)
   openTopbar();
