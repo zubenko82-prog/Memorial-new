@@ -950,6 +950,7 @@ useEffect(() => {
   const onVisible = () => {
     if (document.visibilityState === "visible") openTopbar();
   };
+
   window.addEventListener("focus", onFocus);
   document.addEventListener("visibilitychange", onVisible);
 
@@ -962,12 +963,6 @@ useEffect(() => {
   };
 }, []);
 
-
-  // Сразу и с повтором (чтобы пережить задержки рендера/гидратации)
-  openTopbar();
-  const t1 = window.setTimeout(() => alive && openTopbar(), 120);
-  const t2 = window.setTimeout(() => alive && openTopbar(), 420);
-  const t3 = window.setTimeout(() => alive && openTopbar(), 900);
 
   // На всякий случай: если вернулись на вкладку/экран — снова открыть
   const onFocus = () => openTopbar();
@@ -985,7 +980,7 @@ useEffect(() => {
     window.removeEventListener("focus", onFocus);
     document.removeEventListener("visibilitychange", onVisible);
   };
-} []);
+}, []);
 
   // ===== Back sketch: detect "empty" by actual image size =====
   function getBackSketchUrl(d: any): string | null {
