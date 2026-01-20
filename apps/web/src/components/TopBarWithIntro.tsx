@@ -1,12 +1,6 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
-// Правки:
-// 1) refreshAll больше НЕ сравнивает JSON — всегда перечитывает intro/order из localStorage,
-//    чтобы гарантированно увидеть изменения от других шагов.
-// 2) Сохранение в saveAll использует ПАТЧ (partial) и полагается на merge в saveOrderDraft,
-//    ничего не перетирая. После сохранения — принудительный refreshAll({force:true}).
-// 3) При первом сохранении контактов блокируем intro (lock: true), чтобы появился номер заявки.
-// 4) Доп. события после saveAll уже генерируются внутри saveOrderDraft (и здесь тоже дублируем на всякий).
+// Эпитафии теперь отображаются в разделе «Элементы эскиза» (для лицевой и тыльной сторон).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -355,7 +349,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
   }, [rearSelectedIds, rearMeta]);
 
-  // Эпитафии
+  // Эпитафии (фронт/тыл)
   const frontEpitaphs: string[] = useMemo(() => {
     const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
     if (arr.length) return arr;
@@ -398,11 +392,9 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       customerPhone: (phone || "").trim(),
       customerNotes: (contactNotes || "").trim() || undefined
     };
-    // Если номера нет — блокируем при первом сохранении
     const lock = !introData.orderNumber;
     saveIntro(introNext, { lock });
 
-    // Пишем только изменяемые ключи (патч). Глубокий мердж сделает остальное.
     const patch: Partial<OrderDraft> = {
       size: { notes: sizeNotes?.trim() || undefined },
       engraving: {
@@ -411,13 +403,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       } as any,
       editor: { wishes: (frontWishes || "").trim() || undefined } as any,
       editorBack: { wishes: (backWishes || "").trim() || undefined } as any,
-      // заметки заказа (если предусмотрены)
       ...(orderNotes?.trim() ? { notes: orderNotes.trim() } : {})
     };
 
     const stored = saveOrderDraft(patch);
     setOrder(stored);
-    // На всякий — сразу перечитываем (в некоторых WebView события могут опоздать)
     refreshAll({ force: true });
 
     try {
@@ -426,7 +416,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     } catch {}
   };
 
-  // ===== Очистка «Очистить всё» (без изменений функционала) =====
+  // Очистка
   const [isClearing, setIsClearing] = useState(false);
   function makeEmptyDraft(): OrderDraft {
     return {
@@ -588,7 +578,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
                 <span style={chip(theme)}>Люди на памятнике</span>
-                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона есть</span>}
+                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"), gap: 16 }}>
@@ -659,13 +649,16 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           {(frontHasSketch || rearHasSketch) && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
-                <span style={chip(theme)}>Элементы эскиза</span>
+                <span style={chip(theme)}></span>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"), gap: 16 }}>
+                {/* Лицевая */}
                 {frontHasSketch && (
                   <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
+
+                    {/* Графика (лицевая) */}
                     {frontGraphics.length > 0 && (
                       <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
@@ -687,6 +680,16 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                         })}
                       </div>
                     )}
+
+                    {/* Эпитафии (лицевая) */}
+                    {frontEpitaphs.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{frontEpitaphs.join("\n")}</div>
+                      </div>
+                    )}
+
+                    {/* Пожелания (лицевая) */}
                     {frontWishes.trim() && (
                       <div>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
@@ -696,9 +699,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                   </div>
                 )}
 
+                {/* Тыльная */}
                 {rearHasSketch && (
                   <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
+
+                    {/* Графика (тыльная) */}
                     {rearUnique.length > 0 && (
                       <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
@@ -721,6 +727,16 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
                         })}
                       </div>
                     )}
+
+                    {/* Эпитафии (тыльная) */}
+                    {rearEpitaphs.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Эпитафии</div>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{rearEpitaphs.join("\n")}</div>
+                      </div>
+                    )}
+
+                    {/* Пожелания (тыльная) */}
                     {backWishes.trim() && (
                       <div>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
