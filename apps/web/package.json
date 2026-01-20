@@ -6,7 +6,7 @@
     "node": "20.x"
   },
   "scripts": {
-    "build": "vite build",
+    "build": "node ../../scripts/generate-catalog.mjs && vite build",
     "dev": "vite",
     "preview": "vite preview"
   },
