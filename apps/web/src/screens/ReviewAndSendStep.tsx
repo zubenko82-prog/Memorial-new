@@ -1,16 +1,18 @@
 // src/screens/ReviewAndSendStep.tsx
+//
 // Шаг «Обзор и подтверждение»
 //
-// Обновление для гарантированной доставки:
-// - Не отправляем PDF в Telegram (часто упирается в лимиты). Вместо него:
-//   1) Отправляем полное текстовое описание заказа (бьём на части ≤ 4096, используем ~3500).
-//   2) Отправляем эскизы (лицевая/тыльная) как изображения. Если DOM→PNG не удаётся (CORS),
-//      для тыльной шлём напрямую URL (сервер отправит в Telegram photo=URL).
-//   3) Обязательно отправляем портретные фотографии по отдельности с подписями (ФИО и даты).
-// - Кнопка «Скачать PDF» генерирует локальный PDF со всеми фото (для клиента, не в Telegram).
-// - Блок «Заявка отправлена» объединён со «Статус доставки» и расположен внизу.
-// - Блок «Выбрано для плиты» восстановлен, добавлены «Размер» и «Ширина», расположен над «Комментарий к заказу».
-// - Добавлены маркеры начала/конца заявки в Telegram (декоративные сообщения с пиктограммами).
+// Обновление (по вашему ТЗ):
+// - Если эскиз тыльной стороны пустой — не показываем.
+// - При входе на экран разворачиваем WebApp (Telegram.WebApp.expand()).
+// - Делаем скриншот "топбара" (ваш TopBarWithIntro, т.е. кнопка‑заголовок сверху) и отправляем в Telegram-чат БЕЗ подписи.
+//   Важно: нативный верхний бар Telegram (UI клиента) в скриншот не попадает — только DOM вашего приложения.
+// - Фотографии отправляем с подписью (ФИО + даты) — уже было, оставлено.
+// - После успешной отправки заявки пытаемся отправить пользователю DM:
+//   "Заявка №... отправлена. Спасибо, (имя)! ... (телефон). + Telegram user/id"
+//   (Сработает только если пользователь уже запускал бота /start и бот может писать ему.)
+//
+// Требуется бэкенд endpoint: POST /api/tg-send-dm  { userId, text }.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -160,13 +162,15 @@ function personLines(p: any): string[] {
   return [l1, l2, l3].filter(Boolean);
 }
 function toParagraphs(input?: string | string[] | null): string[] {
-  if (Array.isArray(input)) return input.map(s => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
+  if (Array.isArray(input)) return input.map((s) => String(s || "").replace(/\r\n?/g, "\n").trim()).filter(Boolean);
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
   if (!t) return [];
-  const blocks = t.split(/\n{2,}/g).map(s => s.trim()).filter(Boolean);
-  return blocks.length ? blocks : t.split(/\n/g).map(s => s.trim()).filter(Boolean);
+  const blocks = t.split(/\n{2,}/g).map((s) => s.trim()).filter(Boolean);
+  return blocks.length ? blocks : t.split(/\n/g).map((s) => s.trim()).filter(Boolean);
 }
-function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 /* ========= Top hint ========= */
 function TopHintNotice() {
@@ -220,10 +224,29 @@ function EditableOrderSummary({
         <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={saveOnBlur}
+          placeholder="Имя"
+          style={inputStyle()}
+        />
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          onBlur={saveOnBlur}
+          placeholder="+7..."
+          inputMode="tel"
+          style={inputStyle()}
+        />
       </div>
-      <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} onBlur={saveOnBlur} placeholder="Примечание для связи…" style={inputStyle()} />
+      <input
+        value={contactNotes}
+        onChange={(e) => setContactNotes(e.target.value)}
+        onBlur={saveOnBlur}
+        placeholder="Примечание для связи…"
+        style={inputStyle()}
+      />
     </section>
   );
 }
@@ -242,13 +265,16 @@ function LoudAccordion({
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
+
   useEffect(() => {
     const m = () => setH(ref.current?.scrollHeight || 0);
     m();
-    const ro = new (window as any).ResizeObserver?.(m);
+    const RO = (window as any).ResizeObserver;
+    const ro = RO ? new RO(m) : null;
     if (ref.current && ro) ro.observe(ref.current);
     return () => ro?.disconnect?.();
   }, [children]);
+
   return (
     <div style={{ ...glassPanelStyle(), padding: 0 }}>
       <button
@@ -273,7 +299,9 @@ function LoudAccordion({
         <span aria-hidden>{open ? "▾" : "▸"}</span>
       </button>
       <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
-        <div ref={ref} style={{ padding: 12 }}>{children}</div>
+        <div ref={ref} style={{ padding: 12 }}>
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -281,9 +309,15 @@ function LoudAccordion({
 
 /* ========= Graphics grid ========= */
 function CatGrid({
-  items, plateIds, addGraphic, removeGraphic
+  items,
+  plateIds,
+  addGraphic,
+  removeGraphic
 }: {
-  items: any[]; plateIds: string[]; addGraphic: (g: any) => void; removeGraphic: (gid: string) => void;
+  items: any[];
+  plateIds: string[];
+  addGraphic: (g: any) => void;
+  removeGraphic: (gid: string) => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
@@ -382,7 +416,12 @@ function CatGrid({
               {name}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-              <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
+              <button
+                type="button"
+                onClick={() => removeGraphic(gid)}
+                disabled={qty === 0}
+                style={glassButtonStyle("nano", qty === 0)}
+              >
                 −
               </button>
               <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
@@ -399,31 +438,65 @@ function CatGrid({
 
 /* ========= PlateBlock ========= */
 function PlateBlock(props: {
-  extraPlate: boolean; setExtraPlate: (v: boolean) => void;
-  plateSize: string; setPlateSize: (v: string) => void;
-  plateCustomSize: string; setPlateCustomSize: (v: string) => void;
-  plateThickness: string; setPlateThickness: (v: string) => void;
-  plateCustomThickness: string; setPlateCustomThickness: (v: string) => void;
-  plateOrientation: string; setPlateOrientation: (v: string) => void;
-  plateEpitaph: string; setPlateEpitaph: (v: string) => void;
-  catsLoading: boolean; catsError: string; cats: any[];
-  catOpen: Record<string, boolean>; setCatOpen: (m: Record<string, boolean>) => void;
-  addPlateGraphic: (g: any) => void; removePlateGraphic: (gid: string) => void;
+  extraPlate: boolean;
+  setExtraPlate: (v: boolean) => void;
+  plateSize: string;
+  setPlateSize: (v: string) => void;
+  plateCustomSize: string;
+  setPlateCustomSize: (v: string) => void;
+  plateThickness: string;
+  setPlateThickness: (v: string) => void;
+  plateCustomThickness: string;
+  setPlateCustomThickness: (v: string) => void;
+  plateOrientation: string;
+  setPlateOrientation: (v: string) => void;
+  plateEpitaph: string;
+  setPlateEpitaph: (v: string) => void;
+  catsLoading: boolean;
+  catsError: string;
+  cats: any[];
+  catOpen: Record<string, boolean>;
+  setCatOpen: (m: Record<string, boolean>) => void;
+  addPlateGraphic: (g: any) => void;
+  removePlateGraphic: (gid: string) => void;
   plateIds: string[];
-  hasPedestal: boolean; setHasPedestal: (v: boolean) => void;
-  hasFlowerbed: boolean; setHasFlowerbed: (v: boolean) => void;
-  hasVase: boolean; setHasVase: (v: boolean) => void;
+  hasPedestal: boolean;
+  setHasPedestal: (v: boolean) => void;
+  hasFlowerbed: boolean;
+  setHasFlowerbed: (v: boolean) => void;
+  hasVase: boolean;
+  setHasVase: (v: boolean) => void;
   onDirty?: () => void;
 }) {
   const {
-    extraPlate, setExtraPlate,
-    plateSize, setPlateSize, plateCustomSize, setPlateCustomSize,
-    plateThickness, setPlateThickness, plateCustomThickness, setPlateCustomThickness,
-    plateOrientation, setPlateOrientation,
-    plateEpitaph, setPlateEpitaph,
-    catsLoading, catsError, cats, catOpen, setCatOpen,
-    addPlateGraphic, removePlateGraphic,
-    plateIds, hasPedestal, setHasPedestal, hasFlowerbed, setHasFlowerbed, hasVase, setHasVase,
+    extraPlate,
+    setExtraPlate,
+    plateSize,
+    setPlateSize,
+    plateCustomSize,
+    setPlateCustomSize,
+    plateThickness,
+    setPlateThickness,
+    plateCustomThickness,
+    setPlateCustomThickness,
+    plateOrientation,
+    setPlateOrientation,
+    plateEpitaph,
+    setPlateEpitaph,
+    catsLoading,
+    catsError,
+    cats,
+    catOpen,
+    setCatOpen,
+    addPlateGraphic,
+    removePlateGraphic,
+    plateIds,
+    hasPedestal,
+    setHasPedestal,
+    hasFlowerbed,
+    setHasFlowerbed,
+    hasVase,
+    setHasVase,
     onDirty
   } = props;
 
@@ -432,7 +505,10 @@ function PlateBlock(props: {
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
-  useEffect(() => { if (!extraPlate) setAccPlateOpen(false); }, [extraPlate]);
+  useEffect(() => {
+    if (!extraPlate) setAccPlateOpen(false);
+  }, [extraPlate]);
+
   const markDirty = () => onDirty?.();
 
   const plateTitle = (
@@ -444,7 +520,10 @@ function PlateBlock(props: {
       <input
         type="checkbox"
         checked={extraPlate}
-        onChange={(e) => { setExtraPlate(e.target.checked); markDirty(); }}
+        onChange={(e) => {
+          setExtraPlate(e.target.checked);
+          markDirty();
+        }}
         onClick={(e) => e.stopPropagation()}
       />
       <span>Надгробная плита</span>
@@ -454,19 +533,40 @@ function PlateBlock(props: {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {/* Дополнительно */}
-      <LoudAccordion title="Дополнительно" open={accExtrasOpen} onToggle={() => setAccExtrasOpen(v => !v)}>
+      <LoudAccordion title="Дополнительно" open={accExtrasOpen} onToggle={() => setAccExtrasOpen((v) => !v)}>
         <div style={{ ...sectionBox }}>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input type="checkbox" checked={hasPedestal} onChange={(e) => { setHasPedestal(e.target.checked); markDirty(); }} />
+              <input
+                type="checkbox"
+                checked={hasPedestal}
+                onChange={(e) => {
+                  setHasPedestal(e.target.checked);
+                  markDirty();
+                }}
+              />
               <span>Тумба</span>
             </label>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input type="checkbox" checked={hasFlowerbed} onChange={(e) => { setHasFlowerbed(e.target.checked); markDirty(); }} />
+              <input
+                type="checkbox"
+                checked={hasFlowerbed}
+                onChange={(e) => {
+                  setHasFlowerbed(e.target.checked);
+                  markDirty();
+                }}
+              />
               <span>Цветник</span>
             </label>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input type="checkbox" checked={hasVase} onChange={(e) => { setHasVase(e.target.checked); markDirty(); }} />
+              <input
+                type="checkbox"
+                checked={hasVase}
+                onChange={(e) => {
+                  setHasVase(e.target.checked);
+                  markDirty();
+                }}
+              />
               <span>Ваза</span>
             </label>
           </div>
@@ -474,7 +574,7 @@ function PlateBlock(props: {
       </LoudAccordion>
 
       {/* Надгробная плита */}
-      <LoudAccordion title={plateTitle} open={accPlateOpen} onToggle={() => setAccPlateOpen(v => !v)}>
+      <LoudAccordion title={plateTitle} open={accPlateOpen} onToggle={() => setAccPlateOpen((v) => !v)}>
         {extraPlate && (
           <div style={{ display: "grid", gap: 12 }}>
             {/* Размер */}
@@ -487,7 +587,10 @@ function PlateBlock(props: {
                       type="radio"
                       name="plate-size"
                       checked={plateSize === v}
-                      onChange={() => { setPlateSize(v); markDirty(); }}
+                      onChange={() => {
+                        setPlateSize(v);
+                        markDirty();
+                      }}
                     />
                     <span>{v}</span>
                   </label>
@@ -496,8 +599,13 @@ function PlateBlock(props: {
               {plateSize === "Свой вариант" && (
                 <input
                   value={plateCustomSize}
-                  onChange={(e) => { setPlateCustomSize(e.target.value); markDirty(); }}
-                  onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
+                  onChange={(e) => {
+                    setPlateCustomSize(e.target.value);
+                    markDirty();
+                  }}
+                  onBlur={(e) => {
+                    if (e.target.value.trim()) markDirty();
+                  }}
                   placeholder="Укажите свой размер (например, 130×60 см)"
                   style={inputStyle()}
                 />
@@ -514,7 +622,10 @@ function PlateBlock(props: {
                       type="radio"
                       name="plate-thickness"
                       checked={plateThickness === v}
-                      onChange={() => { setPlateThickness(v); markDirty(); }}
+                      onChange={() => {
+                        setPlateThickness(v);
+                        markDirty();
+                      }}
                     />
                     <span>{v}</span>
                   </label>
@@ -523,8 +634,13 @@ function PlateBlock(props: {
               {plateThickness === "Свой вариант" && (
                 <input
                   value={plateCustomThickness}
-                  onChange={(e) => { setPlateCustomThickness(e.target.value); markDirty(); }}
-                  onBlur={(e) => { if (e.target.value.trim()) markDirty(); }}
+                  onChange={(e) => {
+                    setPlateCustomThickness(e.target.value);
+                    markDirty();
+                  }}
+                  onBlur={(e) => {
+                    if (e.target.value.trim()) markDirty();
+                  }}
                   placeholder="Укажите толщину (например, 7 см)"
                   style={inputStyle()}
                 />
@@ -541,7 +657,10 @@ function PlateBlock(props: {
                       type="radio"
                       name="plate-orient"
                       checked={plateOrientation === v}
-                      onChange={() => { setPlateOrientation(v); markDirty(); }}
+                      onChange={() => {
+                        setPlateOrientation(v);
+                        markDirty();
+                      }}
                     />
                     <span>{t}</span>
                   </label>
@@ -550,14 +669,16 @@ function PlateBlock(props: {
             </div>
 
             {/* Эпитафии */}
-            <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen(v => !v)}>
+            <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ ...sectionBox }}>
                   <div style={{ marginBottom: 6 }}>Свой вариант:</div>
                   <textarea
                     rows={3}
                     value={plateEpitaph}
-                    onChange={(e) => { setPlateEpitaph(e.target.value); }}
+                    onChange={(e) => {
+                      setPlateEpitaph(e.target.value);
+                    }}
                     onBlur={() => markDirty()}
                     placeholder="Введите текст…"
                     style={{ ...inputStyle(), resize: "vertical" }}
@@ -591,7 +712,7 @@ function PlateBlock(props: {
             </LoudAccordion>
 
             {/* Графика */}
-            <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen(v => !v)}>
+            <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
               {catsLoading && <div>Загрузка каталога…</div>}
               {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
               {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
@@ -606,8 +727,14 @@ function PlateBlock(props: {
                         <CatGrid
                           items={cat.items || []}
                           plateIds={plateIds}
-                          addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                          removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                          addGraphic={(g) => {
+                            addPlateGraphic(g);
+                            markDirty();
+                          }}
+                          removeGraphic={(gid) => {
+                            removePlateGraphic(gid);
+                            markDirty();
+                          }}
                         />
                         {(cat.children || []).map((sub: any, j: number) => (
                           <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
@@ -615,8 +742,14 @@ function PlateBlock(props: {
                             <CatGrid
                               items={sub.items || []}
                               plateIds={plateIds}
-                              addGraphic={(g) => { addPlateGraphic(g); markDirty(); }}
-                              removeGraphic={(gid) => { removePlateGraphic(gid); markDirty(); }}
+                              addGraphic={(g) => {
+                                addPlateGraphic(g);
+                                markDirty();
+                              }}
+                              removeGraphic={(gid) => {
+                                removePlateGraphic(gid);
+                                markDirty();
+                              }}
                             />
                           </div>
                         ))}
@@ -643,7 +776,8 @@ async function ensureHtmlToImage(): Promise<any> {
   const CDN = "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js";
   await new Promise<void>((res, rej) => {
     const s = document.createElement("script");
-    s.src = CDN; s.async = true;
+    s.src = CDN;
+    s.async = true;
     s.onload = () => res();
     s.onerror = () => rej(new Error("html-to-image load error"));
     document.head.appendChild(s);
@@ -651,11 +785,17 @@ async function ensureHtmlToImage(): Promise<any> {
   if (!(window as any).htmlToImage) throw new Error("html-to-image unavailable");
   return (window as any).htmlToImage;
 }
+
 async function elementToPngDataUrl(node: HTMLElement | null, opts?: { pixelRatio?: number; bg?: string }): Promise<string | null> {
   if (!node) return null;
   const hti = await ensureHtmlToImage();
-  return await hti.toPng(node, { backgroundColor: opts?.bg || "#ffffff", pixelRatio: Math.max(1, Math.min(2, opts?.pixelRatio || 2)), cacheBust: true });
+  return await hti.toPng(node, {
+    backgroundColor: opts?.bg || "#ffffff",
+    pixelRatio: Math.max(1, Math.min(2, opts?.pixelRatio || 2)),
+    cacheBust: true
+  });
 }
+
 function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   const arr = dataUrl.split(",");
   const mime = (arr[0].match(/data:(.*);base64/) || [])[1] || "image/png";
@@ -674,9 +814,23 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
 
+  // Expand WebApp on enter (разворачиваем "топбар" Telegram WebApp)
   useEffect(() => {
-    const refresh = () => { setDraft(loadOrderDraft()); setIntroState(loadIntroState()); };
-    const markDirtyOnDraft = () => { if (sentOk) setIsDirtyAfterSend(true); refresh(); };
+    try {
+      (window as any)?.Telegram?.WebApp?.ready?.();
+      (window as any)?.Telegram?.WebApp?.expand?.();
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => {
+      setDraft(loadOrderDraft());
+      setIntroState(loadIntroState());
+    };
+    const markDirtyOnDraft = () => {
+      if (sentOk) setIsDirtyAfterSend(true);
+      refresh();
+    };
     window.addEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
     refresh();
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
@@ -689,7 +843,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return raw;
   }
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
-  useEffect(() => { setBackCandidateUrl(getBackSketchUrl(draft)); }, [draft]);
+  useEffect(() => {
+    setBackCandidateUrl(getBackSketchUrl(draft));
+  }, [draft]);
   const showBack = !!backCandidateUrl;
 
   // Front
@@ -699,7 +855,9 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     if (!itemUrl) return;
     const im = new Image();
-    im.onload = () => { if (im.naturalWidth && im.naturalHeight) setAspect(`${im.naturalWidth} / ${im.naturalHeight}`); };
+    im.onload = () => {
+      if (im.naturalWidth && im.naturalHeight) setAspect(`${im.naturalWidth} / ${im.naturalHeight}`);
+    };
     im.src = itemUrl;
   }, [itemUrl]);
 
@@ -736,7 +894,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [plateCustomThickness, setPlateCustomThickness] = useState<string>(extras0.plateCustomThickness || "");
   const [plateOrientation, setPlateOrientation] = useState<string>(
     extras0.plateOrientation ||
-    ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
+      ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
   );
   const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
@@ -753,16 +911,22 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      setCatsLoading(true); setCatsError("");
+      setCatsLoading(true);
+      setCatsError("");
       try {
         const data = await fetchCatalog("graphics");
         const root = (data as any)?.categories || data;
         const catsArr = Array.isArray(root) ? root : [];
         if (alive) setCats(catsArr);
-      } catch { if (alive) setCatsError("Не удалось загрузить каталог графики."); }
-      finally { if (alive) setCatsLoading(false); }
+      } catch {
+        if (alive) setCatsError("Не удалось загрузить каталог графики.");
+      } finally {
+        if (alive) setCatsLoading(false);
+      }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
   useEffect(() => {
     if (!cats.length) return;
@@ -779,11 +943,12 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const chosenPlateList = useMemo(() => {
     const index: Record<string, any> = {};
     cats.forEach((cat: any) => {
-      const collect = (arr: any[]) => (arr || []).forEach((it: any) => {
-        const id = String(it.id || it.relPath || it.url || it.name || "");
-        if (!id) return;
-        if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
-      });
+      const collect = (arr: any[]) =>
+        (arr || []).forEach((it: any) => {
+          const id = String(it.id || it.relPath || it.url || it.name || "");
+          if (!id) return;
+          if (!index[id]) index[id] = { id, name: it.name || id, url: it.preview || it.url || "" };
+        });
       collect(cat.items || []);
       (cat.children || []).forEach((sub: any) => collect(sub.items || []));
     });
@@ -808,29 +973,32 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  // Маркеры начала/конца в Telegram
+  // ---- Telegram send helpers ----
   async function sendMessage(text: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const resp = await fetch("/api/tg-send-message", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text })
       });
       const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {}
       return { ok: !!(resp.ok && json?.ok), error: json?.error || raw || resp.statusText };
-    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
   }
+
   function startMarkerText(no: string): string {
     const n = no || "—";
-    return [
-      `🪦 НАЧАЛО ЗАЯВКИ №${n}`
-    ].join("\n");
+    return [`🪦 НАЧАЛО ЗАЯВКИ №${n}`].join("\n");
   }
   function endMarkerText(no: string): string {
     const n = no || "—";
-    return [
-      `🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${n}`
-    ].join("\n");
+    return [`🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${n}`].join("\n");
   }
 
   function extractPlateWidthText(): string {
@@ -856,19 +1024,20 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     const rearIds: string[] = (((d as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
     const rearMeta: Record<string, any> = ((d as any)?.editorBack?.graphicsMeta || {});
     const rearCounts: Record<string, number> = {};
-    (rearIds || []).forEach(id => rearCounts[id] = (rearCounts[id] || 0) + 1);
-    const gfxRear = Array.from(new Set(rearIds || [])).map(id => (rearMeta?.[id]?.name || id));
+    (rearIds || []).forEach((id) => (rearCounts[id] = (rearCounts[id] || 0) + 1));
+    const gfxRear = Array.from(new Set(rearIds || [])).map((id) => rearMeta?.[id]?.name || id);
 
     const epsFront = toParagraphs((d?.engraving as any)?.epitaphs ?? (d?.engraving as any)?.epitaphText);
     const epsRear = toParagraphs(((d as any)?.editorBack?.epitaphTexts || []).join("\n\n"));
 
     const plateOn = !!(d as any)?.extras?.headstonePlate;
-    const pSize = plateSize === "Свой вариант" ? (plateCustomSize || plateSize) : plateSize;
+    const pSize = plateSize === "Свой вариант" ? plateCustomSize || plateSize : plateSize;
     const pThick = plateThickness || "";
-    const pOrient = plateOrientation === "horizontal" ? "горизонтально" : plateOrientation === "vertical" ? "вертикально" : "";
+    const pOrient =
+      plateOrientation === "horizontal" ? "горизонтально" : plateOrientation === "vertical" ? "вертикально" : "";
     const pWidth = extractPlateWidthText();
     const plateUnique = Array.from(new Set(plateIds));
-    const plateNames = plateUnique.map(id => plateMeta[id]?.name || id);
+    const plateNames = plateUnique.map((id) => plateMeta[id]?.name || id);
     const plateEps = toParagraphs(plateEpitaph);
 
     const flowerbed = !!(d as any)?.extras?.flowerbed;
@@ -888,7 +1057,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     if ((intro?.intro?.customerNotes || "").trim()) lines.push(`- Примечание: ${(intro?.intro?.customerNotes || "").trim()}`);
     lines.push("");
 
-    if (itemName) { lines.push("Изделие:"); lines.push(`- Модель: ${itemName}`); lines.push(""); }
+    if (itemName) {
+      lines.push("Изделие:");
+      lines.push(`- Модель: ${itemName}`);
+      lines.push("");
+    }
 
     lines.push("Люди:");
     if (persons.length === 0) lines.push("- —");
@@ -901,24 +1074,46 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
     lines.push("");
 
-    if (epsFront.length) { lines.push("Эпитафии (лицевая):"); epsFront.forEach((ep) => lines.push(`- ${ep}`)); lines.push(""); }
-    if (epsRear.length)  { lines.push("Эпитафии (тыльная):"); epsRear.forEach((ep) => lines.push(`- ${ep}`)); lines.push(""); }
+    if (epsFront.length) {
+      lines.push("Эпитафии (лицевая):");
+      epsFront.forEach((ep) => lines.push(`- ${ep}`));
+      lines.push("");
+    }
+    if (epsRear.length) {
+      lines.push("Эпитафии (тыльная):");
+      epsRear.forEach((ep) => lines.push(`- ${ep}`));
+      lines.push("");
+    }
 
-    if (gfxFront.length) { lines.push("Графика (лицевая):"); gfxFront.forEach((n) => lines.push(`- ${n}`)); lines.push(""); }
-    if (gfxRear.length)  { lines.push("Графика (тыльная):"); gfxRear.forEach((n) => {
-      const id = (rearIds || []).find(id0 => (rearMeta[id0]?.name || id0) === n) || "";
-      const count = rearCounts[id] || 1;
-      lines.push(`- ${n}${count > 1 ? ` ×${count}` : ""}`);
-    }); lines.push(""); }
+    if (gfxFront.length) {
+      lines.push("Графика (лицевая):");
+      gfxFront.forEach((n) => lines.push(`- ${n}`));
+      lines.push("");
+    }
+    if (gfxRear.length) {
+      lines.push("Графика (тыльная):");
+      gfxRear.forEach((n) => {
+        const id = (rearIds || []).find((id0) => (rearMeta[id0]?.name || id0) === n) || "";
+        const count = rearCounts[id] || 1;
+        lines.push(`- ${n}${count > 1 ? ` ×${count}` : ""}`);
+      });
+      lines.push("");
+    }
 
     if (plateOn) {
       lines.push("Надгробная плита:");
-      if (pSize)   lines.push(`- Размер: ${pSize}`);
-      if (pWidth)  lines.push(`- Ширина: ${pWidth}`);
-      if (pThick)  lines.push(`- Толщина: ${pThick}`);
+      if (pSize) lines.push(`- Размер: ${pSize}`);
+      if (pWidth) lines.push(`- Ширина: ${pWidth}`);
+      if (pThick) lines.push(`- Толщина: ${pThick}`);
       if (pOrient) lines.push(`- Ориентация: ${pOrient}`);
-      if (plateNames.length) { lines.push("- Графика:"); plateNames.forEach((n) => lines.push(`  • ${n}`)); }
-      if (plateEps.length)   { lines.push("- Эпитафии:"); plateEps.forEach((ep) => lines.push(`  • ${ep}`)); }
+      if (plateNames.length) {
+        lines.push("- Графика:");
+        plateNames.forEach((n) => lines.push(`  • ${n}`));
+      }
+      if (plateEps.length) {
+        lines.push("- Эпитафии:");
+        plateEps.forEach((ep) => lines.push(`  • ${ep}`));
+      }
       lines.push("");
     }
 
@@ -928,7 +1123,10 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
     lines.push("");
 
-    if (notes) { lines.push("Комментарий к заказу:"); lines.push(notes, ""); }
+    if (notes) {
+      lines.push("Комментарий к заказу:");
+      lines.push(notes, "");
+    }
 
     return lines.join("\n");
   }
@@ -948,46 +1146,65 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         body: JSON.stringify({ text: parts[i] })
       });
       const raw = await resp.text().catch(() => "");
-      let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {}
       if (!resp.ok || !json?.ok) errors.push(json?.error || raw || resp.statusText);
       await sleep(150);
     }
     return { ok: errors.length === 0, errors };
   }
 
-  async function sendSketchFromNode(nodeId: string, caption: string, fallbackUrl?: string | null): Promise<{ ok: boolean; error?: string }> {
-    // 1) Пробуем DOM → PNG
+  async function sendSketchFromNode(
+    nodeId: string,
+    caption: string | undefined,
+    fallbackUrl?: string | null
+  ): Promise<{ ok: boolean; error?: string }> {
+    // 1) DOM → PNG
     try {
-      const el = document.getElementById(nodeId);
+      const el = document.getElementById(nodeId) as HTMLElement | null;
       if (el) {
         const dataUrl = await elementToPngDataUrl(el, { pixelRatio: 2, bg: "#ffffff" });
         if (dataUrl) {
           const file = dataUrlToFile(dataUrl, `${nodeId}.png`);
           const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
-            maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08
+            maxWidth: 2000,
+            maxHeight: 2000,
+            mime: "image/jpeg",
+            qualityStart: 0.9,
+            qualityMin: 0.55,
+            qualityStep: 0.08
           });
           const fd = new FormData();
           fd.append("file", new File([compressed], `${nodeId}.jpg`, { type: "image/jpeg" }));
-          fd.append("caption", caption);
+          if (caption) fd.append("caption", caption);
+
           const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
           const raw = await resp.text().catch(() => "");
-          let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+          let json: any = null;
+          try {
+            json = raw ? JSON.parse(raw) : null;
+          } catch {}
           if (resp.ok && json?.ok) return { ok: true };
         }
       }
-    } catch (e) {
-      // игнор, попробуем URL
+    } catch {
+      // ignore, fallback to URL
     }
 
-    // 2) Fallback: отправим URL (Telegram сам скачает)
+    // 2) URL fallback
     try {
       if (fallbackUrl) {
         const fd2 = new FormData();
         fd2.append("url", fallbackUrl);
-        fd2.append("caption", caption);
+        if (caption) fd2.append("caption", caption);
         const r2 = await fetch("/api/tg-send-photo", { method: "POST", body: fd2 });
         const raw2 = await r2.text().catch(() => "");
-        let j2: any = null; try { j2 = raw2 ? JSON.parse(raw2) : null; } catch {}
+        let j2: any = null;
+        try {
+          j2 = raw2 ? JSON.parse(raw2) : null;
+        } catch {}
         if (r2.ok && j2?.ok) return { ok: true };
         return { ok: false, error: j2?.error || raw2 || r2.statusText };
       }
@@ -996,6 +1213,41 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
 
     return { ok: false, error: "Не удалось отправить эскиз" };
+  }
+
+  async function sendTopBarShot(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const node = document.getElementById("tg-topbar-shot") as HTMLElement | null;
+      if (!node) return { ok: false, error: "topbar node not found" };
+
+      const dataUrl = await elementToPngDataUrl(node, { pixelRatio: 2, bg: "#111111" });
+      if (!dataUrl) return { ok: false, error: "topbar shot failed" };
+
+      const file = dataUrlToFile(dataUrl, "topbar.png");
+      const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
+        maxWidth: 1400,
+        maxHeight: 600,
+        mime: "image/jpeg",
+        qualityStart: 0.9,
+        qualityMin: 0.55,
+        qualityStep: 0.08
+      });
+
+      const fd = new FormData();
+      fd.append("file", new File([compressed], `topbar.jpg`, { type: "image/jpeg" }));
+      // caption НЕ добавляем
+
+      const resp = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
+      const raw = await resp.text().catch(() => "");
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {}
+      if (resp.ok && json?.ok) return { ok: true };
+      return { ok: false, error: json?.error || raw || resp.statusText };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
   }
 
   function collectPersonPhotosWithCaptions(d: any): { file: File; caption: string; name: string }[] {
@@ -1013,16 +1265,47 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       const dataUrl = (p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
       if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
+
       const bin = atob(dataUrl.split(",")[1]);
       const u8 = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-      const file = new File([u8], `${fio || "photo"}.jpg`, { type: "image/jpeg" });
-      out.push({ file, caption, name: `${fio || "photo"}.jpg` });
+
+      const safeName = (fio || "photo").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+      const file = new File([u8], `${safeName}.jpg`, { type: "image/jpeg" });
+      out.push({ file, caption, name: `${safeName}.jpg` });
     }
     return out;
   }
 
-  // Основная отправка (маркеры + текст + эскизы + фото)
+  async function sendUserConfirmation(orderNoCur: string) {
+    try {
+      const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
+      const userId = tgUser?.id;
+      if (!userId) return;
+
+      const intro = loadIntroState();
+      const name = (intro?.intro?.customerName || "").trim() || "—";
+      const phone = (intro?.intro?.customerPhone || "").trim() || "—";
+      const uname = tgUser?.username ? `@${tgUser.username}` : "";
+      const full = [uname, tgUser?.first_name, tgUser?.last_name].filter(Boolean).join(" ").trim();
+
+      const text =
+        `Заявка №${orderNoCur || "—"} отправлена.\n` +
+        `Спасибо, ${name}! Наш менеджер свяжется с вами по указанному номеру ${phone}.\n\n` +
+        `Telegram: ${full || "—"}\n` +
+        `ID: ${userId}`;
+
+      await fetch("/api/tg-send-dm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, text })
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  // Основная отправка (маркеры + topbar-shot + текст + эскизы + фото)
   const sendOrderDirect = async (showBackInner: boolean, backUrlInner: string | null) => {
     setUploading(true);
     setUploadProgress(0);
@@ -1032,22 +1315,27 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     setFrontSketchDelivered(null);
     setBackSketchDelivered(showBackInner ? null : null);
     setPhotosDelivered(0);
+
     const warnings: string[] = [];
 
     try {
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
 
-      // Стартовый маркер
+      // Маркер начала
       await sendMessage(startMarkerText(orderNoCur));
 
-      // Текст описания
+      // Скриншот "топбара" (TopBarWithIntro), без подписи
+      const topShot = await sendTopBarShot();
+      if (!topShot.ok && topShot.error) warnings.push(`Скриншот топбара не отправлен: ${topShot.error}`);
+
+      // Текст заказа
       const full = buildOrderText();
       const tRes = await sendLargeText(full);
       setTextDelivered(tRes.ok);
       if (!tRes.ok) warnings.push(`Текст не отправлен: ${tRes.errors.join(" | ")}`);
 
       // Эскиз (лицевая)
-      const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)");
+      const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)", null);
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
@@ -1058,21 +1346,30 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         if (!backRes.ok && backRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${backRes.error}`);
       }
 
-      // Портретные фото
+      // Портретные фото (с подписью: ФИО + даты)
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
       let delivered = 0;
       for (let i = 0; i < photos.length; i++) {
         const ph = photos[i];
         const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, {
-          maxWidth: 2000, maxHeight: 2000, mime: "image/jpeg", qualityStart: 0.9, qualityMin: 0.55, qualityStep: 0.08
+          maxWidth: 2000,
+          maxHeight: 2000,
+          mime: "image/jpeg",
+          qualityStart: 0.9,
+          qualityMin: 0.55,
+          qualityStep: 0.08
         });
         const fd = new FormData();
         fd.append("file", new File([compressed], ph.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" }));
         fd.append("caption", ph.caption);
+
         const r = await fetch("/api/tg-send-photo", { method: "POST", body: fd });
         const raw = await r.text().catch(() => "");
-        let json: any = null; try { json = raw ? JSON.parse(raw) : null; } catch {}
+        let json: any = null;
+        try {
+          json = raw ? JSON.parse(raw) : null;
+        } catch {}
         if (!r.ok || !json?.ok) {
           warnings.push(`Фото не отправлено (${ph.name}): ${json?.error || raw || r.statusText}`);
         } else {
@@ -1083,12 +1380,15 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         await sleep(200);
       }
 
-      // Завершающий маркер
+      // Маркер конца
       await sendMessage(endMarkerText(orderNoCur));
 
       setSentOk(true);
       if (warnings.length) setLastWarnings(warnings);
       setUploadProgress(100);
+
+      // DM пользователю
+      await sendUserConfirmation(orderNoCur);
     } finally {
       setUploading(false);
     }
@@ -1122,61 +1422,113 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       await sendOrderDirect(showBack, backCandidateUrl);
       setConfirmOpen(false);
       setIsDirtyAfterSend(false);
-      setTimeout(() => { afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, 150);
+      setTimeout(() => {
+        afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      }, 150);
     } finally {
       setIsSending(false);
     }
   }
 
-  // UI: overlay text
   const overlayText =
-    uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%` :
-    isSending ? "Отправляем заказ…" :
-    isSaving ? "Формируем PDF…" : "";
+    uploading
+      ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%`
+      : isSending
+        ? "Отправляем заказ…"
+        : isSaving
+          ? "Формируем PDF…"
+          : "";
 
   return (
     <div style={safeRoot()}>
       <TopHintNotice />
-      <TopBarWithIntro title="Memorial" />
+
+      {/* ВАЖНО: этот контейнер будет скриншотиться и отправляться в Telegram без подписи */}
+      <div id="tg-topbar-shot" style={{ marginBottom: 10 }}>
+        <TopBarWithIntro title="Обзор и отправка" />
+      </div>
 
       {/* Контакты и № заказа */}
-      <EditableOrderSummary orderNo={orderNo} onOpenTop={() => {}} onDirty={() => sentOk && setIsDirtyAfterSend(true)} />
+      <EditableOrderSummary
+        orderNo={orderNo}
+        onOpenTop={() => {}}
+        onDirty={() => sentOk && setIsDirtyAfterSend(true)}
+      />
 
       {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
           extraPlate={extraPlate}
-          setExtraPlate={(v) => { setExtraPlate(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: v }, updatedAt: Date.now() }); if (sentOk) setIsDirtyAfterSend(true); }}
-          plateSize={plateSize} setPlateSize={setPlateSize}
-          plateCustomSize={plateCustomSize} setPlateCustomSize={setPlateCustomSize}
-          plateThickness={plateThickness} setPlateThickness={setPlateThickness}
-          plateCustomThickness={plateCustomThickness} setPlateCustomThickness={setPlateCustomThickness}
-          plateOrientation={plateOrientation} setPlateOrientation={setPlateOrientation}
-          plateEpitaph={plateEpitaph} setPlateEpitaph={setPlateEpitaph}
-          catsLoading={catsLoading} catsError={catsError} cats={cats}
-          catOpen={catOpen} setCatOpen={setCatOpen}
+          setExtraPlate={(v) => {
+            setExtraPlate(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: v }, updatedAt: Date.now() });
+            if (sentOk) setIsDirtyAfterSend(true);
+          }}
+          plateSize={plateSize}
+          setPlateSize={setPlateSize}
+          plateCustomSize={plateCustomSize}
+          setPlateCustomSize={setPlateCustomSize}
+          plateThickness={plateThickness}
+          setPlateThickness={setPlateThickness}
+          plateCustomThickness={plateCustomThickness}
+          setPlateCustomThickness={setPlateCustomThickness}
+          plateOrientation={plateOrientation}
+          setPlateOrientation={setPlateOrientation}
+          plateEpitaph={plateEpitaph}
+          setPlateEpitaph={setPlateEpitaph}
+          catsLoading={catsLoading}
+          catsError={catsError}
+          cats={cats}
+          catOpen={catOpen}
+          setCatOpen={setCatOpen}
           addPlateGraphic={(g) => {
             const gid = String(g.id || g.relPath || g.url || g.name);
             const nextIds = [...plateIds, gid];
             const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-            setPlateIds(nextIds); setPlateMeta(nextMeta);
+            setPlateIds(nextIds);
+            setPlateMeta(nextMeta);
             const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta }, updatedAt: Date.now() });
+            saveOrderDraft({
+              ...prev,
+              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta },
+              updatedAt: Date.now()
+            });
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           removePlateGraphic={(gid) => {
             const idx = plateIds.findIndex((x) => x === gid);
             if (idx === -1) return;
-            const nextIds = plateIds.slice(); nextIds.splice(idx, 1);
+            const nextIds = plateIds.slice();
+            nextIds.splice(idx, 1);
             setPlateIds(nextIds);
             const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta }, updatedAt: Date.now() });
+            saveOrderDraft({
+              ...prev,
+              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
+              updatedAt: Date.now()
+            });
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateIds={plateIds}
-          hasPedestal={hasPedestal} setHasPedestal={(v) => { setHasPedestal(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, tumba: v }, updatedAt: Date.now() }); }}
-          hasFlowerbed={hasFlowerbed} setHasFlowerbed={(v) => { setHasFlowerbed(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, flowerbed: v }, updatedAt: Date.now() }); }}
-          hasVase={hasVase} setHasVase={(v) => { setHasVase(v); const prev = loadOrderDraft(); saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, vase: v }, updatedAt: Date.now() }); }}
+          hasPedestal={hasPedestal}
+          setHasPedestal={(v) => {
+            setHasPedestal(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, tumba: v }, updatedAt: Date.now() });
+          }}
+          hasFlowerbed={hasFlowerbed}
+          setHasFlowerbed={(v) => {
+            setHasFlowerbed(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, flowerbed: v }, updatedAt: Date.now() });
+          }}
+          hasVase={hasVase}
+          setHasVase={(v) => {
+            setHasVase(v);
+            const prev = loadOrderDraft();
+            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, vase: v }, updatedAt: Date.now() });
+          }}
           onDirty={() => sentOk && setIsDirtyAfterSend(true)}
         />
       </section>
@@ -1198,12 +1550,18 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       </section>
 
-      {/* Эскиз тыльной — только если есть */}
+      {/* Эскиз тыльной — только если реально есть URL */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
           <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
-            <img id="pdf-back-sketch" src={backCandidateUrl} crossOrigin="anonymous" alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+            <img
+              id="pdf-back-sketch"
+              src={backCandidateUrl}
+              crossOrigin="anonymous"
+              alt=""
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+            />
           </div>
         </section>
       )}
@@ -1214,13 +1572,20 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           <div style={{ ...sectionBox }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-              <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
-              <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
+              <div>
+                <strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}
+              </div>
+              <div>
+                <strong>Ширина:</strong> {extractPlateWidthText()}
+              </div>
             </div>
             {chosenPlateList.length > 0 && (
               <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
                 {chosenPlateList.map((g, i) => (
-                  <div key={`${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}>
+                  <div
+                    key={`${g.id || g.url || i}`}
+                    style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 8, alignItems: "center" }}
+                  >
                     <Thumb url={g.url} />
                     <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {g.name || g.id}
@@ -1272,7 +1637,12 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
-          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>
+          <button
+            type="button"
+            onPointerUp={() => setConfirmOpen(true)}
+            onClick={() => setConfirmOpen(true)}
+            style={glassButtonStyle("sm")}
+          >
             Отправить менеджеру
           </button>
         </div>
@@ -1280,24 +1650,54 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
       {/* Подтверждение */}
       {confirmOpen && (
-        <div role="dialog" aria-modal style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }} onPointerUp={() => { if (!isSending && !uploading) setConfirmOpen(false); }}>
+        <div
+          role="dialog"
+          aria-modal
+          style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }}
+          onPointerUp={() => {
+            if (!isSending && !uploading) setConfirmOpen(false);
+          }}
+        >
           <div
             onPointerUp={(e) => e.stopPropagation()}
             onClick={(e) => (e.stopPropagation() as any)}
             style={{
-              position: "absolute", left: 0, right: 0, bottom: 0, background: "#fff", color: "#111",
-              borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16,
-              boxShadow: "0 -20px 60px rgba(0,0,0,0.45)", transform: "translateY(8px)", opacity: 0,
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: "#fff",
+              color: "#111",
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              padding: 16,
+              boxShadow: "0 -20px 60px rgba(0,0,0,0.45)",
+              transform: "translateY(8px)",
+              opacity: 0,
               animation: "sheetIn 180ms ease forwards"
             }}
           >
             <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
             <div style={{ position: "absolute", top: 8, right: 8 }}>
-              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть" className="btn" disabled={isSending || uploading}>×</button>
+              <button
+                onPointerUp={() => setConfirmOpen(false)}
+                onClick={() => setConfirmOpen(false)}
+                title="Закрыть"
+                className="btn"
+                disabled={isSending || uploading}
+              >
+                ×
+              </button>
             </div>
             <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам в Telegram?</div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="btn" onPointerUp={handleSend} onClick={handleSend} disabled={isSending || uploading} style={{ background: "#e5ffe5", borderColor: "#99d199" }}>
+              <button
+                className="btn"
+                onPointerUp={handleSend}
+                onClick={handleSend}
+                disabled={isSending || uploading}
+                style={{ background: "#e5ffe5", borderColor: "#99d199" }}
+              >
                 {isSending || uploading ? "Отправляем…" : "Отправить"}
               </button>
             </div>
@@ -1325,21 +1725,40 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 </div>
                 <div>
                   <span style={{ opacity: 0.85 }}>Эскиз (лицевая) — </span>
-                  <strong style={{ color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
+                  <strong
+                    style={{
+                      color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4"
+                    }}
+                  >
                     {frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}
                   </strong>
                 </div>
                 {showBack && (
                   <div>
                     <span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span>
-                    <strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
+                    <strong
+                      style={{
+                        color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4"
+                      }}
+                    >
                       {backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}
                     </strong>
                   </div>
                 )}
                 <div>
                   <span style={{ opacity: 0.85 }}>Фото — </span>
-                  <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : photosTotal === 0 ? "#ccc" : "#ffb4b4" }}>
+                  <strong
+                    style={{
+                      color:
+                        photosDelivered === photosTotal
+                          ? "#7dffa0"
+                          : photosDelivered > 0
+                            ? "#ffd666"
+                            : photosTotal === 0
+                              ? "#ccc"
+                              : "#ffb4b4"
+                    }}
+                  >
                     {photosTotal > 0 ? `${photosDelivered} из ${photosTotal}` : "—"}
                   </strong>
                 </div>
@@ -1349,20 +1768,27 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 <details style={{ marginTop: 8 }}>
                   <summary style={{ cursor: "pointer" }}>Подробности</summary>
                   <ul style={{ margin: "6px 0 0 20px" }}>
-                    {lastWarnings.map((w, i) => (<li key={`w-${i}`} style={{ marginBottom: 4 }}>{w}</li>))}
+                    {lastWarnings.map((w, i) => (
+                      <li key={`w-${i}`} style={{ marginBottom: 4 }}>
+                        {w}
+                      </li>
+                    ))}
                   </ul>
                 </details>
               )}
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(
-                (textDelivered === false) ||
-                (frontSketchDelivered === false) ||
+              {(textDelivered === false ||
+                frontSketchDelivered === false ||
                 (showBack && backSketchDelivered === false) ||
-                (photosTotal > 0 && photosDelivered < photosTotal)
-              ) && (
-                <button type="button" onClick={() => sendOrderDirect(showBack, backCandidateUrl)} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
+                (photosTotal > 0 && photosDelivered < photosTotal)) && (
+                <button
+                  type="button"
+                  onClick={() => sendOrderDirect(showBack, backCandidateUrl)}
+                  disabled={uploading || isSending}
+                  style={glassButtonStyle("sm", uploading || isSending)}
+                >
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
               )}
