@@ -2,36 +2,29 @@
 //
 // Шаг «Обзор и подтверждение»
 //
-// Требования (учтены):
-// 1) Root Directory на Vercel = apps/web → backend функции должны быть в apps/web/api/* (у вас /api/tg уже работает).
-// 2) Скриншот нужен ИМЕННО раскрытой панели TopBarWithIntro:
-//    - диспатчим "memorial:openTopBarPanel"
-//    - ждём анимацию раскрытия
-//    - делаем скриншот элемента с data-topbar-panel="1"
-//    - отправляем в Telegram БЕЗ подписи
-// 3) Если тыльный эскиз “пустой” — не показываем вовсе (проверка по фактическому размеру загруженного изображения).
-// 4) Аккордеон «Надгробная плита» синхронизирован с чекбоксом: checked ⇄ open.
-// 5) Отправка идёт через единый endpoint POST /api/tg
-//    - action=manager_message (JSON)
-//    - action=manager_photo (multipart)
-//    - action=dm (JSON)
-// 6) Фотографии подписываем: ФИО и даты.
-// 7) Пользователю (tg id) отправляем уведомление: Заявка №... отправлена... (имя, телефон) + username + id.
+// ВАЖНО:
+// - Root Directory на Vercel = apps/web (API работает по /api/*)
+// - Скриншот должен захватывать И КНОПКУ TopBarWithIntro, И раскрытую панель.
+//   Для этого TopBarWithIntro обёрнут в #topbar-shot-root, а перед скриншотом мы раскрываем панель
+//   через событие "memorial:openTopBarPanel" и снимаем именно #topbar-shot-root.
 //
-// Важно про Telegram:
-// - Telegram.WebApp.expand() влияет на высоту webview, а не на раскрытие вашей панели TopBarWithIntro.
-// - “Развернуть топбар” в вашем смысле = раскрыть TopBarWithIntro через событие.
+// - Эпитафии на плите реализованы как список (как в EpitaphStep):
+//   * многострочная эпитафия = ОДИН элемент
+//   * toggle/add/remove/clear с нормализацией
+//   * сохранение в draft.extras:
+//       - 1 эпитафия: extras.plateEpitaph (string)
+//       - >1: extras.plateEpitaphs (string[])
+//       - 0: оба ключа удаляются
 //
-// Примечание: этот файл сам НЕ добавляет больше данных в TopBarWithIntro — это делается в компоненте.
-// Здесь мы только гарантируем, что панель открыта и попадёт в скриншот.
+// - Блок “Заказ № …” под топбаром скрыт: EditableOrderSummary НЕ рендерится.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
-import { loadIntroState, saveIntro, type Intro } from "../lib/intro";
+import { loadIntroState } from "../lib/intro";
 import { fetchCatalog } from "../api";
-import { QUICK_EPITAPHS } from "../data/epitaphs";
+import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import { generateOrderPdf, downloadBlob } from "../lib/pdf/generateOrderPdf";
 import { compressImageFileToMaxBytes } from "../lib/media/resize";
 
@@ -179,6 +172,31 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/* ===== Plate epitaph helpers (как в EpitaphStep) ===== */
+const normEpitaph = (t: string) =>
+  (t || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+
+function indexOfByNorm(list: string[], needle: string): number {
+  const n = normEpitaph(needle);
+  for (let i = 0; i < list.length; i++) {
+    if (normEpitaph(list[i]) === n) return i;
+  }
+  return -1;
+}
+function hasByNorm(list: string[], needle: string) {
+  return indexOfByNorm(list, needle) !== -1;
+}
+function uniqueByNorm(list: string[]): string[] {
+  const out: string[] = [];
+  for (const t of list) {
+    if (!hasByNorm(out, t)) out.push(t);
+  }
+  return out;
+}
+
 /* ========= Top hint ========= */
 function TopHintNotice() {
   return (
@@ -198,42 +216,6 @@ function TopHintNotice() {
     >
       Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.
     </div>
-  );
-}
-
-/* ========= Header summary ========= */
-function EditableOrderSummary({
-  orderNo,
-  onDirty
-}: {
-  orderNo: string;
-  onDirty?: () => void;
-}) {
-  const introInitial = loadIntroState().intro || {};
-  const [name, setName] = useState<string>(introInitial.customerName || "");
-  const [phone, setPhone] = useState<string>(introInitial.customerPhone || "");
-  const [contactNotes, setContactNotes] = useState<string>(introInitial.customerNotes || "");
-  const saveOnBlur = () => {
-    const next: Intro = {
-      customerName: name.trim(),
-      customerPhone: phone.trim(),
-      customerNotes: contactNotes.trim() || undefined
-    };
-    saveIntro(next, { lock: false });
-    onDirty?.();
-  };
-
-  return (
-    <section style={{ ...glassPanelStyle(), padding: 10, display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ fontSize: 13, opacity: 0.95 }}>заказ № {orderNo || "—"}</div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 8 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveOnBlur} placeholder="Имя" style={inputStyle()} />
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={saveOnBlur} placeholder="+7..." inputMode="tel" style={inputStyle()} />
-      </div>
-      <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} onBlur={saveOnBlur} placeholder="Примечание для связи…" style={inputStyle()} />
-    </section>
   );
 }
 
@@ -311,8 +293,16 @@ function PlateBlock(props: {
   plateOrientation: string;
   setPlateOrientation: (v: string) => void;
 
-  plateEpitaph: string;
-  setPlateEpitaph: (v: string) => void;
+  // NEW: epitaph list UI (как EpitaphStep)
+  plateSelectedEpitaphs: string[];
+  setPlateSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
+  plateShowMore: boolean;
+  setPlateShowMore: (v: boolean | ((p: boolean) => boolean)) => void;
+  plateCustomText: string;
+  setPlateCustomText: (v: string) => void;
+  onTogglePlateEpitaph: (t: string) => void;
+  onAddPlateCustom: () => void;
+  onRemovePlateEpitaph: (t: string) => void;
 
   catsLoading: boolean;
   catsError: string;
@@ -345,8 +335,17 @@ function PlateBlock(props: {
     setPlateCustomThickness,
     plateOrientation,
     setPlateOrientation,
-    plateEpitaph,
-    setPlateEpitaph,
+
+    plateSelectedEpitaphs,
+    setPlateSelectedEpitaphs,
+    plateShowMore,
+    setPlateShowMore,
+    plateCustomText,
+    setPlateCustomText,
+    onTogglePlateEpitaph,
+    onAddPlateCustom,
+    onRemovePlateEpitaph,
+
     catsLoading,
     catsError,
     cats,
@@ -355,6 +354,7 @@ function PlateBlock(props: {
     addPlateGraphic,
     removePlateGraphic,
     plateIds,
+
     hasPedestal,
     setHasPedestal,
     hasFlowerbed,
@@ -385,11 +385,7 @@ function PlateBlock(props: {
     return () => ro.disconnect();
   }, []);
 
-  function CatGrid({
-    items
-  }: {
-    items: any[];
-  }) {
+  function CatGrid({ items }: { items: any[] }) {
     return (
       <div ref={rootRef} style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 12 }}>
         {items.map((g: any, idx: number) => {
@@ -650,50 +646,158 @@ function PlateBlock(props: {
               </div>
             </div>
 
+            {/* ===== Эпитафии на плите (как EpitaphStep) ===== */}
             <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ ...sectionBox }}>
-                  <div style={{ marginBottom: 6 }}>Свой вариант:</div>
-                  <textarea
-                    rows={3}
-                    value={plateEpitaph}
-                    onChange={(e) => setPlateEpitaph(e.target.value)}
-                    onBlur={() => {
-  // мгновенно сохраняем в draft, чтобы точно не потерялось
-  const prev = loadOrderDraft();
-  const nextExtras: any = { ...(prev as any).extras, plateEpitaph: (plateEpitaph || "").trim() || "" };
-  saveOrderDraft({ ...prev, extras: nextExtras, updatedAt: Date.now() });
-
-  markDirty();
-}}
-
-                    placeholder="Введите текст…"
-                    style={{ ...inputStyle(), resize: "vertical" }}
-                  />
-                </div>
-                <div>
-                  <div style={{ marginBottom: 8 }}>Быстрый выбор:</div>
+                  <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {QUICK_EPITAPHS.map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => {
-                          const list = toParagraphs(plateEpitaph);
-                          const norm = (s: string) => s.replace(/\r\n?/g, "\n").trim();
-                          const exists = list.some((s) => norm(s) === norm(t));
-                          const next = exists ? list.filter((s) => norm(s) !== norm(t)) : list.concat([t]);
-                          setPlateEpitaph(next.join("\n\n"));
-                          markDirty();
-                        }}
-                        style={glassButtonStyle("nano")}
-                        title={t}
-                      >
-                        {t}
-                      </button>
-                    ))}
+                    {QUICK_EPITAPHS.map((t) => {
+                      const active = hasByNorm(plateSelectedEpitaphs, t);
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => {
+                            onTogglePlateEpitaph(t);
+                            markDirty();
+                          }}
+                          style={{
+                            ...glassButtonStyle("nano"),
+                            border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)"
+                          }}
+                          title={t}
+                        >
+                          {t}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+
+                <div style={{ ...sectionBox }}>
+                  <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
+                  <button
+                    type="button"
+                    onClick={() => setPlateShowMore((v) => !v)}
+                    style={glassButtonStyle("nano")}
+                  >
+                    {plateShowMore ? "Свернуть список" : "Развернуть список"}
+                  </button>
+
+                  {plateShowMore && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                        gap: 8,
+                        padding: 2
+                      }}
+                    >
+                      {MORE_EPITAPHS.map((t, idx) => {
+                        const active = hasByNorm(plateSelectedEpitaphs, t);
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              onTogglePlateEpitaph(t);
+                              markDirty();
+                            }}
+                            title={t}
+                            style={{
+                              textAlign: "left",
+                              ...glassPanelStyle(),
+                              borderRadius: 10,
+                              padding: 10,
+                              cursor: "pointer",
+                              outline: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.14)",
+                              fontSize: 13,
+                              lineHeight: 1.25,
+                              whiteSpace: "pre-wrap"
+                            }}
+                          >
+                            {t}
+                            <div style={{ marginTop: 6, fontSize: 12 }}>
+                              {active ? "Удалить из выбранных" : "Добавить к выбранным"}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ ...sectionBox }}>
+                  <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <textarea
+                      rows={3}
+                      value={plateCustomText}
+                      onChange={(e) => setPlateCustomText(e.target.value)}
+                      placeholder="Введите текст и нажмите «Добавить»"
+                      style={{ ...inputStyle(), resize: "vertical" }}
+                    />
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        style={glassButtonStyle("nano")}
+                        onClick={() => {
+                          onAddPlateCustom();
+                          markDirty();
+                        }}
+                      >
+                        Добавить
+                      </button>
+                      <button
+                        type="button"
+                        style={glassButtonStyle("nano")}
+                        onClick={() => {
+                          setPlateSelectedEpitaphs([]);
+                          markDirty();
+                        }}
+                      >
+                        Очистить выбранные
+                      </button>
+                      {plateSelectedEpitaphs.length > 0 && <div>Выбрано: {plateSelectedEpitaphs.length}</div>}
+                    </div>
+                  </div>
+                </div>
+
+                {plateSelectedEpitaphs.length > 0 && (
+                  <div style={{ ...sectionBox }}>
+                    <div style={{ marginBottom: 6, textAlign: "left" }}>Выбранные эпитафии:</div>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {plateSelectedEpitaphs.map((t) => (
+                        <div
+                          key={t}
+                          style={{
+                            ...glassPanelStyle(),
+                            borderRadius: 10,
+                            padding: 10,
+                            display: "flex",
+                            gap: 8,
+                            alignItems: "center",
+                            justifyContent: "space-between"
+                          }}
+                        >
+                          <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                          <button
+                            type="button"
+                            style={glassButtonStyle("nano")}
+                            onClick={() => {
+                              onRemovePlateEpitaph(t);
+                              markDirty();
+                            }}
+                          >
+                            Удалить
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </LoudAccordion>
 
@@ -749,6 +853,7 @@ async function ensureHtmlToImage(): Promise<any> {
   if (!(window as any).htmlToImage) throw new Error("html-to-image unavailable");
   return (window as any).htmlToImage;
 }
+
 async function elementToPngDataUrl(node: HTMLElement | null, opts?: { pixelRatio?: number; bg?: string }): Promise<string | null> {
   if (!node) return null;
   const hti = await ensureHtmlToImage();
@@ -758,6 +863,7 @@ async function elementToPngDataUrl(node: HTMLElement | null, opts?: { pixelRatio
     cacheBust: true
   });
 }
+
 function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   const arr = dataUrl.split(",");
   const mime = (arr[0].match(/data:(.*);base64/) || [])[1] || "image/png";
@@ -773,7 +879,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [introState, setIntroState] = useState(() => loadIntroState());
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
 
-  const orderNo = String(introState.orderNumber || "").trim();
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
 
@@ -835,7 +940,6 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       if (!alive) return;
       const w = img.naturalWidth || 0;
       const h = img.naturalHeight || 0;
-      // отсекаем пустышки
       setBackIsRenderable(w >= 50 && h >= 50);
     };
     img.onerror = () => {
@@ -888,7 +992,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // Плита — состояния
+  // ===== Plate state =====
   const extras0 = (draft as any)?.extras || {};
   const [extraPlate, setExtraPlate] = useState<boolean>(!!extras0.headstonePlate);
   const [plateSize, setPlateSize] = useState<string>(extras0.plateSize || "100×50 см");
@@ -899,33 +1003,90 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     extras0.plateOrientation ||
       ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
   );
-  const [plateEpitaph, setPlateEpitaph] = useState<string>(extras0.plateEpitaph || "");
-  const plateEpitaphDebounceRef = useRef<number | null>(null);
 
-useEffect(() => {
-  if (plateEpitaphDebounceRef.current) window.clearTimeout(plateEpitaphDebounceRef.current);
-
-  plateEpitaphDebounceRef.current = window.setTimeout(() => {
-    const prev = loadOrderDraft();
-    const nextExtras: any = { ...(prev as any).extras, plateEpitaph: (plateEpitaph || "").trim() || "" };
-
-    // Важно: не затираем другие поля extras
-    saveOrderDraft({ ...prev, extras: nextExtras, updatedAt: Date.now() });
-    setDraft(loadOrderDraft());
-  }, 350);
-
-  return () => {
-    if (plateEpitaphDebounceRef.current) window.clearTimeout(plateEpitaphDebounceRef.current);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [plateEpitaph]);
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
   const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
   const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
 
-  // Каталог графики (для блока «Выбрано для плиты»)
+  // ===== Plate epitaphs (как EpitaphStep) =====
+  const initialPlateSelected = useMemo(() => {
+    const d = loadOrderDraft();
+    const ex: any = (d as any)?.extras || {};
+
+    const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
+    const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
+
+    return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
+  }, []);
+
+  const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
+  const [plateShowMore, setPlateShowMore] = useState(false);
+  const [plateCustomText, setPlateCustomText] = useState("");
+
+  // Persist plate epitaphs to draft.extras
+  const prevPlateEpiJsonRef = useRef<string>("");
+  useEffect(() => {
+    const list = uniqueByNorm(plateSelectedEpitaphs);
+    const prevAll = loadOrderDraft();
+    const exPrev: any = { ...(prevAll as any).extras };
+
+    const exNext: any = { ...exPrev };
+    delete exNext.plateEpitaph;
+    delete exNext.plateEpitaphs;
+
+    if (list.length === 1) {
+      exNext.plateEpitaph = list[0];
+    } else if (list.length > 1) {
+      exNext.plateEpitaphs = list.slice();
+    }
+
+    const snapshot = JSON.stringify({ extras: exNext });
+    if (snapshot !== prevPlateEpiJsonRef.current) {
+      prevPlateEpiJsonRef.current = snapshot;
+      saveOrderDraft({ ...prevAll, extras: exNext, updatedAt: Date.now() });
+      setDraft(loadOrderDraft());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plateSelectedEpitaphs]);
+
+  const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
+
+  // Keep local plate states in sync when draft updates externally
+  useEffect(() => {
+    const ex: any = (draft as any)?.extras || {};
+
+    setExtraPlate(!!ex.headstonePlate);
+    setPlateSize(ex.plateSize || "100×50 см");
+    setPlateCustomSize(ex.plateCustomSize || "");
+    setPlateThickness(ex.plateThickness || "5 см");
+    setPlateCustomThickness(ex.plateCustomThickness || "");
+    setPlateOrientation(
+      ex.plateOrientation ||
+        ((draft?.size?.orientation || (draft as any)?.orientation || "").toLowerCase().startsWith("h") ? "horizontal" : "vertical")
+    );
+    setPlateIds((ex.plateGraphicsIds as string[]) || []);
+    setPlateMeta((ex.plateGraphicsMeta as Record<string, any>) || {});
+    setHasPedestal(ex.tumba ?? true);
+    setHasFlowerbed(!!ex.flowerbed);
+    setHasVase(!!ex.vase);
+
+    // синхронизируем выбранные эпитафии плиты из draft, если они там есть
+    const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
+    const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
+    const nextSelected = uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
+    // обновляем только если реально отличается (по норме)
+    const same =
+      nextSelected.length === plateSelectedEpitaphs.length &&
+      nextSelected.every((x, i) => normEpitaph(x) === normEpitaph(plateSelectedEpitaphs[i]));
+    if (!same && nextSelected.length > 0) {
+      setPlateSelectedEpitaphs(nextSelected);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
+
+  // ===== Catalog for plate graphics =====
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -977,8 +1138,6 @@ useEffect(() => {
     const uniq = Array.from(new Set(plateIds));
     return uniq.map((gid) => plateMeta[gid] || index[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta, cats]);
-
-  const plateEpitaphList = useMemo(() => toParagraphs(plateEpitaph), [plateEpitaph]);
 
   // ===== Sending state =====
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1145,32 +1304,29 @@ useEffect(() => {
 
   async function ensureTopBarPanelOpenForShot(): Promise<void> {
     try {
-      // Открываем панель (ваш TopBarWithIntro слушает это событие)
       window.dispatchEvent(new Event("memorial:openTopBarPanel"));
     } catch {}
-    // ждём анимацию useCollapse (в компоненте ~280ms) + запас
     await sleep(420);
   }
 
   function findTopBarShotRootNode(): HTMLElement | null {
-  return document.getElementById("topbar-shot-root");
-}
+    return document.getElementById("topbar-shot-root");
+  }
 
-
-  async function sendExpandedTopBarPanelShot(): Promise<{ ok: boolean; error?: string }> {
+  async function sendTopbarShotWithHeaderAndPanel(): Promise<{ ok: boolean; error?: string }> {
     try {
       await ensureTopBarPanelOpenForShot();
 
       const node = findTopBarShotRootNode();
-      if (!node) return { ok: false, error: "TopBar panel node not found" };
+      if (!node) return { ok: false, error: "TopBar shot root not found" };
 
       const dataUrl = await elementToPngDataUrl(node, { pixelRatio: 2, bg: "#111111" });
-      if (!dataUrl) return { ok: false, error: "TopBar panel shot failed" };
+      if (!dataUrl) return { ok: false, error: "TopBar shot failed" };
 
-      const file = dataUrlToFile(dataUrl, "topbar-panel.png");
+      const file = dataUrlToFile(dataUrl, "topbar.png");
       const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
         maxWidth: 1600,
-        maxHeight: 2600,
+        maxHeight: 3000,
         mime: "image/jpeg",
         qualityStart: 0.9,
         qualityMin: 0.55,
@@ -1178,9 +1334,7 @@ useEffect(() => {
       });
 
       const fd = new FormData();
-      fd.append("file", new File([compressed], "topbar-panel.jpg", { type: "image/jpeg" }));
-      // caption НЕ добавляем
-
+      fd.append("file", new File([compressed], "topbar.jpg", { type: "image/jpeg" }));
       return await sendManagerPhoto(fd);
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
@@ -1188,7 +1342,6 @@ useEffect(() => {
   }
 
   async function sendSketchFromNode(nodeId: string, caption: string | undefined, fallbackUrl?: string | null): Promise<{ ok: boolean; error?: string }> {
-    // 1) DOM → image
     try {
       const el = document.getElementById(nodeId) as HTMLElement | null;
       if (el) {
@@ -1216,7 +1369,6 @@ useEffect(() => {
       // ignore, try URL
     }
 
-    // 2) URL
     if (fallbackUrl) {
       const fd2 = new FormData();
       fd2.append("url", fallbackUrl);
@@ -1295,22 +1447,22 @@ useEffect(() => {
 
       await sendManagerMessage(startMarkerText(orderNoCur));
 
-      // 1) Скриншот раскрытой панели TopBarWithIntro (без подписи)
-      const topRes = await sendExpandedTopBarPanelShot();
+      // Скриншот топбара (кнопка + панель)
+      const topRes = await sendTopbarShotWithHeaderAndPanel();
       setTopbarDelivered(topRes.ok);
-      if (!topRes.ok && topRes.error) warnings.push(`Топбар (панель) не отправлен: ${topRes.error}`);
+      if (!topRes.ok && topRes.error) warnings.push(`Топбар не отправлен: ${topRes.error}`);
 
-      // 2) Текст заявки
+      // Текст заявки
       const tRes = await sendLargeText(buildOrderText());
       setTextDelivered(tRes.ok);
       if (!tRes.ok) warnings.push(`Текст не отправлен: ${tRes.errors.join(" | ")}`);
 
-      // 3) Эскиз (лицевая)
+      // Эскиз (лицевая)
       const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)", null);
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // 4) Эскиз (тыльная) — только если showBack=true
+      // Эскиз (тыльная) — только если showBack=true
       if (showBack && backCandidateUrl) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backCandidateUrl);
         setBackSketchDelivered(backRes.ok);
@@ -1319,7 +1471,7 @@ useEffect(() => {
         setBackSketchDelivered(null);
       }
 
-      // 5) Фото портретов (с подписью ФИО+даты)
+      // Фото портретов
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
 
@@ -1405,10 +1557,12 @@ useEffect(() => {
     <div style={safeRoot()}>
       <TopHintNotice />
 
-      {/* TopBarWithIntro: нужен на странице, чтобы можно было раскрыть и снять панель */}
+      {/* Скриншотим этот контейнер целиком: кнопка + панель */}
       <div id="topbar-shot-root">
-  <TopBarWithIntro title="Обзор и отправка" />
-</div>
+        <TopBarWithIntro title="Обзор и отправка" />
+      </div>
+
+      {/* EditableOrderSummary скрыт по требованию */}
 
       {/* Аккордеоны: Дополнительно/Плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
@@ -1430,8 +1584,34 @@ useEffect(() => {
           setPlateCustomThickness={setPlateCustomThickness}
           plateOrientation={plateOrientation}
           setPlateOrientation={setPlateOrientation}
-          plateEpitaph={plateEpitaph}
-          setPlateEpitaph={setPlateEpitaph}
+          plateSelectedEpitaphs={plateSelectedEpitaphs}
+          setPlateSelectedEpitaphs={setPlateSelectedEpitaphs}
+          plateShowMore={plateShowMore}
+          setPlateShowMore={setPlateShowMore}
+          plateCustomText={plateCustomText}
+          setPlateCustomText={setPlateCustomText}
+          onTogglePlateEpitaph={(text) => {
+            const t = normEpitaph(text);
+            if (!t) return;
+            setPlateSelectedEpitaphs((prev) => {
+              const idx = indexOfByNorm(prev, t);
+              if (idx !== -1) return prev.filter((_, i) => i !== idx);
+              return prev.concat([text]); // сохраняем исходный многострочный текст
+            });
+          }}
+          onAddPlateCustom={() => {
+            const raw = (plateCustomText || "").trim();
+            const t = normEpitaph(raw);
+            if (!t) return;
+            setPlateSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([raw])));
+            setPlateCustomText("");
+          }}
+          onRemovePlateEpitaph={(text) => {
+            setPlateSelectedEpitaphs((prev) => {
+              const idx = indexOfByNorm(prev, text);
+              return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
+            });
+          }}
           catsLoading={catsLoading}
           catsError={catsError}
           cats={cats}
@@ -1662,7 +1842,7 @@ useEffect(() => {
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Статус доставки</div>
               <div style={{ display: "grid", gap: 6 }}>
                 <div>
-                  <span style={{ opacity: 0.85 }}>Топбар (панель) — </span>
+                  <span style={{ opacity: 0.85 }}>Топбар (кнопка+панель) — </span>
                   <strong style={{ color: topbarDelivered == null ? "#ccc" : topbarDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {topbarDelivered == null ? "—" : topbarDelivered ? "да" : "нет"}
                   </strong>
