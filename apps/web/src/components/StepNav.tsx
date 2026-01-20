@@ -230,11 +230,13 @@ export default function StepNav({
     if (!el) return;
 
     const measure = () => {
-      const h = Math.ceil(el.getBoundingClientRect().height || 0);
-      try {
-        document.documentElement.style.setProperty(heightCssVar, `${h}px`);
-      } catch {}
-    };
+  const raw = Math.ceil(el.getBoundingClientRect().height || 0);
+  const safe = Math.max(0, Math.min(raw, 80)); // 80px — верхний предел, подберите при желании
+  try {
+    document.documentElement.style.setProperty(heightCssVar, `${safe}px`);
+  } catch {}
+};
+
 
     measure();
     const ro = new ResizeObserver(measure);
