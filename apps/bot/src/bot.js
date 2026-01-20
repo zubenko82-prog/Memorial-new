@@ -196,7 +196,7 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
 // Инлайн-клавиатуры под постом канала
 function channelPostKbFull(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
-  const webAppUrl = new URL(WEBAPP_URL).origin;
+  const webAppUrl = new URL(WEBAPP_URL).toString();
   return Markup.inlineKeyboard([
     [
       Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
@@ -207,11 +207,12 @@ function channelPostKbFull(botUsername, sourceToken) {
 
 function channelPostKbFallback(botUsername, sourceToken) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  const webAppUrl = new URL(WEBAPP_URL).toString();
   return Markup.inlineKeyboard([
     [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)],
+    [Markup.button.url('Подобрать памятник', webAppUrl)],
   ]);
 }
-
 
 // Отправка поста в канал сразу с reply_markup; если web_app не принимается — fallback (URL)
 async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
