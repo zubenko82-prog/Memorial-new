@@ -2,30 +2,28 @@
 //
 // Шаг «Обзор и подтверждение»
 //
-// ИСПРАВЛЕНИЯ ПО ЗАПРОСУ:
-// 1) Топбар открывается при входе на шаг и держится открытым:
-//    - делаем "force open" через событие memorial:openTopBarPanel в цикле
-//    - цикл останавливаем, когда видим, что в DOM появился раскрытый panel ([data-topbar-panel="1"])
-//    - на focus/visibilitychange снова принудительно открываем
-//    ВАЖНО: это не требует изменения TopBarWithIntro и не зависит от ack-события.
+// ВАЖНО/СДЕЛАНО:
+// 1) Топбар открывается при входе и держится открытым.
+//    Надёжность достигается так:
+//    - ReviewAndSendStep постоянно шлёт событие memorial:openTopBarPanel
+//    - TopBarWithIntro должен уметь открываться от этого события
+//    - Для детекта "открыт" используем data-topbar-open="1" на элементе панели
+//      (это надо добавить в TopBarWithIntro: data-topbar-open={open ? "1":"0"}).
 //
-// 2) Блок «Выбрано для плиты» переносим ПОД аккордеон «Надгробная плита» (внутрь PlateBlock),
-//    выделяем обводкой красной толщины 1px (как прочие).
-//    Добавляем возможность удалить выбранную графику (кнопка × у элемента).
-//
-// 3) Исправляем удаление эпитафий на плите:
-//    - раньше удаление могло не работать из-за key={t} (для одинаковых строк) и/или рассинхронизации.
-//    - теперь key стабильный: `${idx}-${normEpitaph(t)}`
-//    - persist в draft.extras всегда обновляет extras.plateEpitaph/plateEpitaphs и диспатчит DRAFT_UPDATED_EVENT
-//
-// 4) Топбар теперь видит изменения эпитафий плиты и графики, потому что мы:
-//    - сохраняем в localStorage через saveOrderDraft
-//    - диспатчим DRAFT_UPDATED_EVENT после каждого save (TopBarWithIntro слушает его)
-//
-// 5) Скриншот включает и кнопку TopBarWithIntro, и раскрытую панель:
-//    - TopBarWithIntro обёрнут в #topbar-shot-root
+// 2) Скриншот захватывает и кнопку TopBarWithIntro, и раскрытую панель:
+//    - оборачиваем TopBarWithIntro в #topbar-shot-root
 //    - снимаем #topbar-shot-root
-//    - перед скрином дополнительно принудительно открываем и ждём появления data-topbar-panel="1"
+//    - перед скрином ждём открытия data-topbar-open="1"
+//
+// 3) Плита:
+//    - аккордеон "Надгробная плита" синхронизирован с чекбоксом (open == extraPlate)
+//    - эпитафии плиты как список, многострочная = один элемент
+//    - хранение в draft.extras: plateEpitaph (1) / plateEpitaphs (>1), очистка при 0
+//    - блок "Выбрано для плиты" внутри аккордеона, с красной рамкой 1px
+//      и с удалением графики + удалением эпитафий (кнопки ×)
+//
+// 4) После любых сохранений в draft — диспатчим DRAFT_UPDATED_EVENT,
+//    чтобы TopBarWithIntro перечитал драфт и обновился.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -309,7 +307,6 @@ function PlateBlock(props: {
   plateOrientation: string;
   setPlateOrientation: (v: string) => void;
 
-  // Epitaph list UI
   plateSelectedEpitaphs: string[];
   setPlateSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
   plateShowMore: boolean;
@@ -594,17 +591,16 @@ function PlateBlock(props: {
       >
         {extraPlate && (
           <div style={{ display: "grid", gap: 12 }}>
-            {/* ПОД АККОРДЕОНОМ "НАДГРОБНАЯ ПЛИТА" — блок выбранного (с красной рамкой) */}
-            <div
-              style={{
-                ...sectionBox,
-                border: "1px solid rgba(255,80,80,0.95)" // красная, толщина 1px
-              }}
-            >
+            {/* Выбрано для плиты (красная рамка) */}
+            <div style={{ ...sectionBox, border: "1px solid rgba(255,80,80,0.95)" }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано для плиты</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                <div><strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}</div>
-                <div><strong>Ширина:</strong> {extractPlateWidthText()}</div>
+                <div>
+                  <strong>Размер:</strong> {(plateSize === "Свой вариант" ? plateCustomSize : plateSize) || "—"}
+                </div>
+                <div>
+                  <strong>Ширина:</strong> {extractPlateWidthText()}
+                </div>
               </div>
 
               {chosenPlateList.length > 0 && (
@@ -620,7 +616,10 @@ function PlateBlock(props: {
                         <button
                           type="button"
                           title="Удалить"
-                          onClick={() => onRemoveChosenPlateItem(String(g.id || g.name || g.url || ""))}
+                          onClick={() => {
+                            onRemoveChosenPlateItem(String(g.id || g.name || g.url || ""));
+                            markDirty();
+                          }}
                           style={{
                             ...glassButtonStyle("nano"),
                             padding: "6px 10px",
@@ -635,11 +634,37 @@ function PlateBlock(props: {
                 </div>
               )}
 
+              {/* Удаление эпитафий прямо из блока "Выбрано для плиты" */}
               {plateEpitaphList.length > 0 && (
                 <div style={{ display: "grid", gap: 6 }}>
                   {plateEpitaphList.map((t, idx) => (
-                    <div key={`plate-ep-preview-${idx}-${normEpitaph(t)}`} style={{ ...sectionBox, padding: 8 }}>
+                    <div
+                      key={`plate-ep-preview-${idx}-${normEpitaph(t)}`}
+                      style={{
+                        ...sectionBox,
+                        padding: 8,
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        gap: 10,
+                        alignItems: "start"
+                      }}
+                    >
                       <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                      <button
+                        type="button"
+                        title="Удалить эпитафию"
+                        onClick={() => {
+                          onRemovePlateEpitaph(t);
+                          markDirty();
+                        }}
+                        style={{
+                          ...glassButtonStyle("nano"),
+                          padding: "6px 10px",
+                          borderColor: "rgba(255,80,80,0.9)"
+                        }}
+                      >
+                        ×
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -728,7 +753,7 @@ function PlateBlock(props: {
               </div>
             </div>
 
-            {/* ===== Эпитафии на плите ===== */}
+            {/* Эпитафии на плите */}
             <LoudAccordion title="Эпитафии на плите" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ ...sectionBox }}>
@@ -879,6 +904,7 @@ function PlateBlock(props: {
               </div>
             </LoudAccordion>
 
+            {/* Графика на плите */}
             <LoudAccordion title="Графика на плите" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
               {catsLoading && <div>Загрузка каталога…</div>}
               {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
@@ -996,18 +1022,21 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
   }, []);
 
-  // ===== Force open TopBarWithIntro & keep open (DOM-based) =====
+  // ===== Force open TopBarWithIntro & keep open (requires TopBar data-topbar-open) =====
   useEffect(() => {
     let alive = true;
 
-    const isOpen = () => !!document.querySelector('[data-topbar-panel="1"]');
+    const isOpen = () => {
+      const el = document.querySelector('[data-topbar-panel="1"]') as HTMLElement | null;
+      return el?.getAttribute("data-topbar-open") === "1";
+    };
+
     const openTopbar = () => {
       try {
         window.dispatchEvent(new Event("memorial:openTopBarPanel"));
       } catch {}
     };
 
-    // Запускаем частые попытки, пока не увидим DOM-панель
     openTopbar();
     const timer = window.setInterval(() => {
       if (!alive) return;
@@ -1124,10 +1153,8 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const initialPlateSelected = useMemo(() => {
     const d = loadOrderDraft();
     const ex: any = (d as any)?.extras || {};
-
     const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
     const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
-
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
 
@@ -1147,6 +1174,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     const exNext: any = { ...exPrev };
     delete exNext.plateEpitaph;
     delete exNext.plateEpitaphs;
+    delete exNext.plateEpitaphTexts;
 
     if (list.length === 1) {
       exNext.plateEpitaph = list[0];
@@ -1387,19 +1415,21 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         window.dispatchEvent(new Event("memorial:openTopBarPanel"));
       } catch {}
     };
-    const isOpen = () => !!document.querySelector('[data-topbar-panel="1"]');
+    const isOpen = () => {
+      const el = document.querySelector('[data-topbar-panel="1"]') as HTMLElement | null;
+      return el?.getAttribute("data-topbar-open") === "1";
+    };
 
     openTopbar();
 
     const start = Date.now();
-    while (Date.now() - start < 900) {
+    while (Date.now() - start < 1200) {
       if (isOpen()) break;
       await sleep(120);
       openTopbar();
     }
 
-    // небольшой запас под анимацию/перерисовку
-    await sleep(150);
+    await sleep(160);
   }
 
   function findTopBarShotRootNode(): HTMLElement | null {
@@ -1555,7 +1585,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // 4) Эскиз (тыльная) — только если showBack=true
+      // 4) Эскиз (тыльная)
       if (showBack && backCandidateUrl) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backCandidateUrl);
         setBackSketchDelivered(backRes.ok);
@@ -1646,7 +1676,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     isSending ? "Отправляем заказ…" :
     isSaving ? "Формируем PDF…" : "";
 
-  // ===== Remove chosen plate graphic from selection (remove ONE occurrence) =====
+  // Remove ONE occurrence of chosen plate graphic id
   const removeChosenPlateOne = (gidRaw: string) => {
     const gid = String(gidRaw || "").trim();
     if (!gid) return;
@@ -1677,7 +1707,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <TopBarWithIntro title="Обзор и отправка" />
       </div>
 
-      {/* Аккордеоны: Дополнительно/Плита */}
+      {/* Аккордеоны */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <PlateBlock
           extraPlate={extraPlate}
@@ -1840,7 +1870,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         </div>
       </section>
 
-      {/* Эскиз тыльной — только если не пустой */}
+      {/* Эскиз тыльной */}
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>

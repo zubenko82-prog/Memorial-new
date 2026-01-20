@@ -374,6 +374,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   } catch {}
 }, [open]);
 
+// внутри компонента TopBarWithIntro, рядом с другими useEffect:
+useEffect(() => {
+  const onOpen = () => setOpen(true);
+  window.addEventListener("memorial:openTopBarPanel", onOpen as any);
+  return () => window.removeEventListener("memorial:openTopBarPanel", onOpen as any);
+}, []);
 
   // Линия контактная (только телефон)
   const phoneLine = useMemo(() => {
@@ -584,11 +590,13 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
       {/* Панель */}
       <div
-        id={panelId}
-        data-topbar-panel="1"
-        ref={coll.ref}
-        style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
-      >
+  id={panelId}
+  data-topbar-panel="1"
+  data-topbar-open={open ? "1" : "0"}
+  ref={coll.ref}
+  style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
+>
+
         <section style={{ background: p.panelBg, border: p.panelBorder, borderRadius: compact ? 10 : 12, color: p.text, ...paperShadow(theme), padding: compact ? 8 : 12, display: "grid", gap: compact ? 8 : 10 }}>
           {/* Действия */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
