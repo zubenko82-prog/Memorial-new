@@ -963,26 +963,7 @@ useEffect(() => {
   };
 }, []);
 
-
-  // На всякий случай: если вернулись на вкладку/экран — снова открыть
-  const onFocus = () => openTopbar();
-  const onVisible = () => {
-    if (document.visibilityState === "visible") openTopbar();
-  };
-  window.addEventListener("focus", onFocus);
-  document.addEventListener("visibilitychange", onVisible);
-
-  return () => {
-    alive = false;
-    clearTimeout(t1);
-    clearTimeout(t2);
-    clearTimeout(t3);
-    window.removeEventListener("focus", onFocus);
-    document.removeEventListener("visibilitychange", onVisible);
-  };
-}, []);
-
-  // ===== Back sketch: detect "empty" by actual image size =====
+// ===== Back sketch: detect "empty" by actual image size =====
   function getBackSketchUrl(d: any): string | null {
     const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
     if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
