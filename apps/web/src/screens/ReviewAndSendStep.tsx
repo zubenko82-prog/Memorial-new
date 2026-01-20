@@ -920,6 +920,40 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
   }, []);
 
+// Держим TopBarWithIntro раскрытым на этом шаге (для клиента и для скриншота)
+useEffect(() => {
+  let alive = true;
+
+  const openTopbar = () => {
+    try {
+      window.dispatchEvent(new Event("memorial:openTopBarPanel"));
+    } catch {}
+  };
+
+  // Сразу и с повтором (чтобы пережить задержки рендера/гидратации)
+  openTopbar();
+  const t1 = window.setTimeout(() => alive && openTopbar(), 120);
+  const t2 = window.setTimeout(() => alive && openTopbar(), 420);
+  const t3 = window.setTimeout(() => alive && openTopbar(), 900);
+
+  // На всякий случай: если вернулись на вкладку/экран — снова открыть
+  const onFocus = () => openTopbar();
+  const onVisible = () => {
+    if (document.visibilityState === "visible") openTopbar();
+  };
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisible);
+
+  return () => {
+    alive = false;
+    clearTimeout(t1);
+    clearTimeout(t2);
+    clearTimeout(t3);
+    window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisible);
+  };
+}, []);
+
   // ===== Back sketch: detect "empty" by actual image size =====
   function getBackSketchUrl(d: any): string | null {
     const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
@@ -1303,11 +1337,12 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   }
 
   async function ensureTopBarPanelOpenForShot(): Promise<void> {
-    try {
-      window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-    } catch {}
-    await sleep(420);
-  }
+  try {
+    window.dispatchEvent(new Event("memorial:openTopBarPanel"));
+  } catch {}
+  await sleep(420);
+}
+
 
   function findTopBarShotRootNode(): HTMLElement | null {
     return document.getElementById("topbar-shot-root");
