@@ -956,11 +956,11 @@ useEffect(() => {
               </div>
 
               {/* Эпитафии плиты — добавлено, подложка насыщеннее */}
-              {plateEpitaphLines.length > 0 && (
+              {plateEpitaphItems.length > 0 && (
   <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
     <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
     <div style={epitaphListStyle()}>
-      {plateEpitaphLines.map((t, idx) => (
+      {plateEpitaphItems.map((t, idx) => (
         <div key={`plate-ep-${idx}`} style={epitaphItemStyle(theme)}>
           <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
         </div>
