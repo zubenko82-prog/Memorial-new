@@ -872,38 +872,47 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   // rear preview generation
   useEffect(() => {
-    let alive = true;
-    const run = async () => {
-      const d = loadOrderDraft();
-      const eb: any = (d as any)?.editorBack || {};
-      const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
-      const meta: Record<string, any> = eb.graphicsMeta || {};
-      const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
+  let alive = true;
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
-      const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
+  const run = async () => {
+    const d = loadOrderDraft();
+    const eb: any = (d as any)?.editorBack || {};
+    const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+    const meta: Record<string, any> = eb.graphicsMeta || {};
+    const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
 
-      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
-      if (!hasRear) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
+    const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
+    const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
 
-      const mini = await renderStackedPreview({ W: 900, H: 1200, bg: { type: "gradient" }, graphics: graphicsUniq, epitaphs });
-      const big = await renderStackedPreview({ W: 1600, H: 2200, bg: { type: "gradient" }, graphics: graphicsUniq, epitaphs });
-
-      if (!alive) return;
-      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
+    const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
+    if (!hasRear) {
+      saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
       dispatchDraftUpdated();
-    };
+      return;
+    }
 
-    const t = window.setTimeout(() => void run(), 380);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [rearIds, rearMeta, rearSelectedEpitaphs]);
+    const mini = await renderStackedPreview({
+      W: 900,
+      H: 1200,
+      bg: { type: "gradient" },
+      graphics: graphicsUniq,
+      epitaphs
+    });
+
+    if (!alive) return;
+
+    // SAFE: no hi-res
+    saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: null } as any });
+    dispatchDraftUpdated();
+  };
+
+  const t = window.setTimeout(() => void run(), 800);
+  return () => {
+    alive = false;
+    clearTimeout(t);
+  };
+}, [rearIds, rearMeta, rearSelectedEpitaphs]);
+
 
   /* =========================
    * PLATE (extras) state
@@ -1030,40 +1039,49 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   // plate preview generation
   useEffect(() => {
-    let alive = true;
-    const run = async () => {
-      const d = loadOrderDraft();
-      const ex: any = (d as any)?.extras || {};
-      const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
-      const meta: Record<string, any> = ex.plateGraphicsMeta || {};
+  let alive = true;
 
-      const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
-      const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
-      const epitaphs = [...one, ...arr].map((s) => String(s || "").trim()).filter(Boolean);
+  const run = async () => {
+    const d = loadOrderDraft();
+    const ex: any = (d as any)?.extras || {};
+    const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
+    const meta: Record<string, any> = ex.plateGraphicsMeta || {};
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
+    const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
+    const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
+    const epitaphs = [...one, ...arr].map((s) => String(s || "").trim()).filter(Boolean);
 
-      const hasPlate = !!ex.headstonePlate && (graphicsUniq.length > 0 || epitaphs.length > 0);
-      if (!hasPlate) {
-        saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
+    const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
 
-      const mini = await renderStackedPreview({ W: 900, H: 1200, bg: { type: "image", url: PLATE_BG_URL }, graphics: graphicsUniq, epitaphs });
-      const big = await renderStackedPreview({ W: 1600, H: 2200, bg: { type: "image", url: PLATE_BG_URL }, graphics: graphicsUniq, epitaphs });
-
-      if (!alive) return;
-      saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: big || null } as any });
+    const hasPlate = !!ex.headstonePlate && (graphicsUniq.length > 0 || epitaphs.length > 0);
+    if (!hasPlate) {
+      saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
       dispatchDraftUpdated();
-    };
+      return;
+    }
 
-    const t = window.setTimeout(() => void run(), 420);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
+    const mini = await renderStackedPreview({
+      W: 900,
+      H: 1200,
+      bg: { type: "image", url: PLATE_BG_URL },
+      graphics: graphicsUniq,
+      epitaphs
+    });
+
+    if (!alive) return;
+
+    // SAFE: no hi-res
+    saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: null } as any });
+    dispatchDraftUpdated();
+  };
+
+  const t = window.setTimeout(() => void run(), 800);
+  return () => {
+    alive = false;
+    clearTimeout(t);
+  };
+}, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
+
 
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
