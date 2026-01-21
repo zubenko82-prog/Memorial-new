@@ -369,4 +369,10 @@ function PlateBlock(props: {
   plateSize: string;
   setPlateSize: (v: string) => void;
   plateCustomSize: string;
-  setPlateCustomSize: (v: string) => точный путь и типы; у вас он был `../components/PhotoField`).
+  setPlateCustomSize: (v: string) => void;
+}) {
+  // временная заглушка, чтобы файл компилировался.
+  // ВАЖНО: дальше нужно вернуть полный PlateBlock (тело функции и остальные поля props),
+  // потому что сейчас ваш файл ОБРЕЗАН и заканчивается посреди объявления.
+  return null as any;
+}
