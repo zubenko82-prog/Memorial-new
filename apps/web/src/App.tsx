@@ -5,11 +5,14 @@ import SizeStep from "./screens/SizeStep";
 import EngravingStep from "./screens/EngravingStep";
 import GraphicsStep from "./screens/GraphicsStep";
 import EpitaphStep from "./screens/EpitaphStep";
-import BackEditorStep from "./screens/BackEditorStep";
+// import BackEditorStep from "./screens/BackEditorStep";
 import ReviewAndSendStep from "./screens/ReviewAndSendStep";
 
 import StepNav from "./components/StepNav";
 import { STEPS, type StepId } from "./wizard/steps";
+import React, { useEffect, useLayoutEffect, useMemo, useState, lazy, Suspense } from "react";
+
+const BackEditorStepLazy = lazy(() => import("./screens/BackEditorStep"));
 
 type Step =
   | "start"
@@ -63,9 +66,10 @@ const localStepFromId = (id: StepId): Step => {
     case "epitaph":
       return "epitaph";
     case "editor":
-      return "editorBack";
-    case "rear":
-      return "editorBack";
+  return "review";
+case "rear":
+  return "review";
+
     case "extras":
       return "review";
     case "finish":
@@ -317,7 +321,7 @@ export default function App() {
   const onEpitaphSave = (data: any) => setDecor((prev: any) => ({ ...(prev || {}), ...data }));
   const onEpitaphDone = (data: any) => {
     setDecor((prev: any) => ({ ...(prev || {}), ...data }));
-    setStep("editorBack");
+    setStep("review");
   };
 
   const onBackEditorBack = () => setStep("epitaph");
@@ -410,8 +414,11 @@ export default function App() {
       )}
 
       {step === "editorBack" && (
-        <BackEditorStep onBack={onBackEditorBack} onContinue={(payload) => onBackEditorDone(payload)} />
-      )}
+  <Suspense fallback={<div style={{ padding: 16 }}>Загрузка…</div>}>
+    <BackEditorStepLazy onBack={onBackEditorBack} onContinue={(payload) => onBackEditorDone(payload)} />
+  </Suspense>
+)}
+
 
       {step === "review" && <ReviewAndSendStep onBack={onReviewBack} onSend={onReviewSend} />}
 
