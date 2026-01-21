@@ -2,14 +2,15 @@
 // Шапка-кнопка с раскрывающейся панелью заказа.
 // Эпитафии отображаются в разделе «Элементы эскиза» (лицевая/тыльная) + добавлены эпитафии плиты.
 //
-// ВАЖНЫЕ ФИКСЫ (чтобы в топбаре эпитафии плиты корректно добавлялись/удалялись):
+// ВАЖНЫЕ ФИКСЫ (чтобы в топбаре эпитафии корректно добавлялись/удалялись на ВСЕХ шагах):
 // 1) Для плиты читаем ТОЛЬКО extras.plateEpitaph и extras.plateEpitaphs (НЕ plateEpitaphTexts),
 //    иначе "старые" значения могут оставаться и казаться, что удаление не работает.
 // 2) Эпитафия плиты = один элемент списка, даже если многострочная (НЕ split по \n).
-// 3) На DRAFT_UPDATED_EVENT всегда refreshAll({force:true}), чтобы UI не "залипал".
+// 3) На DRAFT_UPDATED_EVENT всегда refreshAll({force:true}).
 // 4) Поддержка принудительного открытия панели: слушаем "memorial:openTopBarPanel" -> setOpen(true).
 // 5) Для детекта открытости (скрин/автооткрытие) ставим data-topbar-open={open?"1":"0"} на panel root.
 // 6) Все эпитафии (лицевая/тыльная/плита) отображаются раздельно (каждая в рамке).
+// 7) Дополнительно: пока панель открыта — polling draft (каждые 300мс), чтобы Telegram WebView не "терял" обновления.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
@@ -177,7 +178,17 @@ function linkButtonStyle(theme: ThemeMode, kind: "default" | "danger" = "default
   };
 }
 
-function Row({ label, theme, children, compact = false }: { label: string; theme: ThemeMode; children: React.ReactNode; compact?: boolean }) {
+function Row({
+  label,
+  theme,
+  children,
+  compact = false
+}: {
+  label: string;
+  theme: ThemeMode;
+  children: React.ReactNode;
+  compact?: boolean;
+}) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: `${compact ? 120 : 160}px 1fr`, gap: compact ? 8 : 10, alignItems: "center" }}>
       <div style={{ color: palette(theme).text }}>{label}</div>
@@ -401,26 +412,25 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   }, []);
 
   // ✅ Надёжная синхронизация для Telegram WebApp:
-// пока панель открыта — регулярно перечитываем draft из localStorage.
-// Это убирает "то обновилось, то нет" на всех шагах (эпитафии/графика/люди и т.д.)
-useEffect(() => {
-  if (!open) return;
+  // пока панель открыта — регулярно перечитываем draft из localStorage.
+  useEffect(() => {
+    if (!open) return;
 
-  let alive = true;
-  const tick = () => {
-    if (!alive) return;
-    const fresh = loadOrderDraft();
-    setOrder(fresh);
-  };
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      const fresh = loadOrderDraft();
+      setOrder(fresh);
+    };
 
-  tick();
-  const t = window.setInterval(tick, 300);
+    tick();
+    const t = window.setInterval(tick, 300);
 
-  return () => {
-    alive = false;
-    clearInterval(t);
-  };
-}, [open]);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [open]);
 
   // Контактная линия (телефон)
   const phoneLine = useMemo(() => {
@@ -474,8 +484,15 @@ useEffect(() => {
     [order]
   );
 
-  const frontHasSketch = (frontUnique && frontUnique.length > 0) || (frontEpitaphs && frontEpitaphs.length > 0) || (frontWishes && frontWishes.trim().length > 0);
-  const rearHasSketch = (rearUnique && rearUnique.length > 0) || (rearEpitaphs && rearEpitaphs.length > 0) || (backWishes && backWishes.trim().length > 0);
+  const frontHasSketch =
+    (frontUnique && frontUnique.length > 0) ||
+    (frontEpitaphs && frontEpitaphs.length > 0) ||
+    (frontWishes && frontWishes.trim().length > 0);
+
+  const rearHasSketch =
+    (rearUnique && rearUnique.length > 0) ||
+    (rearEpitaphs && rearEpitaphs.length > 0) ||
+    (backWishes && backWishes.trim().length > 0);
 
   // Extras (плита)
   const extras: any = (order as any)?.extras || {};
@@ -493,11 +510,10 @@ useEffect(() => {
 
   // ✅ ВАЖНО: читаем эпитафии плиты ТОЛЬКО из plateEpitaph / plateEpitaphs
   const plateEpitaphItems = useMemo(() => {
-  const a = normalizeEpitaphItems(extras.plateEpitaph);
-  const b = normalizeEpitaphItems(extras.plateEpitaphs);
-  return uniqByNorm([...a, ...b]);
-}, [extras.plateEpitaph, extras.plateEpitaphs]);
-
+    const a = normalizeEpitaphItems(extras.plateEpitaph);
+    const b = normalizeEpitaphItems(extras.plateEpitaphs);
+    return uniqByNorm([...a, ...b]);
+  }, [extras.plateEpitaph, extras.plateEpitaphs]);
 
   // Дополнительно (строка)
   const extrasParts = useMemo(() => {
@@ -775,117 +791,116 @@ useEffect(() => {
           </section>
 
           {/* Люди */}
-{(order.engraving?.persons?.length || 0) > 0 && (
-  <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-    <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
-      <span style={chip(theme)}>Люди на памятнике</span>
-      {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
-    </div>
+          {(order.engraving?.persons?.length || 0) > 0 && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
+                <span style={chip(theme)}>Люди на памятнике</span>
+                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
+              </div>
 
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"),
-        gap: 16
-      }}
-    >
-      {/* Лицевая */}
-      <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
-        {order.engraving?.persons?.length ? (
-          <div style={{ display: "grid", gap: 0 }}>
-            {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
-              const last = idx === (order.engraving?.persons?.length || 0) - 1;
-              const fio1 = (ppl.lastName || "").trim();
-              const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-              const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
-              return (
-                <div
-                  key={ppl.id || `person-front-${idx}`}
-                  style={{
-                    padding: "8px 0",
-                    borderBottom: last ? "none" : palette(theme).divider,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10
-                  }}
-                >
-                  <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                    <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
-                      {ppl.photoPreview ? (
-                        <img
-                          src={ppl.photoPreview}
-                          alt="Фото"
-                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
-                        />
-                      ) : (
-                        <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
-                      )}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"),
+                  gap: 16
+                }}
+              >
+                {/* Лицевая */}
+                <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
+                  {order.engraving?.persons?.length ? (
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
+                        const last = idx === (order.engraving?.persons?.length || 0) - 1;
+                        const fio1 = (ppl.lastName || "").trim();
+                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+                        return (
+                          <div
+                            key={ppl.id || `person-front-${idx}`}
+                            style={{
+                              padding: "8px 0",
+                              borderBottom: last ? "none" : palette(theme).divider,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10
+                            }}
+                          >
+                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                                {ppl.photoPreview ? (
+                                  <img
+                                    src={ppl.photoPreview}
+                                    alt="Фото"
+                                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
+                                  />
+                                ) : (
+                                  <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ color: palette(theme).subText }}>—</div>
+                  )}
+                </div>
+
+                {/* Тыльная */}
+                {(order as any)?.editorBack?.people?.length > 0 && (
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
+                        const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
+                        const fio1 = (ppl.lastName || "").trim();
+                        const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+                        return (
+                          <div
+                            key={ppl.id || `person-back-${idx}`}
+                            style={{
+                              padding: "8px 0",
+                              borderBottom: last ? "none" : palette(theme).divider,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10
+                            }}
+                          >
+                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                                {ppl.photoPreview ? (
+                                  <img
+                                    src={ppl.photoPreview}
+                                    alt="Фото"
+                                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
+                                  />
+                                ) : (
+                                  <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                  <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                    {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                    {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
-                    <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div style={{ color: palette(theme).subText }}>—</div>
-        )}
-      </div>
-
-      {/* Тыльная */}
-      {(order as any)?.editorBack?.people?.length > 0 && (
-        <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
-          <div style={{ display: "grid", gap: 0 }}>
-            {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
-              const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
-              const fio1 = (ppl.lastName || "").trim();
-              const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
-              const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
-              return (
-                <div
-                  key={ppl.id || `person-back-${idx}`}
-                  style={{
-                    padding: "8px 0",
-                    borderBottom: last ? "none" : palette(theme).divider,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10
-                  }}
-                >
-                  <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                    <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
-                      {ppl.photoPreview ? (
-                        <img
-                          src={ppl.photoPreview}
-                          alt="Фото"
-                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
-                        />
-                      ) : (
-                        <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                    {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                    {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
-                    <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  </section>
-)}
-
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Элементы эскиза */}
           {(frontHasSketch || rearHasSketch) && (
