@@ -1,12 +1,15 @@
 // src/components/TopBarWithIntro.tsx
 // Шапка-кнопка с раскрывающейся панелью заказа.
-// Эпитафии теперь отображаются в разделе «Элементы эскиза» (для лицевой и тыльной сторон).
+// Эпитафии отображаются в разделе «Элементы эскиза» (лицевая/тыльная) + добавлены эпитафии плиты.
 //
-// ИЗМЕНЕНИЯ ТОЛЬКО ПО ОФОРМЛЕНИЮ + ДОБАВЛЕНО (НЕ УДАЛЯЯ ЭЛЕМЕНТЫ):
-// 1) Добавлено отображение эпитафий надгробной плиты (extras.plateEpitaph / plateEpitaphs / plateEpitaphTexts)
-// 2) Ниже добавлена строка "Дополнительно: Цветник: ... · Тумба: ... · Ваза: ..."
-// 3) Все эпитафии (лицевая/тыльная/плита) выделены более насыщенной подложкой
-// 4) Подложка под миниатюрами изображений: rgba(0,0,0,0.4)
+// ВАЖНЫЕ ФИКСЫ (чтобы в топбаре эпитафии плиты корректно добавлялись/удалялись):
+// 1) Для плиты читаем ТОЛЬКО extras.plateEpitaph и extras.plateEpitaphs (НЕ plateEpitaphTexts),
+//    иначе "старые" значения могут оставаться и казаться, что удаление не работает.
+// 2) Эпитафия плиты = один элемент списка, даже если многострочная (НЕ split по \n).
+// 3) На DRAFT_UPDATED_EVENT всегда refreshAll({force:true}), чтобы UI не "залипал".
+// 4) Поддержка принудительного открытия панели: слушаем "memorial:openTopBarPanel" -> setOpen(true).
+// 5) Для детекта открытости (скрин/автооткрытие) ставим data-topbar-open={open?"1":"0"} на panel root.
+// 6) Все эпитафии (лицевая/тыльная/плита) отображаются раздельно (каждая в рамке).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
@@ -15,6 +18,7 @@ import { loadOrderDraft, saveOrderDraft, clearOrderDraft, type OrderDraft, DRAFT
 /* ===== Темизация ===== */
 type ThemeMode = "dark" | "light";
 const LS_THEME_KEY = "memorial.ui.theme.v1";
+
 function loadTheme(): ThemeMode {
   const v = (typeof localStorage !== "undefined" ? localStorage.getItem(LS_THEME_KEY) : null) || "light";
   return v?.toLowerCase() === "dark" ? "dark" : "light";
@@ -111,35 +115,20 @@ function inputStyle(theme: ThemeMode): React.CSSProperties {
   };
 }
 
-// ПОДЛОЖКА ПОД МИНИАТЮРЫ: rgba(0,0,0,0.4)
 function thumbBackdropStyle(theme: ThemeMode): React.CSSProperties {
-  const p = palette(theme);
   return {
     borderRadius: 10,
     background: "rgba(0,0,0,0.4)",
-    border: tEq(theme, "light") ? "1px solid rgba(0,0,0,0.18)" : "1px solid rgba(255,255,255,0.14)",
+    border: theme === "light" ? "1px solid rgba(0,0,0,0.18)" : "1px solid rgba(255,255,255,0.14)",
     padding: 4,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     boxSizing: "border-box"
   };
-
-  function tEq(a: ThemeMode, b: ThemeMode) { return a === b; }
 }
 
-// БОЛЕЕ НАСЫЩЕННАЯ ПОДЛОЖКА ДЛЯ ЭПИТАФИЙ
-function epitaphBackdropStyle(theme: ThemeMode): React.CSSProperties {
-  const p = palette(theme);
-  // немного насыщеннее, чем accentBg: делаем чуть более плотный фон и контур
-  return {
-    background: theme === "light" ? "rgba(255, 232, 170, 0.85)" : "rgba(255, 232, 170, 0.22)",
-    border: theme === "light" ? "1px solid rgba(160, 110, 0, 0.35)" : "1px solid rgba(255,255,255,0.22)",
-    borderRadius: 10,
-    padding: 8,
-    color: p.text
-  };
-}
+// Карточки эпитафий (отдельно каждая)
 function epitaphItemStyle(theme: ThemeMode): React.CSSProperties {
   const p = palette(theme);
   return {
@@ -150,11 +139,10 @@ function epitaphItemStyle(theme: ThemeMode): React.CSSProperties {
     color: p.text
   };
 }
-
-// 2) (опционально) контейнер списка эпитафий
 function epitaphListStyle(): React.CSSProperties {
   return { display: "grid", gap: 6 };
 }
+
 function galleryThumbBoxStyle(): React.CSSProperties {
   const grad: React.CSSProperties = {
     backgroundColor: "#000000",
@@ -172,6 +160,7 @@ function galleryThumbBoxStyle(): React.CSSProperties {
     position: "relative"
   };
 }
+
 function linkButtonStyle(theme: ThemeMode, kind: "default" | "danger" = "default", disabled = false): React.CSSProperties {
   const p = palette(theme);
   const color = kind === "danger" ? p.danger : p.link;
@@ -187,6 +176,7 @@ function linkButtonStyle(theme: ThemeMode, kind: "default" | "danger" = "default
     lineHeight: 1.2
   };
 }
+
 function Row({ label, theme, children, compact = false }: { label: string; theme: ThemeMode; children: React.ReactNode; compact?: boolean }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: `${compact ? 120 : 160}px 1fr`, gap: compact ? 8 : 10, alignItems: "center" }}>
@@ -195,6 +185,7 @@ function Row({ label, theme, children, compact = false }: { label: string; theme
     </div>
   );
 }
+
 function fileNameFromUrl(url?: string): string {
   if (!url) return "";
   try {
@@ -205,15 +196,13 @@ function fileNameFromUrl(url?: string): string {
     return url;
   }
 }
+
 function glassPanelStyle(themeParam?: ThemeMode): React.CSSProperties {
   const t = themeParam ?? loadTheme();
   const p = palette(t);
   return { background: p.neutralBg, border: p.neutralBorder, borderRadius: 10, color: p.text };
 }
-function accentPanelStyle(theme: ThemeMode): React.CSSProperties {
-  const p = palette(theme);
-  return { background: p.accentBg, border: p.accentBorder, borderRadius: 10, padding: 8 };
-}
+
 function chip(theme: ThemeMode): React.CSSProperties {
   const p = palette(theme);
   return {
@@ -241,6 +230,7 @@ function useCollapse(open: boolean, duration = 280) {
     const el = ref.current;
     if (!el) return;
     const h = el.scrollHeight;
+
     if (open) {
       setStyle({
         overflow: "hidden",
@@ -254,6 +244,7 @@ function useCollapse(open: boolean, duration = 280) {
       }, duration + 20);
       return () => clearTimeout(t);
     }
+
     setStyle({
       overflow: "hidden",
       maxHeight: 0,
@@ -276,22 +267,37 @@ function cmValue(n?: number): string {
   return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
 }
 
-// Нормализация эпитафий плиты (поддержим строку и массив)
+/**
+ * Нормализация эпитафий плиты:
+ * - если массив — каждый элемент = одна эпитафия (может быть многострочной)
+ * - если строка — это ОДНА эпитафия целиком (НЕ split по '\n')
+ */
 function normalizeEpitaphItems(input: any): string[] {
   if (!input) return [];
-
-  // если массив — каждый элемент = одна эпитафия (может быть многострочной)
   if (Array.isArray(input)) {
     return input
       .map((s) => String(s || "").replace(/\r\n?/g, "\n").trim())
       .filter(Boolean);
   }
-
-  // если строка — это ОДНА эпитафия целиком (даже если многострочная)
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
   return t ? [t] : [];
 }
 
+function uniqByNorm(items: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of items) {
+    const key = String(x || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[ \t]+$/gm, "")
+      .trim();
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(String(x || "").replace(/\r\n?/g, "\n").trim());
+  }
+  return out;
+}
 
 /* ===== Компонент ===== */
 export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
@@ -314,43 +320,47 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [contactNotes, setContactNotes] = useState(intro?.customerNotes || "");
   const [sizeNotes, setSizeNotes] = useState(order.size?.notes || "");
   const [epitaphsText, setEpitaphsText] = useState(
-    (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) ||
-      order.engraving?.epitaphText ||
-      ""
+    (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) || order.engraving?.epitaphText || ""
   );
   const [orderNotes, setOrderNotes] = useState((order as any).notes || "");
   const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
   const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
 
-  // Единая синхронизация (всегда подтягиваем актуальные значения)
-  const refreshAll = React.useCallback((opts?: { force?: boolean }) => {
-    const freshOrder = loadOrderDraft();
-    const freshIntroState = loadIntroState();
+  // Синхронизация: всегда обновляем order/intro, а формы — если не editing или force
+  const refreshAll = React.useCallback(
+    (opts?: { force?: boolean }) => {
+      const freshOrder = loadOrderDraft();
+      const freshIntroState = loadIntroState();
 
-    setOrder(freshOrder);
-    setIntroData(freshIntroState);
+      setOrder(freshOrder);
+      setIntroData(freshIntroState);
 
-    if (!editing || opts?.force) {
-      const i = freshIntroState.intro || {};
-      setName(i.customerName || "");
-      setPhone(i.customerPhone || "");
-      setContactNotes(i.customerNotes || "");
+      if (!editing || opts?.force) {
+        const i = freshIntroState.intro || {};
+        setName(i.customerName || "");
+        setPhone(i.customerPhone || "");
+        setContactNotes(i.customerNotes || "");
 
-      setSizeNotes(freshOrder.size?.notes || "");
-      setEpitaphsText(
-        (freshOrder.engraving?.epitaphs && freshOrder.engraving!.epitaphs!.join("\n")) ||
-          freshOrder.engraving?.epitaphText ||
-          ""
-      );
-      setOrderNotes((freshOrder as any).notes || "");
-      setFrontWishes((freshOrder as any)?.editor?.wishes || "");
-      setBackWishes((freshOrder as any)?.editorBack?.wishes || "");
-    }
-  }, [editing]);
+        setSizeNotes(freshOrder.size?.notes || "");
+        setEpitaphsText(
+          (freshOrder.engraving?.epitaphs && freshOrder.engraving!.epitaphs!.join("\n")) ||
+            freshOrder.engraving?.epitaphText ||
+            ""
+        );
+        setOrderNotes((freshOrder as any).notes || "");
+        setFrontWishes((freshOrder as any)?.editor?.wishes || "");
+        setBackWishes((freshOrder as any)?.editorBack?.wishes || "");
+      }
+    },
+    [editing]
+  );
 
+  // Подписки на обновления: всегда force, чтобы не было "то обновилось, то нет"
   useEffect(() => {
-    const onAny = () => refreshAll();
-    const onVisible = () => { if (document.visibilityState === "visible") refreshAll({ force: true }); };
+    const onAny = () => refreshAll({ force: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshAll({ force: true });
+    };
 
     window.addEventListener("storage", onAny);
     window.addEventListener("memorial:orderDraftUpdated", onAny as any);
@@ -370,49 +380,58 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     };
   }, [refreshAll]);
 
+  // Если панель открыта — обновим на всякий случай
   useEffect(() => {
     if (open) refreshAll({ force: true });
   }, [open, refreshAll]);
 
-
+  // Сообщаем наружу, что панель раскрылась (для ReviewAndSendStep, если нужно)
   useEffect(() => {
-  if (!open) return;
-  try {
-    window.dispatchEvent(new Event("memorial:topbarOpened"));
-  } catch {}
-}, [open]);
+    if (!open) return;
+    try {
+      window.dispatchEvent(new Event("memorial:topbarOpened"));
+    } catch {}
+  }, [open]);
 
-// внутри компонента TopBarWithIntro, рядом с другими useEffect:
-useEffect(() => {
-  const onOpen = () => setOpen(true);
-  window.addEventListener("memorial:openTopBarPanel", onOpen as any);
-  return () => window.removeEventListener("memorial:openTopBarPanel", onOpen as any);
-}, []);
+  // Принудительное открытие панели по событию
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener("memorial:openTopBarPanel", onOpen as any);
+    return () => window.removeEventListener("memorial:openTopBarPanel", onOpen as any);
+  }, []);
 
-  // Линия контактная (только телефон)
+  // Контактная линия (телефон)
   const phoneLine = useMemo(() => {
     const b = (editing ? phone : intro?.customerPhone) || "";
     return b;
   }, [editing, phone, intro?.customerPhone]);
 
-  // Графика (лицевая/тыльная)
+  // Графика (лицевая)
   const frontGraphics = (order.graphics || []) as any[];
   const frontCountsById = useMemo(() => {
     const m: Record<string, number> = {};
-    frontGraphics.forEach((g: any) => { if (g?.id) m[g.id] = (m[g.id] || 0) + 1; });
+    frontGraphics.forEach((g: any) => {
+      if (g?.id) m[g.id] = (m[g.id] || 0) + 1;
+    });
     return m;
   }, [frontGraphics]);
   const frontUnique = useMemo(() => {
     const first: Record<string, any> = {};
-    frontGraphics.forEach((g: any) => { const id = g?.id; if (id && !first[id]) first[id] = g; });
+    frontGraphics.forEach((g: any) => {
+      const id = g?.id;
+      if (id && !first[id]) first[id] = g;
+    });
     return Object.values(first);
   }, [frontGraphics]);
 
+  // Графика (тыльная)
   const rearSelectedIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
   const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
   const rearCountsById = useMemo(() => {
     const m: Record<string, number> = {};
-    (rearSelectedIds || []).forEach((id) => { m[id] = (m[id] || 0) + 1; });
+    (rearSelectedIds || []).forEach((id) => {
+      m[id] = (m[id] || 0) + 1;
+    });
     return m;
   }, [rearSelectedIds]);
   const rearUnique = useMemo(() => {
@@ -420,78 +439,55 @@ useEffect(() => {
     return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
   }, [rearSelectedIds, rearMeta]);
 
-  // Эпитафии (фронт/тыл)
+  // Эпитафии (лицевая/тыльная)
   const frontEpitaphs: string[] = useMemo(() => {
     const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
     if (arr.length) return arr;
     if (order.engraving?.epitaphText?.trim()) return [order.engraving!.epitaphText!.trim()];
     return [];
   }, [order.engraving]);
+
   const rearEpitaphs: string[] = useMemo(
     () => (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean),
     [order]
   );
 
-  const frontHasSketch =
-    (frontUnique && frontUnique.length > 0) ||
-    (frontEpitaphs && frontEpitaphs.length > 0) ||
-    (frontWishes && frontWishes.trim().length > 0);
-  const rearHasSketch =
-    (rearUnique && rearUnique.length > 0) ||
-    (rearEpitaphs && rearEpitaphs.length > 0) ||
-    (backWishes && backWishes.trim().length > 0);
+  const frontHasSketch = (frontUnique && frontUnique.length > 0) || (frontEpitaphs && frontEpitaphs.length > 0) || (frontWishes && frontWishes.trim().length > 0);
+  const rearHasSketch = (rearUnique && rearUnique.length > 0) || (rearEpitaphs && rearEpitaphs.length > 0) || (backWishes && backWishes.trim().length > 0);
 
   // Extras (плита)
   const extras: any = (order as any)?.extras || {};
   const plateEnabled: boolean = !!extras.headstonePlate;
   const plateIds: string[] = (extras.plateGraphicsIds as string[]) || [];
   const plateMeta: Record<string, any> = (extras.plateGraphicsMeta as Record<string, any>) || {};
-  const plateEpitaph: string = (extras.plateEpitaph as string) || "";
   const plateSize = extras.plateSize as string | undefined;
   const plateThickness = extras.plateThickness as string | undefined;
   const plateOrientation = extras.plateOrientation as string | undefined;
+
   const plateChosen = useMemo(() => {
     const uniq = Array.from(new Set(plateIds || []));
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta]);
 
-  // NEW: Эпитафии плиты (поддержим несколько полей)
+  // ✅ ВАЖНО: читаем эпитафии плиты ТОЛЬКО из plateEpitaph / plateEpitaphs
   const plateEpitaphItems = useMemo(() => {
-  const a = normalizeEpitaphItems(extras.plateEpitaph);
-  const b = normalizeEpitaphItems(extras.plateEpitaphs);
+    const a = normalizeEpitaphItems(extras.plateEpitaph);
+    const b = normalizeEpitaphItems(extras.plateEpitaphs);
+    return uniqByNorm([...a, ...b]);
+  }, [extras.plateEpitaph, extras.plateEpitaphs]);
 
-  // plateEpitaphTexts можно поддержать, но тоже как items, НЕ split
-  const c = normalizeEpitaphItems(extras.plateEpitaphTexts);
-
-  const merged = [...a, ...b, ...c]
-    .map((s) => String(s || "").replace(/\r\n?/g, "\n").trim())
-    .filter(Boolean);
-
-  // уникальность по нормализованному тексту (как у вас в шаге)
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const t of merged) {
-    const key = t.replace(/[ \t]+$/gm, "").trim();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(t);
-  }
-  return out;
-}, [extras.plateEpitaph, extras.plateEpitaphs, extras.plateEpitaphTexts]);
-
-
-  // NEW: Дополнительно строкой
+  // Дополнительно (строка)
   const extrasParts = useMemo(() => {
-  const tumba = (extras.tumba ?? true) ? true : false;
-  const flowerbed = !!extras.flowerbed;
-  const vase = !!extras.vase;
+    const tumba = (extras.tumba ?? true) ? true : false;
+    const flowerbed = !!extras.flowerbed;
+    const vase = !!extras.vase;
+    return { tumba, flowerbed, vase };
+  }, [extras.tumba, extras.flowerbed, extras.vase]);
 
-  return { tumba, flowerbed, vase };
-}, [extras.tumba, extras.flowerbed, extras.vase]);
-
-  // Сохранение (патч + принудительный refresh)
+  // Сохранение (редактирование контактных/пожеланий и т.п.)
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+
     const introNext: Intro = {
       customerName: (name || "").trim(),
       customerPhone: (phone || "").trim(),
@@ -523,6 +519,7 @@ useEffect(() => {
 
   // Очистка
   const [isClearing, setIsClearing] = useState(false);
+
   function makeEmptyDraft(): OrderDraft {
     return {
       item: null as any,
@@ -536,10 +533,12 @@ useEffect(() => {
       updatedAt: Date.now()
     } as OrderDraft;
   }
+
   async function handleClearAll() {
     if (isClearing) return;
     const ok = window.confirm("Очистить ВСЕ данные заказа, включая номер заявки и усопших? Действие необратимо.");
     if (!ok) return;
+
     setIsClearing(true);
     try {
       await clearOrderDraft();
@@ -550,16 +549,25 @@ useEffect(() => {
       } catch {}
       setEditing(false);
       setOpen(false);
+
       const blank = makeEmptyDraft();
       setOrder(blank);
       setIntroData({ intro: {}, orderNumber: undefined } as any);
-      setName(""); setPhone(""); setContactNotes("");
-      setSizeNotes(""); setEpitaphsText(""); setOrderNotes("");
-      setFrontWishes(""); setBackWishes("");
+
+      setName("");
+      setPhone("");
+      setContactNotes("");
+      setSizeNotes("");
+      setEpitaphsText("");
+      setOrderNotes("");
+      setFrontWishes("");
+      setBackWishes("");
+
       try {
         window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
         window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
       } catch {}
+
       setTimeout(() => refreshAll({ force: true }), 0);
     } finally {
       setIsClearing(false);
@@ -605,7 +613,17 @@ useEffect(() => {
             {(editing ? name : intro?.customerName) || "—"}
           </div>
           {phoneLine && (
-            <div style={{ fontSize: compact ? 12 : 13, opacity: 0.92, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: compact ? "56vw" : "50vw" }} title={phoneLine}>
+            <div
+              style={{
+                fontSize: compact ? 12 : 13,
+                opacity: 0.92,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: compact ? "56vw" : "50vw"
+              }}
+              title={phoneLine}
+            >
               {phoneLine}
             </div>
           )}
@@ -614,14 +632,24 @@ useEffect(() => {
 
       {/* Панель */}
       <div
-  id={panelId}
-  data-topbar-panel="1"
-  data-topbar-open={open ? "1" : "0"}
-  ref={coll.ref}
-  style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
->
-
-        <section style={{ background: p.panelBg, border: p.panelBorder, borderRadius: compact ? 10 : 12, color: p.text, ...paperShadow(theme), padding: compact ? 8 : 12, display: "grid", gap: compact ? 8 : 10 }}>
+        id={panelId}
+        data-topbar-panel="1"
+        data-topbar-open={open ? "1" : "0"}
+        ref={coll.ref}
+        style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
+      >
+        <section
+          style={{
+            background: p.panelBg,
+            border: p.panelBorder,
+            borderRadius: compact ? 10 : 12,
+            color: p.text,
+            ...paperShadow(theme),
+            padding: compact ? 8 : 12,
+            display: "grid",
+            gap: compact ? 8 : 10
+          }}
+        >
           {/* Действия */}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
             <button
@@ -633,19 +661,18 @@ useEffect(() => {
                 saveTheme(next);
               }}
               style={linkButtonStyle(theme)}
-              className="link-like"
             >
               {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
             </button>
+
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                if (editing) { saveAll(); }
+                if (editing) saveAll();
                 setEditing((v) => !v);
               }}
               style={linkButtonStyle(theme)}
-              className="link-like"
             >
               {editing ? "Сохранить" : "Редактировать"}
             </button>
@@ -661,9 +688,14 @@ useEffect(() => {
               {editing ? (
                 compact ? (
                   <div style={{ display: "grid", gap: 6 }}>
-                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Имя" style={{ ...inputStyle(theme) }} />
-                    <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7..." inputMode="tel" style={{ ...inputStyle(theme) }} />
-                    <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} placeholder="Примечание (мессенджер, время...)" style={{ ...inputStyle(theme) }} />
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Имя" style={inputStyle(theme)} />
+                    <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7..." inputMode="tel" style={inputStyle(theme)} />
+                    <input
+                      value={contactNotes}
+                      onChange={(e) => setContactNotes(e.target.value)}
+                      placeholder="Примечание (мессенджер, время...)"
+                      style={inputStyle(theme)}
+                    />
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: 8 }}>
@@ -692,7 +724,9 @@ useEffect(() => {
                 <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
                   {order.item?.url ? (
                     <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
-                  ) : <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>}
+                  ) : (
+                    <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>
+                  )}
                 </div>
                 <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
@@ -725,69 +759,22 @@ useEffect(() => {
                 {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"), gap: 16 }}>
-                {/* Лицевая */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"),
+                  gap: 16
+                }}
+              >
                 <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
-                  {order.engraving?.persons?.length ? (
-                    <div style={{ display: "grid", gap: 0 }}>
-                      {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
-                        const last = idx === (order.engraving?.persons?.length || 0) - 1;
-                        const fio1 = (ppl.lastName || "").trim();
-                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
-                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
-                        return (
-                          <div key={ppl.id || `person-front-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                              {/* подложка под миниатюру */}
-                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
-                                {ppl.photoPreview ? (
-                                  <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }} />
-                                ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
-                              </div>
-                            </div>
-                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
-                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div style={{ color: palette(theme).subText }}>—</div>
-                  )}
+                  <div style={{ color: palette(theme).subText, fontSize: 12 }}>См. выбор людей на предыдущих шагах</div>
                 </div>
 
-                {/* Тыльная */}
                 {(order as any)?.editorBack?.people?.length > 0 && (
                   <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
-                    <div style={{ display: "grid", gap: 0 }}>
-                      {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
-                        const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
-                        const fio1 = (ppl.lastName || "").trim();
-                        const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
-                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
-                        return (
-                          <div key={ppl.id || `person-back-${idx}`} style={{ padding: "8px 0", borderBottom: last ? "none" : palette(theme).divider, display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
-                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
-                                {ppl.photoPreview ? (
-                                  <img src={ppl.photoPreview} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }} />
-                                ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
-                              </div>
-                            </div>
-                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
-                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
-                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <div style={{ color: palette(theme).subText, fontSize: 12 }}>См. выбор людей на предыдущих шагах</div>
                   </div>
                 )}
               </div>
@@ -798,7 +785,7 @@ useEffect(() => {
           {(frontHasSketch || rearHasSketch) && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
-                <span style={chip(theme)}></span>
+                <span style={chip(theme)}>Элементы эскиза</span>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"), gap: 16 }}>
@@ -807,18 +794,16 @@ useEffect(() => {
                   <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
 
-                    {/* Графика (лицевая) */}
                     {frontGraphics.length > 0 && (
                       <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
                         {frontUnique.map((g: any) => {
                           const qty = g?.id ? (frontCountsById[g.id] || 0) : 0;
                           return (
-                            <div key={`fg-${g.id || Math.random()}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
-                              {/* подложка под миниатюру */}
+                            <div key={`fg-${g.id || fileNameFromUrl(g.url)}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
                               <div style={{ ...thumbBackdropStyle(theme), width: 64, height: 64 }}>
                                 {g.url ? (
-                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block", objectFit: "contain", borderRadius: 8 }} />
+                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
                                 ) : (
                                   <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
                                 )}
@@ -836,22 +821,19 @@ useEffect(() => {
                       </div>
                     )}
 
-                    {/* Эпитафии (лицевая) — подложка насыщеннее */}
                     {frontEpitaphs.length > 0 && (
-  <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
-    <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
-    <div style={epitaphListStyle()}>
-      {frontEpitaphs.map((t, idx) => (
-        <div key={`front-ep-${idx}`} style={epitaphItemStyle(theme)}>
-          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+                        <div style={epitaphListStyle()}>
+                          {frontEpitaphs.map((t, idx) => (
+                            <div key={`front-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                              <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-
-                    {/* Пожелания (лицевая) */}
                     {frontWishes.trim() && (
                       <div>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
@@ -866,18 +848,18 @@ useEffect(() => {
                   <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
 
-                    {/* Графика (тыльная) */}
                     {rearUnique.length > 0 && (
                       <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
                         <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
                         {rearUnique.map((g: any, i: number) => {
                           const gid = g?.id || g?.relPath || g?.url || g?.name || `rear-${i}`;
                           const qty = rearCountsById[gid] || 0;
+
                           return (
                             <div key={`rg-${gid}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
                               <div style={{ ...thumbBackdropStyle(theme), width: 64, height: 64 }}>
                                 {g.url ? (
-                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block", objectFit: "contain", borderRadius: 8 }} />
+                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
                                 ) : (
                                   <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
                                 )}
@@ -895,22 +877,19 @@ useEffect(() => {
                       </div>
                     )}
 
-                    {/* Эпитафии (тыльная) — подложка насыщеннее */}
                     {rearEpitaphs.length > 0 && (
-  <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
-    <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
-    <div style={epitaphListStyle()}>
-      {rearEpitaphs.map((t, idx) => (
-        <div key={`rear-ep-${idx}`} style={epitaphItemStyle(theme)}>
-          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+                        <div style={epitaphListStyle()}>
+                          {rearEpitaphs.map((t, idx) => (
+                            <div key={`rear-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                              <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-
-                    {/* Пожелания (тыльная) */}
                     {backWishes.trim() && (
                       <div>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
@@ -923,10 +902,11 @@ useEffect(() => {
             </section>
           )}
 
-          {/* Плита (extras) */}
-          {(!!plateEnabled) && (
+          {/* Плита */}
+          {plateEnabled && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита — выбрано</div>
+
               {(plateSize || plateThickness || plateOrientation) && (
                 <div style={{ marginBottom: 8, opacity: 0.95 }}>
                   {plateSize && <div>Размер: {plateSize}</div>}
@@ -934,6 +914,7 @@ useEffect(() => {
                   {plateOrientation && <div>Ориентация: {plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
                 </div>
               )}
+
               <div style={{ display: "grid", gap: 8 }}>
                 {plateChosen.length > 0 ? (
                   plateChosen.map((g: any, i: number) => (
@@ -942,7 +923,9 @@ useEffect(() => {
                         <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
                           {g.url ? (
                             <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
-                          ) : <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>}
+                          ) : (
+                            <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                          )}
                         </div>
                       </div>
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -955,41 +938,27 @@ useEffect(() => {
                 )}
               </div>
 
-              {/* Эпитафии плиты — добавлено, подложка насыщеннее */}
               {plateEpitaphItems.length > 0 && (
-  <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
-    <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
-    <div style={epitaphListStyle()}>
-      {plateEpitaphItems.map((t, idx) => (
-        <div key={`plate-ep-${idx}`} style={epitaphItemStyle(theme)}>
-          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+                <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
+                  <div style={epitaphListStyle()}>
+                    {plateEpitaphItems.map((t, idx) => (
+                      <div key={`plate-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-
-              {/* Дополнительно — строка */}
               <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
-  <span style={{ opacity: 0.9 }}>Дополнительно: </span>
-
-  <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>
-     - Тумба: {extrasParts.tumba ? "да" : "нет"}
-  . </span>
-
-  <span style={{ opacity: 0.7 }}>{"  "}</span>
-
-  <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>
-     - Цветник: {extrasParts.flowerbed ? "да" : "нет"}
-  . </span>
-
-  <span style={{ opacity: 0.7 }}>{"  "}</span>
-
-  <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>
-     - Ваза: {extrasParts.vase ? "да" : "нет"}
-  .</span>
-</div>
+                <span style={{ opacity: 0.9 }}>Дополнительно: </span>
+                <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>Тумба: {extrasParts.tumba ? "да" : "нет"}</span>
+                <span style={{ opacity: 0.7 }}> · </span>
+                <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>Цветник: {extrasParts.flowerbed ? "да" : "нет"}</span>
+                <span style={{ opacity: 0.7 }}> · </span>
+                <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>Ваза: {extrasParts.vase ? "да" : "нет"}</span>
+              </div>
             </section>
           )}
 
@@ -1002,7 +971,6 @@ useEffect(() => {
                 void handleClearAll();
               }}
               style={linkButtonStyle(theme, "danger", isClearing)}
-              className="link-like"
               title="Очистить все данные (с подтверждением)"
               disabled={isClearing}
             >
