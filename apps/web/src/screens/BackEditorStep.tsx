@@ -2,24 +2,16 @@
 //
 // Шаг «Тыл»
 //
-// Что есть в этом файле:
-// 1) Блок "Дополнительно" (extras): Тумба / Цветник / Ваза (чекбоксы)
-// 2) Блок "Тыльная сторона" — визуально и по поведению как "плита":
-//    - чекбокс включения/выключения
-//    - "Выбрано" (красная рамка): выбранная графика + эпитафии с удалением
-//    - аккордеоны: Эпитафии, Графика
-//    - при выключении: чистим editorBack.* и preview
-//    - preview тыла: только мини (900×1200), без hi-res, чтобы не ловить OOM
-//      + overlay силуэт из item.url (зеркалим и заливаем по контуру)
-// 3) Блок "Надгробная плита" — такой же UI:
-//    - чекбокс включения/выключения (extras.headstonePlate)
-//    - "Выбрано", "Эпитафии", "Графика"
-//    - preview плиты: только мини (900×1200), без hi-res
+// Требование:
+// - Скопировать блок "Надгробная плита" (стили/верстка/поведение: Выбрано + Эпитафии + Графика-каталог)
+// - Адаптировать под "Тыльная сторона" (пишем в draft.editorBack)
+// - Два блока должны быть визуально одинаковые
+// - Аккордеон "усопшие" для тыла пока не делаем
 //
-// ВАЖНО:
-// - "Усопшие" для тыла пока не делаем.
-// - Генерация превью делается в ДВУХ разных useEffect (rear отдельно, plate отдельно) — это исправляет вашу ошибку сборки.
-// - Силуэт может не построиться из-за CORS на item.url. Тогда overlay просто будет null (превью всё равно сформируется).
+// Превью:
+// - Тыл: draft.editorBack.previewUrl/previewHiUrl (генерим из тыл-графики + тыл-эпитафий)
+// - Плита: draft.extras.platePreviewUrl/platePreviewHiUrl (генерим из plate-графики + plate-эпитафий) с фоном из PLATE_BG_URL
+// - Если элементов нет — previewUrl/previewHiUrl = null
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -198,117 +190,6 @@ function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H: number; mirrorX?: boolean }): Promise<string | null> {
-  const { src, W, H, mirrorX } = params;
-  const baseImg = await loadImageSafe(src);
-  if (!baseImg) return null;
-
-  const iw = baseImg.naturalWidth || baseImg.width;
-  const ih = baseImg.naturalHeight || baseImg.height;
-
-  // contain geometry
-  const sr = iw / ih;
-  const dr = W / H;
-  let rw = W,
-    rh = H,
-    rx = 0,
-    ry = 0;
-  if (sr > dr) {
-    rh = Math.round(W / sr);
-    ry = Math.round((H - rh) / 2);
-  } else {
-    rw = Math.round(H * sr);
-    rx = Math.round((W - rw) / 2);
-  }
-
-  const off = document.createElement("canvas");
-  off.width = rw;
-  off.height = rh;
-  const octx = off.getContext("2d");
-  if (!octx) return null;
-  octx.clearRect(0, 0, rw, rh);
-  octx.drawImage(baseImg, 0, 0, rw, rh);
-
-  const imgData = octx.getImageData(0, 0, rw, rh);
-  const d = imgData.data;
-
-  let hasUsefulAlpha = false;
-  for (let i = 3; i < d.length; i += 4) {
-    if (d[i] !== 255) {
-      hasUsefulAlpha = true;
-      break;
-    }
-  }
-
-  const mask = octx.createImageData(rw, rh);
-  const md = mask.data;
-
-  if (hasUsefulAlpha) {
-    for (let i = 0; i < d.length; i += 4) {
-      const A = d[i + 3];
-      const alpha = A > 10 ? 255 : 0;
-      md[i + 0] = 0;
-      md[i + 1] = 0;
-      md[i + 2] = 0;
-      md[i + 3] = alpha;
-    }
-  } else {
-    const pxAt = (x: number, y: number) => {
-      const idx = (y * rw + x) * 4;
-      return [d[idx], d[idx + 1], d[idx + 2]] as [number, number, number];
-    };
-    const corners = [pxAt(0, 0), pxAt(rw - 1, 0), pxAt(0, rh - 1), pxAt(rw - 1, rh - 1)];
-    const bg = corners
-      .reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number], [0, 0, 0])
-      .map((v) => Math.round(v / 4)) as [number, number, number];
-
-    const BG_DELTA = 26;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i + 0],
-        g = d[i + 1],
-        b = d[i + 2];
-      const diff = Math.max(Math.abs(r - bg[0]), Math.abs(g - bg[1]), Math.abs(b - bg[2]));
-      const alpha = diff > BG_DELTA ? 255 : 0;
-      md[i + 0] = 0;
-      md[i + 1] = 0;
-      md[i + 2] = 0;
-      md[i + 3] = alpha;
-    }
-  }
-
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = rw;
-  maskCanvas.height = rh;
-  const mctx = maskCanvas.getContext("2d");
-  if (!mctx) return null;
-  mctx.putImageData(mask, 0, 0);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.save();
-
-  if (mirrorX) {
-    ctx.translate(W, 0);
-    ctx.scale(-1, 1);
-  }
-
-  ctx.fillStyle = "#1b1b1b";
-  ctx.fillRect(0, 0, W, H);
-  ctx.globalCompositeOperation = "destination-in";
-
-  const drawX = mirrorX ? W - (rx + rw) : rx;
-  ctx.drawImage(maskCanvas, drawX, ry);
-
-  ctx.restore();
-
-  return canvas.toDataURL("image/png");
-}
-
 function wrapLinesCanvas(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
   const out: string[] = [];
   const paras = String(text || "").split(/\r?\n/);
@@ -332,11 +213,10 @@ async function renderStackedPreview(params: {
   W: number;
   H: number;
   bg?: { type: "gradient" } | { type: "image"; url: string };
-  overlayPng?: string | null;
   graphics: { url?: string; preview?: string }[];
   epitaphs: string[];
 }): Promise<string | null> {
-  const { W, H, bg, overlayPng, graphics, epitaphs } = params;
+  const { W, H, bg, graphics, epitaphs } = params;
   if (W <= 0 || H <= 0) return null;
 
   const canvas = document.createElement("canvas");
@@ -345,7 +225,7 @@ async function renderStackedPreview(params: {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // background
+  // bg
   if (!bg || bg.type === "gradient") {
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, "#6e6e6e");
@@ -377,17 +257,13 @@ async function renderStackedPreview(params: {
     }
   }
 
-  if (overlayPng) {
-    const ov = await loadImageSafe(overlayPng);
-    if (ov) ctx.drawImage(ov, 0, 0, W, H);
-  }
-
   const items: { kind: "g" | "t"; url?: string; text?: string }[] = [];
   for (const g of graphics) items.push({ kind: "g", url: g.preview || g.url });
   for (const t of epitaphs) items.push({ kind: "t", text: t });
 
   if (items.length === 0) return null;
 
+  // layout
   const pad = Math.round(Math.min(W, H) * 0.06);
   const top = pad;
   const bottom = H - pad;
@@ -428,6 +304,7 @@ async function renderStackedPreview(params: {
       ctx.fillStyle = "#fff";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
+      // чуть уменьшили базовый множитель, чтобы не было "огромного текста"
       const fontSize = Math.max(12, Math.floor(r.h * 0.14));
       ctx.font = `${fontSize}px "Times New Roman", serif`;
       const maxW = r.w - 12;
@@ -448,12 +325,19 @@ async function renderStackedPreview(params: {
   return canvas.toDataURL("image/jpeg", 0.92);
 }
 
-/* ========= SideLikeBlock (rear/plate UI identical) ========= */
-function SideLikeBlock(props: {
+/* ========= SideLikePlateBlock =========
+   Универсальный блок (копия "Надгробной плиты") для:
+   - rear: пишет в draft.editorBack (rearGraphicsIds/rearGraphicsMeta + rearEpitaphs)
+   - plate: пишет в draft.extras (plateGraphicsIds/plateGraphicsMeta + plateEpitaph/plateEpitaphs)
+*/
+type SideKind = "rear" | "plate";
+
+function SideLikePlateBlock(props: {
   title: string;
   enabled: boolean;
   onToggleEnabled: (v: boolean) => void;
 
+  // epitaph state (UI)
   selectedEpitaphs: string[];
   setSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
   showMore: boolean;
@@ -465,6 +349,7 @@ function SideLikeBlock(props: {
   onRemoveEpitaph: (t: string) => void;
   epitaphList: string[];
 
+  // graphics state (UI)
   catsLoading: boolean;
   catsError: string;
   cats: any[];
@@ -508,6 +393,7 @@ function SideLikeBlock(props: {
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
+  // сетка каталога графики
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
   useEffect(() => {
@@ -617,7 +503,12 @@ function SideLikeBlock(props: {
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <input type="checkbox" checked={enabled} onChange={(e) => onToggleEnabled(e.target.checked)} onClick={(e) => e.stopPropagation()} />
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={(e) => onToggleEnabled(e.target.checked)}
+        onClick={(e) => e.stopPropagation()}
+      />
       <span>{title}</span>
     </label>
   );
@@ -626,7 +517,7 @@ function SideLikeBlock(props: {
     <LoudAccordion title={blockTitle} open={enabled} onToggle={() => onToggleEnabled(!enabled)}>
       {enabled && (
         <div style={{ display: "grid", gap: 12 }}>
-          {/* Выбрано */}
+          {/* Выбрано (красная рамка) */}
           <div style={{ ...sectionBoxStyle(), border: "1px solid rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано</div>
 
@@ -841,9 +732,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, []);
 
-  const itemUrl = String((draft as any)?.item?.url || "").trim();
-
-  /* ========= Shared catalog ========= */
+  /* ========= Shared catalog for both blocks ========= */
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
@@ -873,77 +762,48 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   useEffect(() => {
     if (!cats.length) return;
-    const init = (prev: Record<string, boolean>) => {
+    setCatOpenRear((prev) => {
       const next = { ...prev };
       for (const c of cats) {
         const key = String(c._id || c.name || "");
         if (!(key in next)) next[key] = false;
       }
       return next;
-    };
-    setCatOpenRear(init);
-    setCatOpenPlate(init);
+    });
+    setCatOpenPlate((prev) => {
+      const next = { ...prev };
+      for (const c of cats) {
+        const key = String(c._id || c.name || "");
+        if (!(key in next)) next[key] = false;
+      }
+      return next;
+    });
   }, [cats]);
 
   /* =========================
-   * Дополнительно (extras)
-   * ========================= */
-  const extras0: any = (draft as any)?.extras || {};
-  const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
-  const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
-  const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
-
-  /* =========================
-   * REAR (editorBack)
+   * REAR (editorBack) state
    * ========================= */
   const editorBack0: any = (draft as any)?.editorBack || {};
-  const [rearEnabled, setRearEnabled] = useState<boolean>(() => {
-    const eb: any = loadOrderDraft()?.editorBack || {};
-    return !!(eb?.selectedGraphicsIds?.length || eb?.epitaphTexts?.length || eb?.previewUrl);
-  });
-
+  const [rearEnabled, setRearEnabled] = useState<boolean>(true); // тыльная сторона всегда включена
   const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
   const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
   const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(((editorBack0.epitaphTexts as string[]) || []).filter(Boolean));
   const [rearShowMore, setRearShowMore] = useState(false);
   const [rearCustomText, setRearCustomText] = useState("");
 
-  // if rear disabled => clear editorBack
-  useEffect(() => {
-    if (rearEnabled) return;
-
-    saveOrderDraft({
-      editorBack: {
-        selectedGraphicsIds: null,
-        graphicsMeta: null,
-        epitaphTexts: null,
-        people: null,
-        previewUrl: null,
-        previewHiUrl: null
-      } as any
-    });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-
-    setRearIds([]);
-    setRearMeta({});
-    setRearSelectedEpitaphs([]);
-  }, [rearEnabled]);
-
-  // persist rear epitaphs (light)
+  // persist rear epitaphs
   const prevRearEpiJsonRef = useRef<string>("");
   useEffect(() => {
-    if (!rearEnabled) return;
     const list = uniqueByNorm(rearSelectedEpitaphs);
     const snapshot = JSON.stringify(list);
     if (snapshot === prevRearEpiJsonRef.current) return;
     prevRearEpiJsonRef.current = snapshot;
-
     saveOrderDraft({ editorBack: { epitaphTexts: list.length ? list : null } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
-  }, [rearEnabled, rearSelectedEpitaphs]);
+  }, [rearSelectedEpitaphs]);
 
+  // rear graphics helpers (+/- and meta)
   const rearCountsById = useMemo(() => {
     const m: Record<string, number> = {};
     rearIds.forEach((id) => (m[id] = (m[id] || 0) + 1));
@@ -951,37 +811,28 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [rearIds]);
 
   const addRearGraphic = (g: any) => {
-    if (!rearEnabled) return;
     const gid = String(g.id || g.relPath || g.url || g.name);
     if (!gid) return;
-
     const qty = rearCountsById[gid] || 0;
     if (qty >= 3) {
       window.alert("Нельзя добавить более трёх одинаковых изображений");
       return;
     }
-
     const nextIds = [...rearIds, gid];
     const nextMeta = { ...rearMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-
     setRearIds(nextIds);
     setRearMeta(nextMeta);
-
     saveOrderDraft({ editorBack: { selectedGraphicsIds: nextIds, graphicsMeta: nextMeta } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
   };
 
   const removeRearGraphic = (gid: string) => {
-    if (!rearEnabled) return;
     const idx = rearIds.findIndex((x) => x === gid);
     if (idx === -1) return;
-
     const nextIds = rearIds.slice();
     nextIds.splice(idx, 1);
-
     setRearIds(nextIds);
-
     saveOrderDraft({ editorBack: { selectedGraphicsIds: nextIds, graphicsMeta: rearMeta } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
@@ -992,8 +843,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return uniq.map((gid) => rearMeta[gid] || { id: gid, name: gid, url: "" });
   }, [rearIds, rearMeta]);
 
+  const removeRearChosenOne = (gidRaw: string) => removeRearGraphic(String(gidRaw || "").trim());
+
+  const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
+
   const toggleRearEpitaph = (text: string) => {
-    if (!rearEnabled) return;
     const t = normEpitaph(text);
     if (!t) return;
     setRearSelectedEpitaphs((prev) => {
@@ -1003,7 +857,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     });
   };
   const addRearCustom = () => {
-    if (!rearEnabled) return;
     const raw = (rearCustomText || "").trim();
     const t = normEpitaph(raw);
     if (!t) return;
@@ -1011,26 +864,16 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setRearCustomText("");
   };
   const removeRearEpitaph = (text: string) => {
-    if (!rearEnabled) return;
     setRearSelectedEpitaphs((prev) => {
       const idx = indexOfByNorm(prev, text);
       return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
     });
   };
 
-  const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
-
-  // ===== REAR PREVIEW EFFECT (separate!) =====
+  // rear preview generation
   useEffect(() => {
     let alive = true;
-
     const run = async () => {
-      if (!rearEnabled) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
-
       const d = loadOrderDraft();
       const eb: any = (d as any)?.editorBack || {};
       const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
@@ -1047,39 +890,31 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
-      // silhouette overlay from item.url (rear mirrored)
-      const overlay900 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 900, H: 1200, mirrorX: true }) : null;
-
-      // SAFE: only mini preview (no hi-res)
-      const mini = await renderStackedPreview({
-        W: 900,
-        H: 1200,
-        bg: { type: "gradient" },
-        overlayPng: overlay900,
-        graphics: graphicsUniq,
-        epitaphs
-      });
+      const mini = await renderStackedPreview({ W: 900, H: 1200, bg: { type: "gradient" }, graphics: graphicsUniq, epitaphs });
+      const big = await renderStackedPreview({ W: 1600, H: 2200, bg: { type: "gradient" }, graphics: graphicsUniq, epitaphs });
 
       if (!alive) return;
-
-      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: null } as any });
+      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
       dispatchDraftUpdated();
     };
 
-    const t = window.setTimeout(() => void run(), 600);
+    const t = window.setTimeout(() => void run(), 380);
     return () => {
       alive = false;
       clearTimeout(t);
     };
-  }, [rearEnabled, rearIds, rearMeta, rearSelectedEpitaphs, itemUrl]);
+  }, [rearIds, rearMeta, rearSelectedEpitaphs]);
 
   /* =========================
-   * PLATE (extras)
+   * PLATE (extras) state
    * ========================= */
+  const extras0: any = (draft as any)?.extras || {};
+
   const [plateEnabled, setPlateEnabled] = useState<boolean>(!!extras0.headstonePlate);
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
+  // plate epitaphs state (kept like you had: plateEpitaph or plateEpitaphs)
   const initialPlateSelected = useMemo(() => {
     const d = loadOrderDraft();
     const ex: any = (d as any)?.extras || {};
@@ -1091,6 +926,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
   const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
+
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
   // persist plate enabled
@@ -1098,6 +934,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     saveOrderDraft({ extras: { headstonePlate: plateEnabled } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plateEnabled]);
 
   // persist plate epitaphs
@@ -1126,6 +963,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setDraft(loadOrderDraft());
   }, [plateSelectedEpitaphs]);
 
+  // plate graphics add/remove
   const plateCountsById = useMemo(() => {
     const m: Record<string, number> = {};
     plateIds.forEach((id) => (m[id] = (m[id] || 0) + 1));
@@ -1133,37 +971,28 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [plateIds]);
 
   const addPlateGraphic = (g: any) => {
-    if (!plateEnabled) return;
     const gid = String(g.id || g.relPath || g.url || g.name);
     if (!gid) return;
-
     const qty = plateCountsById[gid] || 0;
     if (qty >= 3) {
       window.alert("Нельзя добавить более трёх одинаковых изображений");
       return;
     }
-
     const nextIds = [...plateIds, gid];
     const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-
     setPlateIds(nextIds);
     setPlateMeta(nextMeta);
-
     saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
   };
 
   const removePlateGraphic = (gid: string) => {
-    if (!plateEnabled) return;
     const idx = plateIds.findIndex((x) => x === gid);
     if (idx === -1) return;
-
     const nextIds = plateIds.slice();
     nextIds.splice(idx, 1);
-
     setPlateIds(nextIds);
-
     saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
@@ -1174,8 +1003,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
   }, [plateIds, plateMeta]);
 
+  const removePlateChosenOne = (gidRaw: string) => removePlateGraphic(String(gidRaw || "").trim());
+
   const togglePlateEpitaph = (text: string) => {
-    if (!plateEnabled) return;
     const t = normEpitaph(text);
     if (!t) return;
     setPlateSelectedEpitaphs((prev) => {
@@ -1185,7 +1015,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     });
   };
   const addPlateCustom = () => {
-    if (!plateEnabled) return;
     const raw = (plateCustomText || "").trim();
     const t = normEpitaph(raw);
     if (!t) return;
@@ -1193,21 +1022,18 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setPlateCustomText("");
   };
   const removePlateEpitaph = (text: string) => {
-    if (!plateEnabled) return;
     setPlateSelectedEpitaphs((prev) => {
       const idx = indexOfByNorm(prev, text);
       return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
     });
   };
 
-  // ===== PLATE PREVIEW EFFECT (separate!) =====
+  // plate preview generation
   useEffect(() => {
     let alive = true;
-
     const run = async () => {
       const d = loadOrderDraft();
       const ex: any = (d as any)?.extras || {};
-
       const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
       const meta: Record<string, any> = ex.plateGraphicsMeta || {};
 
@@ -1224,92 +1050,31 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
-      // SAFE: only mini preview (no hi-res)
-      const mini = await renderStackedPreview({
-        W: 900,
-        H: 1200,
-        bg: { type: "image", url: PLATE_BG_URL },
-        graphics: graphicsUniq,
-        epitaphs
-      });
+      const mini = await renderStackedPreview({ W: 900, H: 1200, bg: { type: "image", url: PLATE_BG_URL }, graphics: graphicsUniq, epitaphs });
+      const big = await renderStackedPreview({ W: 1600, H: 2200, bg: { type: "image", url: PLATE_BG_URL }, graphics: graphicsUniq, epitaphs });
 
       if (!alive) return;
-
-      saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: null } as any });
+      saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: big || null } as any });
       dispatchDraftUpdated();
     };
 
-    const t = window.setTimeout(() => void run(), 600);
+    const t = window.setTimeout(() => void run(), 420);
     return () => {
       alive = false;
       clearTimeout(t);
     };
-  }, [plateEnabled, plateIds, plateMeta, plateEpitaphList]);
+  }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
       <TopBarWithIntro title="Тыл" />
 
-      {/* Дополнительно */}
+      {/* 1) Тыльная сторона — визуальная копия "плиты" */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-        <LoudAccordion title="Дополнительно" open={true} onToggle={() => void 0}>
-          <div style={sectionBoxStyle()}>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={hasPedestal}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setHasPedestal(v);
-                    saveOrderDraft({ extras: { tumba: v } as any });
-                    dispatchDraftUpdated();
-                    setDraft(loadOrderDraft());
-                  }}
-                />
-                <span>Тумба</span>
-              </label>
-
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={hasFlowerbed}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setHasFlowerbed(v);
-                    saveOrderDraft({ extras: { flowerbed: v } as any });
-                    dispatchDraftUpdated();
-                    setDraft(loadOrderDraft());
-                  }}
-                />
-                <span>Цветник</span>
-              </label>
-
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={hasVase}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setHasVase(v);
-                    saveOrderDraft({ extras: { vase: v } as any });
-                    dispatchDraftUpdated();
-                    setDraft(loadOrderDraft());
-                  }}
-                />
-                <span>Ваза</span>
-              </label>
-            </div>
-          </div>
-        </LoudAccordion>
-      </section>
-
-      {/* Тыльная сторона */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        <SideLikeBlock
+        <SideLikePlateBlock
           title="Тыльная сторона"
           enabled={rearEnabled}
-          onToggleEnabled={setRearEnabled}
+          onToggleEnabled={(v) => setRearEnabled(v)} // можно позже сделать как чекбокс "нужна тыльная сторона"
           selectedEpitaphs={rearSelectedEpitaphs}
           setSelectedEpitaphs={setRearSelectedEpitaphs}
           showMore={rearShowMore}
@@ -1329,13 +1094,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           removeGraphic={removeRearGraphic}
           ids={rearIds}
           chosenList={rearChosenList}
-          onRemoveChosenItem={(gid) => removeRearGraphic(gid)}
+          onRemoveChosenItem={removeRearChosenOne}
         />
       </section>
 
-      {/* Надгробная плита */}
+      {/* 2) Надгробная плита — тот же самый блок (визуально 1-в-1) */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        <SideLikeBlock
+        <SideLikePlateBlock
           title="Надгробная плита"
           enabled={plateEnabled}
           onToggleEnabled={setPlateEnabled}
@@ -1358,7 +1123,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           removeGraphic={removePlateGraphic}
           ids={plateIds}
           chosenList={chosenPlateList}
-          onRemoveChosenItem={(gid) => removePlateGraphic(gid)}
+          onRemoveChosenItem={removePlateChosenOne}
         />
       </section>
 
