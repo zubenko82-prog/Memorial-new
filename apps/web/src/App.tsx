@@ -5,7 +5,7 @@ import SizeStep from "./screens/SizeStep";
 import EngravingStep from "./screens/EngravingStep";
 import GraphicsStep from "./screens/GraphicsStep";
 import EpitaphStep from "./screens/EpitaphStep";
-zimport BackEditorStep from "./screens/BackEditorStep";
+import BackEditorStep from "./screens/BackEditorStep";
 import ReviewAndSendStep from "./screens/ReviewAndSendStep";
 
 import StepNav from "./components/StepNav";
