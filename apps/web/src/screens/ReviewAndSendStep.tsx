@@ -2,28 +2,28 @@
 //
 // Шаг «Обзор и подтверждение»
 //
-// ВАЖНО/СДЕЛАНО:
+// ВАЖНО/СДЕЛАНО (с учётом нового saveOrderDraft из lib/order.ts, который умеет удалять поля через null):
 // 1) Топбар открывается при входе и держится открытым.
-//    Надёжность достигается так:
-//    - ReviewAndSendStep постоянно шлёт событие memorial:openTopBarPanel
-//    - TopBarWithIntro должен уметь открываться от этого события
-//    - Для детекта "открыт" используем data-topbar-open="1" на элементе панели
-//      (это надо добавить в TopBarWithIntro: data-topbar-open={open ? "1":"0"}).
+//    - ReviewAndSendStep шлёт событие memorial:openTopBarPanel
+//    - детект "открыт" через data-topbar-open="1" на панели TopBarWithIntro
 //
 // 2) Скриншот захватывает и кнопку TopBarWithIntro, и раскрытую панель:
-//    - оборачиваем TopBarWithIntro в #topbar-shot-root
-//    - снимаем #topbar-shot-root
+//    - #topbar-shot-root
 //    - перед скрином ждём открытия data-topbar-open="1"
 //
 // 3) Плита:
 //    - аккордеон "Надгробная плита" синхронизирован с чекбоксом (open == extraPlate)
 //    - эпитафии плиты как список, многострочная = один элемент
-//    - хранение в draft.extras: plateEpitaph (1) / plateEpitaphs (>1), очистка при 0
-//    - блок "Выбрано для плиты" внутри аккордеона, с красной рамкой 1px
-//      и с удалением графики + удалением эпитафий (кнопки ×)
+//    - хранение в draft.extras: plateEpitaph (1) / plateEpitaphs (>1)
+//    - очистка при 0: plateEpitaph=null, plateEpitaphs=null (+ plateEpitaphTexts=null на всякий случай)
 //
 // 4) После любых сохранений в draft — диспатчим DRAFT_UPDATED_EVENT,
 //    чтобы TopBarWithIntro перечитал драфт и обновился.
+//
+// КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ПРОТИВ "ВОЗВРАЩАЮТСЯ ПРИ ПЕРЕХОДЕ":
+// - больше не делаем saveOrderDraft({ ...prev, extras: ... }) (снапшот всего драфта)
+// - делаем только патчи: saveOrderDraft({ extras: { ... } as any })
+// - для удаления используем null (поскольку saveOrderDraft теперь умеет удалять поля)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -1020,9 +1020,10 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     window.addEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
     refresh();
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===== Force open TopBarWithIntro & keep open (requires TopBar data-topbar-open) =====
+  // ===== Force open TopBarWithIntro & keep open =====
   useEffect(() => {
     let alive = true;
 
@@ -1164,28 +1165,31 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
-  // Persist plate epitaphs to draft.extras (+ dispatch event so TopBar refreshes)
+  // Persist plate epitaphs to draft.extras (патчами; удаление через null)
   const prevPlateEpiJsonRef = useRef<string>("");
   useEffect(() => {
     const list = uniqueByNorm(plateSelectedEpitaphs);
-    const prevAll = loadOrderDraft();
-    const exPrev: any = { ...(prevAll as any).extras };
 
-    const exNext: any = { ...exPrev };
-    delete exNext.plateEpitaph;
-    delete exNext.plateEpitaphs;
-    delete exNext.plateEpitaphTexts;
-
-    if (list.length === 1) {
-      exNext.plateEpitaph = list[0];
-    } else if (list.length > 1) {
-      exNext.plateEpitaphs = list.slice();
+    const patchExtras: any = {};
+    if (list.length === 0) {
+      patchExtras.plateEpitaph = null;
+      patchExtras.plateEpitaphs = null;
+      patchExtras.plateEpitaphTexts = null; // legacy/мусор
+    } else if (list.length === 1) {
+      patchExtras.plateEpitaph = list[0];
+      patchExtras.plateEpitaphs = null;
+      patchExtras.plateEpitaphTexts = null;
+    } else {
+      patchExtras.plateEpitaph = null;
+      patchExtras.plateEpitaphs = list.slice();
+      patchExtras.plateEpitaphTexts = null;
     }
 
-    const snapshot = JSON.stringify({ extras: exNext });
+    const snapshot = JSON.stringify(patchExtras);
     if (snapshot !== prevPlateEpiJsonRef.current) {
       prevPlateEpiJsonRef.current = snapshot;
-      saveOrderDraft({ ...prevAll, extras: exNext, updatedAt: Date.now() });
+
+      saveOrderDraft({ extras: patchExtras } as any);
       dispatchDraftUpdated();
       setDraft(loadOrderDraft());
     }
@@ -1197,6 +1201,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
   const [catOpen, setCatOpen] = useState<Record<string, boolean>>({});
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -1217,6 +1222,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       alive = false;
     };
   }, []);
+
   useEffect(() => {
     if (!cats.length) return;
     setCatOpen((prev) => {
@@ -1676,7 +1682,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     isSending ? "Отправляем заказ…" :
     isSaving ? "Формируем PDF…" : "";
 
-  // Remove ONE occurrence of chosen plate graphic id
+  // Remove ONE occurrence of chosen plate graphic id (патч, без снапшота всего драфта)
   const removeChosenPlateOne = (gidRaw: string) => {
     const gid = String(gidRaw || "").trim();
     if (!gid) return;
@@ -1688,12 +1694,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     nextIds.splice(idx, 1);
     setPlateIds(nextIds);
 
-    const prev = loadOrderDraft();
-    saveOrderDraft({
-      ...prev,
-      extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
-      updatedAt: Date.now()
-    });
+    saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta } as any });
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
   };
@@ -1713,44 +1714,38 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           extraPlate={extraPlate}
           setExtraPlate={(v) => {
             setExtraPlate(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, headstonePlate: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { headstonePlate: v } as any });
             dispatchDraftUpdated();
             if (sentOk) setIsDirtyAfterSend(true);
           }}
           plateSize={plateSize}
           setPlateSize={(v) => {
             setPlateSize(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateSize: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { plateSize: v } as any });
             dispatchDraftUpdated();
           }}
           plateCustomSize={plateCustomSize}
           setPlateCustomSize={(v) => {
             setPlateCustomSize(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateCustomSize: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { plateCustomSize: v } as any });
             dispatchDraftUpdated();
           }}
           plateThickness={plateThickness}
           setPlateThickness={(v) => {
             setPlateThickness(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateThickness: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { plateThickness: v } as any });
             dispatchDraftUpdated();
           }}
           plateCustomThickness={plateCustomThickness}
           setPlateCustomThickness={(v) => {
             setPlateCustomThickness(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateCustomThickness: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { plateCustomThickness: v } as any });
             dispatchDraftUpdated();
           }}
           plateOrientation={plateOrientation}
           setPlateOrientation={(v) => {
             setPlateOrientation(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, plateOrientation: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { plateOrientation: v } as any });
             dispatchDraftUpdated();
           }}
           plateSelectedEpitaphs={plateSelectedEpitaphs}
@@ -1790,15 +1785,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             const gid = String(g.id || g.relPath || g.url || g.name);
             const nextIds = [...plateIds, gid];
             const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
+
             setPlateIds(nextIds);
             setPlateMeta(nextMeta);
 
-            const prev = loadOrderDraft();
-            saveOrderDraft({
-              ...prev,
-              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta },
-              updatedAt: Date.now()
-            });
+            saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta } as any });
             dispatchDraftUpdated();
             setDraft(loadOrderDraft());
 
@@ -1812,12 +1803,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             nextIds.splice(idx, 1);
             setPlateIds(nextIds);
 
-            const prev = loadOrderDraft();
-            saveOrderDraft({
-              ...prev,
-              extras: { ...(prev as any).extras, plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta },
-              updatedAt: Date.now()
-            });
+            saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta } as any });
             dispatchDraftUpdated();
             setDraft(loadOrderDraft());
 
@@ -1830,22 +1816,19 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           hasPedestal={hasPedestal}
           setHasPedestal={(v) => {
             setHasPedestal(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, tumba: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { tumba: v } as any });
             dispatchDraftUpdated();
           }}
           hasFlowerbed={hasFlowerbed}
           setHasFlowerbed={(v) => {
             setHasFlowerbed(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, flowerbed: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { flowerbed: v } as any });
             dispatchDraftUpdated();
           }}
           hasVase={hasVase}
           setHasVase={(v) => {
             setHasVase(v);
-            const prev = loadOrderDraft();
-            saveOrderDraft({ ...prev, extras: { ...(prev as any).extras, vase: v }, updatedAt: Date.now() });
+            saveOrderDraft({ extras: { vase: v } as any });
             dispatchDraftUpdated();
           }}
           extractPlateWidthText={extractPlateWidthText}
@@ -1899,9 +1882,8 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           rows={3}
           defaultValue={String((extras0.orderNotes || "")).trim()}
           onBlur={(e) => {
-            const prev = loadOrderDraft();
-            const extras: any = { ...(prev as any).extras, orderNotes: (e.target.value || "").trim() || undefined };
-            saveOrderDraft({ ...prev, extras, updatedAt: Date.now() });
+            const v = String(e.target.value || "").trim();
+            saveOrderDraft({ extras: { orderNotes: v ? v : null } as any });
             dispatchDraftUpdated();
             setDraft(loadOrderDraft());
             if (sentOk) setIsDirtyAfterSend(true);
@@ -1979,7 +1961,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
-            <div style={{fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
+            <div style={{ fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
               {`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}
             </div>
 

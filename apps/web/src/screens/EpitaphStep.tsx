@@ -270,21 +270,22 @@ export default function EpitaphStep(props: any) {
   // Если >1 — пишем массив epitaphs (каждый элемент — целиком, даже если многострочный).
   const prevJsonRef = useRef<string>("");
   useEffect(() => {
-    const list = uniqueByNorm(selectedEpitaphs);
-    const payloadEngr = {
-      ...(loadOrderDraft().engraving || {}),
-      epitaphs: list.length > 1 ? list.slice() : undefined,
-      epitaphText: list.length === 1 ? list[0] : undefined
-    };
-    const prevAll = loadOrderDraft();
-    const snapshot = JSON.stringify({ engraving: payloadEngr });
+  const list = uniqueByNorm(selectedEpitaphs);
 
-    if (snapshot !== prevJsonRef.current) {
-      prevJsonRef.current = snapshot;
-      saveOrderDraft({ ...prevAll, engraving: payloadEngr });
-      onSaveDraft?.({ epitaphs: list, epitaphText: list.length === 1 ? list[0] : list.join("\n\n") });
-    }
-  }, [selectedEpitaphs, onSaveDraft]);
+  const payloadEngr: any = {
+    ...(loadOrderDraft().engraving || {}),
+    epitaphs: list.length > 1 ? list.slice() : null,
+    epitaphText: list.length === 1 ? list[0] : null
+  };
+
+  const snapshot = JSON.stringify({ engraving: payloadEngr });
+  if (snapshot !== prevJsonRef.current) {
+    prevJsonRef.current = snapshot;
+    saveOrderDraft({ engraving: payloadEngr });
+    onSaveDraft?.({ epitaphs: list, epitaphText: list.length === 1 ? list[0] : list.join("\n\n") });
+  }
+}, [selectedEpitaphs, onSaveDraft]);
+
 
   // Данные предпросмотра
   const engravingForPreview = useMemo(() => draft.engraving || engraving || {}, [draft, engraving]);
