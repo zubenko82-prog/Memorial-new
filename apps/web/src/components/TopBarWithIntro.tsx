@@ -752,34 +752,117 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
           </section>
 
           {/* Люди */}
-          {(order.engraving?.persons?.length || 0) > 0 && (
-            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
-                <span style={chip(theme)}>Люди на памятнике</span>
-                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
-              </div>
+{(order.engraving?.persons?.length || 0) > 0 && (
+  <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+    <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
+      <span style={chip(theme)}>Люди на памятнике</span>
+      {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
+    </div>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"),
-                  gap: 16
-                }}
-              >
-                <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
-                  <div style={{ color: palette(theme).subText, fontSize: 12 }}>См. выбор людей на предыдущих шагах</div>
-                </div>
-
-                {(order as any)?.editorBack?.people?.length > 0 && (
-                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
-                    <div style={{ color: palette(theme).subText, fontSize: 12 }}>См. выбор людей на предыдущих шагах</div>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"),
+        gap: 16
+      }}
+    >
+      {/* Лицевая */}
+      <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
+        {order.engraving?.persons?.length ? (
+          <div style={{ display: "grid", gap: 0 }}>
+            {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
+              const last = idx === (order.engraving?.persons?.length || 0) - 1;
+              const fio1 = (ppl.lastName || "").trim();
+              const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+              const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+              return (
+                <div
+                  key={ppl.id || `person-front-${idx}`}
+                  style={{
+                    padding: "8px 0",
+                    borderBottom: last ? "none" : palette(theme).divider,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10
+                  }}
+                >
+                  <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                    <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                      {ppl.photoPreview ? (
+                        <img
+                          src={ppl.photoPreview}
+                          alt="Фото"
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
+                        />
+                      ) : (
+                        <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            </section>
-          )}
+                  <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                    {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                    {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                    <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ color: palette(theme).subText }}>—</div>
+        )}
+      </div>
+
+      {/* Тыльная */}
+      {(order as any)?.editorBack?.people?.length > 0 && (
+        <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
+          <div style={{ display: "grid", gap: 0 }}>
+            {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
+              const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
+              const fio1 = (ppl.lastName || "").trim();
+              const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+              const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+              return (
+                <div
+                  key={ppl.id || `person-back-${idx}`}
+                  style={{
+                    padding: "8px 0",
+                    borderBottom: last ? "none" : palette(theme).divider,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10
+                  }}
+                >
+                  <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                    <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                      {ppl.photoPreview ? (
+                        <img
+                          src={ppl.photoPreview}
+                          alt="Фото"
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
+                        />
+                      ) : (
+                        <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                    {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                    {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                    <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  </section>
+)}
+
 
           {/* Элементы эскиза */}
           {(frontHasSketch || rearHasSketch) && (
