@@ -400,6 +400,28 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return () => window.removeEventListener("memorial:openTopBarPanel", onOpen as any);
   }, []);
 
+  // ✅ Надёжная синхронизация для Telegram WebApp:
+// пока панель открыта — регулярно перечитываем draft из localStorage.
+// Это убирает "то обновилось, то нет" на всех шагах (эпитафии/графика/люди и т.д.)
+useEffect(() => {
+  if (!open) return;
+
+  let alive = true;
+  const tick = () => {
+    if (!alive) return;
+    const fresh = loadOrderDraft();
+    setOrder(fresh);
+  };
+
+  tick();
+  const t = window.setInterval(tick, 300);
+
+  return () => {
+    alive = false;
+    clearInterval(t);
+  };
+}, [open]);
+
   // Контактная линия (телефон)
   const phoneLine = useMemo(() => {
     const b = (editing ? phone : intro?.customerPhone) || "";
@@ -471,10 +493,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
   // ✅ ВАЖНО: читаем эпитафии плиты ТОЛЬКО из plateEpitaph / plateEpitaphs
   const plateEpitaphItems = useMemo(() => {
-    const a = normalizeEpitaphItems(extras.plateEpitaph);
-    const b = normalizeEpitaphItems(extras.plateEpitaphs);
-    return uniqByNorm([...a, ...b]);
-  }, [extras.plateEpitaph, extras.plateEpitaphs]);
+  const a = normalizeEpitaphItems(extras.plateEpitaph);
+  const b = normalizeEpitaphItems(extras.plateEpitaphs);
+  return uniqByNorm([...a, ...b]);
+}, [extras.plateEpitaph, extras.plateEpitaphs]);
+
 
   // Дополнительно (строка)
   const extrasParts = useMemo(() => {
