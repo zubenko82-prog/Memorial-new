@@ -128,17 +128,12 @@ export default function App() {
   const [step, setStep] = useState<Step>("start");
 
   const [navUnlocked, setNavUnlocked] = useState<boolean>(() => {
-    try {
-      const a = localStorage.getItem(LS_KEY);
-      const b = localStorage.getItem(NAV_UNLOCK_KEY);
-      if (b === "1") return true;
-      if (a) {
-        const p = JSON.parse(a);
-        if (p?.navUnlocked || p?.step === "review" || p?.step === "done") return true;
-      }
-    } catch {}
-    return false;
-  });
+  try {
+    return localStorage.getItem(NAV_UNLOCK_KEY) === "1";
+  } catch {}
+  return false;
+});
+
 
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [sizeResult, setSizeResult] = useState<any>(null);
