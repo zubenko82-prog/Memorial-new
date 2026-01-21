@@ -146,23 +146,30 @@ export default function App() {
   const [decor, setDecor] = useState<any>({});
   const [editorBackState, setEditorBackState] = useState<any>(null);
 
-  // restore progress
-  useEffect(() => {
+  // restore progress (SAFE)
+useEffect(() => {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+
+    // Anti-OOM: if progress is huge, drop it
+    if (raw.length > 200_000) {
+      localStorage.removeItem(LS_KEY);
+      return;
+    }
+
+    const p = JSON.parse(raw);
+    if (p && typeof p === "object") {
+      setStep((p.step as Step) || "start");
+      if (p?.navUnlocked) setNavUnlocked(true);
+    }
+  } catch {
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const p = JSON.parse(raw);
-      if (p && typeof p === "object") {
-        setStep((p.step as Step) || "start");
-        setSelectedItem(p.selectedItem ?? null);
-        setSizeResult(p.sizeResult ?? null);
-        setEngraving(p.engraving ?? null);
-        setDecor(p.decor ?? {});
-        setEditorBackState(p.editorBackState ?? null);
-        if (p?.navUnlocked) setNavUnlocked(true);
-      }
+      localStorage.removeItem(LS_KEY);
     } catch {}
-  }, []);
+  }
+}, []);
+
 
   // url sync at mount
   useEffect(() => {
@@ -220,16 +227,13 @@ export default function App() {
     return () => window.removeEventListener("memorial:resetAll", onResetAll as any);
   }, []);
 
-  // persist progress
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        LS_KEY,
-        JSON.stringify({ step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked })
-      );
-      if (navUnlocked) localStorage.setItem(NAV_UNLOCK_KEY, "1");
-    } catch {}
-  }, [step, selectedItem, sizeResult, engraving, decor, editorBackState, navUnlocked]);
+  // persist progress (SAFE: only lightweight fields)
+useEffect(() => {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({ step, navUnlocked }));
+    if (navUnlocked) localStorage.setItem(NAV_UNLOCK_KEY, "1");
+  } catch {}
+}, [step, navUnlocked]);
 
   // guards
   useEffect(() => {
