@@ -2,13 +2,15 @@
 //
 // Шаг «Обзор и подтверждение»
 //
-// В этой версии (по вашему требованию):
-// - вообще НЕ показываем "Дополнительно" и "Надгробная плита" (они перенесены на шаг "Тыл").
-// - сохранены: TopBar (с принудительным раскрытием), скриншот TopBar, отправка в Telegram,
-//   PDF, эскизы (лицевая/тыльная), комментарий к заказу, статус доставки/повторная отправка.
+// ТРЕБОВАНИЯ:
+// - НЕ показываем редакторы "Дополнительно/Надгробная плита" на обзоре.
+// - НО показываем эскиз надгробной плиты (если он существует и не пустой),
+//   по аналогии с тыльной стороной.
+// - Эскиз плиты берём из draft.extras.platePreviewHiUrl / platePreviewUrl.
+// - Если элементов на тыле/плите нет — соответствующие эскизы скрываются
+//   (у вас это достигается тем, что previewUrl/previewHiUrl записываются как null).
 //
-// ВАЖНО: этот файл компилируется (исправлена поломка, которая у вас попала в build —
-//         это был повреждённый файл/вставка, из-за чего JSX "style={{...}}" оказался внутри for()).
+// ВАЖНО: этот файл компилируется; добавлено только чтение/показ эскиза плиты + отправка в Telegram.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -322,6 +324,42 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
   const showBack = !!backCandidateUrl && backIsRenderable;
 
+  // ===== Plate sketch: detect "empty" by actual image size =====
+  function getPlateSketchUrl(d: any): string | null {
+    const ex: any = (d as any)?.extras || {};
+    const raw = String((ex?.platePreviewHiUrl || ex?.platePreviewUrl || "") ?? "").trim();
+    if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
+    return raw;
+  }
+  const [plateCandidateUrl, setPlateCandidateUrl] = useState<string | null>(getPlateSketchUrl(draft));
+  useEffect(() => setPlateCandidateUrl(getPlateSketchUrl(draft)), [draft]);
+
+  const [plateIsRenderable, setPlateIsRenderable] = useState(false);
+  useEffect(() => {
+    setPlateIsRenderable(false);
+    if (!plateCandidateUrl) return;
+
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      if (!alive) return;
+      const w = img.naturalWidth || 0;
+      const h = img.naturalHeight || 0;
+      setPlateIsRenderable(w >= 50 && h >= 50);
+    };
+    img.onerror = () => {
+      if (!alive) return;
+      setPlateIsRenderable(false);
+    };
+    img.crossOrigin = "anonymous";
+    img.src = plateCandidateUrl;
+    return () => {
+      alive = false;
+    };
+  }, [plateCandidateUrl]);
+
+  const showPlate = !!plateCandidateUrl && plateIsRenderable;
+
   // Front
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
@@ -371,6 +409,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [topbarDelivered, setTopbarDelivered] = useState<boolean | null>(null);
   const [frontSketchDelivered, setFrontSketchDelivered] = useState<boolean | null>(null);
   const [backSketchDelivered, setBackSketchDelivered] = useState<boolean | null>(null);
+  const [plateSketchDelivered, setPlateSketchDelivered] = useState<boolean | null>(null);
   const [photosDelivered, setPhotosDelivered] = useState(0);
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
@@ -544,7 +583,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     }
   }
 
-  async function sendSketchFromNode(nodeId: string, caption: string | undefined, fallbackUrl?: string | null): Promise<{ ok: boolean; error?: string }> {
+  async function sendSketchFromNode(
+    nodeId: string,
+    caption: string | undefined,
+    fallbackUrl?: string | null
+  ): Promise<{ ok: boolean; error?: string }> {
     try {
       const el = document.getElementById(nodeId) as HTMLElement | null;
       if (el) {
@@ -641,6 +684,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     setTopbarDelivered(null);
     setFrontSketchDelivered(null);
     setBackSketchDelivered(null);
+    setPlateSketchDelivered(null);
     setPhotosDelivered(0);
 
     const warnings: string[] = [];
@@ -668,6 +712,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         if (!backRes.ok && backRes.error) warnings.push(`Эскиз (тыльная) не отправлен: ${backRes.error}`);
       } else {
         setBackSketchDelivered(null);
+      }
+
+      if (showPlate && plateCandidateUrl) {
+        const plateRes = await sendSketchFromNode("pdf-plate-sketch", "Эскиз (надгробная плита)", plateCandidateUrl);
+        setPlateSketchDelivered(plateRes.ok);
+        if (!plateRes.ok && plateRes.error) warnings.push(`Эскиз (плита) не отправлен: ${plateRes.error}`);
+      } else {
+        setPlateSketchDelivered(null);
       }
 
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
@@ -785,6 +837,22 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
             <img
               id="pdf-back-sketch"
               src={backCandidateUrl}
+              crossOrigin="anonymous"
+              alt=""
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Эскиз надгробной плиты (только если есть) */}
+      {showPlate && plateCandidateUrl && (
+        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита</div>
+          <div style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "3 / 4" }}>
+            <img
+              id="pdf-plate-sketch"
+              src={plateCandidateUrl}
               crossOrigin="anonymous"
               alt=""
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
@@ -918,6 +986,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                     </strong>
                   </div>
                 )}
+                {showPlate && (
+                  <div>
+                    <span style={{ opacity: 0.85 }}>Эскиз (плита) — </span>
+                    <strong style={{ color: plateSketchDelivered == null ? "#ccc" : plateSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
+                      {plateSketchDelivered == null ? "—" : plateSketchDelivered ? "да" : "нет"}
+                    </strong>
+                  </div>
+                )}
                 <div>
                   <span style={{ opacity: 0.85 }}>Фото — </span>
                   <strong style={{ color: photosDelivered === photosTotal ? "#7dffa0" : photosDelivered > 0 ? "#ffd666" : photosTotal === 0 ? "#ccc" : "#ffb4b4" }}>
@@ -945,6 +1021,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 textDelivered === false ||
                 frontSketchDelivered === false ||
                 (showBack && backSketchDelivered === false) ||
+                (showPlate && plateSketchDelivered === false) ||
                 (photosTotal > 0 && photosDelivered < photosTotal)) && (
                 <button type="button" onClick={() => sendOrderDirect()} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
                   {uploading ? "Повторяем…" : "Повторить отправку"}
