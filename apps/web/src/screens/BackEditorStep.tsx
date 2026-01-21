@@ -731,6 +731,52 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       window.removeEventListener("focus", sync);
     };
   }, []);
+// === Anti-OOM sanitizer: remove heavy preview fields if they are too large ===
+useEffect(() => {
+  try {
+    const d: any = loadOrderDraft();
+    const eb: any = d?.editorBack || {};
+    const ex: any = d?.extras || {};
+
+    const tooBig = (v: any, maxChars: number) => typeof v === "string" && v.length > maxChars;
+
+    // Порог по символам: 250k ~ 250 KB текста (base64 обычно намного больше)
+    // hi-res превью часто > 1-3 млн символов.
+    const MAX = 250_000;
+
+    const patchEB: any = {};
+    const patchEX: any = {};
+
+    let changed = false;
+
+    if (tooBig(eb.previewUrl, MAX)) {
+      patchEB.previewUrl = null;
+      changed = true;
+    }
+    if (tooBig(eb.previewHiUrl, MAX)) {
+      patchEB.previewHiUrl = null;
+      changed = true;
+    }
+
+    if (tooBig(ex.platePreviewUrl, MAX)) {
+      patchEX.platePreviewUrl = null;
+      changed = true;
+    }
+    if (tooBig(ex.platePreviewHiUrl, MAX)) {
+      patchEX.platePreviewHiUrl = null;
+      changed = true;
+    }
+
+    if (changed) {
+      if (Object.keys(patchEB).length) saveOrderDraft({ editorBack: patchEB } as any);
+      if (Object.keys(patchEX).length) saveOrderDraft({ extras: patchEX } as any);
+      dispatchDraftUpdated();
+      setDraft(loadOrderDraft());
+    }
+  } catch {
+    // если loadOrderDraft упал — лучше хотя бы не падать здесь
+  }
+}, []);
 
   /* ========= Shared catalog for both blocks ========= */
   const [catsLoading, setCatsLoading] = useState(false);
