@@ -1,15 +1,6 @@
 // src/lib/order.ts
 // Единый стор заказа (draft) в localStorage + оригинал фото в IndexedDB.
-//
-// ВАЖНО (анти-OOM):
-// - localStorage может переполняться из-за base64 (previewUrl/previewHiUrl и т.п.).
-// - JSON.parse огромной строки может убить вкладку (Out of Memory) ещё ДО рендера.
-// Поэтому loadOrderDraft() теперь:
-//   1) проверяет размер raw и при превышении лимита сбрасывает драфт (removeItem)
-//   2) дополнительно "подрезает" большие preview-поля уже после parse
-//
-// saveOrderDraft() также защищён: если JSON.stringify слишком большой и setItem падает,
-// мы пытаемся удалить тяжёлые preview-поля и сохранить облегчённый вариант.
+// Поля: size.width/height/thickness/notes/orientation, graphics, engraving, etc.
 
 import { idbPutBlob, idbGetBlob, idbDel } from "./idb";
 
@@ -77,11 +68,6 @@ export type OrderDraft = {
   notes?: string;
   orientation?: Orientation; // legacy-дубль для совместимости
   updatedAt?: number;
-
-  // extras у вас используются в проекте, но типом не описаны — оставляем совместимость
-  extras?: any;
-  editor?: any;
-  editorBack?: any;
 };
 
 export const LS_ORDER_DRAFT_KEY = "memorial.order.draft.v1";
@@ -101,115 +87,20 @@ function now() {
   return Date.now();
 }
 
-/* ==================== Deep merge with delete ==================== */
+/* ==================== Deep merge ==================== */
 
-/**
- * Маркер удаления поля.
- * Можно использовать del() или просто null в patch.
- */
-export const __delete__ = Symbol("order.delete");
-
-/** Удобный helper: del() */
-export function del() {
-  return __delete__ as any;
-}
-
-/**
- * Правила:
- * - undefined: игнорируем (не трогаем поле)
- * - null: удаляем поле (delete)
- * - __delete__: удаляем поле (delete)
- * - object (не массив): рекурсивно мержим
- * - массив/примитив: заменяем целиком
- */
-function deepMergeWithDelete<T>(target: T, source: Partial<T>): T {
-  if (source == null) return target as any;
-
+function deepMergeDefined<T>(target: T, source: Partial<T>): T {
+  if (source == null) return target;
   const out: any = Array.isArray(target) ? [...(target as any)] : { ...(target as any) };
-
-  for (const [k, v] of Object.entries(source as any)) {
-    if (v === undefined) continue;
-
-    if (v === null) {
-      delete out[k];
-      continue;
-    }
-
-    if ((v as any) === __delete__) {
-      delete out[k];
-      continue;
-    }
-
+  for (const [k, v] of Object.entries(source)) {
+    if (v === undefined || v === null) continue; // не пишем undefined/null, чтобы не затирать поля
     if (typeof v === "object" && !Array.isArray(v)) {
-      out[k] = deepMergeWithDelete(out[k] ?? {}, v as any);
+      out[k] = deepMergeDefined(out[k] ?? {}, v as any);
     } else {
       out[k] = v;
     }
   }
-
   return out;
-}
-
-/* ==================== Draft sanitizing (anti-OOM) ==================== */
-
-// Максимальный размер JSON строки драфта (символов) до того, как мы перестаём его парсить.
-// 2_000_000 символов ~ 2MB текста; base64-превью легко делает 5-20MB.
-const MAX_DRAFT_RAW_CHARS = 2_000_000;
-
-// Максимальная длина одного preview-поля (base64) в символах.
-// Всё что больше — считаем опасным, режем в null.
-const MAX_PREVIEW_CHARS = 250_000;
-
-function clampBigStringToNull(v: any, maxChars = MAX_PREVIEW_CHARS) {
-  return typeof v === "string" && v.length > maxChars ? null : v;
-}
-
-function sanitizeDraftPreviews(d: OrderDraft): OrderDraft {
-  try {
-    const out: any = { ...d };
-
-    // editorBack previews
-    if (out.editorBack && typeof out.editorBack === "object") {
-      out.editorBack = { ...out.editorBack };
-      out.editorBack.previewUrl = clampBigStringToNull(out.editorBack.previewUrl);
-      out.editorBack.previewHiUrl = clampBigStringToNull(out.editorBack.previewHiUrl);
-    }
-
-    // extras previews
-    if (out.extras && typeof out.extras === "object") {
-      out.extras = { ...out.extras };
-      out.extras.platePreviewUrl = clampBigStringToNull(out.extras.platePreviewUrl);
-      out.extras.platePreviewHiUrl = clampBigStringToNull(out.extras.platePreviewHiUrl);
-    }
-
-    // engraving photo preview (тоже бывает большой)
-    if (out.engraving && typeof out.engraving === "object") {
-      out.engraving = { ...out.engraving };
-      out.engraving.photoPreview = clampBigStringToNull(out.engraving.photoPreview, 350_000);
-    }
-
-    return out as OrderDraft;
-  } catch {
-    return d;
-  }
-}
-
-function dropAllHeavyPreviews(d: OrderDraft): OrderDraft {
-  const out: any = { ...d };
-
-  if (out.editorBack && typeof out.editorBack === "object") {
-    out.editorBack = { ...out.editorBack, previewUrl: null, previewHiUrl: null };
-  }
-
-  if (out.extras && typeof out.extras === "object") {
-    out.extras = { ...out.extras, platePreviewUrl: null, platePreviewHiUrl: null };
-  }
-
-  if (out.engraving && typeof out.engraving === "object") {
-    out.engraving = { ...out.engraving, photoPreview: null };
-  }
-
-  return out as OrderDraft;
 }
 
 /* ==================== Load/Save ==================== */
@@ -218,69 +109,25 @@ export function loadOrderDraft(): OrderDraft {
   try {
     const raw = localStorage.getItem(LS_ORDER_DRAFT_KEY);
     if (!raw) return { graphics: [], updatedAt: now() };
-
-    // Anti-OOM: если драфт стал слишком большим — не парсим, а сбрасываем.
-    if (raw.length > MAX_DRAFT_RAW_CHARS) {
-      try {
-        localStorage.removeItem(LS_ORDER_DRAFT_KEY);
-      } catch {}
-      return { graphics: [], updatedAt: now() };
-    }
-
     const obj = JSON.parse(raw) as OrderDraft;
-
-    // минимальная нормализация
     if (!Array.isArray(obj.graphics)) obj.graphics = [];
     if (obj.size && typeof obj.size !== "object") obj.size = null;
     if (obj.item && typeof obj.item !== "object") obj.item = null;
     if (obj.engraving && typeof obj.engraving !== "object") obj.engraving = null;
-
-    const sanitized = sanitizeDraftPreviews(obj);
-
-    return { ...sanitized, updatedAt: sanitized.updatedAt || now() };
+    return { ...obj, updatedAt: obj.updatedAt || now() };
   } catch {
-    // Если JSON.parse упал или localStorage недоступен — сбрасываем ключ (чтобы не падать каждый раз).
-    try {
-      localStorage.removeItem(LS_ORDER_DRAFT_KEY);
-    } catch {}
     return { graphics: [], updatedAt: now() };
   }
 }
 
 export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
   const prev = loadOrderDraft();
-
-  // updatedAt всегда обновляем
-  const next0: OrderDraft = deepMergeWithDelete(prev, { ...patch, updatedAt: now() });
-  const next: OrderDraft = sanitizeDraftPreviews(next0);
-
-  // Пытаемся сохранить как есть.
+  const next: OrderDraft = deepMergeDefined(prev, { ...patch, updatedAt: now() });
   try {
-    const raw = JSON.stringify(next);
-    // Anti-OOM: если получился слишком большой JSON — сначала пробуем выбросить превью и сохранить облегчённый.
-    if (raw.length > MAX_DRAFT_RAW_CHARS) {
-      const lite = dropAllHeavyPreviews(next);
-      localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(lite));
-      emitDraftUpdated();
-      return lite;
-    }
-
-    localStorage.setItem(LS_ORDER_DRAFT_KEY, raw);
-    emitDraftUpdated();
-    return next;
-  } catch {
-    // Если localStorage.setItem упал (quota / memory), пробуем сохранить облегчённую версию.
-    try {
-      const lite = dropAllHeavyPreviews(next);
-      localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(lite));
-      emitDraftUpdated();
-      return lite;
-    } catch {
-      // Последний шанс: ничего не сохраняем, но возвращаем next (в памяти).
-      emitDraftUpdated();
-      return next;
-    }
-  }
+    localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
+  } catch {}
+  emitDraftUpdated();
+  return next;
 }
 
 /* ==================== Размеры: удобные сеттеры ==================== */
@@ -311,7 +158,6 @@ export async function setPhotoOriginal(file: File): Promise<OrderDraft> {
   const key = `photo:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   await idbPutBlob(key, file);
   const preview = await makePreviewDataUrl(file, 300);
-
   const next = saveOrderDraft({
     engraving: {
       photoOriginalKey: key,
@@ -320,7 +166,6 @@ export async function setPhotoOriginal(file: File): Promise<OrderDraft> {
       photoPreview: preview
     }
   });
-
   return next;
 }
 
@@ -338,13 +183,11 @@ export async function getPhotoOriginalFromDraft(draft?: OrderDraft): Promise<Blo
 export async function clearPhotoOriginal(): Promise<OrderDraft> {
   const cur = loadOrderDraft();
   const key = cur.engraving?.photoOriginalKey;
-
   if (key) {
     try {
       await idbDel(key);
     } catch {}
   }
-
   return saveOrderDraft({
     engraving: {
       ...(cur.engraving || {}),
