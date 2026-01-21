@@ -1979,7 +1979,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
-            <div style={{ opacity: 0.92, marginBottom: 10 }}>
+            <div style={{fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
               {`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа при необходимости.`}
             </div>
 

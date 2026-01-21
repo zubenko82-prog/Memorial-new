@@ -277,13 +277,21 @@ function cmValue(n?: number): string {
 }
 
 // Нормализация эпитафий плиты (поддержим строку и массив)
-function normalizeEpitaphLines(input: any): string[] {
+function normalizeEpitaphItems(input: any): string[] {
   if (!input) return [];
-  if (Array.isArray(input)) return input.map((s) => String(s || "").trim()).filter(Boolean);
+
+  // если массив — каждый элемент = одна эпитафия (может быть многострочной)
+  if (Array.isArray(input)) {
+    return input
+      .map((s) => String(s || "").replace(/\r\n?/g, "\n").trim())
+      .filter(Boolean);
+  }
+
+  // если строка — это ОДНА эпитафия целиком (даже если многострочная)
   const t = String(input || "").replace(/\r\n?/g, "\n").trim();
-  if (!t) return [];
-  return t.split(/\n{1,2}/g).map((s) => s.trim()).filter(Boolean);
+  return t ? [t] : [];
 }
+
 
 /* ===== Компонент ===== */
 export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
@@ -448,13 +456,29 @@ useEffect(() => {
   }, [plateIds, plateMeta]);
 
   // NEW: Эпитафии плиты (поддержим несколько полей)
-  const plateEpitaphLines = useMemo(() => {
-    const a = normalizeEpitaphLines(plateEpitaph);
-    const b = normalizeEpitaphLines(extras.plateEpitaphs);
-    const c = normalizeEpitaphLines(extras.plateEpitaphTexts);
-    const merged = [...a, ...b, ...c].map((s) => s.trim()).filter(Boolean);
-    return Array.from(new Set(merged));
-  }, [plateEpitaph, extras.plateEpitaphs, extras.plateEpitaphTexts]);
+  const plateEpitaphItems = useMemo(() => {
+  const a = normalizeEpitaphItems(extras.plateEpitaph);
+  const b = normalizeEpitaphItems(extras.plateEpitaphs);
+
+  // plateEpitaphTexts можно поддержать, но тоже как items, НЕ split
+  const c = normalizeEpitaphItems(extras.plateEpitaphTexts);
+
+  const merged = [...a, ...b, ...c]
+    .map((s) => String(s || "").replace(/\r\n?/g, "\n").trim())
+    .filter(Boolean);
+
+  // уникальность по нормализованному тексту (как у вас в шаге)
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const t of merged) {
+    const key = t.replace(/[ \t]+$/gm, "").trim();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}, [extras.plateEpitaph, extras.plateEpitaphs, extras.plateEpitaphTexts]);
+
 
   // NEW: Дополнительно строкой
   const extrasParts = useMemo(() => {
