@@ -267,12 +267,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       } catch {}
     };
 
-    openTopbar();
-    const timer = window.setInterval(() => {
-      if (!alive) return;
-      if (isOpen()) return;
-      openTopbar();
-    }, 120);
+    
 
     const onFocus = () => openTopbar();
     const onVisible = () => {
