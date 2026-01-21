@@ -1,6 +1,15 @@
 // src/lib/order.ts
 // Единый стор заказа (draft) в localStorage + оригинал фото в IndexedDB.
-// Поля: size.width/height/thickness/notes/orientation, graphics, engraving, etc.
+//
+// ВАЖНО (анти-OOM):
+// - localStorage может переполняться из-за base64 (previewUrl/previewHiUrl и т.п.).
+// - JSON.parse огромной строки может убить вкладку (Out of Memory) ещё ДО рендера.
+// Поэтому loadOrderDraft() теперь:
+//   1) проверяет размер raw и при превышении лимита сбрасывает драфт (removeItem)
+//   2) дополнительно "подрезает" большие preview-поля уже после parse
+//
+// saveOrderDraft() также защищён: если JSON.stringify слишком большой и setItem падает,
+// мы пытаемся удалить тяжёлые preview-поля и сохранить облегчённый вариант.
 
 import { idbPutBlob, idbGetBlob, idbDel } from "./idb";
 
@@ -132,7 +141,6 @@ function deepMergeWithDelete<T>(target: T, source: Partial<T>): T {
     }
 
     if (typeof v === "object" && !Array.isArray(v)) {
-      // рекурсивный merge
       out[k] = deepMergeWithDelete(out[k] ?? {}, v as any);
     } else {
       out[k] = v;
@@ -142,21 +150,99 @@ function deepMergeWithDelete<T>(target: T, source: Partial<T>): T {
   return out;
 }
 
+/* ==================== Draft sanitizing (anti-OOM) ==================== */
+
+// Максимальный размер JSON строки драфта (символов) до того, как мы перестаём его парсить.
+// 2_000_000 символов ~ 2MB текста; base64-превью легко делает 5-20MB.
+const MAX_DRAFT_RAW_CHARS = 2_000_000;
+
+// Максимальная длина одного preview-поля (base64) в символах.
+// Всё что больше — считаем опасным, режем в null.
+const MAX_PREVIEW_CHARS = 250_000;
+
+function clampBigStringToNull(v: any, maxChars = MAX_PREVIEW_CHARS) {
+  return typeof v === "string" && v.length > maxChars ? null : v;
+}
+
+function sanitizeDraftPreviews(d: OrderDraft): OrderDraft {
+  try {
+    const out: any = { ...d };
+
+    // editorBack previews
+    if (out.editorBack && typeof out.editorBack === "object") {
+      out.editorBack = { ...out.editorBack };
+      out.editorBack.previewUrl = clampBigStringToNull(out.editorBack.previewUrl);
+      out.editorBack.previewHiUrl = clampBigStringToNull(out.editorBack.previewHiUrl);
+    }
+
+    // extras previews
+    if (out.extras && typeof out.extras === "object") {
+      out.extras = { ...out.extras };
+      out.extras.platePreviewUrl = clampBigStringToNull(out.extras.platePreviewUrl);
+      out.extras.platePreviewHiUrl = clampBigStringToNull(out.extras.platePreviewHiUrl);
+    }
+
+    // engraving photo preview (тоже бывает большой)
+    if (out.engraving && typeof out.engraving === "object") {
+      out.engraving = { ...out.engraving };
+      out.engraving.photoPreview = clampBigStringToNull(out.engraving.photoPreview, 350_000);
+    }
+
+    return out as OrderDraft;
+  } catch {
+    return d;
+  }
+}
+
+function dropAllHeavyPreviews(d: OrderDraft): OrderDraft {
+  const out: any = { ...d };
+
+  if (out.editorBack && typeof out.editorBack === "object") {
+    out.editorBack = { ...out.editorBack, previewUrl: null, previewHiUrl: null };
+  }
+
+  if (out.extras && typeof out.extras === "object") {
+    out.extras = { ...out.extras, platePreviewUrl: null, platePreviewHiUrl: null };
+  }
+
+  if (out.engraving && typeof out.engraving === "object") {
+    out.engraving = { ...out.engraving, photoPreview: null };
+  }
+
+  return out as OrderDraft;
+}
+
 /* ==================== Load/Save ==================== */
 
 export function loadOrderDraft(): OrderDraft {
   try {
     const raw = localStorage.getItem(LS_ORDER_DRAFT_KEY);
     if (!raw) return { graphics: [], updatedAt: now() };
+
+    // Anti-OOM: если драфт стал слишком большим — не парсим, а сбрасываем.
+    if (raw.length > MAX_DRAFT_RAW_CHARS) {
+      try {
+        localStorage.removeItem(LS_ORDER_DRAFT_KEY);
+      } catch {}
+      return { graphics: [], updatedAt: now() };
+    }
+
     const obj = JSON.parse(raw) as OrderDraft;
 
+    // минимальная нормализация
     if (!Array.isArray(obj.graphics)) obj.graphics = [];
     if (obj.size && typeof obj.size !== "object") obj.size = null;
     if (obj.item && typeof obj.item !== "object") obj.item = null;
     if (obj.engraving && typeof obj.engraving !== "object") obj.engraving = null;
 
-    return { ...obj, updatedAt: obj.updatedAt || now() };
+    const sanitized = sanitizeDraftPreviews(obj);
+
+    return { ...sanitized, updatedAt: sanitized.updatedAt || now() };
   } catch {
+    // Если JSON.parse упал или localStorage недоступен — сбрасываем ключ (чтобы не падать каждый раз).
+    try {
+      localStorage.removeItem(LS_ORDER_DRAFT_KEY);
+    } catch {}
     return { graphics: [], updatedAt: now() };
   }
 }
@@ -165,14 +251,36 @@ export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
   const prev = loadOrderDraft();
 
   // updatedAt всегда обновляем
-  const next: OrderDraft = deepMergeWithDelete(prev, { ...patch, updatedAt: now() });
+  const next0: OrderDraft = deepMergeWithDelete(prev, { ...patch, updatedAt: now() });
+  const next: OrderDraft = sanitizeDraftPreviews(next0);
 
+  // Пытаемся сохранить как есть.
   try {
-    localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
-  } catch {}
+    const raw = JSON.stringify(next);
+    // Anti-OOM: если получился слишком большой JSON — сначала пробуем выбросить превью и сохранить облегчённый.
+    if (raw.length > MAX_DRAFT_RAW_CHARS) {
+      const lite = dropAllHeavyPreviews(next);
+      localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(lite));
+      emitDraftUpdated();
+      return lite;
+    }
 
-  emitDraftUpdated();
-  return next;
+    localStorage.setItem(LS_ORDER_DRAFT_KEY, raw);
+    emitDraftUpdated();
+    return next;
+  } catch {
+    // Если localStorage.setItem упал (quota / memory), пробуем сохранить облегчённую версию.
+    try {
+      const lite = dropAllHeavyPreviews(next);
+      localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(lite));
+      emitDraftUpdated();
+      return lite;
+    } catch {
+      // Последний шанс: ничего не сохраняем, но возвращаем next (в памяти).
+      emitDraftUpdated();
+      return next;
+    }
+  }
 }
 
 /* ==================== Размеры: удобные сеттеры ==================== */
@@ -240,7 +348,7 @@ export async function clearPhotoOriginal(): Promise<OrderDraft> {
   return saveOrderDraft({
     engraving: {
       ...(cur.engraving || {}),
-      photoOriginalKey: null, // удаляем
+      photoOriginalKey: null,
       photoPreview: null,
       photoFileName: null,
       photoMime: null
