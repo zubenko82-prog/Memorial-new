@@ -870,40 +870,45 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     });
   };
 
-  // rear preview generation
-  useEffect(() => {
-    let alive = true;
-    const run = async () => {
-      const d = loadOrderDraft();
-      const eb: any = (d as any)?.editorBack || {};
-      const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
-      const meta: Record<string, any> = eb.graphicsMeta || {};
-      const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
+  // SAFE rear preview generation (NO silhouette, NO hi-res)
+useEffect(() => {
+  let alive = true;
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
-      const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
-
-      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
-      if (!hasRear) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
-
-      const mini = await renderStackedPreview({ W: 900, H: 1200, bg: { type: "gradient" }, graphics: graphicsUniq, epitaphs });
-      const big = await renderStackedPreview({ W: 1600, H: 2200, bg: { type: "gradient" }, graphics: graphicsUniq, epitaphs });
-
-      if (!alive) return;
-      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
+  const run = async () => {
+    if (!rearEnabled) {
+      saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
       dispatchDraftUpdated();
-    };
+      return;
+    }
 
-    const t = window.setTimeout(() => void run(), 380);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [rearIds, rearMeta, rearSelectedEpitaphs]);
+    const d = loadOrderDraft();
+    const eb: any = (d as any)?.editorBack || {};
+    const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+    const meta: Record<string, any> = eb.graphicsMeta || {};
+    const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
+
+    const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
+    const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
+
+    const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
+    if (!hasRear) {
+      saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
+      dispatchDraftUpdated();
+      return;
+    }
+
+    // SAFE plate preview generation (NO hi-res)
+const mini = await renderStackedPreview({ W: 900, H: 1200, bg: { type: "image", url: PLATE_BG_URL }, graphics: graphicsUniq, epitaphs });
+saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: null } as any });
+
+
+  const t = window.setTimeout(() => void run(), 600); // debounce
+  return () => {
+    alive = false;
+    clearTimeout(t);
+  };
+}, [rearEnabled, rearIds, rearMeta, rearSelectedEpitaphs]);
+
 
   /* =========================
    * PLATE (extras) state
