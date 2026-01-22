@@ -697,7 +697,7 @@ export default function Start({
                       <div style={{ fontSize: 12, opacity: 0.9, padding: 6, textAlign: "center" }}>
   {getDecodedFileName(it)}
 </div>
-                      />
+
                     </div>
                   </button>
                 ))}
