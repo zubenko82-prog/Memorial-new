@@ -1,38 +1,4 @@
 // src/screens/BackEditorStep.tsx
-//
-// Шаг «Тыл»
-//
-// Требования (актуально):
-// 1) Дополнительно (extras) по умолчанию:
-//    - Тумба = true
-//    - Цветник = true
-//    - Ваза = false
-//    (если в драфте значения отсутствуют — проставляем дефолты)
-// 2) Тыльная сторона / Надгробная плита — чекбокс жёстко привязан к раскрытию (как сейчас):
-//    - enabled=true => блок раскрыт и учитывается
-//    - enabled=false => блок закрыт и НЕ учитывается (чистим данные в draft)
-//    - ВАЖНО: при выключении enabled НЕ теряем выбор в памяти компонента,
-//      чтобы при повторном включении в этой же сессии восстановить выбор в UI
-//      (но в draft при выключении всё равно чистим).
-// 3) Внутри "Эпитафии" не показываем секцию "Выбранные эпитафии:".
-//    Выбранное показывается только в красной рамке "Выбрано" (для каждого блока отдельно).
-// 4) Усопшие:
-//    - есть ТОЛЬКО в "Тыльная сторона"
-//    - в "Надгробная плита" усопших нет
-// 5) Остальной функционал не урезаем (графика, эпитафии, превью, ограничения, и т.д.).
-//
-// Доработки превью по вашему последнему сообщению:
-// A) "Вписать в размер" — используем НОРМАЛИЗОВАННУЮ сетку слотов как в src/lib/sketchTemplates.ts:
-//    - classicSingle для 1 усопшего
-//    - doublePortrait для 2+
-//    Рисуем элементы по rect (0..1) => гарантированно вписано.
-// B) Метрика ВСЕГДА под фото: фото -> фамилия (крупно) -> имя/отчество (меньше) -> даты (ещё меньше).
-// C) Усопшие на превью тыла: показываем фото и метрику (как выше).
-//
-// Важно: Это меняет ТОЛЬКО генерацию dataURL превью в draft:
-// - editorBack.previewUrl / previewHiUrl
-// - extras.platePreviewUrl / platePreviewHiUrl
-// Если у вас на экране показывается другой источник превью — пришлите место рендера (img src=...).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -262,7 +228,6 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
   const baseImg = await loadImageSafe(src);
   if (!baseImg) return null;
 
-  // contain geometry
   const iw = baseImg.naturalWidth || baseImg.width;
   const ih = baseImg.naturalHeight || baseImg.height;
   const sr = iw / ih;
@@ -387,19 +352,21 @@ function wrapLinesCanvas(ctx: CanvasRenderingContext2D, text: string, maxW: numb
   return out.length ? out : [""];
 }
 
-/* ===== normalized slots (same as src/lib/sketchTemplates.ts) ===== */
+/* ===== Templates coords (copied from src/lib/sketchTemplates.ts) ===== */
 type NormalizedRect = { x: number; y: number; w: number; h: number; padding?: number };
 type SlotType = "cross" | "photo" | "personName" | "dates" | "epitaph" | "decor" | "flower";
 type TemplateSlot = { type: SlotType; index?: number; rect: NormalizedRect; maxScale?: number };
 
 const classicSingle: TemplateSlot[] = [
-  { type: "photo", rect: { x: 0.28, y: 0.18, w: 0.44, h: 0.40, padding: 8 } },
+  { type: "cross", rect: { x: 0.06, y: 0.05, w: 0.14, h: 0.14, padding: 4 }, maxScale: 1.25 },
+  { type: "photo", rect: { x: 0.28, y: 0.18, w: 0.44, h: 0.40, padding: 8 }, maxScale: 1.15 },
   { type: "personName", rect: { x: 0.18, y: 0.62, w: 0.64, h: 0.10, padding: 6 } },
   { type: "dates", rect: { x: 0.26, y: 0.73, w: 0.48, h: 0.07, padding: 6 } },
   { type: "epitaph", rect: { x: 0.12, y: 0.84, w: 0.76, h: 0.10, padding: 8 } }
 ];
 
 const doublePortrait: TemplateSlot[] = [
+  { type: "cross", rect: { x: 0.06, y: 0.05, w: 0.14, h: 0.14, padding: 4 }, maxScale: 1.25 },
   { type: "photo", index: 0, rect: { x: 0.12, y: 0.22, w: 0.34, h: 0.38, padding: 8 } },
   { type: "photo", index: 1, rect: { x: 0.54, y: 0.22, w: 0.34, h: 0.38, padding: 8 } },
   { type: "personName", index: 0, rect: { x: 0.08, y: 0.62, w: 0.40, h: 0.10, padding: 6 } },
@@ -418,7 +385,7 @@ function rectFromNorm(W: number, H: number, nr: NormalizedRect) {
   return { x, y, w: Math.max(1, w), h: Math.max(1, h) };
 }
 
-type PersonPreviewBlock = {
+type PersonPreview = {
   id: string;
   photo: string | null;
   lastName: string;
@@ -428,17 +395,39 @@ type PersonPreviewBlock = {
   deathDate: string;
 };
 
-async function renderPreviewUsingTemplate(params: {
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+function fitTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxW: number, startSize: number, minSize: number) {
+  let fs = startSize;
+  while (fs > minSize) {
+    ctx.font = `${fs}px "Times New Roman", serif`;
+    if (ctx.measureText(text).width <= maxW) break;
+    fs -= 1;
+  }
+  return fs;
+}
+
+function splitName(p: PersonPreview) {
+  const ln = (p.lastName || "").trim();
+  const fn = [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
+  const dates = [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
+  return { ln, fn, dates };
+}
+
+async function renderPreviewByTemplate(params: {
   W: number;
   H: number;
   bg: { type: "gradient" } | { type: "image"; url: string };
   bgFit?: "cover" | "contain";
   overlayPng?: string | null;
+
+  people: PersonPreview[];
   graphics: { url?: string; preview?: string }[];
   epitaphs: string[];
-  people: PersonPreviewBlock[];
 }): Promise<string | null> {
-  const { W, H, bg, bgFit = "cover", overlayPng, graphics, epitaphs, people } = params;
+  const { W, H, bg, bgFit = "cover", overlayPng, people, graphics, epitaphs } = params;
 
   const canvas = document.createElement("canvas");
   canvas.width = W;
@@ -459,99 +448,88 @@ async function renderPreviewUsingTemplate(params: {
   } else {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
-    const im = await loadImageSafe(bg.url);
-    if (im) {
-      if (bgFit === "contain") drawImageContain(ctx, im, { x: 0, y: 0, w: W, h: H });
-      else drawImageCover(ctx, im, { x: 0, y: 0, w: W, h: H });
+    const bgIm = await loadImageSafe(bg.url);
+    if (bgIm) {
+      if (bgFit === "contain") drawImageContain(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
+      else drawImageCover(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
     }
   }
 
-  // overlay silhouette
+  // overlay
   if (overlayPng) {
     const ov = await loadImageSafe(overlayPng);
     if (ov) ctx.drawImage(ov, 0, 0, W, H);
   }
 
-  // template selection
   const tpl = people.length <= 1 ? classicSingle : doublePortrait;
 
-  // helpers to pick graphics in order (just stack them into decor slots logic-free)
-  const g0 = graphics[0]?.preview || graphics[0]?.url || null;
+  // draw "cross/decor" = first graphic (if exists)
+  const decorUrl = graphics[0]?.preview || graphics[0]?.url || null;
+  if (decorUrl) {
+    const crossSlot = tpl.find((s) => s.type === "cross");
+    if (crossSlot) {
+      const r = rectFromNorm(W, H, crossSlot.rect);
+      const im = await loadImageSafe(decorUrl);
+      if (im) drawImageContain(ctx, im, r);
+    }
+  }
 
-  // PHOTO slots: people[0], people[1] etc.
-  for (const slot of tpl) {
-    if (slot.type !== "photo") continue;
+  // draw photos
+  for (const slot of tpl.filter((s) => s.type === "photo")) {
     const idx = slot.index ?? 0;
     const p = people[idx];
     if (!p?.photo) continue;
-
     const r = rectFromNorm(W, H, slot.rect);
     const im = await loadImageSafe(p.photo);
     if (im) drawImageContain(ctx, im, r);
   }
 
-  // PERSON NAME slots: render last/first+middle as 2 lines, big->smaller. Dates under (in dates slots).
-  for (const slot of tpl) {
-    if (slot.type !== "personName") continue;
+  // metrica: ALWAYS under photo, rendered using personName + dates slots
+  for (const slot of tpl.filter((s) => s.type === "personName")) {
     const idx = slot.index ?? 0;
     const p = people[idx];
     if (!p) continue;
-
     const r = rectFromNorm(W, H, slot.rect);
-    const ln = (p.lastName || "").trim();
-    const fn = [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
+    const { ln, fn } = splitName(p);
 
     ctx.save();
     ctx.fillStyle = "#fff";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    // METRICA FONT SIZES (fix): lastName big, first/middle smaller
-    let lastSize = Math.max(14, Math.floor(r.h * 0.55));
-    let nameSize = Math.max(12, Math.floor(r.h * 0.40));
-    lastSize = Math.min(lastSize, 28);
-    nameSize = Math.min(nameSize, 20);
+    // sizes: ln > fn
+    const baseLast = clamp(Math.floor(r.h * 0.60), 16, 34);
+    const baseFn = clamp(Math.floor(r.h * 0.42), 13, 24);
 
-    // fit by width
-    const fitLine = (text: string, targetSize: number) => {
-      let fs = targetSize;
-      while (fs > 10) {
-        ctx.font = `${fs}px "Times New Roman", serif`;
-        if (ctx.measureText(text).width <= r.w) break;
-        fs -= 1;
-      }
-      return fs;
-    };
+    let lastSize = ln ? fitTextToWidth(ctx, ln, r.w, baseLast, 12) : baseLast;
+    let fnSize = fn ? fitTextToWidth(ctx, fn, r.w, baseFn, 11) : baseFn;
 
-    lastSize = ln ? fitLine(ln, lastSize) : lastSize;
-    nameSize = fn ? fitLine(fn, nameSize) : nameSize;
+    // stack two lines vertically inside slot
+    const lh1 = Math.round(lastSize * 1.05);
+    const lh2 = Math.round(fnSize * 1.05);
+    const total = (ln ? lh1 : 0) + (fn ? lh2 : 0);
+    let y = r.y + Math.round(r.h / 2 - total / 2);
 
-    const lines: { text: string; size: number }[] = [];
-    if (ln) lines.push({ text: ln, size: lastSize });
-    if (fn) lines.push({ text: fn, size: nameSize });
-
-    const totalH = lines.reduce((acc, l) => acc + Math.round(l.size * 1.05), 0);
-    let y = r.y + Math.round(r.h / 2 - totalH / 2);
-
-    for (const l of lines) {
-      ctx.font = `${l.size}px "Times New Roman", serif`;
-      const lh = Math.round(l.size * 1.05);
-      ctx.fillText(l.text, r.x + r.w / 2, y + lh / 2);
-      y += lh;
+    if (ln) {
+      ctx.font = `${lastSize}px "Times New Roman", serif`;
+      ctx.fillText(ln, r.x + r.w / 2, y + lh1 / 2);
+      y += lh1;
+    }
+    if (fn) {
+      ctx.font = `${fnSize}px "Times New Roman", serif`;
+      ctx.fillText(fn, r.x + r.w / 2, y + lh2 / 2);
+      y += lh2;
     }
 
     ctx.restore();
   }
 
-  // DATES slots: smaller than names
-  for (const slot of tpl) {
-    if (slot.type !== "dates") continue;
+  for (const slot of tpl.filter((s) => s.type === "dates")) {
     const idx = slot.index ?? 0;
     const p = people[idx];
     if (!p) continue;
-
     const r = rectFromNorm(W, H, slot.rect);
-    const dates = [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
+    const { dates } = splitName(p);
     if (!dates) continue;
 
     ctx.save();
@@ -559,66 +537,52 @@ async function renderPreviewUsingTemplate(params: {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    let fs = Math.max(11, Math.floor(r.h * 0.62));
-    fs = Math.min(fs, 18);
-
-    while (fs > 9) {
-      ctx.font = `${fs}px "Times New Roman", serif`;
-      if (ctx.measureText(dates).width <= r.w) break;
-      fs -= 1;
-    }
-
-    ctx.fillText(dates, r.x + r.w / 2, r.y + r.h / 2);
-    ctx.restore();
-  }
-
-  // EPITAPH slot: smaller font
-  for (const slot of tpl) {
-    if (slot.type !== "epitaph") continue;
-    const r = rectFromNorm(W, H, slot.rect);
-    const t = epitaphs.join("\n").trim();
-    if (!t) continue;
-
-    ctx.save();
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    let fs = Math.max(10, Math.floor(r.h * 0.22));
-    fs = Math.min(fs, 14);
-
+    // dates smallest
+    const baseDates = clamp(Math.floor(r.h * 0.70), 12, 20);
+    const fs = fitTextToWidth(ctx, dates, r.w, baseDates, 10);
     ctx.font = `${fs}px "Times New Roman", serif`;
-    const maxW = Math.max(10, r.w - 8);
-    let lines = wrapLinesCanvas(ctx, t, maxW);
-    let lh = Math.round(fs * 1.15);
-
-    while (lines.length * lh > r.h - 6 && fs > 9) {
-      fs -= 1;
-      ctx.font = `${fs}px "Times New Roman", serif`;
-      lines = wrapLinesCanvas(ctx, t, maxW);
-      lh = Math.round(fs * 1.15);
-    }
-
-    const total = lines.length * lh;
-    let ty = r.y + Math.round(r.h / 2 - total / 2 + lh / 2);
-    for (const line of lines) {
-      ctx.fillText(line, r.x + r.w / 2, ty);
-      ty += lh;
-    }
+    ctx.fillText(dates, r.x + r.w / 2, r.y + r.h / 2);
 
     ctx.restore();
   }
 
-  // If there are graphics and no dedicated slots, we simply draw the first graphic as a "decor" in the photo area top-left-ish.
-  if (g0) {
-    const im = await loadImageSafe(g0);
-    if (im) {
-      const r = { x: Math.round(W * 0.06), y: Math.round(H * 0.06), w: Math.round(W * 0.16), h: Math.round(H * 0.16) };
-      drawImageContain(ctx, im, r);
+  // epitaph (single block, smaller)
+  const epSlot = tpl.find((s) => s.type === "epitaph");
+  if (epSlot) {
+    const r = rectFromNorm(W, H, epSlot.rect);
+    const t = epitaphs.join("\n").trim();
+    if (t) {
+      ctx.save();
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      let fs = clamp(Math.floor(r.h * 0.24), 10, 14);
+      ctx.font = `${fs}px "Times New Roman", serif`;
+
+      const maxW = Math.max(10, r.w - 8);
+      let lines = wrapLinesCanvas(ctx, t, maxW);
+      let lh = Math.round(fs * 1.15);
+
+      while (lines.length * lh > r.h - 6 && fs > 9) {
+        fs -= 1;
+        ctx.font = `${fs}px "Times New Roman", serif`;
+        lines = wrapLinesCanvas(ctx, t, maxW);
+        lh = Math.round(fs * 1.15);
+      }
+
+      const total = lines.length * lh;
+      let ty = r.y + Math.round(r.h / 2 - total / 2 + lh / 2);
+      for (const line of lines) {
+        ctx.fillText(line, r.x + r.w / 2, ty);
+        ty += lh;
+      }
+
+      ctx.restore();
     }
   }
 
-  return canvas.toDataURL("image/jpeg", 0.9);
+  return canvas.toDataURL("image/jpeg", 0.92);
 }
 
 /* ========= Usopshie (rear people) ========= */
@@ -701,7 +665,7 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
-/* ===== Image compression ===== */
+/* ===== Image compression (для безопасного сохранения в localStorage) ===== */
 const DRAFT_IMG_MAX_BYTES = 600 * 1024;
 const DRAFT_IMG_MAX_DIM = 1600;
 const JPEG_Q_START = 0.9;
@@ -782,6 +746,7 @@ async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_B
   return await blobToDataUrl(out);
 }
 
+/* ===== Form helpers ===== */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "grid", gap: 4, width: "100%", boxSizing: "border-box" }}>
@@ -840,6 +805,7 @@ function SideLikePlateBlock(props: {
   chosenList: any[];
   onRemoveChosenItem: (gid: string) => void;
 }) {
+  // (UI часть без изменений относительно вашей последней версии; не урезаю)
   const {
     title,
     enabled,
@@ -875,6 +841,7 @@ function SideLikePlateBlock(props: {
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
+  // grid cols
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
   useEffect(() => {
@@ -989,6 +956,7 @@ function SideLikePlateBlock(props: {
     </label>
   );
 
+  // people CRUD
   const updatePerson = (idx: number, patch: Partial<Person>) =>
     setPeople((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   const removePerson = (idx: number) =>
@@ -1048,10 +1016,7 @@ function SideLikePlateBlock(props: {
             {epitaphList.length > 0 && (
               <div style={{ display: "grid", gap: 6 }}>
                 {epitaphList.map((t, idx) => (
-                  <div
-                    key={`ep-preview-${idx}-${normEpitaph(t)}`}
-                    style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
-                  >
+                  <div key={`ep-preview-${idx}-${normEpitaph(t)}`} style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}>
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
                     <button
                       type="button"
@@ -1069,7 +1034,7 @@ function SideLikePlateBlock(props: {
             {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </div>
 
-          {/* Усопшие (только тыл) */}
+          {/* Усопшие */}
           {showPeople && (
             <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
@@ -1085,30 +1050,16 @@ function SideLikePlateBlock(props: {
                       <div key={id} style={{ ...glassPanelStyle(), padding: 0 }}>
                         <div
                           onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "6px 8px",
-                            background: "rgba(0,0,0,0.66)",
-                            borderRadius: "12px 12px 0 0",
-                            cursor: "pointer"
-                          }}
+                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", background: "rgba(0,0,0,0.66)", borderRadius: "12px 12px 0 0", cursor: "pointer" }}
                         >
                           <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
                           <div style={{ fontSize: 16, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {nameLeft}
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); moveUp(idx); }} disabled={idx === 0} style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }} title="Выше">
-                              ▲
-                            </button>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); moveDown(idx); }} disabled={idx === people.length - 1} style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }} title="Ниже">
-                              ▼
-                            </button>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); removePerson(idx); }} style={iconBtn()} title="Удалить">
-                              ✖
-                            </button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); moveUp(idx); }} disabled={idx === 0} style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }} title="Выше">▲</button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); moveDown(idx); }} disabled={idx === people.length - 1} style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }} title="Ниже">▼</button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); removePerson(idx); }} style={iconBtn()} title="Удалить">✖</button>
                           </div>
                         </div>
 
@@ -1142,11 +1093,7 @@ function SideLikePlateBlock(props: {
                               </div>
 
                               <div>
-                                {!hasPhoto && (
-                                  <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
-                                    Прикрепите фотографию. Она сохранится в заявке.
-                                  </div>
-                                )}
+                                {!hasPhoto && <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>Прикрепите фотографию. Она сохранится в заявке.</div>}
                                 <PhotoField
                                   label="Фотография"
                                   value={{ url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
@@ -1162,9 +1109,7 @@ function SideLikePlateBlock(props: {
                 </div>
 
                 <div style={{ marginTop: 2 }}>
-                  <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>
-                    Добавить
-                  </button>
+                  <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>Добавить</button>
                 </div>
               </div>
             </LoudAccordion>
@@ -1179,13 +1124,7 @@ function SideLikePlateBlock(props: {
                   {QUICK_EPITAPHS.map((t) => {
                     const active = hasByNorm(selectedEpitaphs, t);
                     return (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => onToggleEpitaph(t)}
-                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
-                        title={t}
-                      >
+                      <button key={t} type="button" onClick={() => onToggleEpitaph(t)} style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }} title={t}>
                         {t}
                       </button>
                     );
@@ -1321,7 +1260,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         if (alive) setCatsLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -1346,6 +1287,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
   const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
 
+  // проставляем дефолты в draft, если отсутствуют (однократно)
   useEffect(() => {
     const d = loadOrderDraft() as any;
     const ex = (d?.extras || {}) as any;
@@ -1376,12 +1318,15 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
   const [rearPeople, setRearPeople] = useState<Person[]>(rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]);
 
+  // transient photo urls
   const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const setRearTransientFor = useCallback((id: string, url: string | null) => {
     setRearTransientPhotoUrlById((prev) => {
       const prevUrl = prev[id];
       if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
-        try { URL.revokeObjectURL(prevUrl); } catch {}
+        try {
+          URL.revokeObjectURL(prevUrl);
+        } catch {}
       }
       return { ...prev, [id]: url ?? null };
     });
@@ -1389,11 +1334,16 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   useEffect(() => {
     return () => {
       Object.values(rearTransientPhotoUrlById).forEach((u) => {
-        if (u && u.startsWith("blob:")) { try { URL.revokeObjectURL(u); } catch {} }
+        if (u && u.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
       });
     };
   }, [rearTransientPhotoUrlById]);
 
+  // photo handler
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
@@ -1436,10 +1386,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         (async () => {
           try {
             const safe = await compressBlobToJpegDataUrl(maybeFile, DRAFT_IMG_MAX_BYTES);
-            try { URL.revokeObjectURL(tempUrl); } catch {}
+            try {
+              URL.revokeObjectURL(tempUrl);
+            } catch {}
             commitLocal({ photoDataUrl: safe, photoUrl: safe });
           } catch {
-            try { URL.revokeObjectURL(tempUrl); } catch {}
+            try {
+              URL.revokeObjectURL(tempUrl);
+            } catch {}
             commitLocal({ photoUrl: tempUrl, photoDataUrl: null });
           }
         })();
@@ -1468,24 +1422,28 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     [setRearTransientFor]
   );
 
-  const rearPeopleForPreview = useMemo<PersonPreviewBlock[]>(() => {
-    return rearPeople.slice(0, 2).map((p) => {
-      const transient = rearTransientPhotoUrlById[p.id];
-      const stable = p.photoDataUrl ?? p.photoUrl ?? null;
-      const photo = transient ?? stable;
+  const rearPeopleForPreview = useMemo<PersonPreview[]>(() => {
+    return rearPeople
+      .slice(0, 2)
+      .map((p) => {
+        const transient = rearTransientPhotoUrlById[p.id];
+        const stable = p.photoDataUrl ?? p.photoUrl ?? null;
+        const photo = (transient ?? stable) as string | null;
 
-      return {
-        id: p.id,
-        photo,
-        lastName: (p.lastName || "").trim(),
-        firstName: (p.firstName || "").trim(),
-        middleName: (p.middleName || "").trim(),
-        birthDate: (p.birthDate || "").trim(),
-        deathDate: (p.deathDate || "").trim()
-      };
-    });
+        return {
+          id: p.id,
+          photo,
+          lastName: (p.lastName || "").trim(),
+          firstName: (p.firstName || "").trim(),
+          middleName: (p.middleName || "").trim(),
+          birthDate: (p.birthDate || "").trim(),
+          deathDate: (p.deathDate || "").trim()
+        };
+      })
+      .filter((p) => p.photo || p.lastName || p.firstName || p.middleName || p.birthDate || p.deathDate);
   }, [rearPeople, rearTransientPhotoUrlById]);
 
+  // persist rear epitaphs when enabled
   const prevRearEpiJsonRef = useRef<string>("");
   useEffect(() => {
     if (!rearEnabled) return;
@@ -1567,6 +1525,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   };
   const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
 
+  // rear people save on leave (only when enabled)
   const flushRearPeopleSaveNow = useCallback(() => {
     const norm = normalizePersonsForSave(rearPeople);
     saveOrderDraft({ editorBack: { people: norm.length ? norm : null } as any });
@@ -1597,6 +1556,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, [rearEnabled, flushRearPeopleSaveNow]);
 
+  // toggle rear enabled: OFF clears draft only, ON restores from memory
   useEffect(() => {
     saveOrderDraft({ editorBack: { enabled: rearEnabled } as any });
     dispatchDraftUpdated();
@@ -1634,6 +1594,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rearEnabled]);
 
+  // rear preview generation (template-based)
   useEffect(() => {
     let alive = true;
 
@@ -1659,26 +1620,26 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const overlay900 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 900, H: 1200, mirrorX: true }) : null;
       const overlay1600 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 1600, H: 2200, mirrorX: true }) : null;
 
-      const mini = await renderPreviewUsingTemplate({
+      const mini = await renderPreviewByTemplate({
         W: 900,
         H: 1200,
         bg: { type: "gradient" },
         bgFit: "cover",
         overlayPng: overlay900,
+        people: rearPeopleForPreview,
         graphics: graphicsUniq,
-        epitaphs,
-        people: rearPeopleForPreview
+        epitaphs
       });
 
-      const big = await renderPreviewUsingTemplate({
+      const big = await renderPreviewByTemplate({
         W: 1600,
         H: 2200,
         bg: { type: "gradient" },
         bgFit: "cover",
         overlayPng: overlay1600,
+        people: rearPeopleForPreview,
         graphics: graphicsUniq,
-        epitaphs,
-        people: rearPeopleForPreview
+        epitaphs
       });
 
       if (!alive) return;
@@ -1692,14 +1653,16 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       alive = false;
       clearTimeout(t);
     };
-  }, [rearEnabled, rearIds, rearMeta, rearSelectedEpitaphs, itemUrl, rearPeopleForPreview]);
+  }, [rearEnabled, itemUrl, rearPeopleForPreview]);
 
   /* =========================
    * PLATE (extras)
    * ========================= */
   const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
+
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
+
   const initialPlateSelected = useMemo(() => {
     const d = loadOrderDraft();
     const ex: any = (d as any)?.extras || {};
@@ -1707,6 +1670,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
+
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
   const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
@@ -1878,26 +1842,26 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
-      // For plate, people are not used.
-      const mini = await renderPreviewUsingTemplate({
+      const mini = await renderPreviewByTemplate({
         W: 900,
         H: 1200,
         bg: { type: "image", url: PLATE_BG_URL },
         bgFit: "cover",
         overlayPng: null,
+        people: [],
         graphics: graphicsUniq,
-        epitaphs,
-        people: []
+        epitaphs
       });
-      const big = await renderPreviewUsingTemplate({
+
+      const big = await renderPreviewByTemplate({
         W: 1600,
         H: 2200,
         bg: { type: "image", url: PLATE_BG_URL },
         bgFit: "cover",
         overlayPng: null,
+        people: [],
         graphics: graphicsUniq,
-        epitaphs,
-        people: []
+        epitaphs
       });
 
       if (!alive) return;
@@ -1913,13 +1877,17 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
   const handleBack = useCallback(() => {
-    try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
+    try {
+      if (rearEnabled) flushRearPeopleSaveNow();
+    } catch {}
     setOutro(true);
     setTimeout(() => onBack?.(), 320);
   }, [flushRearPeopleSaveNow, onBack, rearEnabled]);
 
   const handleContinue = useCallback(() => {
-    try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
+    try {
+      if (rearEnabled) flushRearPeopleSaveNow();
+    } catch {}
     setOutro(true);
     setTimeout(() => onContinue?.(), 320);
   }, [flushRearPeopleSaveNow, onContinue, rearEnabled]);
@@ -2000,21 +1968,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           customText={rearCustomText}
           setCustomText={setRearCustomText}
           onToggleEpitaph={toggleRearEpitaph}
-          onAddCustom={() => {
-            if (!rearEnabled) return;
-            const raw = (rearCustomText || "").trim();
-            const t = normEpitaph(raw);
-            if (!t) return;
-            setRearSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([raw])));
-            setRearCustomText("");
-          }}
-          onRemoveEpitaph={(t) => {
-            if (!rearEnabled) return;
-            setRearSelectedEpitaphs((prev) => {
-              const idx = indexOfByNorm(prev, t);
-              return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
-            });
-          }}
+          onAddCustom={addRearCustom}
+          onRemoveEpitaph={removeRearEpitaph}
           epitaphList={rearEpitaphList}
           catsLoading={catsLoading}
           catsError={catsError}
@@ -2064,8 +2019,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       </section>
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
-        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
-        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
+        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
+          Назад
+        </button>
+
+        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
+          Продолжить
+        </button>
       </div>
     </div>
   );
