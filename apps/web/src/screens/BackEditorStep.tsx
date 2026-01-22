@@ -2,25 +2,38 @@
 //
 // Шаг «Тыл»
 //
-// Изменения по задаче:
-// 1) "Дополнительно" по умолчанию:
-//    - Тумба: ВКЛ
-//    - Цветник: ВКЛ
-//    - Ваза: ВЫКЛ
-// 2) Если выключен чекбокс блока (Тыльная сторона / Надгробная плита):
-//    - содержимое НЕ показываем,
-//    - НЕ учитываем ранее выбранное (очищаем из draft соответствующие поля),
-//    - превью тоже очищаем.
-// 3) Выбор должен сохраняться даже если внутренние аккордеоны не открываются.
-//    Поэтому мы не завязываемся на "открыт/закрыт": состояние хранится в draft,
-//    а локальные state синхронизируем с draft.
-// 4) Внутри блоков не показываем каталоги выбора эпитафий/графики — оставляем ТОЛЬКО "Выбрано" (красная рамка).
-// 5) Аккордеон "Усопшие" — ТОЛЬКО для тыльной стороны. В надгробной плите его нет.
+// Требования (текущее ТЗ):
+// 1) Тыльная сторона — блок визуально/поведенчески как "Надгробная плита":
+//    - чекбокс включения/выключения (rearEnabled)
+//    - блок "Выбрано" (красная рамка): выбранная графика + эпитафии с удалением
+//    - аккордеоны: "Усопшие", "Эпитафии", "Графика"
+//    - при выключении rearEnabled: чистим editorBack.* и скрываем эскиз на обзоре
+// 2) Надгробная плита — аналогичный блок:
+//    - чекбокс включения/выключения (extras.headstonePlate)
+//    - "Выбрано", "Эпитафии", "Графика"
+//    - превью плиты (extras.platePreviewUrl/platePreviewHiUrl) с фоном PLATE_BG_URL
+// 3) Вернуть блок "Дополнительно" (чекбоксы): Тумба, Цветник, Ваза (пишем в draft.extras)
+//    - по умолчанию: Тумба=true, Цветник=true, Ваза=false
+// 4) Превью тыла должно рисовать "контур/силуэт" резной работы:
+//    - берём img src={order.item.url} (то есть draft.item.url)
+//    - строим силуэт по alpha (если есть) или по фону углов (fallback)
+//    - заливаем #1b1b1b и зеркалим по X (тыльная сторона)
+//    - накладываем на градиентный фон
+//
+// ВАЖНО:
+// - Сохранение в draft патчами, удаление через null.
+// - Каталог графики общий (fetchCatalog("graphics")).
+// - Усопшие (для тыла) — 1:1 как в EngravingStep, но внутри аккордеона «Усопшие» блока «Тыльная сторона».
+// - Для надёжности сохранения тяжёлых фото:
+//   • в драфт пишем ТОЛЬКО по кнопкам «Назад»/«Продолжить» и по событиям ухода/скрытия вкладки,
+//   • при выборе фото сжимаем до безопасного размера (JPEG dataURL) сразу в локальный state,
+//   • в драфте храним только компактный photoPreview (dataURL или внешний URL).
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import PhotoField, { type PhotoValue } from "../components/PhotoField";
 import { fetchCatalog } from "../api";
+import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT, type OrderDraft } from "../lib/order";
 
 /* ========= Styles ========= */
@@ -105,6 +118,29 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   );
 }
 
+/* ========= Epitaph helpers ========= */
+const normEpitaph = (t: string) =>
+  (t || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+
+function indexOfByNorm(list: string[], needle: string): number {
+  const n = normEpitaph(needle);
+  for (let i = 0; i < list.length; i++) {
+    if (normEpitaph(list[i]) === n) return i;
+  }
+  return -1;
+}
+function hasByNorm(list: string[], needle: string) {
+  return indexOfByNorm(list, needle) !== -1;
+}
+function uniqueByNorm(list: string[]): string[] {
+  const out: string[] = [];
+  for (const t of list) if (!hasByNorm(out, t)) out.push(t);
+  return out;
+}
+
 /* ========= Accordion ========= */
 function LoudAccordion({
   title,
@@ -161,32 +197,286 @@ function LoudAccordion({
   );
 }
 
-/* ========= Helpers ========= */
-const normEpitaph = (t: string) =>
-  (t || "")
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t]+$/gm, "")
-    .trim();
+/* ========= Preview helpers ========= */
+const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
 
-function indexOfByNorm(list: string[], needle: string): number {
-  const n = normEpitaph(needle);
-  for (let i = 0; i < list.length; i++) {
-    if (normEpitaph(list[i]) === n) return i;
-  }
-  return -1;
+function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    if (!src) return resolve(null);
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => resolve(im);
+    im.onerror = () => resolve(null);
+    im.src = src;
+  });
 }
-function uniqueByNorm(list: string[]): string[] {
+
+async function buildSilhouetteOverlayDataUrl(params: {
+  src: string;
+  W: number;
+  H: number;
+  mirrorX?: boolean;
+}): Promise<string | null> {
+  const { src, W, H, mirrorX } = params;
+  const baseImg = await loadImageSafe(src);
+  if (!baseImg) return null;
+
+  // contain geometry
+  const iw = baseImg.naturalWidth || baseImg.width;
+  const ih = baseImg.naturalHeight || baseImg.height;
+  const sr = iw / ih;
+  const dr = W / H;
+
+  let rw = W,
+    rh = H,
+    rx = 0,
+    ry = 0;
+  if (sr > dr) {
+    rh = Math.round(W / sr);
+    ry = Math.round((H - rh) / 2);
+  } else {
+    rw = Math.round(H * sr);
+    rx = Math.round((W - rw) / 2);
+  }
+
+  // draw contain into offscreen
+  const off = document.createElement("canvas");
+  off.width = rw;
+  off.height = rh;
+  const octx = off.getContext("2d");
+  if (!octx) return null;
+  octx.clearRect(0, 0, rw, rh);
+  octx.drawImage(baseImg, 0, 0, rw, rh);
+
+  const imgData = octx.getImageData(0, 0, rw, rh);
+  const d = imgData.data;
+
+  // detect alpha usage
+  let hasUsefulAlpha = false;
+  for (let i = 3; i < d.length; i += 4) {
+    if (d[i] !== 255) {
+      hasUsefulAlpha = true;
+      break;
+    }
+  }
+
+  // create mask
+  const mask = octx.createImageData(rw, rh);
+  const md = mask.data;
+
+  if (hasUsefulAlpha) {
+    for (let i = 0; i < d.length; i += 4) {
+      const A = d[i + 3];
+      const alpha = A > 10 ? 255 : 0;
+      md[i + 0] = 0;
+      md[i + 1] = 0;
+      md[i + 2] = 0;
+      md[i + 3] = alpha;
+    }
+  } else {
+    // background by corners (fallback)
+    const pxAt = (x: number, y: number) => {
+      const idx = (y * rw + x) * 4;
+      return [d[idx], d[idx + 1], d[idx + 2]] as [number, number, number];
+    };
+    const corners = [pxAt(0, 0), pxAt(rw - 1, 0), pxAt(0, rh - 1), pxAt(rw - 1, rh - 1)];
+    const bg = corners
+      .reduce(
+        (acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number],
+        [0, 0, 0]
+      )
+      .map((v) => Math.round(v / 4)) as [number, number, number];
+
+    const BG_DELTA = 26;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i + 0],
+        g = d[i + 1],
+        b = d[i + 2];
+      const diff = Math.max(Math.abs(r - bg[0]), Math.abs(g - bg[1]), Math.abs(b - bg[2]));
+      const alpha = diff > BG_DELTA ? 255 : 0;
+      md[i + 0] = 0;
+      md[i + 1] = 0;
+      md[i + 2] = 0;
+      md[i + 3] = alpha;
+    }
+  }
+
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = rw;
+  maskCanvas.height = rh;
+  const mctx = maskCanvas.getContext("2d");
+  if (!mctx) return null;
+  mctx.putImageData(mask, 0, 0);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+
+  if (mirrorX) {
+    ctx.translate(W, 0);
+    ctx.scale(-1, 1);
+  }
+
+  ctx.fillStyle = "#1b1b1b";
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = "destination-in";
+
+  // when mirrored, keep placement
+  const drawX = mirrorX ? W - (rx + rw) : rx;
+  ctx.drawImage(maskCanvas, drawX, ry);
+
+  ctx.restore();
+
+  return canvas.toDataURL("image/png");
+}
+
+function wrapLinesCanvas(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
   const out: string[] = [];
-  for (const t of list) {
-    const n = normEpitaph(t);
-    if (!n) continue;
-    if (out.some((x) => normEpitaph(x) === n)) continue;
-    out.push(t);
+  const paras = String(text || "").split(/\r?\n/);
+  for (const para of paras) {
+    const words = para.split(/\s+/).filter(Boolean);
+    let line = "";
+    for (const w of words) {
+      const test = line ? `${line} ${w}` : w;
+      if (ctx.measureText(test).width <= maxW) line = test;
+      else {
+        if (line) out.push(line);
+        line = w;
+      }
+    }
+    if (line) out.push(line);
   }
-  return out;
+  return out.length ? out : [""];
 }
 
-/* ========= People (rear) types & helpers ========= */
+async function renderStackedPreview(params: {
+  W: number;
+  H: number;
+  bg?: { type: "gradient" } | { type: "image"; url: string };
+  overlayPng?: string | null;
+  graphics: { url?: string; preview?: string }[];
+  epitaphs: string[];
+}): Promise<string | null> {
+  const { W, H, bg, overlayPng, graphics, epitaphs } = params;
+  if (W <= 0 || H <= 0) return null;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // background
+  if (!bg || bg.type === "gradient") {
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "#6e6e6e");
+    grad.addColorStop(0.2, "#464545");
+    grad.addColorStop(0.4, "#424242");
+    grad.addColorStop(0.7, "#888");
+    grad.addColorStop(1.0, "#ffffff");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+  } else if (bg.type === "image") {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, W, H);
+    const im = await loadImageSafe(bg.url);
+    if (im) {
+      const sr = im.width / im.height;
+      const dr = W / H;
+      let dw = W,
+        dh = H,
+        dx = 0,
+        dy = 0;
+      if (sr > dr) {
+        dh = Math.round(W / sr);
+        dy = Math.round((H - dh) / 2);
+      } else {
+        dw = Math.round(H * sr);
+        dx = Math.round((W - dw) / 2);
+      }
+      ctx.drawImage(im, dx, dy, dw, dh);
+    }
+  }
+
+  // overlay silhouette (rear)
+  if (overlayPng) {
+    const ov = await loadImageSafe(overlayPng);
+    if (ov) ctx.drawImage(ov, 0, 0, W, H);
+  }
+
+  const items: { kind: "g" | "t"; url?: string; text?: string }[] = [];
+  for (const g of graphics) items.push({ kind: "g", url: g.preview || g.url });
+  for (const t of epitaphs) items.push({ kind: "t", text: t });
+
+  if (items.length === 0) return null;
+
+  // layout
+  const pad = Math.round(Math.min(W, H) * 0.06);
+  const top = pad;
+  const bottom = H - pad;
+  const gap = Math.round(Math.min(W, H) * 0.02);
+  const usable = Math.max(10, bottom - top);
+  const blockH = Math.max(60, Math.floor((usable - gap * (items.length - 1)) / items.length));
+  const totalH = items.length * blockH + gap * (items.length - 1);
+  let y = Math.max(top, Math.floor((H - totalH) / 2));
+
+  const blockW = Math.floor(W * 0.35);
+  const x = Math.floor((W - blockW) / 2);
+
+  for (const it of items) {
+    const r = { x, y, w: blockW, h: blockH };
+
+    if (it.kind === "g" && it.url) {
+      const im = await loadImageSafe(it.url);
+      if (im) {
+        const sr = im.width / im.height;
+        const dr = r.w / r.h;
+        let dw = r.w,
+          dh = r.h,
+          dx = r.x,
+          dy = r.y;
+        if (sr > dr) {
+          dh = Math.round(r.w / sr);
+          dy = r.y + Math.round((r.h - dh) / 2);
+        } else {
+          dw = Math.round(r.h * sr);
+          dx = r.x + Math.round((r.w - dw) / 2);
+        }
+        ctx.drawImage(im, dx, dy, dw, dh);
+      }
+    }
+
+    if (it.kind === "t" && it.text) {
+      ctx.save();
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const fontSize = Math.max(12, Math.floor(r.h * 0.14));
+      ctx.font = `${fontSize}px "Times New Roman", serif`;
+      const maxW = r.w - 12;
+      const lines = wrapLinesCanvas(ctx, it.text, maxW);
+      const lh = Math.round(fontSize * 1.18);
+      const total = lines.length * lh;
+      let ty = r.y + Math.round(r.h / 2 - total / 2 + lh / 2);
+      for (const line of lines) {
+        ctx.fillText(line, r.x + r.w / 2, ty);
+        ty += lh;
+      }
+      ctx.restore();
+    }
+
+    y += blockH + gap;
+  }
+
+  return canvas.toDataURL("image/jpeg", 0.92);
+}
+
+/* ========= Usopshie (rear people) - 1:1 EngravingStep (adapted) ========= */
 type Person = {
   id: string;
   lastName?: string;
@@ -206,6 +496,7 @@ type NormalizedPerson = {
   deathDate?: string;
   photoPreview: string | null;
 };
+
 function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
   if (!Array.isArray(list)) return [];
   return list.map((d, i) => ({
@@ -242,6 +533,8 @@ function makeBlankPerson(id?: string): Person {
     photoDataUrl: null
   };
 }
+
+/* ===== Date validation (локально) ===== */
 function parseFlexibleDate(input?: string): Date | null {
   const s = (input || "").trim();
   if (!s) return null;
@@ -265,7 +558,7 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
-/* ===== Image compression (safe localStorage) ===== */
+/* ===== Image compression (для безопасного сохранения в localStorage) ===== */
 const DRAFT_IMG_MAX_BYTES = 600 * 1024; // 600 KiB
 const DRAFT_IMG_MAX_DIM = 1600;
 const JPEG_Q_START = 0.9;
@@ -329,6 +622,7 @@ async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_B
   }
   if (out.size <= maxBytes) return await blobToDataUrl(out);
 
+  // если не уложились — ещё уменьшаем габариты
   let scale = 0.9;
   for (let i = 0; i < 4 && out.size > maxBytes; i++) {
     const nw = Math.max(1, Math.round(canvas.width * scale));
@@ -378,49 +672,198 @@ function iconBtn(): React.CSSProperties {
   };
 }
 
-/* ========= Chosen view helpers ========= */
-function uniqMetaByIds(ids: string[], meta: Record<string, any>) {
-  const uniq = Array.from(new Set(ids));
-  return uniq.map((gid) => meta[gid] || { id: gid, name: gid, url: "" });
-}
-
-/* ========= Block (only "Выбрано") ========= */
-function SelectedOnlyBlock(props: {
+/* ========= SideLikePlateBlock ========= */
+function SideLikePlateBlock(props: {
   title: string;
   enabled: boolean;
   onToggleEnabled: (v: boolean) => void;
 
-  // selected graphics
+  // people
+  peopleEnabled?: boolean; // (можно использовать чтобы скрывать секцию, но сейчас по enabled)
+  people: Person[];
+  setPeople: (v: Person[] | ((p: Person[]) => Person[])) => void;
+  transientPhotoUrlById: Record<string, string | null>;
+  setTransientFor: (id: string, url: string | null) => void;
+  setPersonPhotoById: (personId: string, pv: PhotoValue | null) => void;
+
+  // epitaphs
+  selectedEpitaphs: string[];
+  setSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
+  showMore: boolean;
+  setShowMore: (v: boolean | ((p: boolean) => boolean)) => void;
+  customText: string;
+  setCustomText: (v: string) => void;
+  onToggleEpitaph: (t: string) => void;
+  onAddCustom: () => void;
+  onRemoveEpitaph: (t: string) => void;
+  epitaphList: string[];
+
+  // graphics
+  catsLoading: boolean;
+  catsError: string;
+  cats: any[];
+  catOpen: Record<string, boolean>;
+  setCatOpen: (m: Record<string, boolean>) => void;
+  addGraphic: (g: any) => void;
+  removeGraphic: (gid: string) => void;
+  ids: string[];
   chosenList: any[];
   onRemoveChosenItem: (gid: string) => void;
-
-  // selected epitaphs
-  epitaphList: string[];
-  onRemoveEpitaph: (t: string) => void;
-
-  // people (rear only)
-  showPeople?: boolean;
-  people?: Person[];
-  setPeople?: (v: Person[] | ((p: Person[]) => Person[])) => void;
-  transientPhotoUrlById?: Record<string, string | null>;
-  setPersonPhotoById?: (personId: string, pv: PhotoValue | null) => void;
 }) {
   const {
     title,
     enabled,
     onToggleEnabled,
-    chosenList,
-    onRemoveChosenItem,
-    epitaphList,
-    onRemoveEpitaph,
-    showPeople,
+
     people,
     setPeople,
     transientPhotoUrlById,
-    setPersonPhotoById
+    setPersonPhotoById,
+
+    selectedEpitaphs,
+    setSelectedEpitaphs,
+    showMore,
+    setShowMore,
+    customText,
+    setCustomText,
+    onToggleEpitaph,
+    onAddCustom,
+    onRemoveEpitaph,
+    epitaphList,
+
+    catsLoading,
+    catsError,
+    cats,
+    catOpen,
+    setCatOpen,
+    addGraphic,
+    removeGraphic,
+    ids,
+    chosenList,
+    onRemoveChosenItem
   } = props;
 
   const [accPeopleOpen, setAccPeopleOpen] = useState(false);
+  const [accEpOpen, setAccEpOpen] = useState(false);
+  const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
+
+  // grid cols
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [cols, setCols] = useState<number>(2);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
+      setCols(Math.max(2, Math.floor(w / 160)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  function CatGrid({ items }: { items: any[] }) {
+    return (
+      <div ref={rootRef} style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 12 }}>
+        {items.map((g: any, idx: number) => {
+          const gid = String(g.id || g.relPath || g.url || g.name || idx);
+          const qty = ids.filter((x) => x === gid).length;
+          const selected = qty > 0;
+          const thumbUrl = g.preview || g.url || "";
+          const name = g.name || gid;
+
+          return (
+            <div
+              key={gid}
+              aria-selected={selected}
+              style={{
+                ...glassPanelStyle(),
+                padding: 8,
+                borderRadius: 12,
+                position: "relative",
+                borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
+                boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
+              }}
+            >
+              <div
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  display: selected ? "inline-flex" : "none",
+                  alignItems: "center",
+                  gap: 4,
+                  background: "rgba(10,127,46,0.95)",
+                  color: "#fff",
+                  borderRadius: 999,
+                  padding: "0 6px",
+                  fontSize: 11,
+                  lineHeight: "18px",
+                  height: 18
+                }}
+                title={`Выбрано: ${qty}`}
+              >
+                <span>✓</span>
+                <span>{qty}</span>
+              </div>
+
+              <div
+                role="button"
+                title={name}
+                onClick={() => addGraphic(g)}
+                style={{
+                  borderRadius: 10,
+                  overflow: "hidden",
+                  background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
+                  aspectRatio: "1/1",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
+                  cursor: "pointer",
+                  outline: "none"
+                }}
+              >
+                {thumbUrl ? (
+                  <img
+                    src={thumbUrl}
+                    alt={name}
+                    style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
+                  />
+                ) : (
+                  <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
+                )}
+              </div>
+
+              <div
+                title={name}
+                style={{
+                  marginTop: 6,
+                  fontSize: 12,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  opacity: 0.95
+                }}
+              >
+                {name}
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
+                <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
+                  −
+                </button>
+                <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
+                <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
+                  +
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   const blockTitle = (
     <label
@@ -428,39 +871,39 @@ function SelectedOnlyBlock(props: {
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <input
-        type="checkbox"
-        checked={enabled}
-        onChange={(e) => onToggleEnabled(e.target.checked)}
-        onClick={(e) => e.stopPropagation()}
-      />
+      <input type="checkbox" checked={enabled} onChange={(e) => onToggleEnabled(e.target.checked)} onClick={(e) => e.stopPropagation()} />
       <span>{title}</span>
     </label>
   );
 
-  // People CRUD (only if showPeople)
-  const updatePerson = (idx: number, patch: Partial<Person>) => setPeople?.((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  // ===== People (CRUD) 1:1 EngravingStep =====
+  const updatePerson = (idx: number, patch: Partial<Person>) =>
+    setPeople((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   const removePerson = (idx: number) =>
-    setPeople?.((prev) => {
+    setPeople((prev) => {
       const next = prev.filter((_, i) => i !== idx);
       return next.length > 0 ? next : [makeBlankPerson("p-0")];
     });
-  const addPerson = () => setPeople?.((prev) => prev.concat([makeBlankPerson()]));
+  const addPerson = () => setPeople((prev) => prev.concat([makeBlankPerson()]));
   const moveUp = (idx: number) =>
-    setPeople?.((prev) => (idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))));
+    setPeople((prev) =>
+      idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))
+    );
   const moveDown = (idx: number) =>
-    setPeople?.((prev) =>
-      idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
+    setPeople((prev) =>
+      idx === prev.length - 1
+        ? prev
+        : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
     );
 
-  const [openMap, setOpenMap] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries((people || []).map((p) => [p.id, true]))
-  );
+  // open map (accordion per person)
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => Object.fromEntries(people.map((p) => [p.id, true])));
   useEffect(() => {
-    if (!people) return;
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
-      people.forEach((p) => (next[p.id] = prev[p.id] ?? true));
+      people.forEach((p) => {
+        next[p.id] = prev[p.id] ?? true;
+      });
       return next;
     });
   }, [people]);
@@ -469,7 +912,7 @@ function SelectedOnlyBlock(props: {
     <LoudAccordion title={blockTitle} open={enabled} onToggle={() => onToggleEnabled(!enabled)}>
       {enabled && (
         <div style={{ display: "grid", gap: 12 }}>
-          {/* Выбрано (красная рамка) */}
+          {/* Выбрано */}
           <div style={{ ...sectionBoxStyle(), border: "1px solid rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано</div>
 
@@ -478,10 +921,7 @@ function SelectedOnlyBlock(props: {
                 {chosenList.map((g, i) => {
                   const gid = String(g.id || g.url || i);
                   return (
-                    <div
-                      key={`chosen-${gid}-${i}`}
-                      style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}
-                    >
+                    <div key={`chosen-${gid}-${i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
                       <Thumb url={g.url} />
                       <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {g.name || g.id}
@@ -505,14 +945,7 @@ function SelectedOnlyBlock(props: {
                 {epitaphList.map((t, idx) => (
                   <div
                     key={`ep-preview-${idx}-${normEpitaph(t)}`}
-                    style={{
-                      ...sectionBoxStyle(),
-                      padding: 8,
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto",
-                      gap: 10,
-                      alignItems: "start"
-                    }}
+                    style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
                   >
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
                     <button
@@ -531,174 +964,327 @@ function SelectedOnlyBlock(props: {
             {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </div>
 
-          {/* Усопшие (ТОЛЬКО для тыла) */}
-          {showPeople && people && setPeople && transientPhotoUrlById && setPersonPhotoById && (
-            <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
-              <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {people.map((p, idx) => {
-                    const id = p.id;
-                    const isOpen = openMap[id] ?? true;
-                    const err = validateDates(p.birthDate, p.deathDate);
-                    const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
-                    const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
+          {/* Усопшие */}
+          <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ margin: "0 0 4px 0", textAlign: "left", opacity: 0.92 }}>
+                Заполняется для тыльной стороны (хранится в editorBack.people).
+              </div>
 
-                    return (
-                      <div key={id} style={{ ...glassPanelStyle(), padding: 0 }}>
+              <div style={{ display: "grid", gap: 10 }}>
+                {people.map((p, idx) => {
+                  const id = p.id;
+                  const isOpen = openMap[id] ?? true;
+                  const err = validateDates(p.birthDate, p.deathDate);
+                  const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+                  const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
+
+                  return (
+                    <div key={id} style={{ ...glassPanelStyle(), padding: 0 }}>
+                      <div
+                        onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "6px 8px",
+                          background: "rgba(0,0,0,0.66)",
+                          borderRadius: "12px 12px 0 0",
+                          cursor: "pointer"
+                        }}
+                      >
+                        <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
                         <div
-                          onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "6px 8px",
-                            background: "rgba(0,0,0,0.66)",
-                            borderRadius: "12px 12px 0 0",
-                            cursor: "pointer"
+                            fontSize: 16,
+                            fontWeight: 600,
+                            flex: 1,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap"
                           }}
                         >
-                          <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
-                          <div
-                            style={{
-                              fontSize: 16,
-                              fontWeight: 600,
-                              flex: 1,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap"
-                            }}
-                          >
-                            {nameLeft}
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                moveUp(idx);
-                              }}
-                              disabled={idx === 0}
-                              style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
-                              title="Выше"
-                            >
-                              ▲
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                moveDown(idx);
-                              }}
-                              disabled={idx === people.length - 1}
-                              style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }}
-                              title="Ниже"
-                            >
-                              ▼
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removePerson(idx);
-                              }}
-                              style={iconBtn()}
-                              title="Удалить"
-                            >
-                              ✖
-                            </button>
-                          </div>
+                          {nameLeft}
                         </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveUp(idx);
+                            }}
+                            disabled={idx === 0}
+                            style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
+                            title="Выше"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveDown(idx);
+                            }}
+                            disabled={idx === people.length - 1}
+                            style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }}
+                            title="Ниже"
+                          >
+                            ▼
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removePerson(idx);
+                            }}
+                            style={iconBtn()}
+                            title="Удалить"
+                          >
+                            ✖
+                          </button>
+                        </div>
+                      </div>
 
-                        {isOpen && (
-                          <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
-                            <div style={{ display: "grid", gap: 10 }}>
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                                <Field label="Фамилия">
-                                  <input
-                                    value={p.lastName ?? ""}
-                                    onChange={(e) => updatePerson?.(idx, { lastName: e.target.value })}
-                                    style={inputStyle()}
-                                    placeholder="Иванов"
-                                  />
-                                </Field>
-                                <Field label="Имя">
-                                  <input
-                                    value={p.firstName ?? ""}
-                                    onChange={(e) => updatePerson?.(idx, { firstName: e.target.value })}
-                                    style={inputStyle()}
-                                    placeholder="Иван"
-                                  />
-                                </Field>
-                                <Field label="Отчество">
-                                  <input
-                                    value={p.middleName ?? ""}
-                                    onChange={(e) => updatePerson?.(idx, { middleName: e.target.value })}
-                                    style={inputStyle()}
-                                    placeholder="Иванович"
-                                  />
-                                </Field>
-                              </div>
-
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                                <Field label="Дата рождения">
-                                  <input
-                                    value={p.birthDate ?? ""}
-                                    onChange={(e) => updatePerson?.(idx, { birthDate: e.target.value })}
-                                    style={{
-                                      ...inputStyle(),
-                                      borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)"
-                                    }}
-                                    placeholder="01.01.1950"
-                                  />
-                                </Field>
-                                <Field label="Дата смерти">
-                                  <input
-                                    value={p.deathDate ?? ""}
-                                    onChange={(e) => updatePerson?.(idx, { deathDate: e.target.value })}
-                                    style={{
-                                      ...inputStyle(),
-                                      borderColor:
-                                        err && (err.includes("смерти") || err.includes("раньше"))
-                                          ? "salmon"
-                                          : "rgba(255,255,255,0.18)"
-                                    }}
-                                    placeholder="01.01.2024"
-                                  />
-                                </Field>
-                                {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
-                              </div>
-
-                              <div>
-                                {!hasPhoto && (
-                                  <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
-                                    Прикрепите фотографию. Она сохранится в заявке.
-                                  </div>
-                                )}
-                                <PhotoField
-                                  label="Фотография"
-                                  value={{
-                                    url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
-                                    dataUrl: p.photoDataUrl ?? undefined
-                                  }}
-                                  onChange={(pv) => setPersonPhotoById(p.id, pv)}
+                      {isOpen && (
+                        <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                              <Field label="Фамилия">
+                                <input
+                                  value={p.lastName ?? ""}
+                                  onChange={(e) => updatePerson(idx, { lastName: e.target.value })}
+                                  style={inputStyle()}
+                                  placeholder="Иванов"
                                 />
-                              </div>
+                              </Field>
+                              <Field label="Имя">
+                                <input
+                                  value={p.firstName ?? ""}
+                                  onChange={(e) => updatePerson(idx, { firstName: e.target.value })}
+                                  style={inputStyle()}
+                                  placeholder="Иван"
+                                />
+                              </Field>
+                              <Field label="Отчество">
+                                <input
+                                  value={p.middleName ?? ""}
+                                  onChange={(e) => updatePerson(idx, { middleName: e.target.value })}
+                                  style={inputStyle()}
+                                  placeholder="Иванович"
+                                />
+                              </Field>
+                            </div>
+
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                              <Field label="Дата рождения">
+                                <input
+                                  value={p.birthDate ?? ""}
+                                  onChange={(e) => updatePerson(idx, { birthDate: e.target.value })}
+                                  style={{
+                                    ...inputStyle(),
+                                    borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)"
+                                  }}
+                                  placeholder="01.01.1950"
+                                />
+                              </Field>
+                              <Field label="Дата смерти">
+                                <input
+                                  value={p.deathDate ?? ""}
+                                  onChange={(e) => updatePerson(idx, { deathDate: e.target.value })}
+                                  style={{
+                                    ...inputStyle(),
+                                    borderColor:
+                                      err && (err.includes("смерти") || err.includes("раньше"))
+                                        ? "salmon"
+                                        : "rgba(255,255,255,0.18)"
+                                  }}
+                                  placeholder="01.01.2024"
+                                />
+                              </Field>
+                              {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
+                            </div>
+
+                            {/* Фото + подсказка при отсутствии */}
+                            <div>
+                              {!hasPhoto && (
+                                <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
+                                  Прикрепите фотографию. Она сохранится в заявке.
+                                </div>
+                              )}
+                              <PhotoField
+                                label="Фотография"
+                                value={{
+                                  url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
+                                  dataUrl: p.photoDataUrl ?? undefined
+                                }}
+                                onChange={(pv) => setPersonPhotoById(p.id, pv)}
+                              />
                             </div>
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 2 }}>
+                <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>
+                  Добавить
+                </button>
+              </div>
+            </div>
+          </LoudAccordion>
+
+          {/* Эпитафии */}
+          <LoudAccordion title="Эпитафии" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={sectionBoxStyle()}>
+                <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {QUICK_EPITAPHS.map((t) => {
+                    const active = hasByNorm(selectedEpitaphs, t);
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => onToggleEpitaph(t)}
+                        style={{
+                          ...glassButtonStyle("nano"),
+                          border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)"
+                        }}
+                        title={t}
+                      >
+                        {t}
+                      </button>
                     );
                   })}
                 </div>
+              </div>
 
-                <div style={{ marginTop: 2 }}>
-                  <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>
-                    Добавить
-                  </button>
+              <div style={sectionBoxStyle()}>
+                <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
+                <button type="button" onClick={() => setShowMore((v) => !v)} style={glassButtonStyle("nano")}>
+                  {showMore ? "Свернуть список" : "Развернуть список"}
+                </button>
+
+                {showMore && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                      gap: 8,
+                      padding: 2
+                    }}
+                  >
+                    {MORE_EPITAPHS.map((t, idx) => {
+                      const active = hasByNorm(selectedEpitaphs, t);
+                      return (
+                        <button
+                          key={`more-${idx}-${normEpitaph(t)}`}
+                          type="button"
+                          onClick={() => onToggleEpitaph(t)}
+                          title={t}
+                          style={{
+                            textAlign: "left",
+                            ...glassPanelStyle(),
+                            borderRadius: 10,
+                            padding: 10,
+                            cursor: "pointer",
+                            outline: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.14)",
+                            fontSize: 13,
+                            lineHeight: 1.25,
+                            whiteSpace: "pre-wrap"
+                          }}
+                        >
+                          {t}
+                          <div style={{ marginTop: 6, fontSize: 12 }}>{active ? "Удалить из выбранных" : "Добавить к выбранным"}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div style={sectionBoxStyle()}>
+                <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <textarea
+                    rows={3}
+                    value={customText}
+                    onChange={(e) => setCustomText(e.target.value)}
+                    placeholder="Введите текст и нажмите «Добавить»"
+                    style={{ ...inputStyle(), resize: "vertical" }}
+                  />
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <button type="button" style={glassButtonStyle("nano")} onClick={onAddCustom}>
+                      Добавить
+                    </button>
+                    <button type="button" style={glassButtonStyle("nano")} onClick={() => setSelectedEpitaphs([])}>
+                      Очистить выбранные
+                    </button>
+                    {selectedEpitaphs.length > 0 && <div>Выбрано: {selectedEpitaphs.length}</div>}
+                  </div>
                 </div>
               </div>
-            </LoudAccordion>
-          )}
+
+              {selectedEpitaphs.length > 0 && (
+                <div style={sectionBoxStyle()}>
+                  <div style={{ marginBottom: 6, textAlign: "left" }}>Выбранные эпитафии:</div>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {selectedEpitaphs.map((t, idx) => (
+                      <div
+                        key={`sel-${idx}-${normEpitaph(t)}`}
+                        style={{
+                          ...glassPanelStyle(),
+                          borderRadius: 10,
+                          padding: 10,
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "center",
+                          justifyContent: "space-between"
+                        }}
+                      >
+                        <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
+                        <button type="button" style={glassButtonStyle("nano")} onClick={() => onRemoveEpitaph(t)}>
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </LoudAccordion>
+
+          {/* Графика */}
+          <LoudAccordion title="Графика" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
+            {catsLoading && <div>Загрузка каталога…</div>}
+            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+            {!catsLoading && cats.length > 0 && (
+              <div style={{ display: "grid", gap: 12 }}>
+                {cats.map((cat: any, idx: number) => {
+                  const catKey = String(cat._id || cat.name || idx);
+                  const open = !!(catOpen || {})[catKey];
+                  const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
+
+                  return (
+                    <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
+                      <CatGrid items={cat.items || []} />
+                      {(cat.children || []).map((sub: any, j: number) => (
+                        <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
+                          <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                          <CatGrid items={sub.items || []} />
+                        </div>
+                      ))}
+                    </LoudAccordion>
+                  );
+                })}
+              </div>
+            )}
+          </LoudAccordion>
         </div>
       )}
     </LoudAccordion>
@@ -712,7 +1298,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [outro, setOutro] = useState(false);
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
 
-  // Keep in sync with storage/events
   useEffect(() => {
     const sync = () => setDraft(loadOrderDraft());
     window.addEventListener(DRAFT_UPDATED_EVENT, sync);
@@ -725,10 +1310,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, []);
 
-  /* ========= Shared catalog (не показываем, но сохраняем поведение/совместимость) ========= */
+  const itemUrl = String((draft as any)?.item?.url || "").trim();
+
+  /* ========= Shared catalog ========= */
   const [catsLoading, setCatsLoading] = useState(false);
   const [catsError, setCatsError] = useState("");
   const [cats, setCats] = useState<any[]>([]);
+  const [catOpenRear, setCatOpenRear] = useState<Record<string, boolean>>({});
+  const [catOpenPlate, setCatOpenPlate] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let alive = true;
@@ -751,10 +1340,25 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!cats.length) return;
+    const init = (prev: Record<string, boolean>) => {
+      const next = { ...prev };
+      for (const c of cats) {
+        const key = String(c._id || c.name || "");
+        if (!(key in next)) next[key] = false;
+      }
+      return next;
+    };
+    setCatOpenRear(init);
+    setCatOpenPlate(init);
+  }, [cats]);
+
   /* =========================
-   * Дополнительно (extras) — defaults
+   * Дополнительно (extras)
    * ========================= */
   const extras0: any = (draft as any)?.extras || {};
+  // defaults: tumba=true, flowerbed=true, vase=false
   const [hasPedestal, setHasPedestal] = useState<boolean>(() => (extras0.tumba ?? true));
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
   const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
@@ -763,20 +1367,30 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
    * REAR (editorBack)
    * ========================= */
   const editorBack0: any = (draft as any)?.editorBack || {};
+  const [rearEnabled, setRearEnabled] = useState<boolean>(() => {
+    const eb: any = loadOrderDraft()?.editorBack || {};
+    return !!(
+      eb?.selectedGraphicsIds?.length ||
+      eb?.epitaphTexts?.length ||
+      eb?.people?.length ||
+      eb?.previewUrl ||
+      eb?.previewHiUrl
+    );
+  });
 
-  // rearEnabled only reflects checkbox (not "has something")
-  const [rearEnabled, setRearEnabled] = useState<boolean>(() => !!editorBack0.enabled);
-
-  // local state mirrors draft; keeps values even if UI collapsed (but we will clear when disabled)
   const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
   const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
   const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(
     ((editorBack0.epitaphTexts as string[]) || []).filter(Boolean)
   );
-  const [rearPeople, setRearPeople] = useState<Person[]>(() => {
-    const p0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
-    return p0.length ? p0 : [makeBlankPerson("p-0")];
-  });
+  const [rearShowMore, setRearShowMore] = useState(false);
+  const [rearCustomText, setRearCustomText] = useState("");
+
+  // rear people (local state) from draft snapshot
+  const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
+  const [rearPeople, setRearPeople] = useState<Person[]>(
+    rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]
+  );
 
   // transient photo urls (blob:) with revoke
   const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
@@ -803,7 +1417,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, [rearTransientPhotoUrlById]);
 
-  // Photo handler
+  // Photo handler (1:1 logic)
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
@@ -819,12 +1433,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         setRearPeople((prev) => prev.map((p) => (p.id === personId ? { ...p, ...patch } : p)));
       };
 
+      // Очистка фото
       if (!pv) {
         setRearTransientFor(personId, null);
         commitLocal({ photoUrl: null, photoDataUrl: null });
         return;
       }
 
+      // Источник: готовый dataUrl
       if ((pv as any)?.dataUrl) {
         const dataUrl = (pv as any).dataUrl as string;
         (async () => {
@@ -839,6 +1455,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
+      // Источник: File
       const maybeFile: File | undefined = (pv as any)?.file;
       if (maybeFile instanceof File) {
         const tempUrl = URL.createObjectURL(maybeFile);
@@ -860,6 +1477,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
+      // Источник: url
       if ((pv as any)?.url) {
         const url = (pv as any).url as string;
         if (isBlobUrl(url)) {
@@ -882,34 +1500,17 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     [setRearTransientFor]
   );
 
-  // === Persist rear state into draft on changes (NOT tied to accordion open) ===
-  // Epitaphs / graphics - these are small, can be saved immediately.
-  useEffect(() => {
-    if (!rearEnabled) return;
-    saveOrderDraft({
-      editorBack: {
-        enabled: true,
-        selectedGraphicsIds: rearIds.length ? rearIds : null,
-        graphicsMeta: Object.keys(rearMeta || {}).length ? rearMeta : null,
-        epitaphTexts: uniqueByNorm(rearSelectedEpitaphs).length ? uniqueByNorm(rearSelectedEpitaphs) : null
-      } as any
-    });
-    dispatchDraftUpdated();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rearEnabled, JSON.stringify(rearIds), JSON.stringify(rearMeta), JSON.stringify(rearSelectedEpitaphs)]);
-
-  // People - heavy: save only on transitions/hide (like EngravingStep)
+  // Save people to draft ONLY on transitions (like EngravingStep)
   const flushRearPeopleSaveNow = useCallback(() => {
-    if (!rearEnabled) return;
     const norm = normalizePersonsForSave(rearPeople);
-    saveOrderDraft({ editorBack: { people: norm.length ? norm : null, enabled: true } as any });
+    saveOrderDraft({ editorBack: { people: norm.length ? norm : null } as any });
     dispatchDraftUpdated();
-  }, [rearEnabled, rearPeople]);
+  }, [rearPeople]);
 
   useEffect(() => {
     const saveNow = () => {
       try {
-        flushRearPeopleSaveNow();
+        if (rearEnabled) flushRearPeopleSaveNow();
       } catch {}
     };
     const onVisibility = () => {
@@ -928,14 +1529,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       window.removeEventListener("popstate", saveNow);
       window.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [flushRearPeopleSaveNow]);
+  }, [rearEnabled, flushRearPeopleSaveNow]);
 
-  // When rear disabled: clear everything so it is not shown/considered anywhere
+  // if rear disabled => clear editorBack (including people)
   useEffect(() => {
     if (rearEnabled) return;
+
     saveOrderDraft({
       editorBack: {
-        enabled: false,
         selectedGraphicsIds: null,
         graphicsMeta: null,
         epitaphTexts: null,
@@ -945,8 +1546,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       } as any
     });
     dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
 
-    // local reset
     setRearIds([]);
     setRearMeta({});
     setRearSelectedEpitaphs([]);
@@ -954,7 +1555,43 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setRearTransientPhotoUrlById({});
   }, [rearEnabled]);
 
-  const rearChosenList = useMemo(() => uniqMetaByIds(rearIds, rearMeta), [rearIds, rearMeta]);
+  // persist rear epitaphs
+  const prevRearEpiJsonRef = useRef<string>("");
+  useEffect(() => {
+    if (!rearEnabled) return;
+    const list = uniqueByNorm(rearSelectedEpitaphs);
+    const snapshot = JSON.stringify(list);
+    if (snapshot === prevRearEpiJsonRef.current) return;
+    prevRearEpiJsonRef.current = snapshot;
+
+    saveOrderDraft({ editorBack: { epitaphTexts: list.length ? list : null } as any });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+  }, [rearEnabled, rearSelectedEpitaphs]);
+
+  const rearCountsById = useMemo(() => {
+    const m: Record<string, number> = {};
+    rearIds.forEach((id) => (m[id] = (m[id] || 0) + 1));
+    return m;
+  }, [rearIds]);
+
+  const addRearGraphic = (g: any) => {
+    if (!rearEnabled) return;
+    const gid = String(g.id || g.relPath || g.url || g.name);
+    if (!gid) return;
+    const qty = rearCountsById[gid] || 0;
+    if (qty >= 3) {
+      window.alert("Нельзя добавить более трёх одинаковых изображений");
+      return;
+    }
+    const nextIds = [...rearIds, gid];
+    const nextMeta = { ...rearMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
+    setRearIds(nextIds);
+    setRearMeta(nextMeta);
+    saveOrderDraft({ editorBack: { selectedGraphicsIds: nextIds, graphicsMeta: nextMeta } as any });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+  };
 
   const removeRearGraphic = (gid: string) => {
     if (!rearEnabled) return;
@@ -963,8 +1600,34 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const nextIds = rearIds.slice();
     nextIds.splice(idx, 1);
     setRearIds(nextIds);
+    saveOrderDraft({ editorBack: { selectedGraphicsIds: nextIds, graphicsMeta: rearMeta } as any });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
   };
 
+  const rearChosenList = useMemo(() => {
+    const uniq = Array.from(new Set(rearIds));
+    return uniq.map((gid) => rearMeta[gid] || { id: gid, name: gid, url: "" });
+  }, [rearIds, rearMeta]);
+
+  const toggleRearEpitaph = (text: string) => {
+    if (!rearEnabled) return;
+    const t = normEpitaph(text);
+    if (!t) return;
+    setRearSelectedEpitaphs((prev) => {
+      const idx = indexOfByNorm(prev, t);
+      if (idx !== -1) return prev.filter((_, i) => i !== idx);
+      return prev.concat([text]);
+    });
+  };
+  const addRearCustom = () => {
+    if (!rearEnabled) return;
+    const raw = (rearCustomText || "").trim();
+    const t = normEpitaph(raw);
+    if (!t) return;
+    setRearSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([raw])));
+    setRearCustomText("");
+  };
   const removeRearEpitaph = (text: string) => {
     if (!rearEnabled) return;
     setRearSelectedEpitaphs((prev) => {
@@ -972,30 +1635,103 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
     });
   };
+  const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
+
+  // rear preview generation with silhouette overlay (from item.url)
+  useEffect(() => {
+    let alive = true;
+
+    const run = async () => {
+      if (!rearEnabled) {
+        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
+        dispatchDraftUpdated();
+        return;
+      }
+
+      const d = loadOrderDraft();
+      const eb: any = (d as any)?.editorBack || {};
+      const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+      const meta: Record<string, any> = eb.graphicsMeta || {};
+      const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
+
+      const graphicsUniq = Array.from(new Set(ids))
+        .map((gid) => meta[gid] || { id: gid, url: "" })
+        .filter(Boolean);
+      const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
+
+      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
+      if (!hasRear) {
+        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
+        dispatchDraftUpdated();
+        return;
+      }
+
+      const overlay900 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 900, H: 1200, mirrorX: true }) : null;
+      const overlay1600 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 1600, H: 2200, mirrorX: true }) : null;
+
+      const mini = await renderStackedPreview({
+        W: 900,
+        H: 1200,
+        bg: { type: "gradient" },
+        overlayPng: overlay900,
+        graphics: graphicsUniq,
+        epitaphs
+      });
+      const big = await renderStackedPreview({
+        W: 1600,
+        H: 2200,
+        bg: { type: "gradient" },
+        overlayPng: overlay1600,
+        graphics: graphicsUniq,
+        epitaphs
+      });
+
+      if (!alive) return;
+
+      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
+      dispatchDraftUpdated();
+    };
+
+    const t = window.setTimeout(() => void run(), 420);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [rearEnabled, rearIds, rearMeta, rearSelectedEpitaphs, itemUrl]);
 
   /* =========================
    * PLATE (extras)
    * ========================= */
-  // plateEnabled is checkbox only
-  const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
-
+  const [plateEnabled, setPlateEnabled] = useState<boolean>(!!extras0.headstonePlate);
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
-  const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(() => {
-    const ex: any = loadOrderDraft()?.extras || {};
-    const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
-    const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
-    return uniqueByNorm([...one, ...arr]);
-  });
 
-  // Persist plate state (not tied to accordion open)
+  const initialPlateSelected = useMemo(() => {
+    const d = loadOrderDraft();
+    const ex: any = (d as any)?.extras || {};
+    const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
+    const single: string | undefined =
+      typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
+    return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
+  }, []);
+
+  const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
+  const [plateShowMore, setPlateShowMore] = useState(false);
+  const [plateCustomText, setPlateCustomText] = useState("");
+  const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
+
+  // persist plate enabled
   useEffect(() => {
-    if (!plateEnabled) return;
-    // epitaphs rule as in your original code (plateEpitaph vs plateEpitaphs)
+    saveOrderDraft({ extras: { headstonePlate: plateEnabled } as any });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+  }, [plateEnabled]);
+
+  // persist plate epitaphs
+  const prevPlateEpiJsonRef = useRef<string>("");
+  useEffect(() => {
     const list = uniqueByNorm(plateSelectedEpitaphs);
     const patchExtras: any = {};
-    patchExtras.headstonePlate = true;
-
     if (list.length === 0) {
       patchExtras.plateEpitaph = null;
       patchExtras.plateEpitaphs = null;
@@ -1009,39 +1745,37 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       patchExtras.plateEpitaphs = list.slice();
       patchExtras.plateEpitaphTexts = null;
     }
-
-    patchExtras.plateGraphicsIds = plateIds.length ? plateIds : null;
-    patchExtras.plateGraphicsMeta = Object.keys(plateMeta || {}).length ? plateMeta : null;
-
+    const snap = JSON.stringify(patchExtras);
+    if (snap === prevPlateEpiJsonRef.current) return;
+    prevPlateEpiJsonRef.current = snap;
     saveOrderDraft({ extras: patchExtras } as any);
     dispatchDraftUpdated();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plateEnabled, JSON.stringify(plateIds), JSON.stringify(plateMeta), JSON.stringify(plateSelectedEpitaphs)]);
+    setDraft(loadOrderDraft());
+  }, [plateSelectedEpitaphs]);
 
-  // When plate disabled: clear everything so it is not shown/considered anywhere
-  useEffect(() => {
-    if (plateEnabled) return;
-    saveOrderDraft({
-      extras: {
-        headstonePlate: false,
-        plateGraphicsIds: null,
-        plateGraphicsMeta: null,
-        plateEpitaph: null,
-        plateEpitaphs: null,
-        plateEpitaphTexts: null,
-        platePreviewUrl: null,
-        platePreviewHiUrl: null
-      } as any
-    });
+  const plateCountsById = useMemo(() => {
+    const m: Record<string, number> = {};
+    plateIds.forEach((id) => (m[id] = (m[id] || 0) + 1));
+    return m;
+  }, [plateIds]);
+
+  const addPlateGraphic = (g: any) => {
+    if (!plateEnabled) return;
+    const gid = String(g.id || g.relPath || g.url || g.name);
+    if (!gid) return;
+    const qty = plateCountsById[gid] || 0;
+    if (qty >= 3) {
+      window.alert("Нельзя добавить более трёх одинаковых изображений");
+      return;
+    }
+    const nextIds = [...plateIds, gid];
+    const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
+    setPlateIds(nextIds);
+    setPlateMeta(nextMeta);
+    saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta } as any });
     dispatchDraftUpdated();
-
-    // local reset
-    setPlateIds([]);
-    setPlateMeta({});
-    setPlateSelectedEpitaphs([]);
-  }, [plateEnabled]);
-
-  const chosenPlateList = useMemo(() => uniqMetaByIds(plateIds, plateMeta), [plateIds, plateMeta]);
+    setDraft(loadOrderDraft());
+  };
 
   const removePlateGraphic = (gid: string) => {
     if (!plateEnabled) return;
@@ -1050,8 +1784,34 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const nextIds = plateIds.slice();
     nextIds.splice(idx, 1);
     setPlateIds(nextIds);
+    saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta } as any });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
   };
 
+  const chosenPlateList = useMemo(() => {
+    const uniq = Array.from(new Set(plateIds));
+    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
+  }, [plateIds, plateMeta]);
+
+  const togglePlateEpitaph = (text: string) => {
+    if (!plateEnabled) return;
+    const t = normEpitaph(text);
+    if (!t) return;
+    setPlateSelectedEpitaphs((prev) => {
+      const idx = indexOfByNorm(prev, t);
+      if (idx !== -1) return prev.filter((_, i) => i !== idx);
+      return prev.concat([text]);
+    });
+  };
+  const addPlateCustom = () => {
+    if (!plateEnabled) return;
+    const raw = (plateCustomText || "").trim();
+    const t = normEpitaph(raw);
+    if (!t) return;
+    setPlateSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([raw])));
+    setPlateCustomText("");
+  };
   const removePlateEpitaph = (text: string) => {
     if (!plateEnabled) return;
     setPlateSelectedEpitaphs((prev) => {
@@ -1060,25 +1820,73 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     });
   };
 
-  // We keep existing preview generation behavior in file, but it must not run when disabled.
-  // (If you still need preview generation here later, you can re-add it guarded by plateEnabled/rearEnabled.)
+  // plate preview generation
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      const d = loadOrderDraft();
+      const ex: any = (d as any)?.extras || {};
+      const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
+      const meta: Record<string, any> = ex.plateGraphicsMeta || {};
 
-  /* ========= Handlers ========= */
+      const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
+      const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
+      const epitaphs = [...one, ...arr].map((s) => String(s || "").trim()).filter(Boolean);
+
+      const graphicsUniq = Array.from(new Set(ids))
+        .map((gid) => meta[gid] || { id: gid, url: "" })
+        .filter(Boolean);
+
+      const hasPlate = !!ex.headstonePlate && (graphicsUniq.length > 0 || epitaphs.length > 0);
+      if (!hasPlate) {
+        saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
+        dispatchDraftUpdated();
+        return;
+      }
+
+      const mini = await renderStackedPreview({
+        W: 900,
+        H: 1200,
+        bg: { type: "image", url: PLATE_BG_URL },
+        graphics: graphicsUniq,
+        epitaphs
+      });
+      const big = await renderStackedPreview({
+        W: 1600,
+        H: 2200,
+        bg: { type: "image", url: PLATE_BG_URL },
+        graphics: graphicsUniq,
+        epitaphs
+      });
+
+      if (!alive) return;
+      saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: big || null } as any });
+      dispatchDraftUpdated();
+    };
+
+    const t = window.setTimeout(() => void run(), 420);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
+
   const handleBack = useCallback(() => {
+    // flush rear people before leaving
     try {
-      flushRearPeopleSaveNow();
+      if (rearEnabled) flushRearPeopleSaveNow();
     } catch {}
     setOutro(true);
     setTimeout(() => onBack?.(), 320);
-  }, [flushRearPeopleSaveNow, onBack]);
+  }, [flushRearPeopleSaveNow, onBack, rearEnabled]);
 
   const handleContinue = useCallback(() => {
     try {
-      flushRearPeopleSaveNow();
+      if (rearEnabled) flushRearPeopleSaveNow();
     } catch {}
     setOutro(true);
     setTimeout(() => onContinue?.(), 320);
-  }, [flushRearPeopleSaveNow, onContinue]);
+  }, [flushRearPeopleSaveNow, onContinue, rearEnabled]);
 
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
@@ -1134,56 +1942,75 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 <span>Ваза</span>
               </label>
             </div>
-
-            {/* Debug info can be removed; keeping cats loaded to not break existing assumptions */}
-            {(catsLoading || catsError) && (
-              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-                {catsLoading ? "Загрузка каталога графики…" : null}
-                {catsError ? <span style={{ color: "#ffb4b4" }}>{catsError}</span> : null}
-                {!catsLoading && !catsError && cats.length ? null : null}
-              </div>
-            )}
           </div>
         </LoudAccordion>
       </section>
 
-      {/* Тыльная сторона (только "Выбрано" + Усопшие) */}
+      {/* Тыльная сторона */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        <SelectedOnlyBlock
+        <SideLikePlateBlock
           title="Тыльная сторона"
           enabled={rearEnabled}
-          onToggleEnabled={(v) => {
-            setRearEnabled(v);
-            saveOrderDraft({ editorBack: { enabled: v } as any });
-            dispatchDraftUpdated();
-          }}
-          chosenList={rearChosenList}
-          onRemoveChosenItem={(gid) => removeRearGraphic(gid)}
-          epitaphList={rearSelectedEpitaphs}
-          onRemoveEpitaph={(t) => removeRearEpitaph(t)}
-          showPeople={true}
+          onToggleEnabled={setRearEnabled}
           people={rearPeople}
           setPeople={setRearPeople}
           transientPhotoUrlById={rearTransientPhotoUrlById}
+          setTransientFor={setRearTransientFor}
           setPersonPhotoById={setRearPersonPhotoById}
+          selectedEpitaphs={rearSelectedEpitaphs}
+          setSelectedEpitaphs={setRearSelectedEpitaphs}
+          showMore={rearShowMore}
+          setShowMore={setRearShowMore}
+          customText={rearCustomText}
+          setCustomText={setRearCustomText}
+          onToggleEpitaph={toggleRearEpitaph}
+          onAddCustom={addRearCustom}
+          onRemoveEpitaph={removeRearEpitaph}
+          epitaphList={rearEpitaphList}
+          catsLoading={catsLoading}
+          catsError={catsError}
+          cats={cats}
+          catOpen={catOpenRear}
+          setCatOpen={setCatOpenRear}
+          addGraphic={addRearGraphic}
+          removeGraphic={removeRearGraphic}
+          ids={rearIds}
+          chosenList={rearChosenList}
+          onRemoveChosenItem={(gid) => removeRearGraphic(gid)}
         />
       </section>
 
-      {/* Надгробная плита (только "Выбрано", без "Усопшие") */}
+      {/* Надгробная плита */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        <SelectedOnlyBlock
+        <SideLikePlateBlock
           title="Надгробная плита"
           enabled={plateEnabled}
-          onToggleEnabled={(v) => {
-            setPlateEnabled(v);
-            saveOrderDraft({ extras: { headstonePlate: v } as any });
-            dispatchDraftUpdated();
-          }}
+          onToggleEnabled={setPlateEnabled}
+          people={[]}
+          setPeople={() => void 0}
+          transientPhotoUrlById={{}}
+          setTransientFor={() => void 0}
+          setPersonPhotoById={() => void 0}
+          selectedEpitaphs={plateSelectedEpitaphs}
+          setSelectedEpitaphs={setPlateSelectedEpitaphs}
+          showMore={plateShowMore}
+          setShowMore={setPlateShowMore}
+          customText={plateCustomText}
+          setCustomText={setPlateCustomText}
+          onToggleEpitaph={togglePlateEpitaph}
+          onAddCustom={addPlateCustom}
+          onRemoveEpitaph={removePlateEpitaph}
+          epitaphList={plateEpitaphList}
+          catsLoading={catsLoading}
+          catsError={catsError}
+          cats={cats}
+          catOpen={catOpenPlate}
+          setCatOpen={setCatOpenPlate}
+          addGraphic={addPlateGraphic}
+          removeGraphic={removePlateGraphic}
+          ids={plateIds}
           chosenList={chosenPlateList}
           onRemoveChosenItem={(gid) => removePlateGraphic(gid)}
-          epitaphList={plateSelectedEpitaphs}
-          onRemoveEpitaph={(t) => removePlateEpitaph(t)}
-          showPeople={false}
         />
       </section>
 
