@@ -2,34 +2,23 @@
 //
 // Шаг «Тыл»
 //
-// Требования (текущее ТЗ):
-// 1) Тыльная сторона — блок визуально/поведенчески как "Надгробная плита":
-//    - чекбокс включения/выключения (rearEnabled)
-//    - блок "Выбрано" (красная рамка): выбранная графика + эпитафии с удалением
-//    - аккордеоны: "Усопшие", "Эпитафии", "Графика"
-//    - при выключении rearEnabled: чистим editorBack.* и скрываем эскиз на обзоре
-// 2) Надгробная плита — аналогичный блок:
-//    - чекбокс включения/выключения (extras.headstonePlate)
-//    - "Выбрано", "Эпитафии", "Графика"
-//    - превью плиты (extras.platePreviewUrl/platePreviewHiUrl) с фоном PLATE_BG_URL
-// 3) Вернуть блок "Дополнительно" (чекбоксы): Тумба, Цветник, Ваза (пишем в draft.extras)
-//    - по умолчанию: Тумба=true, Цветник=true, Ваза=false
-// 4) Превью тыла должно рисовать "контур/силуэт" резной работы:
-//    - берём img src={order.item.url} (то есть draft.item.url)
-//    - строим силуэт по alpha (если есть) или по фону углов (fallback)
-//    - заливаем #1b1b1b и зеркалим по X (тыльная сторона)
-//    - накладываем на градиентный фон
-//
-// ВАЖНО:
-// - Сохранение в draft патчами, удаление через null.
-// - Каталог графики общий (fetchCatalog("graphics")).
-// - Усопшие (для тыла) — 1:1 как в EngravingStep, но внутри аккордеона «Усопшие» блока «Тыльная сторона».
-// - Для надёжности сохранения тяжёлых фото:
-//   • в драфт пишем ТОЛЬКО по кнопкам «Назад»/«Продолжить» и по событиям ухода/скрытия вкладки,
-//   • при выборе фото сжимаем до безопасного размера (JPEG dataURL) сразу в локальный state,
-//   • в драфте храним только компактный photoPreview (dataURL или внешний URL).
+// Изменения по задаче:
+// 1) "Дополнительно" по умолчанию:
+//    - Тумба = true
+//    - Цветник = true
+//    - Ваза = false
+// 2) Если чекбокс блока выключен:
+//    - блок не раскрывается/не показывается
+//    - выбор внутри НЕ учитывается (и чистится из draft), даже если был сделан ранее
+//    - при включении — пользователь начинает с "чистого" состояния
+// 3) Выбор должен сохраняться даже при закрытии вложенных аккордеонов (как было),
+//    но если сам блок выключен — очищаем.
+// 4) Внутри "Эпитафии" не показываем секцию "Выбранные эпитафии:".
+//    Оставляем отображение выбранного только в красной рамке "Выбрано".
+// 5) Убираем аккордеон "Усопшие" из "Надгробной плиты".
+//    "Усопшие" остаются только в "Тыльной стороне".
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import PhotoField, { type PhotoValue } from "../components/PhotoField";
 import { fetchCatalog } from "../api";
@@ -221,7 +210,6 @@ async function buildSilhouetteOverlayDataUrl(params: {
   const baseImg = await loadImageSafe(src);
   if (!baseImg) return null;
 
-  // contain geometry
   const iw = baseImg.naturalWidth || baseImg.width;
   const ih = baseImg.naturalHeight || baseImg.height;
   const sr = iw / ih;
@@ -239,7 +227,6 @@ async function buildSilhouetteOverlayDataUrl(params: {
     rx = Math.round((W - rw) / 2);
   }
 
-  // draw contain into offscreen
   const off = document.createElement("canvas");
   off.width = rw;
   off.height = rh;
@@ -251,7 +238,6 @@ async function buildSilhouetteOverlayDataUrl(params: {
   const imgData = octx.getImageData(0, 0, rw, rh);
   const d = imgData.data;
 
-  // detect alpha usage
   let hasUsefulAlpha = false;
   for (let i = 3; i < d.length; i += 4) {
     if (d[i] !== 255) {
@@ -260,7 +246,6 @@ async function buildSilhouetteOverlayDataUrl(params: {
     }
   }
 
-  // create mask
   const mask = octx.createImageData(rw, rh);
   const md = mask.data;
 
@@ -274,17 +259,13 @@ async function buildSilhouetteOverlayDataUrl(params: {
       md[i + 3] = alpha;
     }
   } else {
-    // background by corners (fallback)
     const pxAt = (x: number, y: number) => {
       const idx = (y * rw + x) * 4;
       return [d[idx], d[idx + 1], d[idx + 2]] as [number, number, number];
     };
     const corners = [pxAt(0, 0), pxAt(rw - 1, 0), pxAt(0, rh - 1), pxAt(rw - 1, rh - 1)];
     const bg = corners
-      .reduce(
-        (acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number],
-        [0, 0, 0]
-      )
+      .reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number], [0, 0, 0])
       .map((v) => Math.round(v / 4)) as [number, number, number];
 
     const BG_DELTA = 26;
@@ -326,12 +307,10 @@ async function buildSilhouetteOverlayDataUrl(params: {
   ctx.fillRect(0, 0, W, H);
   ctx.globalCompositeOperation = "destination-in";
 
-  // when mirrored, keep placement
   const drawX = mirrorX ? W - (rx + rw) : rx;
   ctx.drawImage(maskCanvas, drawX, ry);
 
   ctx.restore();
-
   return canvas.toDataURL("image/png");
 }
 
@@ -371,7 +350,6 @@ async function renderStackedPreview(params: {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // background
   if (!bg || bg.type === "gradient") {
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, "#6e6e6e");
@@ -403,7 +381,6 @@ async function renderStackedPreview(params: {
     }
   }
 
-  // overlay silhouette (rear)
   if (overlayPng) {
     const ov = await loadImageSafe(overlayPng);
     if (ov) ctx.drawImage(ov, 0, 0, W, H);
@@ -415,7 +392,6 @@ async function renderStackedPreview(params: {
 
   if (items.length === 0) return null;
 
-  // layout
   const pad = Math.round(Math.min(W, H) * 0.06);
   const top = pad;
   const bottom = H - pad;
@@ -476,7 +452,7 @@ async function renderStackedPreview(params: {
   return canvas.toDataURL("image/jpeg", 0.92);
 }
 
-/* ========= Usopshie (rear people) - 1:1 EngravingStep (adapted) ========= */
+/* ========= Usopshie (rear people) ========= */
 type Person = {
   id: string;
   lastName?: string;
@@ -496,7 +472,6 @@ type NormalizedPerson = {
   deathDate?: string;
   photoPreview: string | null;
 };
-
 function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
   if (!Array.isArray(list)) return [];
   return list.map((d, i) => ({
@@ -558,8 +533,8 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
-/* ===== Image compression (для безопасного сохранения в localStorage) ===== */
-const DRAFT_IMG_MAX_BYTES = 600 * 1024; // 600 KiB
+/* ===== Image compression ===== */
+const DRAFT_IMG_MAX_BYTES = 600 * 1024;
 const DRAFT_IMG_MAX_DIM = 1600;
 const JPEG_Q_START = 0.9;
 const JPEG_Q_MIN = 0.55;
@@ -622,7 +597,6 @@ async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_B
   }
   if (out.size <= maxBytes) return await blobToDataUrl(out);
 
-  // если не уложились — ещё уменьшаем габариты
   let scale = 0.9;
   for (let i = 0; i < 4 && out.size > maxBytes; i++) {
     const nw = Math.max(1, Math.round(canvas.width * scale));
@@ -678,17 +652,13 @@ function SideLikePlateBlock(props: {
   enabled: boolean;
   onToggleEnabled: (v: boolean) => void;
 
-  // people
-  peopleEnabled?: boolean; // (можно использовать чтобы скрывать секцию, но сейчас по enabled)
+  showPeople: boolean;
   people: Person[];
   setPeople: (v: Person[] | ((p: Person[]) => Person[])) => void;
   transientPhotoUrlById: Record<string, string | null>;
-  setTransientFor: (id: string, url: string | null) => void;
   setPersonPhotoById: (personId: string, pv: PhotoValue | null) => void;
 
-  // epitaphs
   selectedEpitaphs: string[];
-  setSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
   showMore: boolean;
   setShowMore: (v: boolean | ((p: boolean) => boolean)) => void;
   customText: string;
@@ -698,7 +668,6 @@ function SideLikePlateBlock(props: {
   onRemoveEpitaph: (t: string) => void;
   epitaphList: string[];
 
-  // graphics
   catsLoading: boolean;
   catsError: string;
   cats: any[];
@@ -715,13 +684,13 @@ function SideLikePlateBlock(props: {
     enabled,
     onToggleEnabled,
 
+    showPeople,
     people,
     setPeople,
     transientPhotoUrlById,
     setPersonPhotoById,
 
     selectedEpitaphs,
-    setSelectedEpitaphs,
     showMore,
     setShowMore,
     customText,
@@ -876,7 +845,7 @@ function SideLikePlateBlock(props: {
     </label>
   );
 
-  // ===== People (CRUD) 1:1 EngravingStep =====
+  // ===== People (CRUD) =====
   const updatePerson = (idx: number, patch: Partial<Person>) =>
     setPeople((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   const removePerson = (idx: number) =>
@@ -886,9 +855,7 @@ function SideLikePlateBlock(props: {
     });
   const addPerson = () => setPeople((prev) => prev.concat([makeBlankPerson()]));
   const moveUp = (idx: number) =>
-    setPeople((prev) =>
-      idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))
-    );
+    setPeople((prev) => (idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))));
   const moveDown = (idx: number) =>
     setPeople((prev) =>
       idx === prev.length - 1
@@ -896,7 +863,6 @@ function SideLikePlateBlock(props: {
         : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
     );
 
-  // open map (accordion per person)
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => Object.fromEntries(people.map((p) => [p.id, true])));
   useEffect(() => {
     setOpenMap((prev) => {
@@ -912,7 +878,7 @@ function SideLikePlateBlock(props: {
     <LoudAccordion title={blockTitle} open={enabled} onToggle={() => onToggleEnabled(!enabled)}>
       {enabled && (
         <div style={{ display: "grid", gap: 12 }}>
-          {/* Выбрано */}
+          {/* Выбрано (красная рамка) */}
           <div style={{ ...sectionBoxStyle(), border: "1px solid rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано</div>
 
@@ -921,7 +887,10 @@ function SideLikePlateBlock(props: {
                 {chosenList.map((g, i) => {
                   const gid = String(g.id || g.url || i);
                   return (
-                    <div key={`chosen-${gid}-${i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
+                    <div
+                      key={`chosen-${gid}-${i}`}
+                      style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}
+                    >
                       <Thumb url={g.url} />
                       <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {g.name || g.id}
@@ -964,179 +933,176 @@ function SideLikePlateBlock(props: {
             {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </div>
 
-          {/* Усопшие */}
-          <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
-            <div style={{ display: "grid", gap: 10 }}>
-              <div style={{ margin: "0 0 4px 0", textAlign: "left", opacity: 0.92 }}>
-                Заполняется для тыльной стороны (хранится в editorBack.people).
-              </div>
-
+          {/* Усопшие (только для Тыльной стороны) */}
+          {showPeople && (
+            <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
-                {people.map((p, idx) => {
-                  const id = p.id;
-                  const isOpen = openMap[id] ?? true;
-                  const err = validateDates(p.birthDate, p.deathDate);
-                  const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
-                  const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
+                <div style={{ display: "grid", gap: 10 }}>
+                  {people.map((p, idx) => {
+                    const id = p.id;
+                    const isOpen = openMap[id] ?? true;
+                    const err = validateDates(p.birthDate, p.deathDate);
+                    const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+                    const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
 
-                  return (
-                    <div key={id} style={{ ...glassPanelStyle(), padding: 0 }}>
-                      <div
-                        onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "6px 8px",
-                          background: "rgba(0,0,0,0.66)",
-                          borderRadius: "12px 12px 0 0",
-                          cursor: "pointer"
-                        }}
-                      >
-                        <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
+                    return (
+                      <div key={id} style={{ ...glassPanelStyle(), padding: 0 }}>
                         <div
+                          onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
                           style={{
-                            fontSize: 16,
-                            fontWeight: 600,
-                            flex: 1,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap"
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "6px 8px",
+                            background: "rgba(0,0,0,0.66)",
+                            borderRadius: "12px 12px 0 0",
+                            cursor: "pointer"
                           }}
                         >
-                          {nameLeft}
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              moveUp(idx);
+                          <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
+                          <div
+                            style={{
+                              fontSize: 16,
+                              fontWeight: 600,
+                              flex: 1,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap"
                             }}
-                            disabled={idx === 0}
-                            style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
-                            title="Выше"
                           >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              moveDown(idx);
-                            }}
-                            disabled={idx === people.length - 1}
-                            style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }}
-                            title="Ниже"
-                          >
-                            ▼
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removePerson(idx);
-                            }}
-                            style={iconBtn()}
-                            title="Удалить"
-                          >
-                            ✖
-                          </button>
-                        </div>
-                      </div>
-
-                      {isOpen && (
-                        <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
-                          <div style={{ display: "grid", gap: 10 }}>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                              <Field label="Фамилия">
-                                <input
-                                  value={p.lastName ?? ""}
-                                  onChange={(e) => updatePerson(idx, { lastName: e.target.value })}
-                                  style={inputStyle()}
-                                  placeholder="Иванов"
-                                />
-                              </Field>
-                              <Field label="Имя">
-                                <input
-                                  value={p.firstName ?? ""}
-                                  onChange={(e) => updatePerson(idx, { firstName: e.target.value })}
-                                  style={inputStyle()}
-                                  placeholder="Иван"
-                                />
-                              </Field>
-                              <Field label="Отчество">
-                                <input
-                                  value={p.middleName ?? ""}
-                                  onChange={(e) => updatePerson(idx, { middleName: e.target.value })}
-                                  style={inputStyle()}
-                                  placeholder="Иванович"
-                                />
-                              </Field>
-                            </div>
-
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                              <Field label="Дата рождения">
-                                <input
-                                  value={p.birthDate ?? ""}
-                                  onChange={(e) => updatePerson(idx, { birthDate: e.target.value })}
-                                  style={{
-                                    ...inputStyle(),
-                                    borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)"
-                                  }}
-                                  placeholder="01.01.1950"
-                                />
-                              </Field>
-                              <Field label="Дата смерти">
-                                <input
-                                  value={p.deathDate ?? ""}
-                                  onChange={(e) => updatePerson(idx, { deathDate: e.target.value })}
-                                  style={{
-                                    ...inputStyle(),
-                                    borderColor:
-                                      err && (err.includes("смерти") || err.includes("раньше"))
-                                        ? "salmon"
-                                        : "rgba(255,255,255,0.18)"
-                                  }}
-                                  placeholder="01.01.2024"
-                                />
-                              </Field>
-                              {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
-                            </div>
-
-                            {/* Фото + подсказка при отсутствии */}
-                            <div>
-                              {!hasPhoto && (
-                                <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
-                                  Прикрепите фотографию. Она сохранится в заявке.
-                                </div>
-                              )}
-                              <PhotoField
-                                label="Фотография"
-                                value={{
-                                  url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
-                                  dataUrl: p.photoDataUrl ?? undefined
-                                }}
-                                onChange={(pv) => setPersonPhotoById(p.id, pv)}
-                              />
-                            </div>
+                            {nameLeft}
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveUp(idx);
+                              }}
+                              disabled={idx === 0}
+                              style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
+                              title="Выше"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveDown(idx);
+                              }}
+                              disabled={idx === people.length - 1}
+                              style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }}
+                              title="Ниже"
+                            >
+                              ▼
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removePerson(idx);
+                              }}
+                              style={iconBtn()}
+                              title="Удалить"
+                            >
+                              ✖
+                            </button>
                           </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
 
-              <div style={{ marginTop: 2 }}>
-                <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>
-                  Добавить
-                </button>
-              </div>
-            </div>
-          </LoudAccordion>
+                        {isOpen && (
+                          <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
+                            <div style={{ display: "grid", gap: 10 }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                                <Field label="Фамилия">
+                                  <input
+                                    value={p.lastName ?? ""}
+                                    onChange={(e) => updatePerson(idx, { lastName: e.target.value })}
+                                    style={inputStyle()}
+                                    placeholder="Иванов"
+                                  />
+                                </Field>
+                                <Field label="Имя">
+                                  <input
+                                    value={p.firstName ?? ""}
+                                    onChange={(e) => updatePerson(idx, { firstName: e.target.value })}
+                                    style={inputStyle()}
+                                    placeholder="Иван"
+                                  />
+                                </Field>
+                                <Field label="Отчество">
+                                  <input
+                                    value={p.middleName ?? ""}
+                                    onChange={(e) => updatePerson(idx, { middleName: e.target.value })}
+                                    style={inputStyle()}
+                                    placeholder="Иванович"
+                                  />
+                                </Field>
+                              </div>
 
-          {/* Эпитафии */}
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                                <Field label="Дата рождения">
+                                  <input
+                                    value={p.birthDate ?? ""}
+                                    onChange={(e) => updatePerson(idx, { birthDate: e.target.value })}
+                                    style={{
+                                      ...inputStyle(),
+                                      borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)"
+                                    }}
+                                    placeholder="01.01.1950"
+                                  />
+                                </Field>
+                                <Field label="Дата смерти">
+                                  <input
+                                    value={p.deathDate ?? ""}
+                                    onChange={(e) => updatePerson(idx, { deathDate: e.target.value })}
+                                    style={{
+                                      ...inputStyle(),
+                                      borderColor:
+                                        err && (err.includes("смерти") || err.includes("раньше"))
+                                          ? "salmon"
+                                          : "rgba(255,255,255,0.18)"
+                                    }}
+                                    placeholder="01.01.2024"
+                                  />
+                                </Field>
+                                {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
+                              </div>
+
+                              <div>
+                                {!hasPhoto && (
+                                  <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
+                                    Прикрепите фотографию. Она сохранится в заявке.
+                                  </div>
+                                )}
+                                <PhotoField
+                                  label="Фотография"
+                                  value={{
+                                    url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
+                                    dataUrl: p.photoDataUrl ?? undefined
+                                  }}
+                                  onChange={(pv) => setPersonPhotoById(p.id, pv)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ marginTop: 2 }}>
+                  <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>
+                    Добавить
+                  </button>
+                </div>
+              </div>
+            </LoudAccordion>
+          )}
+
+          {/* Эпитафии (без блока "Выбранные эпитафии" внутри) */}
           <LoudAccordion title="Эпитафии" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
             <div style={{ display: "grid", gap: 10 }}>
               <div style={sectionBoxStyle()}>
@@ -1228,33 +1194,6 @@ function SideLikePlateBlock(props: {
                   </div>
                 </div>
               </div>
-
-              {selectedEpitaphs.length > 0 && (
-                <div style={sectionBoxStyle()}>
-                  <div style={{ marginBottom: 6, textAlign: "left" }}>Выбранные эпитафии:</div>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {selectedEpitaphs.map((t, idx) => (
-                      <div
-                        key={`sel-${idx}-${normEpitaph(t)}`}
-                        style={{
-                          ...glassPanelStyle(),
-                          borderRadius: 10,
-                          padding: 10,
-                          display: "flex",
-                          gap: 8,
-                          alignItems: "center",
-                          justifyContent: "space-between"
-                        }}
-                      >
-                        <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                        <button type="button" style={glassButtonStyle("nano")} onClick={() => onRemoveEpitaph(t)}>
-                          Удалить
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </LoudAccordion>
 
@@ -1358,25 +1297,31 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
    * Дополнительно (extras)
    * ========================= */
   const extras0: any = (draft as any)?.extras || {};
-  // defaults: tumba=true, flowerbed=true, vase=false
   const [hasPedestal, setHasPedestal] = useState<boolean>(() => (extras0.tumba ?? true));
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
   const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
+
+  // запишем дефолты в draft, если их ещё нет (однократно)
+  useEffect(() => {
+    const d = loadOrderDraft() as any;
+    const ex = (d?.extras || {}) as any;
+    const patch: any = {};
+    if (ex.tumba === undefined) patch.tumba = true;
+    if (ex.flowerbed === undefined) patch.flowerbed = true;
+    if (ex.vase === undefined) patch.vase = false;
+    if (Object.keys(patch).length) {
+      saveOrderDraft({ extras: patch } as any);
+      dispatchDraftUpdated();
+    }
+  }, []);
 
   /* =========================
    * REAR (editorBack)
    * ========================= */
   const editorBack0: any = (draft as any)?.editorBack || {};
-  const [rearEnabled, setRearEnabled] = useState<boolean>(() => {
-    const eb: any = loadOrderDraft()?.editorBack || {};
-    return !!(
-      eb?.selectedGraphicsIds?.length ||
-      eb?.epitaphTexts?.length ||
-      eb?.people?.length ||
-      eb?.previewUrl ||
-      eb?.previewHiUrl
-    );
-  });
+
+  // по умолчанию выключено
+  const [rearEnabled, setRearEnabled] = useState<boolean>(() => !!editorBack0.enabled);
 
   const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
   const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
@@ -1386,13 +1331,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [rearShowMore, setRearShowMore] = useState(false);
   const [rearCustomText, setRearCustomText] = useState("");
 
-  // rear people (local state) from draft snapshot
   const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
-  const [rearPeople, setRearPeople] = useState<Person[]>(
-    rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]
-  );
+  const [rearPeople, setRearPeople] = useState<Person[]>(rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]);
 
-  // transient photo urls (blob:) with revoke
   const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const setRearTransientFor = useCallback((id: string, url: string | null) => {
     setRearTransientPhotoUrlById((prev) => {
@@ -1417,7 +1358,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, [rearTransientPhotoUrlById]);
 
-  // Photo handler (1:1 logic)
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
@@ -1433,14 +1373,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         setRearPeople((prev) => prev.map((p) => (p.id === personId ? { ...p, ...patch } : p)));
       };
 
-      // Очистка фото
       if (!pv) {
         setRearTransientFor(personId, null);
         commitLocal({ photoUrl: null, photoDataUrl: null });
         return;
       }
 
-      // Источник: готовый dataUrl
       if ((pv as any)?.dataUrl) {
         const dataUrl = (pv as any).dataUrl as string;
         (async () => {
@@ -1455,7 +1393,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
-      // Источник: File
       const maybeFile: File | undefined = (pv as any)?.file;
       if (maybeFile instanceof File) {
         const tempUrl = URL.createObjectURL(maybeFile);
@@ -1477,7 +1414,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         return;
       }
 
-      // Источник: url
       if ((pv as any)?.url) {
         const url = (pv as any).url as string;
         if (isBlobUrl(url)) {
@@ -1500,7 +1436,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     [setRearTransientFor]
   );
 
-  // Save people to draft ONLY on transitions (like EngravingStep)
+  // Сохраняем людей тыла по переходам/уходу
   const flushRearPeopleSaveNow = useCallback(() => {
     const norm = normalizePersonsForSave(rearPeople);
     saveOrderDraft({ editorBack: { people: norm.length ? norm : null } as any });
@@ -1531,12 +1467,16 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, [rearEnabled, flushRearPeopleSaveNow]);
 
-  // if rear disabled => clear editorBack (including people)
+  // при выключении rearEnabled: очищаем всё и НЕ учитываем
   useEffect(() => {
+    saveOrderDraft({ editorBack: { enabled: rearEnabled } as any });
+    dispatchDraftUpdated();
+
     if (rearEnabled) return;
 
     saveOrderDraft({
       editorBack: {
+        enabled: false,
         selectedGraphicsIds: null,
         graphicsMeta: null,
         epitaphTexts: null,
@@ -1546,7 +1486,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       } as any
     });
     dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
 
     setRearIds([]);
     setRearMeta({});
@@ -1555,7 +1494,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setRearTransientPhotoUrlById({});
   }, [rearEnabled]);
 
-  // persist rear epitaphs
+  // persist rear epitaphs (как раньше — сохраняется даже когда аккордеон закрыт)
   const prevRearEpiJsonRef = useRef<string>("");
   useEffect(() => {
     if (!rearEnabled) return;
@@ -1637,16 +1576,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   };
   const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
 
-  // rear preview generation with silhouette overlay (from item.url)
+  // rear preview generation
   useEffect(() => {
     let alive = true;
 
     const run = async () => {
-      if (!rearEnabled) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
+      if (!rearEnabled) return;
 
       const d = loadOrderDraft();
       const eb: any = (d as any)?.editorBack || {};
@@ -1667,7 +1602,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       }
 
       const overlay900 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 900, H: 1200, mirrorX: true }) : null;
-      const overlay1600 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 1600, H: 2200, mirrorX: true }) : null;
+      const overlay1600 = itemUrl
+        ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 1600, H: 2200, mirrorX: true })
+        : null;
 
       const mini = await renderStackedPreview({
         W: 900,
@@ -1687,7 +1624,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       });
 
       if (!alive) return;
-
       saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
       dispatchDraftUpdated();
     };
@@ -1702,7 +1638,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   /* =========================
    * PLATE (extras)
    * ========================= */
-  const [plateEnabled, setPlateEnabled] = useState<boolean>(!!extras0.headstonePlate);
+  // по умолчанию выключено
+  const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
+
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
@@ -1710,8 +1648,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const d = loadOrderDraft();
     const ex: any = (d as any)?.extras || {};
     const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
-    const single: string | undefined =
-      typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
+    const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
 
@@ -1720,16 +1657,38 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [plateCustomText, setPlateCustomText] = useState("");
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
-  // persist plate enabled
+  // persist plate enabled and cleanup if off
   useEffect(() => {
     saveOrderDraft({ extras: { headstonePlate: plateEnabled } as any });
     dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
+
+    if (plateEnabled) return;
+
+    // если выключено — чистим всё и НЕ учитываем
+    saveOrderDraft({
+      extras: {
+        headstonePlate: false,
+        plateGraphicsIds: null,
+        plateGraphicsMeta: null,
+        plateEpitaph: null,
+        plateEpitaphs: null,
+        plateEpitaphTexts: null,
+        platePreviewUrl: null,
+        platePreviewHiUrl: null
+      } as any
+    });
+    dispatchDraftUpdated();
+
+    setPlateIds([]);
+    setPlateMeta({});
+    setPlateSelectedEpitaphs([]);
   }, [plateEnabled]);
 
-  // persist plate epitaphs
+  // persist plate epitaphs (как раньше)
   const prevPlateEpiJsonRef = useRef<string>("");
   useEffect(() => {
+    if (!plateEnabled) return;
+
     const list = uniqueByNorm(plateSelectedEpitaphs);
     const patchExtras: any = {};
     if (list.length === 0) {
@@ -1748,10 +1707,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const snap = JSON.stringify(patchExtras);
     if (snap === prevPlateEpiJsonRef.current) return;
     prevPlateEpiJsonRef.current = snap;
+
     saveOrderDraft({ extras: patchExtras } as any);
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
-  }, [plateSelectedEpitaphs]);
+  }, [plateEnabled, plateSelectedEpitaphs]);
 
   const plateCountsById = useMemo(() => {
     const m: Record<string, number> = {};
@@ -1824,6 +1784,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   useEffect(() => {
     let alive = true;
     const run = async () => {
+      if (!plateEnabled) return;
+
       const d = loadOrderDraft();
       const ex: any = (d as any)?.extras || {};
       const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
@@ -1872,7 +1834,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
   const handleBack = useCallback(() => {
-    // flush rear people before leaving
     try {
       if (rearEnabled) flushRearPeopleSaveNow();
     } catch {}
@@ -1952,13 +1913,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           title="Тыльная сторона"
           enabled={rearEnabled}
           onToggleEnabled={setRearEnabled}
+          showPeople={true}
           people={rearPeople}
           setPeople={setRearPeople}
           transientPhotoUrlById={rearTransientPhotoUrlById}
-          setTransientFor={setRearTransientFor}
           setPersonPhotoById={setRearPersonPhotoById}
           selectedEpitaphs={rearSelectedEpitaphs}
-          setSelectedEpitaphs={setRearSelectedEpitaphs}
           showMore={rearShowMore}
           setShowMore={setRearShowMore}
           customText={rearCustomText}
@@ -1986,13 +1946,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           title="Надгробная плита"
           enabled={plateEnabled}
           onToggleEnabled={setPlateEnabled}
+          showPeople={false}
           people={[]}
           setPeople={() => void 0}
           transientPhotoUrlById={{}}
-          setTransientFor={() => void 0}
           setPersonPhotoById={() => void 0}
           selectedEpitaphs={plateSelectedEpitaphs}
-          setSelectedEpitaphs={setPlateSelectedEpitaphs}
           showMore={plateShowMore}
           setShowMore={setPlateShowMore}
           customText={plateCustomText}
