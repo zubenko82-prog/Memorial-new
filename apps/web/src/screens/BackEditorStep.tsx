@@ -21,16 +21,22 @@
 //    - в "Надгробная плита" усопших нет
 // 5) Остальной функционал не урезаем (графика, эпитафии, превью, ограничения, и т.д.).
 //
-// Исправления по превью (ВАЖНО):
-// A) Превью должно "вписываться в фрейм" => рисуем иконки/текст как contain (внутри прямоугольников), не вылезая.
-// B) Размер шрифта уменьшаем.
-// C) Усопшие должны попадать в превью: фото + метрика (ФИО/даты).
-//    => добавляем в renderStackedPreview поддержку peopleBlocks и выводим их (фото+текст) в превью.
+// FIX для превью (по вашему сообщению "ничего не изменилось"):
+// ВАЖНО: В вашем проекте превью, которое вы видите в UI, скорее всего рендерится НЕ из draft.previewUrl,
+// а отдельным компонентом/кодом. Но в этом файле превью генерится canvas'ом и кладётся в:
+//   - editorBack.previewUrl / previewHiUrl
+//   - extras.platePreviewUrl / platePreviewHiUrl
+// Именно их мы и правим.
+// Если на экране у вас показывается НЕ это изображение — пришлите, пожалуйста, место где отображается превью.
 //
-// Примечание:
-// - Этот файл предполагает, что draft.item.url есть (как и раньше).
-// - Локальная "память" при выключении чекбокса сохраняется в state, но draft чистится.
-// - Между перезагрузками страницы локальная память не сохраняется (как вы просили).
+// Здесь делаем строго в текущем генераторе:
+// 1) "Растянуть под фрейм / эскиз полностью вписать":
+//    - фон (plate BG) рисуем cover (заполняет фрейм), а элементы (графика/фото) рисуем contain (вписать).
+//    - блоки компоновки делаем шире и "заполняем" область по вертикали (без лишних пустот).
+// 2) Шрифт уменьшаем (эпитафии) и добавляем авто-уменьшение если не помещается.
+// 3) Усопшие для тыла: добавляем отрисовку фото + метрики (ФИО/даты) в превью тыла.
+//    Берём people из draft.editorBack.people (когда включено) И из локального rearPeople (когда включено),
+//    и рисуем поверх фона.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -215,6 +221,31 @@ function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
+function drawImageCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
+  const iw = img.naturalWidth || img.width || 1;
+  const ih = img.naturalHeight || img.height || 1;
+  const sr = iw / ih;
+  const dr = r.w / r.h;
+
+  let dw = r.w,
+    dh = r.h,
+    dx = r.x,
+    dy = r.y;
+
+  if (sr > dr) {
+    // image wider: scale by height, crop sides
+    dh = r.h;
+    dw = Math.round(r.h * sr);
+    dx = r.x + Math.round((r.w - dw) / 2);
+  } else {
+    // image taller: scale by width, crop top/bottom
+    dw = r.w;
+    dh = Math.round(r.w / sr);
+    dy = r.y + Math.round((r.h - dh) / 2);
+  }
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
 function drawImageContain(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
   const iw = img.naturalWidth || img.width || 1;
   const ih = img.naturalHeight || img.height || 1;
@@ -259,7 +290,6 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
     rx = Math.round((W - rw) / 2);
   }
 
-  // draw contain into offscreen
   const off = document.createElement("canvas");
   off.width = rw;
   off.height = rh;
@@ -271,7 +301,6 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
   const imgData = octx.getImageData(0, 0, rw, rh);
   const d = imgData.data;
 
-  // detect alpha usage
   let hasUsefulAlpha = false;
   for (let i = 3; i < d.length; i += 4) {
     if (d[i] !== 255) {
@@ -280,7 +309,6 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
     }
   }
 
-  // create mask
   const mask = octx.createImageData(rw, rh);
   const md = mask.data;
 
@@ -294,7 +322,6 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
       md[i + 3] = alpha;
     }
   } else {
-    // background by corners (fallback)
     const pxAt = (x: number, y: number) => {
       const idx = (y * rw + x) * 4;
       return [d[idx], d[idx + 1], d[idx + 2]] as [number, number, number];
@@ -343,7 +370,6 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
   ctx.fillRect(0, 0, W, H);
   ctx.globalCompositeOperation = "destination-in";
 
-  // when mirrored, keep placement
   const drawX = mirrorX ? W - (rx + rw) : rx;
   ctx.drawImage(maskCanvas, drawX, ry);
 
@@ -371,11 +397,7 @@ function wrapLinesCanvas(ctx: CanvasRenderingContext2D, text: string, maxW: numb
   return out.length ? out : [""];
 }
 
-type PersonPreviewBlock = {
-  id: string;
-  lines: string[];
-  photo: string | null;
-};
+type PersonPreviewBlock = { id: string; lines: string[]; photo: string | null };
 
 function linesFromPerson(p: Person) {
   const l1 = (p.lastName || "").trim();
@@ -392,8 +414,10 @@ async function renderStackedPreview(params: {
   graphics: { url?: string; preview?: string }[];
   epitaphs: string[];
   peopleBlocks?: PersonPreviewBlock[];
+  // fitMode for background image:
+  bgFit?: "cover" | "contain";
 }): Promise<string | null> {
-  const { W, H, bg, overlayPng, graphics, epitaphs, peopleBlocks } = params;
+  const { W, H, bg, overlayPng, graphics, epitaphs, peopleBlocks, bgFit = "cover" } = params;
   if (W <= 0 || H <= 0) return null;
 
   const canvas = document.createElement("canvas");
@@ -416,7 +440,10 @@ async function renderStackedPreview(params: {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
     const im = await loadImageSafe(bg.url);
-    if (im) drawImageContain(ctx, im, { x: 0, y: 0, w: W, h: H });
+    if (im) {
+      if (bgFit === "contain") drawImageContain(ctx, im, { x: 0, y: 0, w: W, h: H });
+      else drawImageCover(ctx, im, { x: 0, y: 0, w: W, h: H });
+    }
   }
 
   // overlay silhouette (rear)
@@ -425,7 +452,7 @@ async function renderStackedPreview(params: {
     if (ov) ctx.drawImage(ov, 0, 0, W, H);
   }
 
-  // Compose items in order: people -> graphics -> epitaphs
+  // items order: people -> graphics -> epitaphs
   const items: { kind: "p" | "g" | "t"; url?: string; text?: string; lines?: string[] }[] = [];
   (peopleBlocks || []).forEach((p) => items.push({ kind: "p", url: p.photo || undefined, lines: p.lines || [] }));
   for (const g of graphics) items.push({ kind: "g", url: g.preview || g.url });
@@ -433,18 +460,20 @@ async function renderStackedPreview(params: {
 
   if (items.length === 0) return null;
 
-  // layout: fit blocks to frame (contain)
-  const pad = Math.round(Math.min(W, H) * 0.055);
+  // FILL THE FRAME vertically: minimal padding and dynamic block sizes.
+  const pad = Math.round(Math.min(W, H) * 0.035);
   const top = pad;
   const bottom = H - pad;
-  const gap = Math.round(Math.min(W, H) * 0.018);
+  const gap = Math.round(Math.min(W, H) * 0.015);
   const usable = Math.max(10, bottom - top);
-  const blockH = Math.max(52, Math.floor((usable - gap * (items.length - 1)) / items.length));
+
+  const blockH = Math.max(46, Math.floor((usable - gap * (items.length - 1)) / items.length));
   const totalH = items.length * blockH + gap * (items.length - 1);
+  // center if small leftover; but we already fill, so leftover should be small
   let y = Math.max(top, Math.floor((H - totalH) / 2));
 
-  // a bit wider than before so people+text can fit
-  const blockW = Math.floor(W * 0.48);
+  // Wider to better "fit" inside frame.
+  const blockW = Math.floor(W * 0.60);
   const x = Math.floor((W - blockW) / 2);
 
   for (const it of items) {
@@ -452,7 +481,7 @@ async function renderStackedPreview(params: {
 
     if (it.kind === "g" && it.url) {
       const im = await loadImageSafe(it.url);
-      if (im) drawImageContain(ctx, im, r);
+      if (im) drawImageContain(ctx, im, r); // contain: fully inside frame
     }
 
     if (it.kind === "t" && it.text) {
@@ -461,40 +490,38 @@ async function renderStackedPreview(params: {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      // Smaller font (fix #2)
-      const fontSize = Math.max(10, Math.floor(r.h * 0.11));
+      // Smaller base font (fix #2)
+      let fontSize = Math.max(9, Math.floor(r.h * 0.095));
+      if (fontSize > 12) fontSize = 12;
       ctx.font = `${fontSize}px "Times New Roman", serif`;
 
       const maxW = Math.max(10, r.w - 12);
-      const lines = wrapLinesCanvas(ctx, it.text, maxW);
-      const lh = Math.round(fontSize * 1.18);
+      let lines = wrapLinesCanvas(ctx, it.text, maxW);
+      let lh = Math.round(fontSize * 1.15);
 
-      // Ensure fit vertically: if too many lines, shrink further
-      let useFont = fontSize;
-      let useLines = lines;
-      while (useLines.length * lh > r.h - 8 && useFont > 9) {
-        useFont -= 1;
-        ctx.font = `${useFont}px "Times New Roman", serif`;
-        useLines = wrapLinesCanvas(ctx, it.text, maxW);
+      while (lines.length * lh > r.h - 8 && fontSize > 8) {
+        fontSize -= 1;
+        ctx.font = `${fontSize}px "Times New Roman", serif`;
+        lines = wrapLinesCanvas(ctx, it.text, maxW);
+        lh = Math.round(fontSize * 1.15);
       }
 
-      const useLh = Math.round(useFont * 1.18);
-      const total = useLines.length * useLh;
-      let ty = r.y + Math.round(r.h / 2 - total / 2 + useLh / 2);
-      for (const line of useLines) {
+      const total = lines.length * lh;
+      let ty = r.y + Math.round(r.h / 2 - total / 2 + lh / 2);
+      for (const line of lines) {
         ctx.fillText(line, r.x + r.w / 2, ty);
-        ty += useLh;
+        ty += lh;
       }
       ctx.restore();
     }
 
     if (it.kind === "p") {
-      // person block: photo + metrica (fix #3)
+      // person: photo + metrica
       ctx.save();
 
       const innerPad = Math.round(Math.min(r.w, r.h) * 0.08);
-      const photoW = Math.round(r.h - innerPad * 2); // square
-      const photoRect = { x: r.x + innerPad, y: r.y + innerPad, w: photoW, h: photoW };
+      const photoSize = Math.max(20, Math.round(r.h - innerPad * 2));
+      const photoRect = { x: r.x + innerPad, y: r.y + innerPad, w: photoSize, h: photoSize };
       const textRect = {
         x: photoRect.x + photoRect.w + innerPad,
         y: r.y + innerPad,
@@ -502,15 +529,18 @@ async function renderStackedPreview(params: {
         h: Math.max(10, r.h - innerPad * 2)
       };
 
-      // photo
+      // photo (contain)
+      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.fillRect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
+
       if (it.url) {
         const im = await loadImageSafe(it.url);
         if (im) {
-          // circle-ish mask
+          // rounded rect clip
           ctx.save();
-          const rr = Math.round(Math.min(photoRect.w, photoRect.h) * 0.16);
-          ctx.beginPath();
+          const rr = Math.round(Math.min(photoRect.w, photoRect.h) * 0.18);
           const x0 = photoRect.x, y0 = photoRect.y, w0 = photoRect.w, h0 = photoRect.h;
+          ctx.beginPath();
           ctx.moveTo(x0 + rr, y0);
           ctx.arcTo(x0 + w0, y0, x0 + w0, y0 + h0, rr);
           ctx.arcTo(x0 + w0, y0 + h0, x0, y0 + h0, rr);
@@ -521,46 +551,38 @@ async function renderStackedPreview(params: {
 
           drawImageContain(ctx, im, photoRect);
           ctx.restore();
-
-          // border
-          ctx.strokeStyle = "rgba(255,255,255,0.6)";
-          ctx.lineWidth = 1;
-          ctx.strokeRect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-        } else {
-          ctx.fillStyle = "rgba(0,0,0,0.35)";
-          ctx.fillRect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
         }
-      } else {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
       }
 
-      // text (metrica)
+      // border
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
+
+      // metrica lines
       const lines = (it.lines || []).filter(Boolean);
       ctx.fillStyle = "#fff";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
 
-      let font = Math.max(9, Math.floor(textRect.h * 0.18));
-      if (font > 14) font = 14; // cap to avoid huge
+      let font = Math.max(8, Math.floor(textRect.h * 0.22));
+      if (font > 12) font = 12;
       ctx.font = `${font}px "Times New Roman", serif`;
-      const lh = Math.round(font * 1.2);
+      let lh = Math.round(font * 1.15);
 
-      // fit vertically: shrink if needed
-      while (lines.length * lh > textRect.h && font > 9) {
+      while (lines.length * lh > textRect.h - 2 && font > 8) {
         font -= 1;
         ctx.font = `${font}px "Times New Roman", serif`;
+        lh = Math.round(font * 1.15);
       }
-      const useLh = Math.round(font * 1.2);
 
-      let ty = textRect.y + Math.max(0, Math.round((textRect.h - lines.length * useLh) / 2));
+      let ty = textRect.y + Math.max(0, Math.round((textRect.h - lines.length * lh) / 2));
       for (const ln of lines) {
-        // wrap each line if too long
         const wrapped = wrapLinesCanvas(ctx, ln, textRect.w);
         for (const wln of wrapped) {
-          if (ty + useLh > textRect.y + textRect.h + 1) break;
+          if (ty + lh > textRect.y + textRect.h + 1) break;
           ctx.fillText(wln, textRect.x, ty);
-          ty += useLh;
+          ty += lh;
         }
       }
 
@@ -637,7 +659,9 @@ function parseFlexibleDate(input?: string): Date | null {
   if (!s) return null;
   const m = s.match(/\d+/g);
   if (!m || m.length < 3) return null;
-  const d = +m[0], mo = +m[1], y = +m[2];
+  const d = +m[0],
+    mo = +m[1],
+    y = +m[2];
   if (!d || !mo || !y || y < 100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   const dt = new Date(y, mo - 1, d);
   if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
@@ -688,10 +712,16 @@ async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_B
   const ih = img.naturalHeight || img.height;
   const r = iw / ih;
 
-  let tw = iw, th = ih;
+  let tw = iw,
+    th = ih;
   if (Math.max(iw, ih) > DRAFT_IMG_MAX_DIM) {
-    if (r >= 1) { tw = DRAFT_IMG_MAX_DIM; th = Math.round(DRAFT_IMG_MAX_DIM / r); }
-    else { th = DRAFT_IMG_MAX_DIM; tw = Math.round(DRAFT_IMG_MAX_DIM * r); }
+    if (r >= 1) {
+      tw = DRAFT_IMG_MAX_DIM;
+      th = Math.round(DRAFT_IMG_MAX_DIM / r);
+    } else {
+      th = DRAFT_IMG_MAX_DIM;
+      tw = Math.round(DRAFT_IMG_MAX_DIM * r);
+    }
   }
 
   const canvas = document.createElement("canvas");
@@ -962,9 +992,7 @@ function SideLikePlateBlock(props: {
     );
   const moveDown = (idx: number) =>
     setPeople((prev) =>
-      idx === prev.length - 1
-        ? prev
-        : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
+      idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
     );
 
   // open map (accordion per person)
@@ -1144,7 +1172,7 @@ function SideLikePlateBlock(props: {
             </LoudAccordion>
           )}
 
-          {/* Эпитафии (без блока "Выбранные эпитафии") */}
+          {/* Эпитафии */}
           <LoudAccordion title="Эпитафии" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
             <div style={{ display: "grid", gap: 10 }}>
               <div style={sectionBoxStyle()}>
@@ -1332,7 +1360,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
   const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
 
-  // проставляем дефолты в draft, если отсутствуют (однократно)
   useEffect(() => {
     const d = loadOrderDraft() as any;
     const ex = (d?.extras || {}) as any;
@@ -1350,10 +1377,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
    * REAR (editorBack)
    * ========================= */
   const editorBack0: any = (draft as any)?.editorBack || {};
-
   const [rearEnabled, setRearEnabled] = useState<boolean>(() => !!editorBack0.enabled);
 
-  // local memory (do not clear when disabling)
+  // local memory (not cleared on disable)
   const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
   const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
   const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(
@@ -1361,17 +1387,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   );
   const [rearShowMore, setRearShowMore] = useState(false);
   const [rearCustomText, setRearCustomText] = useState("");
+
   const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
   const [rearPeople, setRearPeople] = useState<Person[]>(rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]);
-
-  const rearPeopleBlocks = useMemo<PersonPreviewBlock[]>(
-    () =>
-      rearPeople.map((p) => {
-        const photo = (p.photoDataUrl ?? p.photoUrl ?? null) as string | null;
-        return { id: p.id, lines: linesFromPerson(p), photo };
-      }),
-    [rearPeople]
-  );
 
   // transient photo urls
   const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
@@ -1390,15 +1408,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return () => {
       Object.values(rearTransientPhotoUrlById).forEach((u) => {
         if (u && u.startsWith("blob:")) {
-          try {
-            URL.revokeObjectURL(u);
-          } catch {}
+          try { URL.revokeObjectURL(u); } catch {}
         }
       });
     };
   }, [rearTransientPhotoUrlById]);
 
-  // photo handler
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
@@ -1472,6 +1487,16 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     },
     [setRearTransientFor]
   );
+
+  const rearPeopleBlocks = useMemo<PersonPreviewBlock[]>(() => {
+    // IMPORTANT: for preview we must include transient blob previews too (so user sees photo immediately)
+    return rearPeople.map((p) => {
+      const transient = rearTransientPhotoUrlById[p.id];
+      const stable = p.photoDataUrl ?? p.photoUrl ?? null;
+      const photo = transient ?? stable;
+      return { id: p.id, lines: linesFromPerson(p), photo };
+    });
+  }, [rearPeople, rearTransientPhotoUrlById]);
 
   // persist rear epitaphs when enabled
   const prevRearEpiJsonRef = useRef<string>("");
@@ -1624,7 +1649,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rearEnabled]);
 
-  // rear preview generation (NOW includes peopleBlocks)
+  // rear preview generation (NOW: bg-fit, smaller fonts, people)
   useEffect(() => {
     let alive = true;
 
@@ -1640,10 +1665,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
       const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
 
-      // include people in preview too
-      const peopleBlocks: PersonPreviewBlock[] = rearPeopleBlocks;
+      const peopleBlocks = rearPeopleBlocks;
 
-      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0 || (peopleBlocks && peopleBlocks.length > 0);
+      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0 || peopleBlocks.length > 0;
       if (!hasRear) {
         saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
         dispatchDraftUpdated();
@@ -1657,6 +1681,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         W: 900,
         H: 1200,
         bg: { type: "gradient" },
+        bgFit: "cover",
         overlayPng: overlay900,
         graphics: graphicsUniq,
         epitaphs,
@@ -1666,6 +1691,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         W: 1600,
         H: 2200,
         bg: { type: "gradient" },
+        bgFit: "cover",
         overlayPng: overlay1600,
         graphics: graphicsUniq,
         epitaphs,
@@ -1774,7 +1800,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     });
   };
 
-  // persist plate epitaphs when enabled
   const prevPlateEpiJsonRef = useRef<string>("");
   useEffect(() => {
     if (!plateEnabled) return;
@@ -1852,7 +1877,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plateEnabled]);
 
-  // plate preview generation (smaller font + contain for images already applied)
+  // plate preview generation
   useEffect(() => {
     let alive = true;
     const run = async () => {
@@ -1880,14 +1905,16 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         W: 900,
         H: 1200,
         bg: { type: "image", url: PLATE_BG_URL },
+        bgFit: "cover", // "растянуть под фрейм" фон
         graphics: graphicsUniq,
         epitaphs,
-        peopleBlocks: [] // no people for plate by requirement
+        peopleBlocks: []
       });
       const big = await renderStackedPreview({
         W: 1600,
         H: 2200,
         bg: { type: "image", url: PLATE_BG_URL },
+        bgFit: "cover",
         graphics: graphicsUniq,
         epitaphs,
         peopleBlocks: []
@@ -1999,7 +2026,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           onToggleEpitaph={toggleRearEpitaph}
           onAddCustom={addRearCustom}
           onRemoveEpitaph={removeRearEpitaph}
-          epitaphList={rearEpitaphList}
+          epitaphList={rearSelectedEpitaphs}
           catsLoading={catsLoading}
           catsError={catsError}
           cats={cats}
