@@ -1022,18 +1022,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
               </div>
             </section>
           )}
-
-          {/* Дополнительно (всегда, независимо от плиты) */}
-<div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
-  <span style={{ opacity: 0.9 }}>Дополнительно: </span>
-  <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>Тумба: {extrasParts.tumba ? "да" : "нет"}</span>
-  <span style={{ opacity: 0.7 }}> · </span>
-  <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>Цветник: {extrasParts.flowerbed ? "да" : "нет"}</span>
-  <span style={{ opacity: 0.7 }}> · </span>
-  <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>Ваза: {extrasParts.vase ? "да" : "нет"}</span>
-</div>
-
-
+          
           {/* Плита */}
           {plateEnabled && (
             <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
@@ -1087,6 +1076,15 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
             </section>
           )}
 
+{/* Дополнительно (всегда, независимо от плиты) */}
+<div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
+  <span style={{ opacity: 0.9 }}>Дополнительно: </span>
+  <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>Тумба: {extrasParts.tumba ? "да" : "нет"}</span>
+  <span style={{ opacity: 0.7 }}> · </span>
+  <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>Цветник: {extrasParts.flowerbed ? "да" : "нет"}</span>
+  <span style={{ opacity: 0.7 }}> · </span>
+  <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>Ваза: {extrasParts.vase ? "да" : "нет"}</span>
+</div>
           {/* Очистить всё */}
           <div style={{ marginTop: 2, paddingTop: 10, borderTop: palette(theme).divider, display: "flex", justifyContent: "center" }}>
             <button
