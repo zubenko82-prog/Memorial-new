@@ -68,6 +68,11 @@ export type OrderDraft = {
   notes?: string;
   orientation?: Orientation; // legacy-дубль для совместимости
   updatedAt?: number;
+
+  // extras у вас используются в проекте, но типом не описаны — оставляем совместимость
+  extras?: any;
+  editor?: any;
+  editorBack?: any;
 };
 
 export const LS_ORDER_DRAFT_KEY = "memorial.order.draft.v1";
@@ -87,19 +92,53 @@ function now() {
   return Date.now();
 }
 
-/* ==================== Deep merge ==================== */
+/* ==================== Deep merge with delete ==================== */
 
-function deepMergeDefined<T>(target: T, source: Partial<T>): T {
-  if (source == null) return target;
+/**
+ * Маркер удаления поля.
+ * Можно использовать del() или просто null в patch.
+ */
+export const __delete__ = Symbol("order.delete");
+
+/** Удобный helper: del() */
+export function del() {
+  return __delete__ as any;
+}
+
+/**
+ * Правила:
+ * - undefined: игнорируем (не трогаем поле)
+ * - null: удаляем поле (delete)
+ * - __delete__: удаляем поле (delete)
+ * - object (не массив): рекурсивно мержим
+ * - массив/примитив: заменяем целиком
+ */
+function deepMergeWithDelete<T>(target: T, source: Partial<T>): T {
+  if (source == null) return target as any;
+
   const out: any = Array.isArray(target) ? [...(target as any)] : { ...(target as any) };
-  for (const [k, v] of Object.entries(source)) {
-    if (v === undefined || v === null) continue; // не пишем undefined/null, чтобы не затирать поля
+
+  for (const [k, v] of Object.entries(source as any)) {
+    if (v === undefined) continue;
+
+    if (v === null) {
+      delete out[k];
+      continue;
+    }
+
+    if ((v as any) === __delete__) {
+      delete out[k];
+      continue;
+    }
+
     if (typeof v === "object" && !Array.isArray(v)) {
-      out[k] = deepMergeDefined(out[k] ?? {}, v as any);
+      // рекурсивный merge
+      out[k] = deepMergeWithDelete(out[k] ?? {}, v as any);
     } else {
       out[k] = v;
     }
   }
+
   return out;
 }
 
@@ -110,10 +149,12 @@ export function loadOrderDraft(): OrderDraft {
     const raw = localStorage.getItem(LS_ORDER_DRAFT_KEY);
     if (!raw) return { graphics: [], updatedAt: now() };
     const obj = JSON.parse(raw) as OrderDraft;
+
     if (!Array.isArray(obj.graphics)) obj.graphics = [];
     if (obj.size && typeof obj.size !== "object") obj.size = null;
     if (obj.item && typeof obj.item !== "object") obj.item = null;
     if (obj.engraving && typeof obj.engraving !== "object") obj.engraving = null;
+
     return { ...obj, updatedAt: obj.updatedAt || now() };
   } catch {
     return { graphics: [], updatedAt: now() };
@@ -122,10 +163,14 @@ export function loadOrderDraft(): OrderDraft {
 
 export function saveOrderDraft(patch: Partial<OrderDraft>): OrderDraft {
   const prev = loadOrderDraft();
-  const next: OrderDraft = deepMergeDefined(prev, { ...patch, updatedAt: now() });
+
+  // updatedAt всегда обновляем
+  const next: OrderDraft = deepMergeWithDelete(prev, { ...patch, updatedAt: now() });
+
   try {
     localStorage.setItem(LS_ORDER_DRAFT_KEY, JSON.stringify(next));
   } catch {}
+
   emitDraftUpdated();
   return next;
 }
@@ -158,6 +203,7 @@ export async function setPhotoOriginal(file: File): Promise<OrderDraft> {
   const key = `photo:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   await idbPutBlob(key, file);
   const preview = await makePreviewDataUrl(file, 300);
+
   const next = saveOrderDraft({
     engraving: {
       photoOriginalKey: key,
@@ -166,6 +212,7 @@ export async function setPhotoOriginal(file: File): Promise<OrderDraft> {
       photoPreview: preview
     }
   });
+
   return next;
 }
 
@@ -183,15 +230,17 @@ export async function getPhotoOriginalFromDraft(draft?: OrderDraft): Promise<Blo
 export async function clearPhotoOriginal(): Promise<OrderDraft> {
   const cur = loadOrderDraft();
   const key = cur.engraving?.photoOriginalKey;
+
   if (key) {
     try {
       await idbDel(key);
     } catch {}
   }
+
   return saveOrderDraft({
     engraving: {
       ...(cur.engraving || {}),
-      photoOriginalKey: null,
+      photoOriginalKey: null, // удаляем
       photoPreview: null,
       photoFileName: null,
       photoMime: null
