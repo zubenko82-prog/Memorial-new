@@ -588,7 +588,8 @@ export default function Start({
       }}
     >
       {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
-      <TopBarWithIntro title="Стела" />
+      <div style={{ padding: 12, border: "1px solid #333" }}>TopBar placeholder</div>
+
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
@@ -694,10 +695,19 @@ export default function Start({
                         padding: 6
                       }}
                     >
-                      <div style={{ fontSize: 12, opacity: 0.9, padding: 6, textAlign: "center" }}>
-  {getDecodedFileName(it)}
-</div>
-
+                      <img
+                        src={it.url}
+                        alt={it.name}
+                        style={{
+                          maxWidth: "100%",
+                          maxHeight: "100%",
+                          width: "auto",
+                          height: "auto",
+                          objectFit: "contain",
+                          display: "block",
+                          borderRadius: 8
+                        }}
+                      />
                     </div>
                   </button>
                 ))}
