@@ -694,18 +694,9 @@ export default function Start({
                         padding: 6
                       }}
                     >
-                      <img
-                        src={it.url}
-                        alt={it.name}
-                        style={{
-                          maxWidth: "100%",
-                          maxHeight: "100%",
-                          width: "auto",
-                          height: "auto",
-                          objectFit: "contain",
-                          display: "block",
-                          borderRadius: 8
-                        }}
+                      <div style={{ fontSize: 12, opacity: 0.9, padding: 6, textAlign: "center" }}>
+  {getDecodedFileName(it)}
+</div>
                       />
                     </div>
                   </button>
