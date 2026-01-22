@@ -1,1392 +1,1104 @@
-// src/screens/BackEditorStep.tsx
+// src/components/TopBarWithIntro.tsx
+// Шапка-кнопка с раскрывающейся панелью заказа.
+// Эпитафии отображаются в разделе «Элементы эскиза» (лицевая/тыльная) + добавлены эпитафии плиты.
 //
-// Шаг «Тыл»
-//
-// Требования (текущее ТЗ):
-// 1) Тыльная сторона — блок визуально/поведенчески как "Надгробная плита":
-//    - чекбокс включения/выключения (rearEnabled)
-//    - блок "Выбрано" (красная рамка): выбранная графика + эпитафии с удалением
-//    - аккордеоны: "Эпитафии", "Графика"
-//    - при выключении rearEnabled: чистим editorBack.* и скрываем эскиз на обзоре
-// 2) Надгробная плита — аналогичный блок:
-//    - чекбокс включения/выключения (extras.headstonePlate)
-//    - "Выбрано", "Эпитафии", "Графика"
-//    - превью плиты (extras.platePreviewUrl/platePreviewHiUrl) с фоном PLATE_BG_URL
-// 3) Вернуть блок "Дополнительно" (чекбоксы): Тумба, Цветник, Ваза (пишем в draft.extras)
-// 4) Превью тыла должно рисовать "контур/силуэт" резной работы:
-//    - берём img src={order.item.url} (то есть draft.item.url)
-//    - строим силуэт по alpha (если есть) или по фону углов (fallback)
-//    - заливаем #1b1b1b и зеркалим по X (тыльная сторона)
-//    - накладываем на градиентный фон
-//
-// ВАЖНО:
-// - "Усопшие" для тыла пока не делаем.
-// - Сохранение в draft патчами, удаление через null.
-// - Каталог графики общий (fetchCatalog("graphics")).
+// ВАЖНЫЕ ФИКСЫ (чтобы в топбаре эпитафии корректно добавлялись/удалялись на ВСЕХ шагах):
+// 1) Для плиты читаем ТОЛЬКО extras.plateEpitaph и extras.plateEpitaphs (НЕ plateEpitaphTexts),
+//    иначе "старые" значения могут оставаться и казаться, что удаление не работает.
+// 2) Эпитафия плиты = один элемент списка, даже если многострочная (НЕ split по \n).
+// 3) На DRAFT_UPDATED_EVENT всегда refreshAll({force:true}).
+// 4) Поддержка принудительного открытия панели: слушаем "memorial:openTopBarPanel" -> setOpen(true).
+// 5) Для детекта открытости (скрин/автооткрытие) ставим data-topbar-open={open?"1":"0"} на panel root.
+// 6) Все эпитафии (лицевая/тыльная/плита) отображаются раздельно (каждая в рамке).
+// 7) Дополнительно: пока панель открыта — polling draft (каждые 300мс), чтобы Telegram WebView не "терял" обновления.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import TopBarWithIntro from "../components/TopBarWithIntro";
-import { fetchCatalog } from "../api";
-import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
-import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT, type OrderDraft } from "../lib/order";
+import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
+import { loadOrderDraft, saveOrderDraft, clearOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 
-/* ========= Styles ========= */
-function glassPanelStyle(): React.CSSProperties {
+/* ===== Темизация ===== */
+type ThemeMode = "dark" | "light";
+const LS_THEME_KEY = "memorial.ui.theme.v1";
+
+function loadTheme(): ThemeMode {
+  const v = (typeof localStorage !== "undefined" ? localStorage.getItem(LS_THEME_KEY) : null) || "light";
+  return v?.toLowerCase() === "dark" ? "dark" : "light";
+}
+function saveTheme(t: ThemeMode) {
+  if (typeof localStorage !== "undefined") localStorage.setItem(LS_THEME_KEY, t);
+}
+function palette(t: ThemeMode) {
+  if (t === "light") {
+    return {
+      text: "#222",
+      subText: "rgba(0,0,0,0.65)",
+      panelBg: "#fff",
+      panelBorder: "1px solid #e6e2da",
+      inputBg: "#ffffff",
+      inputBorder: "1px solid #d7d3c7",
+      link: "#1d4ed8",
+      linkHover: "#0b3ab8",
+      danger: "#b91c1c",
+      dangerHover: "#991b1b",
+      headerBg: "#ffffff",
+      headerText: "#111",
+      headerBorder: "1px solid #e6e2da",
+      chevronCircleBg: "rgba(0,0,0,0.06)",
+      chevronCircleBorder: "1px solid rgba(0,0,0,0.16)",
+      chevronStroke: "#111",
+      neutralBg: "#faf9f7",
+      neutralBorder: "1px solid #ece8de",
+      divider: "1px solid #ece8de",
+      accentBg: "#fff8e6",
+      accentBorder: "1px solid #f0d9a7",
+      chipBg: "#eef2ff",
+      chipText: "#1d4ed8"
+    };
+  }
   return {
-    background: "rgba(20,20,24,0.95)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: 12,
-    color: "#fff",
-    boxSizing: "border-box"
+    text: "#fff",
+    subText: "rgba(255,255,255,0.85)",
+    panelBg: "rgba(20,20,24,0.55)",
+    panelBorder: "1px solid rgba(255,255,255,0.14)",
+    inputBg: "rgba(255,255,255,0.06)",
+    inputBorder: "1px solid rgba(255,255,255,0.18)",
+    link: "#8ab4ff",
+    linkHover: "#a5c5ff",
+    danger: "#ff7b7b",
+    dangerHover: "#ff9c9c",
+    headerBg: "#000000",
+    headerText: "#ffffff",
+    headerBorder: "1px solid rgba(255,255,255,0.22)",
+    chevronCircleBg: "rgba(255,255,255,0.06)",
+    chevronCircleBorder: "1px solid rgba(255,255,255,0.16)",
+    chevronStroke: "#ffffff",
+    neutralBg: "rgba(255,255,255,0.04)",
+    neutralBorder: "1px solid rgba(255,255,255,0.10)",
+    divider: "1px solid rgba(255,255,255,0.12)",
+    accentBg: "rgba(255,242,201,0.15)",
+    accentBorder: "1px solid rgba(255,255,255,0.35)",
+    chipBg: "rgba(138,180,255,0.18)",
+    chipText: "#dbe7ff"
   };
 }
-function sectionBoxStyle(): React.CSSProperties {
-  return {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.10)",
-    borderRadius: 10,
-    padding: 10
-  };
+function paperShadow(t: ThemeMode): React.CSSProperties {
+  return t === "light"
+    ? { boxShadow: "0 10px 24px rgba(0,0,0,0.08), 0 1px 0 rgba(0,0,0,0.06)" }
+    : { boxShadow: "0 8px 24px rgba(0,0,0,0.45)" };
 }
-function inputStyle(): React.CSSProperties {
+
+/* ===== Адаптивность ===== */
+function useCompact(breakpoint = 420): boolean {
+  const [compact, setCompact] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= breakpoint;
+  });
+  useEffect(() => {
+    const onResize = () => setCompact(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return compact;
+}
+
+/* ===== UI-хелперы/стили ===== */
+function inputStyle(theme: ThemeMode): React.CSSProperties {
+  const p = palette(theme);
   return {
     width: "100%",
     padding: "8px 10px",
     borderRadius: 8,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#fff",
+    border: p.inputBorder,
+    background: p.inputBg,
+    color: p.text,
     outline: "none",
     boxSizing: "border-box"
   };
 }
-function glassButtonStyle(size: "nano" | "sm" | "md" = "sm", disabled = false): React.CSSProperties {
-  const pad = size === "nano" ? "6px 10px" : size === "sm" ? "10px 14px" : "12px 18px";
+
+function thumbBackdropStyle(theme: ThemeMode): React.CSSProperties {
   return {
-    padding: pad,
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.28)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%), rgba(255,255,255,0.06)",
-    color: "#fff",
-    cursor: disabled ? "not-allowed" : "pointer",
-    whiteSpace: "nowrap",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 24px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.12)",
-    opacity: disabled ? 0.6 : 1
+    borderRadius: 10,
+    background: "rgba(0,0,0,0.4)",
+    border: theme === "light" ? "1px solid rgba(0,0,0,0.18)" : "1px solid rgba(255,255,255,0.14)",
+    padding: 4,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box"
   };
 }
 
-function dispatchDraftUpdated() {
-  try {
-    window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
-    window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-  } catch {}
+// Карточки эпитафий (отдельно каждая)
+function epitaphItemStyle(theme: ThemeMode): React.CSSProperties {
+  const p = palette(theme);
+  return {
+    background: theme === "light" ? "rgba(255, 232, 170, 0.85)" : "rgba(255, 232, 170, 0.22)",
+    border: theme === "light" ? "1px solid rgba(160, 110, 0, 0.35)" : "1px solid rgba(255,255,255,0.22)",
+    borderRadius: 10,
+    padding: 8,
+    color: p.text
+  };
+}
+function epitaphListStyle(): React.CSSProperties {
+  return { display: "grid", gap: 6 };
 }
 
-function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?: number }) {
+function galleryThumbBoxStyle(): React.CSSProperties {
+  const grad: React.CSSProperties = {
+    backgroundColor: "#000000",
+    backgroundImage: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+  };
+  return {
+    ...grad,
+    overflow: "hidden",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.14)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flex: "0 0 auto",
+    position: "relative"
+  };
+}
+
+function linkButtonStyle(theme: ThemeMode, kind: "default" | "danger" = "default", disabled = false): React.CSSProperties {
+  const p = palette(theme);
+  const color = kind === "danger" ? p.danger : p.link;
+  return {
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    margin: 0,
+    color: disabled ? p.subText : color,
+    cursor: disabled ? "not-allowed" : "pointer",
+    textDecoration: "none",
+    font: "inherit",
+    lineHeight: 1.2
+  };
+}
+
+function Row({
+  label,
+  theme,
+  children,
+  compact = false
+}: {
+  label: string;
+  theme: ThemeMode;
+  children: React.ReactNode;
+  compact?: boolean;
+}) {
   return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: 10,
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "transparent",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
-        boxSizing: "border-box"
-      }}
-    >
-      {url ? (
-        <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
-      ) : (
-        <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
-      )}
+    <div style={{ display: "grid", gridTemplateColumns: `${compact ? 120 : 160}px 1fr`, gap: compact ? 8 : 10, alignItems: "center" }}>
+      <div style={{ color: palette(theme).text }}>{label}</div>
+      <div>{children}</div>
     </div>
   );
 }
 
-/* ========= Epitaph helpers ========= */
-const normEpitaph = (t: string) =>
-  (t || "")
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t]+$/gm, "")
-    .trim();
-
-function indexOfByNorm(list: string[], needle: string): number {
-  const n = normEpitaph(needle);
-  for (let i = 0; i < list.length; i++) {
-    if (normEpitaph(list[i]) === n) return i;
+function fileNameFromUrl(url?: string): string {
+  if (!url) return "";
+  try {
+    const noQuery = String(url).split(/[?#]/)[0];
+    const last = (noQuery.split("/").pop() || noQuery).split("\\").pop() || noQuery;
+    return decodeURIComponent(last.replace(/\+/g, " "));
+  } catch {
+    return url;
   }
-  return -1;
 }
-function hasByNorm(list: string[], needle: string) {
-  return indexOfByNorm(list, needle) !== -1;
+
+function glassPanelStyle(themeParam?: ThemeMode): React.CSSProperties {
+  const t = themeParam ?? loadTheme();
+  const p = palette(t);
+  return { background: p.neutralBg, border: p.neutralBorder, borderRadius: 10, color: p.text };
 }
-function uniqueByNorm(list: string[]): string[] {
+
+function chip(theme: ThemeMode): React.CSSProperties {
+  const p = palette(theme);
+  return {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 999,
+    fontSize: 12,
+    background: p.chipBg,
+    color: p.chipText,
+    whiteSpace: "nowrap"
+  };
+}
+
+/* ===== Коллапс ===== */
+function useCollapse(open: boolean, duration = 280) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({
+    overflow: "hidden",
+    maxHeight: 0,
+    opacity: 0,
+    transform: "translateY(-6px)"
+  });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const h = el.scrollHeight;
+
+    if (open) {
+      setStyle({
+        overflow: "hidden",
+        maxHeight: h,
+        opacity: 1,
+        transform: "translateY(0)",
+        transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
+      });
+      const t = setTimeout(() => {
+        if (ref.current) setStyle((s) => ({ ...s, maxHeight: ref.current!.scrollHeight }));
+      }, duration + 20);
+      return () => clearTimeout(t);
+    }
+
+    setStyle({
+      overflow: "hidden",
+      maxHeight: 0,
+      opacity: 0,
+      transform: "translateY(-6px)",
+      transition: `max-height ${duration}ms ease, opacity ${duration}ms ease, transform ${duration}ms ease`
+    });
+  }, [open, duration]);
+
+  return { ref, style };
+}
+
+/* ===== Форматтеры ===== */
+function mmToCm(mm?: number): number | undefined {
+  if (typeof mm !== "number" || !isFinite(mm)) return undefined;
+  return mm / 10;
+}
+function cmValue(n?: number): string {
+  if (typeof n !== "number" || !isFinite(n)) return "—";
+  return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(1)));
+}
+
+/**
+ * Нормализация эпитафий плиты:
+ * - если массив — каждый элемент = одна эпитафия (может быть многострочной)
+ * - если строка — это ОДНА эпитафия целиком (НЕ split по '\n')
+ */
+function normalizeEpitaphItems(input: any): string[] {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return input
+      .map((s) => String(s || "").replace(/\r\n?/g, "\n").trim())
+      .filter(Boolean);
+  }
+  const t = String(input || "").replace(/\r\n?/g, "\n").trim();
+  return t ? [t] : [];
+}
+
+function uniqByNorm(items: string[]): string[] {
   const out: string[] = [];
-  for (const t of list) if (!hasByNorm(out, t)) out.push(t);
+  const seen = new Set<string>();
+  for (const x of items) {
+    const key = String(x || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[ \t]+$/gm, "")
+      .trim();
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(String(x || "").replace(/\r\n?/g, "\n").trim());
+  }
   return out;
 }
 
-/* ========= Accordion ========= */
-function LoudAccordion({
-  title,
-  open,
-  onToggle,
-  children
-}: {
-  title: React.ReactNode;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [h, setH] = useState(0);
+/* ===== Компонент ===== */
+export default function TopBarWithIntro({ title = "Memorial" }: { title?: string }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
+  const compact = useCompact(420);
 
+  // Интро и номер
+  const [introData, setIntroData] = useState(() => loadIntroState());
+  const intro = introData.intro;
+  const orderNumber = introData.orderNumber || "—";
+
+  // Драфт заказа
+  const [order, setOrder] = useState<OrderDraft>(() => loadOrderDraft());
+
+  // Поля редактирования
+  const [name, setName] = useState(intro?.customerName || "");
+  const [phone, setPhone] = useState(intro?.customerPhone || "");
+  const [contactNotes, setContactNotes] = useState(intro?.customerNotes || "");
+  const [sizeNotes, setSizeNotes] = useState(order.size?.notes || "");
+  const [epitaphsText, setEpitaphsText] = useState(
+    (order.engraving?.epitaphs && order.engraving!.epitaphs!.join("\n")) || order.engraving?.epitaphText || ""
+  );
+  const [orderNotes, setOrderNotes] = useState((order as any).notes || "");
+  const [frontWishes, setFrontWishes] = useState<string>((order as any)?.editor?.wishes || "");
+  const [backWishes, setBackWishes] = useState<string>((order as any)?.editorBack?.wishes || "");
+
+  // Синхронизация: всегда обновляем order/intro, а формы — если не editing или force
+  const refreshAll = React.useCallback(
+    (opts?: { force?: boolean }) => {
+      const freshOrder = loadOrderDraft();
+      const freshIntroState = loadIntroState();
+
+      setOrder(freshOrder);
+      setIntroData(freshIntroState);
+
+      if (!editing || opts?.force) {
+        const i = freshIntroState.intro || {};
+        setName(i.customerName || "");
+        setPhone(i.customerPhone || "");
+        setContactNotes(i.customerNotes || "");
+
+        setSizeNotes(freshOrder.size?.notes || "");
+        setEpitaphsText(
+          (freshOrder.engraving?.epitaphs && freshOrder.engraving!.epitaphs!.join("\n")) ||
+            freshOrder.engraving?.epitaphText ||
+            ""
+        );
+        setOrderNotes((freshOrder as any).notes || "");
+        setFrontWishes((freshOrder as any)?.editor?.wishes || "");
+        setBackWishes((freshOrder as any)?.editorBack?.wishes || "");
+      }
+    },
+    [editing]
+  );
+
+  // Подписки на обновления: всегда force, чтобы не было "то обновилось, то нет"
   useEffect(() => {
-    const m = () => setH(ref.current?.scrollHeight || 0);
-    m();
-    const RO = (window as any).ResizeObserver;
-    const ro = RO ? new RO(m) : null;
-    if (ref.current && ro) ro.observe(ref.current);
-    return () => ro?.disconnect?.();
-  }, [children]);
+    const onAny = () => refreshAll({ force: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshAll({ force: true });
+    };
+
+    window.addEventListener("storage", onAny);
+    window.addEventListener("memorial:orderDraftUpdated", onAny as any);
+    window.addEventListener(DRAFT_UPDATED_EVENT, onAny as any);
+    window.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onAny);
+    window.addEventListener("pageshow", onAny as any);
+
+    refreshAll({ force: true });
+    return () => {
+      window.removeEventListener("storage", onAny);
+      window.removeEventListener("memorial:orderDraftUpdated", onAny as any);
+      window.removeEventListener(DRAFT_UPDATED_EVENT, onAny as any);
+      window.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onAny);
+      window.removeEventListener("pageshow", onAny as any);
+    };
+  }, [refreshAll]);
+
+  // Если панель открыта — обновим на всякий случай
+  useEffect(() => {
+    if (open) refreshAll({ force: true });
+  }, [open, refreshAll]);
+
+  // Сообщаем наружу, что панель раскрылась (для ReviewAndSendStep, если нужно)
+  useEffect(() => {
+    if (!open) return;
+    try {
+      window.dispatchEvent(new Event("memorial:topbarOpened"));
+    } catch {}
+  }, [open]);
+
+  // Принудительное открытие панели по событию
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener("memorial:openTopBarPanel", onOpen as any);
+    return () => window.removeEventListener("memorial:openTopBarPanel", onOpen as any);
+  }, []);
+
+  // ✅ Надёжная синхронизация для Telegram WebApp:
+  // пока панель открыта — регулярно перечитываем draft из localStorage.
+  useEffect(() => {
+    if (!open) return;
+
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      const fresh = loadOrderDraft();
+      setOrder(fresh);
+    };
+
+    tick();
+    const t = window.setInterval(tick, 300);
+
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [open]);
+
+  // Контактная линия (телефон)
+  const phoneLine = useMemo(() => {
+    const b = (editing ? phone : intro?.customerPhone) || "";
+    return b;
+  }, [editing, phone, intro?.customerPhone]);
+
+  // Графика (лицевая)
+  const frontGraphics = (order.graphics || []) as any[];
+  const frontCountsById = useMemo(() => {
+    const m: Record<string, number> = {};
+    frontGraphics.forEach((g: any) => {
+      if (g?.id) m[g.id] = (m[g.id] || 0) + 1;
+    });
+    return m;
+  }, [frontGraphics]);
+  const frontUnique = useMemo(() => {
+    const first: Record<string, any> = {};
+    frontGraphics.forEach((g: any) => {
+      const id = g?.id;
+      if (id && !first[id]) first[id] = g;
+    });
+    return Object.values(first);
+  }, [frontGraphics]);
+
+  // Графика (тыльная)
+  const rearSelectedIds: string[] = (((order as any)?.editorBack?.selectedGraphicsIds || []) as string[]);
+  const rearMeta: Record<string, any> = (((order as any)?.editorBack?.graphicsMeta || {}) as Record<string, any>);
+  const rearCountsById = useMemo(() => {
+    const m: Record<string, number> = {};
+    (rearSelectedIds || []).forEach((id) => {
+      m[id] = (m[id] || 0) + 1;
+    });
+    return m;
+  }, [rearSelectedIds]);
+  const rearUnique = useMemo(() => {
+    const ids = Array.from(new Set(rearSelectedIds || []));
+    return ids.map((id) => rearMeta?.[id] || { id, name: id, url: "", preview: "" });
+  }, [rearSelectedIds, rearMeta]);
+
+  // Эпитафии (лицевая/тыльная)
+  const frontEpitaphs: string[] = useMemo(() => {
+    const arr = Array.isArray(order.engraving?.epitaphs) ? order.engraving!.epitaphs!.filter(Boolean) : [];
+    if (arr.length) return arr;
+    if (order.engraving?.epitaphText?.trim()) return [order.engraving!.epitaphText!.trim()];
+    return [];
+  }, [order.engraving]);
+
+  const rearEpitaphs: string[] = useMemo(
+    () => (((order as any)?.editorBack?.epitaphTexts || []) as string[]).filter(Boolean),
+    [order]
+  );
+
+  const frontHasSketch =
+    (frontUnique && frontUnique.length > 0) ||
+    (frontEpitaphs && frontEpitaphs.length > 0) ||
+    (frontWishes && frontWishes.trim().length > 0);
+
+  const rearHasSketch =
+    (rearUnique && rearUnique.length > 0) ||
+    (rearEpitaphs && rearEpitaphs.length > 0) ||
+    (backWishes && backWishes.trim().length > 0);
+
+  // Extras (плита)
+  const extras: any = (order as any)?.extras || {};
+  const plateEnabled: boolean = !!extras.headstonePlate;
+  const plateIds: string[] = (extras.plateGraphicsIds as string[]) || [];
+  const plateMeta: Record<string, any> = (extras.plateGraphicsMeta as Record<string, any>) || {};
+  const plateSize = extras.plateSize as string | undefined;
+  const plateThickness = extras.plateThickness as string | undefined;
+  const plateOrientation = extras.plateOrientation as string | undefined;
+
+  const plateChosen = useMemo(() => {
+    const uniq = Array.from(new Set(plateIds || []));
+    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
+  }, [plateIds, plateMeta]);
+
+  // ✅ ВАЖНО: читаем эпитафии плиты ТОЛЬКО из plateEpitaph / plateEpitaphs
+  const plateEpitaphItems = useMemo(() => {
+    const a = normalizeEpitaphItems(extras.plateEpitaph);
+    const b = normalizeEpitaphItems(extras.plateEpitaphs);
+    return uniqByNorm([...a, ...b]);
+  }, [extras.plateEpitaph, extras.plateEpitaphs]);
+
+  // Дополнительно (строка)
+  const extrasParts = useMemo(() => {
+    const tumba = (extras.tumba ?? true) ? true : false;
+    const flowerbed = !!extras.flowerbed;
+    const vase = !!extras.vase;
+    return { tumba, flowerbed, vase };
+  }, [extras.tumba, extras.flowerbed, extras.vase]);
+
+  // Сохранение (редактирование контактных/пожеланий и т.п.)
+  const saveAll = () => {
+    const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+
+    const introNext: Intro = {
+      customerName: (name || "").trim(),
+      customerPhone: (phone || "").trim(),
+      customerNotes: (contactNotes || "").trim() || undefined
+    };
+    const lock = !introData.orderNumber;
+    saveIntro(introNext, { lock });
+
+    const patch: Partial<OrderDraft> = {
+      size: { notes: sizeNotes?.trim() || undefined },
+      engraving: {
+        epitaphs: epLines.length ? epLines : undefined,
+        epitaphText: epLines.length === 1 ? epLines[0] : undefined
+      } as any,
+      editor: { wishes: (frontWishes || "").trim() || undefined } as any,
+      editorBack: { wishes: (backWishes || "").trim() || undefined } as any,
+      ...(orderNotes?.trim() ? { notes: orderNotes.trim() } : {})
+    };
+
+    const stored = saveOrderDraft(patch);
+    setOrder(stored);
+    refreshAll({ force: true });
+
+    try {
+      window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+      window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+    } catch {}
+  };
+
+  // Очистка
+  const [isClearing, setIsClearing] = useState(false);
+
+  function makeEmptyDraft(): OrderDraft {
+    return {
+      item: null as any,
+      size: {},
+      engraving: { persons: [], epitaphs: undefined, epitaphText: undefined } as any,
+      editor: {} as any,
+      editorBack: {} as any,
+      graphics: [],
+      notes: undefined,
+      extras: {},
+      updatedAt: Date.now()
+    } as OrderDraft;
+  }
+
+  async function handleClearAll() {
+    if (isClearing) return;
+    const ok = window.confirm("Очистить ВСЕ данные заказа, включая номер заявки и усопших? Действие необратимо.");
+    if (!ok) return;
+
+    setIsClearing(true);
+    try {
+      await clearOrderDraft();
+      clearIntroAll();
+      try {
+        localStorage.removeItem("memorial.navEnabled");
+        localStorage.removeItem("memorial.navEnabled.reviewOnly");
+      } catch {}
+      setEditing(false);
+      setOpen(false);
+
+      const blank = makeEmptyDraft();
+      setOrder(blank);
+      setIntroData({ intro: {}, orderNumber: undefined } as any);
+
+      setName("");
+      setPhone("");
+      setContactNotes("");
+      setSizeNotes("");
+      setEpitaphsText("");
+      setOrderNotes("");
+      setFrontWishes("");
+      setBackWishes("");
+
+      try {
+        window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+        window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+      } catch {}
+
+      setTimeout(() => refreshAll({ force: true }), 0);
+    } finally {
+      setIsClearing(false);
+    }
+  }
+
+  const coll = useCollapse(open, 280);
+  const panelId = "order-panel";
+  const p = palette(theme);
 
   return (
-    <div style={{ ...glassPanelStyle(), padding: 0 }}>
+    <div style={{ marginTop: compact ? 1 : 10, marginLeft: compact ? 1 : 0, marginRight: compact ? 1 : 0, marginBottom: compact ? 8 : 10 }}>
+      {/* Шапка-кнопка */}
       <button
         type="button"
-        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={panelId}
+        title={open ? "Скрыть данные заказа" : "Показать данные заказа"}
+        onClick={() => setOpen((v) => !v)}
         style={{
           width: "100%",
           textAlign: "left",
-          padding: "12px 14px",
-          background: "rgba(255,255,255,0.06)",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
+          padding: compact ? "8px 8px" : "12px 14px",
+          borderRadius: compact ? 10 : 12,
+          border: p.headerBorder,
+          background: p.headerBg,
+          color: p.headerText,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          fontSize: 15,
-          fontWeight: 700
+          gap: compact ? 8 : 12,
+          cursor: "pointer",
+          ...paperShadow(theme)
         }}
       >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{title}</span>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
-      </button>
-      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
-        <div ref={ref} style={{ padding: 12 }}>
-          {children}
+        <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 10, minWidth: 0 }}>
+          <span style={{ fontSize: compact ? 18 : 22, fontWeight: 600, letterSpacing: 0.2 }}>{title}</span>
         </div>
-      </div>
-    </div>
-  );
-}
 
-/* ========= Preview helpers ========= */
-const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
-
-function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    if (!src) return resolve(null);
-    const im = new Image();
-    im.crossOrigin = "anonymous";
-    im.onload = () => resolve(im);
-    im.onerror = () => resolve(null);
-    im.src = src;
-  });
-}
-
-async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H: number; mirrorX?: boolean }): Promise<string | null> {
-  const { src, W, H, mirrorX } = params;
-  const baseImg = await loadImageSafe(src);
-  if (!baseImg) return null;
-
-  // contain geometry
-  const iw = baseImg.naturalWidth || baseImg.width;
-  const ih = baseImg.naturalHeight || baseImg.height;
-  const sr = iw / ih;
-  const dr = W / H;
-
-  let rw = W,
-    rh = H,
-    rx = 0,
-    ry = 0;
-  if (sr > dr) {
-    rh = Math.round(W / sr);
-    ry = Math.round((H - rh) / 2);
-  } else {
-    rw = Math.round(H * sr);
-    rx = Math.round((W - rw) / 2);
-  }
-
-  // draw contain into offscreen
-  const off = document.createElement("canvas");
-  off.width = rw;
-  off.height = rh;
-  const octx = off.getContext("2d");
-  if (!octx) return null;
-  octx.clearRect(0, 0, rw, rh);
-  octx.drawImage(baseImg, 0, 0, rw, rh);
-
-  const imgData = octx.getImageData(0, 0, rw, rh);
-  const d = imgData.data;
-
-  // detect alpha usage
-  let hasUsefulAlpha = false;
-  for (let i = 3; i < d.length; i += 4) {
-    if (d[i] !== 255) {
-      hasUsefulAlpha = true;
-      break;
-    }
-  }
-
-  // create mask
-  const mask = octx.createImageData(rw, rh);
-  const md = mask.data;
-
-  if (hasUsefulAlpha) {
-    for (let i = 0; i < d.length; i += 4) {
-      const A = d[i + 3];
-      const alpha = A > 10 ? 255 : 0;
-      md[i + 0] = 0;
-      md[i + 1] = 0;
-      md[i + 2] = 0;
-      md[i + 3] = alpha;
-    }
-  } else {
-    // background by corners (fallback)
-    const pxAt = (x: number, y: number) => {
-      const idx = (y * rw + x) * 4;
-      return [d[idx], d[idx + 1], d[idx + 2]] as [number, number, number];
-    };
-    const corners = [pxAt(0, 0), pxAt(rw - 1, 0), pxAt(0, rh - 1), pxAt(rw - 1, rh - 1)];
-    const bg = corners
-      .reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number], [0, 0, 0])
-      .map((v) => Math.round(v / 4)) as [number, number, number];
-
-    const BG_DELTA = 26;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i + 0],
-        g = d[i + 1],
-        b = d[i + 2];
-      const diff = Math.max(Math.abs(r - bg[0]), Math.abs(g - bg[1]), Math.abs(b - bg[2]));
-      const alpha = diff > BG_DELTA ? 255 : 0;
-      md[i + 0] = 0;
-      md[i + 1] = 0;
-      md[i + 2] = 0;
-      md[i + 3] = alpha;
-    }
-  }
-
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = rw;
-  maskCanvas.height = rh;
-  const mctx = maskCanvas.getContext("2d");
-  if (!mctx) return null;
-  mctx.putImageData(mask, 0, 0);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.save();
-
-  if (mirrorX) {
-    ctx.translate(W, 0);
-    ctx.scale(-1, 1);
-  }
-
-  ctx.fillStyle = "#1b1b1b";
-  ctx.fillRect(0, 0, W, H);
-  ctx.globalCompositeOperation = "destination-in";
-
-  // when mirrored, keep placement
-  const drawX = mirrorX ? W - (rx + rw) : rx;
-  ctx.drawImage(maskCanvas, drawX, ry);
-
-  ctx.restore();
-
-  return canvas.toDataURL("image/png");
-}
-
-function wrapLinesCanvas(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
-  const out: string[] = [];
-  const paras = String(text || "").split(/\r?\n/);
-  for (const para of paras) {
-    const words = para.split(/\s+/).filter(Boolean);
-    let line = "";
-    for (const w of words) {
-      const test = line ? `${line} ${w}` : w;
-      if (ctx.measureText(test).width <= maxW) line = test;
-      else {
-        if (line) out.push(line);
-        line = w;
-      }
-    }
-    if (line) out.push(line);
-  }
-  return out.length ? out : [""];
-}
-
-async function renderStackedPreview(params: {
-  W: number;
-  H: number;
-  bg?: { type: "gradient" } | { type: "image"; url: string };
-  overlayPng?: string | null;
-  graphics: { url?: string; preview?: string }[];
-  epitaphs: string[];
-}): Promise<string | null> {
-  const { W, H, bg, overlayPng, graphics, epitaphs } = params;
-  if (W <= 0 || H <= 0) return null;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  // background
-  if (!bg || bg.type === "gradient") {
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, "#6e6e6e");
-    grad.addColorStop(0.2, "#464545");
-    grad.addColorStop(0.4, "#424242");
-    grad.addColorStop(0.7, "#888");
-    grad.addColorStop(1.0, "#ffffff");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-  } else if (bg.type === "image") {
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, W, H);
-    const im = await loadImageSafe(bg.url);
-    if (im) {
-      const sr = im.width / im.height;
-      const dr = W / H;
-      let dw = W,
-        dh = H,
-        dx = 0,
-        dy = 0;
-      if (sr > dr) {
-        dh = Math.round(W / sr);
-        dy = Math.round((H - dh) / 2);
-      } else {
-        dw = Math.round(H * sr);
-        dx = Math.round((W - dw) / 2);
-      }
-      ctx.drawImage(im, dx, dy, dw, dh);
-    }
-  }
-
-  // overlay silhouette (rear)
-  if (overlayPng) {
-    const ov = await loadImageSafe(overlayPng);
-    if (ov) ctx.drawImage(ov, 0, 0, W, H);
-  }
-
-  const items: { kind: "g" | "t"; url?: string; text?: string }[] = [];
-  for (const g of graphics) items.push({ kind: "g", url: g.preview || g.url });
-  for (const t of epitaphs) items.push({ kind: "t", text: t });
-
-  if (items.length === 0) return null;
-
-  // layout
-  const pad = Math.round(Math.min(W, H) * 0.06);
-  const top = pad;
-  const bottom = H - pad;
-  const gap = Math.round(Math.min(W, H) * 0.02);
-  const usable = Math.max(10, bottom - top);
-  const blockH = Math.max(60, Math.floor((usable - gap * (items.length - 1)) / items.length));
-  const totalH = items.length * blockH + gap * (items.length - 1);
-  let y = Math.max(top, Math.floor((H - totalH) / 2));
-
-  const blockW = Math.floor(W * 0.35);
-  const x = Math.floor((W - blockW) / 2);
-
-  for (const it of items) {
-    const r = { x, y, w: blockW, h: blockH };
-
-    if (it.kind === "g" && it.url) {
-      const im = await loadImageSafe(it.url);
-      if (im) {
-        const sr = im.width / im.height;
-        const dr = r.w / r.h;
-        let dw = r.w,
-          dh = r.h,
-          dx = r.x,
-          dy = r.y;
-        if (sr > dr) {
-          dh = Math.round(r.w / sr);
-          dy = r.y + Math.round((r.h - dh) / 2);
-        } else {
-          dw = Math.round(r.h * sr);
-          dx = r.x + Math.round((r.w - dw) / 2);
-        }
-        ctx.drawImage(im, dx, dy, dw, dh);
-      }
-    }
-
-    if (it.kind === "t" && it.text) {
-      ctx.save();
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      const fontSize = Math.max(12, Math.floor(r.h * 0.14));
-      ctx.font = `${fontSize}px "Times New Roman", serif`;
-      const maxW = r.w - 12;
-      const lines = wrapLinesCanvas(ctx, it.text, maxW);
-      const lh = Math.round(fontSize * 1.18);
-      const total = lines.length * lh;
-      let ty = r.y + Math.round(r.h / 2 - total / 2 + lh / 2);
-      for (const line of lines) {
-        ctx.fillText(line, r.x + r.w / 2, ty);
-        ty += lh;
-      }
-      ctx.restore();
-    }
-
-    y += blockH + gap;
-  }
-
-  return canvas.toDataURL("image/jpeg", 0.92);
-}
-
-/* ========= SideLikePlateBlock ========= */
-function SideLikePlateBlock(props: {
-  title: string;
-  enabled: boolean;
-  onToggleEnabled: (v: boolean) => void;
-
-  selectedEpitaphs: string[];
-  setSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
-  showMore: boolean;
-  setShowMore: (v: boolean | ((p: boolean) => boolean)) => void;
-  customText: string;
-  setCustomText: (v: string) => void;
-  onToggleEpitaph: (t: string) => void;
-  onAddCustom: () => void;
-  onRemoveEpitaph: (t: string) => void;
-  epitaphList: string[];
-
-  catsLoading: boolean;
-  catsError: string;
-  cats: any[];
-  catOpen: Record<string, boolean>;
-  setCatOpen: (m: Record<string, boolean>) => void;
-  addGraphic: (g: any) => void;
-  removeGraphic: (gid: string) => void;
-  ids: string[];
-  chosenList: any[];
-  onRemoveChosenItem: (gid: string) => void;
-}) {
-  const {
-    title,
-    enabled,
-    onToggleEnabled,
-    selectedEpitaphs,
-    setSelectedEpitaphs,
-    showMore,
-    setShowMore,
-    customText,
-    setCustomText,
-    onToggleEpitaph,
-    onAddCustom,
-    onRemoveEpitaph,
-    epitaphList,
-    catsLoading,
-    catsError,
-    cats,
-    catOpen,
-    setCatOpen,
-    addGraphic,
-    removeGraphic,
-    ids,
-    chosenList,
-    onRemoveChosenItem
-  } = props;
-
-  const [accEpOpen, setAccEpOpen] = useState(false);
-  const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
-
-  // grid cols
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [cols, setCols] = useState<number>(2);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
-      setCols(Math.max(2, Math.floor(w / 160)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  function CatGrid({ items }: { items: any[] }) {
-    return (
-      <div ref={rootRef} style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 12 }}>
-        {items.map((g: any, idx: number) => {
-          const gid = String(g.id || g.relPath || g.url || g.name || idx);
-          const qty = ids.filter((x) => x === gid).length;
-          const selected = qty > 0;
-          const thumbUrl = g.preview || g.url || "";
-          const name = g.name || gid;
-
-          return (
+        {/* Справа — ИМЯ + телефон */}
+        <div style={{ display: "grid", gap: 3, minWidth: 0, textAlign: "right", justifyItems: "end" }}>
+          <div style={{ fontSize: compact ? 14 : 16, fontWeight: 700, whiteSpace: "nowrap", maxWidth: "56vw", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {(editing ? name : intro?.customerName) || "—"}
+          </div>
+          {phoneLine && (
             <div
-              key={gid}
-              aria-selected={selected}
               style={{
-                ...glassPanelStyle(),
-                padding: 8,
-                borderRadius: 12,
-                position: "relative",
-                borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
-                boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
+                fontSize: compact ? 12 : 13,
+                opacity: 0.92,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: compact ? "56vw" : "50vw"
               }}
+              title={phoneLine}
             >
-              <div
-                aria-hidden
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 8,
-                  display: selected ? "inline-flex" : "none",
-                  alignItems: "center",
-                  gap: 4,
-                  background: "rgba(10,127,46,0.95)",
-                  color: "#fff",
-                  borderRadius: 999,
-                  padding: "0 6px",
-                  fontSize: 11,
-                  lineHeight: "18px",
-                  height: 18
-                }}
-                title={`Выбрано: ${qty}`}
-              >
-                <span>✓</span>
-                <span>{qty}</span>
-              </div>
-
-              <div
-                role="button"
-                title={name}
-                onClick={() => addGraphic(g)}
-                style={{
-                  borderRadius: 10,
-                  overflow: "hidden",
-                  background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
-                  aspectRatio: "1/1",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
-                  cursor: "pointer",
-                  outline: "none"
-                }}
-              >
-                {thumbUrl ? (
-                  <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
-                ) : (
-                  <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
-                )}
-              </div>
-
-              <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
-                {name}
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
-                  −
-                </button>
-                <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-                <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
-                  +
-                </button>
-              </div>
+              {phoneLine}
             </div>
-          );
-        })}
-      </div>
-    );
-  }
+          )}
+        </div>
+      </button>
 
-  const blockTitle = (
-    <label
-      style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
-      onClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <input type="checkbox" checked={enabled} onChange={(e) => onToggleEnabled(e.target.checked)} onClick={(e) => e.stopPropagation()} />
-      <span>{title}</span>
-    </label>
-  );
+      {/* Панель */}
+      <div
+        id={panelId}
+        data-topbar-panel="1"
+        data-topbar-open={open ? "1" : "0"}
+        ref={coll.ref}
+        style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
+      >
+        <section
+          style={{
+            background: p.panelBg,
+            border: p.panelBorder,
+            borderRadius: compact ? 10 : 12,
+            color: p.text,
+            ...paperShadow(theme),
+            padding: compact ? 8 : 12,
+            display: "grid",
+            gap: compact ? 8 : 10
+          }}
+        >
+          {/* Действия */}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const next: ThemeMode = theme === "dark" ? "light" : "dark";
+                setTheme(next);
+                saveTheme(next);
+              }}
+              style={linkButtonStyle(theme)}
+            >
+              {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
+            </button>
 
-  return (
-    <LoudAccordion title={blockTitle} open={enabled} onToggle={() => onToggleEnabled(!enabled)}>
-      {enabled && (
-        <div style={{ display: "grid", gap: 12 }}>
-          {/* Выбрано */}
-          <div style={{ ...sectionBoxStyle(), border: "1px solid rgba(255,80,80,0.95)" }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано</div>
-
-            {chosenList.length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: epitaphList.length ? 8 : 0 }}>
-                {chosenList.map((g, i) => {
-                  const gid = String(g.id || g.url || i);
-                  return (
-                    <div key={`chosen-${gid}-${i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
-                      <Thumb url={g.url} />
-                      <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {g.name || g.id}
-                      </div>
-                      <button
-                        type="button"
-                        title="Удалить"
-                        onClick={() => onRemoveChosenItem(String(g.id || g.name || g.url || ""))}
-                        style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {epitaphList.length > 0 && (
-              <div style={{ display: "grid", gap: 6 }}>
-                {epitaphList.map((t, idx) => (
-                  <div
-                    key={`ep-preview-${idx}-${normEpitaph(t)}`}
-                    style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
-                  >
-                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button
-                      type="button"
-                      title="Удалить эпитафию"
-                      onClick={() => onRemoveEpitaph(t)}
-                      style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (editing) saveAll();
+                setEditing((v) => !v);
+              }}
+              style={linkButtonStyle(theme)}
+            >
+              {editing ? "Сохранить" : "Редактировать"}
+            </button>
           </div>
 
-          {/* Эпитафии */}
-          <LoudAccordion title="Эпитафии" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
-            <div style={{ display: "grid", gap: 10 }}>
-              <div style={sectionBoxStyle()}>
-                <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {QUICK_EPITAPHS.map((t) => {
-                    const active = hasByNorm(selectedEpitaphs, t);
-                    return (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => onToggleEpitaph(t)}
-                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
-                        title={t}
-                      >
-                        {t}
-                      </button>
-                    );
-                  })}
+          {/* Номер заказа */}
+          <div style={{ fontSize: 13, opacity: 0.9 }}>№ {orderNumber}</div>
+
+          {/* Контакты */}
+          {(editing || contactNotes.trim() || compact) && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Контакты</div>
+              {editing ? (
+                compact ? (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Имя" style={inputStyle(theme)} />
+                    <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7..." inputMode="tel" style={inputStyle(theme)} />
+                    <input
+                      value={contactNotes}
+                      onChange={(e) => setContactNotes(e.target.value)}
+                      placeholder="Примечание (мессенджер, время...)"
+                      style={inputStyle(theme)}
+                    />
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <Row label="Имя" theme={theme} compact={compact}>
+                      <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" />
+                    </Row>
+                    <Row label="Телефон" theme={theme} compact={compact}>
+                      <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" />
+                    </Row>
+                    <Row label="Примечание" theme={theme} compact={compact}>
+                      <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" />
+                    </Row>
+                  </div>
+                )
+              ) : (
+                contactNotes.trim() && <div>{contactNotes.trim()}</div>
+              )}
+            </section>
+          )}
+
+          {/* Резная работа */}
+          <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Резная работа</div>
+            <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 10, alignItems: "stretch" }}>
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
+                  {order.item?.url ? (
+                    <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
+                  ) : (
+                    <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>
+                  )}
+                </div>
+                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
                 </div>
               </div>
 
-              <div style={sectionBoxStyle()}>
-                <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
-                <button type="button" onClick={() => setShowMore((v) => !v)} style={glassButtonStyle("nano")}>
-                  {showMore ? "Свернуть список" : "Развернуть список"}
-                </button>
-
-                {showMore && (
-                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, padding: 2 }}>
-                    {MORE_EPITAPHS.map((t, idx) => {
-                      const active = hasByNorm(selectedEpitaphs, t);
-                      return (
-                        <button
-                          key={`more-${idx}-${normEpitaph(t)}`}
-                          type="button"
-                          onClick={() => onToggleEpitaph(t)}
-                          title={t}
-                          style={{
-                            textAlign: "left",
-                            ...glassPanelStyle(),
-                            borderRadius: 10,
-                            padding: 10,
-                            cursor: "pointer",
-                            outline: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.14)",
-                            fontSize: 13,
-                            lineHeight: 1.25,
-                            whiteSpace: "pre-wrap"
-                          }}
-                        >
-                          {t}
-                          <div style={{ marginTop: 6, fontSize: 12 }}>{active ? "Удалить из выбранных" : "Добавить к выбранным"}</div>
-                        </button>
-                      );
-                    })}
+              <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
+                <div style={{ fontWeight: 600 }}>Характеристики</div>
+                <div style={{ opacity: 0.95 }}>
+                  {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
+                </div>
+                {(editing || sizeNotes.trim()) && (
+                  <div>
+                    {editing ? (
+                      <textarea value={sizeNotes} onChange={(e) => setSizeNotes(e.target.value)} rows={compact ? 2 : 3} placeholder="Примечание по размерам…" style={{ ...inputStyle(theme), resize: "vertical" }} />
+                    ) : (
+                      sizeNotes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{sizeNotes.trim()}</div>
+                    )}
                   </div>
                 )}
               </div>
+            </div>
+          </section>
 
-              <div style={sectionBoxStyle()}>
-                <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
-                <div style={{ display: "grid", gap: 8 }}>
-                  <textarea
-                    rows={3}
-                    value={customText}
-                    onChange={(e) => setCustomText(e.target.value)}
-                    placeholder="Введите текст и нажмите «Добавить»"
-                    style={{ ...inputStyle(), resize: "vertical" }}
-                  />
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <button type="button" style={glassButtonStyle("nano")} onClick={onAddCustom}>
-                      Добавить
-                    </button>
-                    <button type="button" style={glassButtonStyle("nano")} onClick={() => setSelectedEpitaphs([])}>
-                      Очистить выбранные
-                    </button>
-                    {selectedEpitaphs.length > 0 && <div>Выбрано: {selectedEpitaphs.length}</div>}
-                  </div>
-                </div>
+          {/* Люди */}
+          {(order.engraving?.persons?.length || 0) > 0 && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
+                <span style={chip(theme)}>Люди на памятнике</span>
+                {(order as any)?.editorBack?.people?.length > 0 && <span style={{ ...chip(theme), opacity: 0.85 }}>Тыльная сторона</span>}
               </div>
 
-              {selectedEpitaphs.length > 0 && (
-                <div style={sectionBoxStyle()}>
-                  <div style={{ marginBottom: 6, textAlign: "left" }}>Выбранные эпитафии:</div>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {selectedEpitaphs.map((t, idx) => (
-                      <div
-                        key={`sel-${idx}-${normEpitaph(t)}`}
-                        style={{
-                          ...glassPanelStyle(),
-                          borderRadius: 10,
-                          padding: 10,
-                          display: "flex",
-                          gap: 8,
-                          alignItems: "center",
-                          justifyContent: "space-between"
-                        }}
-                      >
-                        <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.25 }}>{t}</div>
-                        <button type="button" style={glassButtonStyle("nano")} onClick={() => onRemoveEpitaph(t)}>
-                          Удалить
-                        </button>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: compact ? "1fr" : ((order as any)?.editorBack?.people?.length > 0 ? "1fr 1fr" : "1fr"),
+                  gap: 16
+                }}
+              >
+                {/* Лицевая */}
+                <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Лицевая</div>
+                  {order.engraving?.persons?.length ? (
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {(order.engraving?.persons as any[]).map((ppl: any, idx: number) => {
+                        const last = idx === (order.engraving?.persons?.length || 0) - 1;
+                        const fio1 = (ppl.lastName || "").trim();
+                        const fio2 = [ppl.firstName, ppl.middleName].map((x: string) => (x || "").trim()).filter(Boolean).join(" ");
+                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+                        return (
+                          <div
+                            key={ppl.id || `person-front-${idx}`}
+                            style={{
+                              padding: "8px 0",
+                              borderBottom: last ? "none" : palette(theme).divider,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10
+                            }}
+                          >
+                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                                {ppl.photoPreview ? (
+                                  <img
+                                    src={ppl.photoPreview}
+                                    alt="Фото"
+                                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
+                                  />
+                                ) : (
+                                  <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ color: palette(theme).subText }}>—</div>
+                  )}
+                </div>
+
+                {/* Тыльная */}
+                {(order as any)?.editorBack?.people?.length > 0 && (
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Тыльная</div>
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {((order as any)?.editorBack?.people as any[]).map((ppl: any, idx: number) => {
+                        const last = idx === ((order as any)?.editorBack?.people?.length || 0) - 1;
+                        const fio1 = (ppl.lastName || "").trim();
+                        const fio2 = [ppl.firstName, ppl.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+                        const metric = [ppl.birthDate?.trim(), ppl.deathDate?.trim()].filter(Boolean).join(" — ");
+                        return (
+                          <div
+                            key={ppl.id || `person-back-${idx}`}
+                            style={{
+                              padding: "8px 0",
+                              borderBottom: last ? "none" : palette(theme).divider,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10
+                            }}
+                          >
+                            <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                              <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                                {ppl.photoPreview ? (
+                                  <img
+                                    src={ppl.photoPreview}
+                                    alt="Фото"
+                                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", borderRadius: 8 }}
+                                  />
+                                ) : (
+                                  <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                              {fio1 && <div style={{ fontWeight: 700 }}>{fio1}</div>}
+                              {fio2 && <div style={{ opacity: 0.95 }}>{fio2}</div>}
+                              <div style={{ opacity: 0.9 }}>{metric || "—"}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Элементы эскиза */}
+          {(frontHasSketch || rearHasSketch) && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 8 }}>
+                <span style={chip(theme)}>Элементы эскиза</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : (frontHasSketch && rearHasSketch ? "1fr 1fr" : "1fr"), gap: 16 }}>
+                {/* Лицевая */}
+                {frontHasSketch && (
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Лицевая</div>
+
+                    {frontGraphics.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
+                        {frontUnique.map((g: any) => {
+                          const qty = g?.id ? (frontCountsById[g.id] || 0) : 0;
+                          return (
+                            <div key={`fg-${g.id || fileNameFromUrl(g.url)}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                              <div style={{ ...thumbBackdropStyle(theme), width: 64, height: 64 }}>
+                                {g.url ? (
+                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
+                                ) : (
+                                  <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
+                                )}
+                              </div>
+
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                                <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                                  {g.name || fileNameFromUrl(g.url) || g.id || "—"}
+                                </div>
+                                {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: palette(theme).subText }}>×{qty}</div>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {frontEpitaphs.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+                        <div style={epitaphListStyle()}>
+                          {frontEpitaphs.map((t, idx) => (
+                            <div key={`front-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                              <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {frontWishes.trim() && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{frontWishes.trim()}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Тыльная */}
+                {rearHasSketch && (
+                  <div style={{ border: palette(theme).divider, borderRadius: 8, padding: 8 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
+
+                    {rearUnique.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Графика</div>
+                        {rearUnique.map((g: any, i: number) => {
+                          const gid = g?.id || g?.relPath || g?.url || g?.name || `rear-${i}`;
+                          const qty = rearCountsById[gid] || 0;
+
+                          return (
+                            <div key={`rg-${gid}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                              <div style={{ ...thumbBackdropStyle(theme), width: 64, height: 64 }}>
+                                {g.url ? (
+                                  <img src={g.url} alt={g.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
+                                ) : (
+                                  <div style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)" }} />
+                                )}
+                              </div>
+
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                                <div style={{ color: palette(theme).text, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                                  {g.name || fileNameFromUrl(g.url) || gid}
+                                </div>
+                                {qty > 1 && <div style={{ fontSize: 12, opacity: 0.8, color: palette(theme).subText }}>×{qty}</div>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {rearEpitaphs.length > 0 && (
+                      <div style={{ ...glassPanelStyle(theme), padding: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Эпитафии</div>
+                        <div style={epitaphListStyle()}>
+                          {rearEpitaphs.map((t, idx) => (
+                            <div key={`rear-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                              <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {backWishes.trim() && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Пожелания</div>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{backWishes.trim()}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Плита */}
+          {plateEnabled && (
+            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита — выбрано</div>
+
+              {(plateSize || plateThickness || plateOrientation) && (
+                <div style={{ marginBottom: 8, opacity: 0.95 }}>
+                  {plateSize && <div>Размер: {plateSize}</div>}
+                  {plateThickness && <div>Толщина: {plateThickness}</div>}
+                  {plateOrientation && <div>Ориентация: {plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
+                </div>
+              )}
+
+              <div style={{ display: "grid", gap: 8 }}>
+                {plateChosen.length > 0 ? (
+                  plateChosen.map((g: any, i: number) => (
+                    <div key={`plate-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                      <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                        <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                          {g.url ? (
+                            <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
+                          ) : (
+                            <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {g.name || g.id}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ color: palette(theme).subText }}>Графика не выбрана</div>
+                )}
+              </div>
+
+              {plateEpitaphItems.length > 0 && (
+                <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
+                  <div style={epitaphListStyle()}>
+                    {plateEpitaphItems.map((t, idx) => (
+                      <div key={`plate-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                        <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-            </div>
-          </LoudAccordion>
 
-          {/* Графика */}
-          <LoudAccordion title="Графика" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
-            {catsLoading && <div>Загрузка каталога…</div>}
-            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-            {!catsLoading && cats.length > 0 && (
-              <div style={{ display: "grid", gap: 12 }}>
-                {cats.map((cat: any, idx: number) => {
-                  const catKey = String(cat._id || cat.name || idx);
-                  const open = !!(catOpen || {})[catKey];
-                  const toggle = () => setCatOpen({ ...(catOpen || {}), [catKey]: !open });
-
-                  return (
-                    <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                      <CatGrid items={cat.items || []} />
-                      {(cat.children || []).map((sub: any, j: number) => (
-                        <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 8 }}>
-                          <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                          <CatGrid items={sub.items || []} />
-                        </div>
-                      ))}
-                    </LoudAccordion>
-                  );
-                })}
+              <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
+                <span style={{ opacity: 0.9 }}>Дополнительно: </span>
+                <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>Тумба: {extrasParts.tumba ? "да" : "нет"}</span>
+                <span style={{ opacity: 0.7 }}> · </span>
+                <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>Цветник: {extrasParts.flowerbed ? "да" : "нет"}</span>
+                <span style={{ opacity: 0.7 }}> · </span>
+                <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>Ваза: {extrasParts.vase ? "да" : "нет"}</span>
               </div>
-            )}
-          </LoudAccordion>
-        </div>
-      )}
-    </LoudAccordion>
-  );
-}
+            </section>
+          )}
 
-/* ========= Main step ========= */
-type Props = { onBack?: () => void; onContinue?: (payload?: any) => void };
-
-export default function BackEditorStep({ onBack, onContinue }: Props) {
-  const [outro, setOutro] = useState(false);
-  const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
-
-  useEffect(() => {
-    const sync = () => setDraft(loadOrderDraft());
-    window.addEventListener(DRAFT_UPDATED_EVENT, sync);
-    window.addEventListener("storage", sync);
-    window.addEventListener("focus", sync);
-    return () => {
-      window.removeEventListener(DRAFT_UPDATED_EVENT, sync);
-      window.removeEventListener("storage", sync);
-      window.removeEventListener("focus", sync);
-    };
-  }, []);
-
-  const itemUrl = String((draft as any)?.item?.url || "").trim();
-
-  /* ========= Shared catalog ========= */
-  const [catsLoading, setCatsLoading] = useState(false);
-  const [catsError, setCatsError] = useState("");
-  const [cats, setCats] = useState<any[]>([]);
-  const [catOpenRear, setCatOpenRear] = useState<Record<string, boolean>>({});
-  const [catOpenPlate, setCatOpenPlate] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setCatsLoading(true);
-      setCatsError("");
-      try {
-        const data = await fetchCatalog("graphics");
-        const root = (data as any)?.categories || data;
-        const catsArr = Array.isArray(root) ? root : [];
-        if (alive) setCats(catsArr);
-      } catch {
-        if (alive) setCatsError("Не удалось загрузить каталог графики.");
-      } finally {
-        if (alive) setCatsLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!cats.length) return;
-    const init = (prev: Record<string, boolean>) => {
-      const next = { ...prev };
-      for (const c of cats) {
-        const key = String(c._id || c.name || "");
-        if (!(key in next)) next[key] = false;
-      }
-      return next;
-    };
-    setCatOpenRear(init);
-    setCatOpenPlate(init);
-  }, [cats]);
-
-  /* =========================
-   * Дополнительно (extras)
-   * ========================= */
-  const extras0: any = (draft as any)?.extras || {};
-  const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
-  const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
-  const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
-
-  /* =========================
-   * REAR (editorBack)
-   * ========================= */
-  const editorBack0: any = (draft as any)?.editorBack || {};
-  const [rearEnabled, setRearEnabled] = useState<boolean>(() => {
-    const eb: any = loadOrderDraft()?.editorBack || {};
-    return !!(eb?.selectedGraphicsIds?.length || eb?.epitaphTexts?.length || eb?.previewUrl || eb?.previewHiUrl);
-  });
-
-  const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
-  const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
-  const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(((editorBack0.epitaphTexts as string[]) || []).filter(Boolean));
-  const [rearShowMore, setRearShowMore] = useState(false);
-  const [rearCustomText, setRearCustomText] = useState("");
-
-  // if rear disabled => clear editorBack
-  useEffect(() => {
-    if (rearEnabled) return;
-
-    saveOrderDraft({
-      editorBack: {
-        selectedGraphicsIds: null,
-        graphicsMeta: null,
-        epitaphTexts: null,
-        people: null,
-        previewUrl: null,
-        previewHiUrl: null
-      } as any
-    });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-
-    setRearIds([]);
-    setRearMeta({});
-    setRearSelectedEpitaphs([]);
-  }, [rearEnabled]);
-
-  // persist rear epitaphs
-  const prevRearEpiJsonRef = useRef<string>("");
-  useEffect(() => {
-    if (!rearEnabled) return;
-    const list = uniqueByNorm(rearSelectedEpitaphs);
-    const snapshot = JSON.stringify(list);
-    if (snapshot === prevRearEpiJsonRef.current) return;
-    prevRearEpiJsonRef.current = snapshot;
-
-    saveOrderDraft({ editorBack: { epitaphTexts: list.length ? list : null } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  }, [rearEnabled, rearSelectedEpitaphs]);
-
-  const rearCountsById = useMemo(() => {
-    const m: Record<string, number> = {};
-    rearIds.forEach((id) => (m[id] = (m[id] || 0) + 1));
-    return m;
-  }, [rearIds]);
-
-  const addRearGraphic = (g: any) => {
-    if (!rearEnabled) return;
-    const gid = String(g.id || g.relPath || g.url || g.name);
-    if (!gid) return;
-    const qty = rearCountsById[gid] || 0;
-    if (qty >= 3) {
-      window.alert("Нельзя добавить более трёх одинаковых изображений");
-      return;
-    }
-    const nextIds = [...rearIds, gid];
-    const nextMeta = { ...rearMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-    setRearIds(nextIds);
-    setRearMeta(nextMeta);
-    saveOrderDraft({ editorBack: { selectedGraphicsIds: nextIds, graphicsMeta: nextMeta } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  };
-
-  const removeRearGraphic = (gid: string) => {
-    if (!rearEnabled) return;
-    const idx = rearIds.findIndex((x) => x === gid);
-    if (idx === -1) return;
-    const nextIds = rearIds.slice();
-    nextIds.splice(idx, 1);
-    setRearIds(nextIds);
-    saveOrderDraft({ editorBack: { selectedGraphicsIds: nextIds, graphicsMeta: rearMeta } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  };
-
-  const rearChosenList = useMemo(() => {
-    const uniq = Array.from(new Set(rearIds));
-    return uniq.map((gid) => rearMeta[gid] || { id: gid, name: gid, url: "" });
-  }, [rearIds, rearMeta]);
-
-  const toggleRearEpitaph = (text: string) => {
-    if (!rearEnabled) return;
-    const t = normEpitaph(text);
-    if (!t) return;
-    setRearSelectedEpitaphs((prev) => {
-      const idx = indexOfByNorm(prev, t);
-      if (idx !== -1) return prev.filter((_, i) => i !== idx);
-      return prev.concat([text]);
-    });
-  };
-  const addRearCustom = () => {
-    if (!rearEnabled) return;
-    const raw = (rearCustomText || "").trim();
-    const t = normEpitaph(raw);
-    if (!t) return;
-    setRearSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([raw])));
-    setRearCustomText("");
-  };
-  const removeRearEpitaph = (text: string) => {
-    if (!rearEnabled) return;
-    setRearSelectedEpitaphs((prev) => {
-      const idx = indexOfByNorm(prev, text);
-      return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
-    });
-  };
-  const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
-
-  // rear preview generation with silhouette overlay (from item.url)
-  useEffect(() => {
-    let alive = true;
-
-    const run = async () => {
-      if (!rearEnabled) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
-
-      const d = loadOrderDraft();
-      const eb: any = (d as any)?.editorBack || {};
-      const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
-      const meta: Record<string, any> = eb.graphicsMeta || {};
-      const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
-
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
-      const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
-
-      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
-      if (!hasRear) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
-
-      const overlay900 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 900, H: 1200, mirrorX: true }) : null;
-      const overlay1600 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 1600, H: 2200, mirrorX: true }) : null;
-
-      const mini = await renderStackedPreview({
-        W: 900,
-        H: 1200,
-        bg: { type: "gradient" },
-        overlayPng: overlay900,
-        graphics: graphicsUniq,
-        epitaphs
-      });
-      const big = await renderStackedPreview({
-        W: 1600,
-        H: 2200,
-        bg: { type: "gradient" },
-        overlayPng: overlay1600,
-        graphics: graphicsUniq,
-        epitaphs
-      });
-
-      if (!alive) return;
-
-      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
-      dispatchDraftUpdated();
-    };
-
-    const t = window.setTimeout(() => void run(), 420);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [rearEnabled, rearIds, rearMeta, rearSelectedEpitaphs, itemUrl]);
-
-  /* =========================
-   * PLATE (extras)
-   * ========================= */
-  const [plateEnabled, setPlateEnabled] = useState<boolean>(!!extras0.headstonePlate);
-  const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
-  const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
-
-  const initialPlateSelected = useMemo(() => {
-    const d = loadOrderDraft();
-    const ex: any = (d as any)?.extras || {};
-    const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
-    const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
-    return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
-  }, []);
-
-  const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
-  const [plateShowMore, setPlateShowMore] = useState(false);
-  const [plateCustomText, setPlateCustomText] = useState("");
-  const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
-
-  // persist plate enabled
-  useEffect(() => {
-    saveOrderDraft({ extras: { headstonePlate: plateEnabled } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  }, [plateEnabled]);
-
-  // persist plate epitaphs
-  const prevPlateEpiJsonRef = useRef<string>("");
-  useEffect(() => {
-    const list = uniqueByNorm(plateSelectedEpitaphs);
-    const patchExtras: any = {};
-    if (list.length === 0) {
-      patchExtras.plateEpitaph = null;
-      patchExtras.plateEpitaphs = null;
-      patchExtras.plateEpitaphTexts = null;
-    } else if (list.length === 1) {
-      patchExtras.plateEpitaph = list[0];
-      patchExtras.plateEpitaphs = null;
-      patchExtras.plateEpitaphTexts = null;
-    } else {
-      patchExtras.plateEpitaph = null;
-      patchExtras.plateEpitaphs = list.slice();
-      patchExtras.plateEpitaphTexts = null;
-    }
-    const snap = JSON.stringify(patchExtras);
-    if (snap === prevPlateEpiJsonRef.current) return;
-    prevPlateEpiJsonRef.current = snap;
-    saveOrderDraft({ extras: patchExtras } as any);
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  }, [plateSelectedEpitaphs]);
-
-  const plateCountsById = useMemo(() => {
-    const m: Record<string, number> = {};
-    plateIds.forEach((id) => (m[id] = (m[id] || 0) + 1));
-    return m;
-  }, [plateIds]);
-
-  const addPlateGraphic = (g: any) => {
-    if (!plateEnabled) return;
-    const gid = String(g.id || g.relPath || g.url || g.name);
-    if (!gid) return;
-    const qty = plateCountsById[gid] || 0;
-    if (qty >= 3) {
-      window.alert("Нельзя добавить более трёх одинаковых изображений");
-      return;
-    }
-    const nextIds = [...plateIds, gid];
-    const nextMeta = { ...plateMeta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-    setPlateIds(nextIds);
-    setPlateMeta(nextMeta);
-    saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  };
-
-  const removePlateGraphic = (gid: string) => {
-    if (!plateEnabled) return;
-    const idx = plateIds.findIndex((x) => x === gid);
-    if (idx === -1) return;
-    const nextIds = plateIds.slice();
-    nextIds.splice(idx, 1);
-    setPlateIds(nextIds);
-    saveOrderDraft({ extras: { plateGraphicsIds: nextIds, plateGraphicsMeta: plateMeta } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  };
-
-  const chosenPlateList = useMemo(() => {
-    const uniq = Array.from(new Set(plateIds));
-    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
-  }, [plateIds, plateMeta]);
-
-  const togglePlateEpitaph = (text: string) => {
-    if (!plateEnabled) return;
-    const t = normEpitaph(text);
-    if (!t) return;
-    setPlateSelectedEpitaphs((prev) => {
-      const idx = indexOfByNorm(prev, t);
-      if (idx !== -1) return prev.filter((_, i) => i !== idx);
-      return prev.concat([text]);
-    });
-  };
-  const addPlateCustom = () => {
-    if (!plateEnabled) return;
-    const raw = (plateCustomText || "").trim();
-    const t = normEpitaph(raw);
-    if (!t) return;
-    setPlateSelectedEpitaphs((prev) => (hasByNorm(prev, t) ? prev : prev.concat([raw])));
-    setPlateCustomText("");
-  };
-  const removePlateEpitaph = (text: string) => {
-    if (!plateEnabled) return;
-    setPlateSelectedEpitaphs((prev) => {
-      const idx = indexOfByNorm(prev, text);
-      return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
-    });
-  };
-
-  // plate preview generation
-  useEffect(() => {
-    let alive = true;
-    const run = async () => {
-      const d = loadOrderDraft();
-      const ex: any = (d as any)?.extras || {};
-      const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
-      const meta: Record<string, any> = ex.plateGraphicsMeta || {};
-
-      const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
-      const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
-      const epitaphs = [...one, ...arr].map((s) => String(s || "").trim()).filter(Boolean);
-
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
-
-      const hasPlate = !!ex.headstonePlate && (graphicsUniq.length > 0 || epitaphs.length > 0);
-      if (!hasPlate) {
-        saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
-
-      const mini = await renderStackedPreview({
-        W: 900,
-        H: 1200,
-        bg: { type: "image", url: PLATE_BG_URL },
-        graphics: graphicsUniq,
-        epitaphs
-      });
-      const big = await renderStackedPreview({
-        W: 1600,
-        H: 2200,
-        bg: { type: "image", url: PLATE_BG_URL },
-        graphics: graphicsUniq,
-        epitaphs
-      });
-
-      if (!alive) return;
-      saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: big || null } as any });
-      dispatchDraftUpdated();
-    };
-
-    const t = window.setTimeout(() => void run(), 420);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
-
-  return (
-    <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
-      <TopBarWithIntro title="Тыл" />
-
-      {/* Дополнительно */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-        <LoudAccordion title="Дополнительно" open={true} onToggle={() => void 0}>
-          <div style={sectionBoxStyle()}>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={hasPedestal}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setHasPedestal(v);
-                    saveOrderDraft({ extras: { tumba: v } as any });
-                    dispatchDraftUpdated();
-                    setDraft(loadOrderDraft());
-                  }}
-                />
-                <span>Тумба</span>
-              </label>
-
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={hasFlowerbed}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setHasFlowerbed(v);
-                    saveOrderDraft({ extras: { flowerbed: v } as any });
-                    dispatchDraftUpdated();
-                    setDraft(loadOrderDraft());
-                  }}
-                />
-                <span>Цветник</span>
-              </label>
-
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={hasVase}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setHasVase(v);
-                    saveOrderDraft({ extras: { vase: v } as any });
-                    dispatchDraftUpdated();
-                    setDraft(loadOrderDraft());
-                  }}
-                />
-                <span>Ваза</span>
-              </label>
-            </div>
+          {/* Очистить всё */}
+          <div style={{ marginTop: 2, paddingTop: 10, borderTop: palette(theme).divider, display: "flex", justifyContent: "center" }}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleClearAll();
+              }}
+              style={linkButtonStyle(theme, "danger", isClearing)}
+              title="Очистить все данные (с подтверждением)"
+              disabled={isClearing}
+            >
+              {isClearing ? "Очищаем…" : "Очистить всё"}
+            </button>
           </div>
-        </LoudAccordion>
-      </section>
-
-      {/* Тыльная сторона */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        <SideLikePlateBlock
-          title="Тыльная сторона"
-          enabled={rearEnabled}
-          onToggleEnabled={setRearEnabled}
-          selectedEpitaphs={rearSelectedEpitaphs}
-          setSelectedEpitaphs={setRearSelectedEpitaphs}
-          showMore={rearShowMore}
-          setShowMore={setRearShowMore}
-          customText={rearCustomText}
-          setCustomText={setRearCustomText}
-          onToggleEpitaph={toggleRearEpitaph}
-          onAddCustom={addRearCustom}
-          onRemoveEpitaph={removeRearEpitaph}
-          epitaphList={rearEpitaphList}
-          catsLoading={catsLoading}
-          catsError={catsError}
-          cats={cats}
-          catOpen={catOpenRear}
-          setCatOpen={setCatOpenRear}
-          addGraphic={addRearGraphic}
-          removeGraphic={removeRearGraphic}
-          ids={rearIds}
-          chosenList={rearChosenList}
-          onRemoveChosenItem={(gid) => removeRearGraphic(gid)}
-        />
-      </section>
-
-      {/* Надгробная плита */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        <SideLikePlateBlock
-          title="Надгробная плита"
-          enabled={plateEnabled}
-          onToggleEnabled={setPlateEnabled}
-          selectedEpitaphs={plateSelectedEpitaphs}
-          setSelectedEpitaphs={setPlateSelectedEpitaphs}
-          showMore={plateShowMore}
-          setShowMore={setPlateShowMore}
-          customText={plateCustomText}
-          setCustomText={setPlateCustomText}
-          onToggleEpitaph={togglePlateEpitaph}
-          onAddCustom={addPlateCustom}
-          onRemoveEpitaph={removePlateEpitaph}
-          epitaphList={plateEpitaphList}
-          catsLoading={catsLoading}
-          catsError={catsError}
-          cats={cats}
-          catOpen={catOpenPlate}
-          setCatOpen={setCatOpenPlate}
-          addGraphic={addPlateGraphic}
-          removeGraphic={removePlateGraphic}
-          ids={plateIds}
-          chosenList={chosenPlateList}
-          onRemoveChosenItem={(gid) => removePlateGraphic(gid)}
-        />
-      </section>
-
-      <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={() => {
-            setOutro(true);
-            setTimeout(() => onBack?.(), 320);
-          }}
-          style={glassButtonStyle("sm")}
-        >
-          Назад
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setOutro(true);
-            setTimeout(() => onContinue?.(), 320);
-          }}
-          style={glassButtonStyle("sm")}
-        >
-          Продолжить
-        </button>
+        </section>
       </div>
     </div>
   );
