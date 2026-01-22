@@ -6,13 +6,14 @@
 // 1) Тыльная сторона — блок визуально/поведенчески как "Надгробная плита":
 //    - чекбокс включения/выключения (rearEnabled)
 //    - блок "Выбрано" (красная рамка): выбранная графика + эпитафии с удалением
-//    - аккордеоны: "Эпитафии", "Графика"
+//    - аккордеоны: "Усопшие", "Эпитафии", "Графика"
 //    - при выключении rearEnabled: чистим editorBack.* и скрываем эскиз на обзоре
 // 2) Надгробная плита — аналогичный блок:
 //    - чекбокс включения/выключения (extras.headstonePlate)
 //    - "Выбрано", "Эпитафии", "Графика"
 //    - превью плиты (extras.platePreviewUrl/platePreviewHiUrl) с фоном PLATE_BG_URL
 // 3) Вернуть блок "Дополнительно" (чекбоксы): Тумба, Цветник, Ваза (пишем в draft.extras)
+//    - по умолчанию: Тумба=true, Цветник=true, Ваза=false
 // 4) Превью тыла должно рисовать "контур/силуэт" резной работы:
 //    - берём img src={order.item.url} (то есть draft.item.url)
 //    - строим силуэт по alpha (если есть) или по фону углов (fallback)
@@ -20,12 +21,17 @@
 //    - накладываем на градиентный фон
 //
 // ВАЖНО:
-// - "Усопшие" для тыла пока не делаем.
 // - Сохранение в draft патчами, удаление через null.
 // - Каталог графики общий (fetchCatalog("graphics")).
+// - Усопшие (для тыла) — 1:1 как в EngravingStep, но внутри аккордеона «Усопшие» блока «Тыльная сторона».
+// - Для надёжности сохранения тяжёлых фото:
+//   • в драфт пишем ТОЛЬКО по кнопкам «Назад»/«Продолжить» и по событиям ухода/скрытия вкладки,
+//   • при выборе фото сжимаем до безопасного размера (JPEG dataURL) сразу в локальный state,
+//   • в драфте храним только компактный photoPreview (dataURL или внешний URL).
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
+import PhotoField, { type PhotoValue } from "../components/PhotoField";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT, type OrderDraft } from "../lib/order";
@@ -100,7 +106,11 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
       }}
     >
       {url ? (
-        <img src={url} alt={alt} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
+        <img
+          src={url}
+          alt={alt}
+          style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }}
+        />
       ) : (
         <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
       )}
@@ -201,7 +211,12 @@ function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H: number; mirrorX?: boolean }): Promise<string | null> {
+async function buildSilhouetteOverlayDataUrl(params: {
+  src: string;
+  W: number;
+  H: number;
+  mirrorX?: boolean;
+}): Promise<string | null> {
   const { src, W, H, mirrorX } = params;
   const baseImg = await loadImageSafe(src);
   if (!baseImg) return null;
@@ -266,7 +281,10 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
     };
     const corners = [pxAt(0, 0), pxAt(rw - 1, 0), pxAt(0, rh - 1), pxAt(rw - 1, rh - 1)];
     const bg = corners
-      .reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number], [0, 0, 0])
+      .reduce(
+        (acc, c) => [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]] as [number, number, number],
+        [0, 0, 0]
+      )
       .map((v) => Math.round(v / 4)) as [number, number, number];
 
     const BG_DELTA = 26;
@@ -458,12 +476,217 @@ async function renderStackedPreview(params: {
   return canvas.toDataURL("image/jpeg", 0.92);
 }
 
+/* ========= Usopshie (rear people) - 1:1 EngravingStep (adapted) ========= */
+type Person = {
+  id: string;
+  lastName?: string;
+  firstName?: string;
+  middleName?: string;
+  birthDate?: string;
+  deathDate?: string;
+  photoUrl?: string | null;
+  photoDataUrl?: string | null;
+};
+type NormalizedPerson = {
+  id: string;
+  lastName?: string;
+  firstName?: string;
+  middleName?: string;
+  birthDate?: string;
+  deathDate?: string;
+  photoPreview: string | null;
+};
+
+function draftPersonsToLocal(list?: NormalizedPerson[] | null): Person[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((d, i) => ({
+    id: d.id || `p-${i}`,
+    lastName: d.lastName || "",
+    firstName: d.firstName || "",
+    middleName: d.middleName || "",
+    birthDate: d.birthDate || "",
+    deathDate: d.deathDate || "",
+    photoUrl: d.photoPreview ?? null,
+    photoDataUrl: d.photoPreview ?? null
+  }));
+}
+function normalizePersonsForSave(persons: Person[]): NormalizedPerson[] {
+  return persons.map((p) => ({
+    id: p.id,
+    lastName: p.lastName?.trim() || undefined,
+    firstName: p.firstName?.trim() || undefined,
+    middleName: p.middleName?.trim() || undefined,
+    birthDate: p.birthDate?.trim() || undefined,
+    deathDate: p.deathDate?.trim() || undefined,
+    photoPreview: p.photoDataUrl ?? p.photoUrl ?? null
+  }));
+}
+function makeBlankPerson(id?: string): Person {
+  return {
+    id: id ?? `p-${Date.now()}`,
+    lastName: "",
+    firstName: "",
+    middleName: "",
+    birthDate: "",
+    deathDate: "",
+    photoUrl: null,
+    photoDataUrl: null
+  };
+}
+
+/* ===== Date validation (локально) ===== */
+function parseFlexibleDate(input?: string): Date | null {
+  const s = (input || "").trim();
+  if (!s) return null;
+  const m = s.match(/\d+/g);
+  if (!m || m.length < 3) return null;
+  const d = +m[0],
+    mo = +m[1],
+    y = +m[2];
+  if (!d || !mo || !y || y < 100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+function validateDates(birth?: string, death?: string): string | null {
+  const bd = parseFlexibleDate(birth);
+  const dd = parseFlexibleDate(death);
+  if (!bd && !dd) return null;
+  if (birth && !bd) return "Некорректная дата рождения";
+  if (death && !dd) return "Некорректная дата смерти";
+  if (bd && dd && dd.getTime() < bd.getTime()) return "Дата смерти раньше даты рождения";
+  return null;
+}
+
+/* ===== Image compression (для безопасного сохранения в localStorage) ===== */
+const DRAFT_IMG_MAX_BYTES = 600 * 1024; // 600 KiB
+const DRAFT_IMG_MAX_DIM = 1600;
+const JPEG_Q_START = 0.9;
+const JPEG_Q_MIN = 0.55;
+const JPEG_Q_STEP = 0.08;
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ""));
+    fr.onerror = () => reject(new Error("read blob"));
+    fr.readAsDataURL(blob);
+  });
+}
+async function loadImageFromBlob(b: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(b);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = (e) => reject(e);
+      im.src = url;
+    });
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_BYTES): Promise<string> {
+  const img = await loadImageFromBlob(input);
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  const r = iw / ih;
+
+  let tw = iw,
+    th = ih;
+  if (Math.max(iw, ih) > DRAFT_IMG_MAX_DIM) {
+    if (r >= 1) {
+      tw = DRAFT_IMG_MAX_DIM;
+      th = Math.round(DRAFT_IMG_MAX_DIM / r);
+    } else {
+      th = DRAFT_IMG_MAX_DIM;
+      tw = Math.round(DRAFT_IMG_MAX_DIM * r);
+    }
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(tw));
+  canvas.height = Math.max(1, Math.round(th));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return await blobToDataUrl(input);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  let q = JPEG_Q_START;
+  let out: Blob = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+  if (out.size <= maxBytes) return await blobToDataUrl(out);
+
+  while (q > JPEG_Q_MIN && out.size > maxBytes) {
+    q = Math.max(JPEG_Q_MIN, q - JPEG_Q_STEP);
+    out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+  }
+  if (out.size <= maxBytes) return await blobToDataUrl(out);
+
+  // если не уложились — ещё уменьшаем габариты
+  let scale = 0.9;
+  for (let i = 0; i < 4 && out.size > maxBytes; i++) {
+    const nw = Math.max(1, Math.round(canvas.width * scale));
+    const nh = Math.max(1, Math.round(canvas.height * scale));
+    const c2 = document.createElement("canvas");
+    c2.width = nw;
+    c2.height = nh;
+    const x2 = c2.getContext("2d");
+    if (!x2) break;
+    x2.drawImage(canvas, 0, 0, nw, nh);
+    canvas.width = nw;
+    canvas.height = nh;
+    ctx.drawImage(c2, 0, 0);
+
+    q = JPEG_Q_START;
+    out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+    while (q > JPEG_Q_MIN && out.size > maxBytes) {
+      q = Math.max(JPEG_Q_MIN, q - JPEG_Q_STEP);
+      out = await new Promise((res) => canvas.toBlob((b) => res(b || new Blob()), "image/jpeg", q));
+    }
+    scale *= 0.9;
+  }
+  return await blobToDataUrl(out);
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "grid", gap: 4, width: "100%", boxSizing: "border-box" }}>
+      <span style={{ fontSize: 13 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+function iconBtn(): React.CSSProperties {
+  return {
+    padding: "2px 6px",
+    borderRadius: 6,
+    border: "1px solid rgba(255,255,255,0.25)",
+    background: "rgba(255,255,255,0.12)",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 12,
+    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center"
+  };
+}
+
 /* ========= SideLikePlateBlock ========= */
 function SideLikePlateBlock(props: {
   title: string;
   enabled: boolean;
   onToggleEnabled: (v: boolean) => void;
 
+  // people
+  peopleEnabled?: boolean; // (можно использовать чтобы скрывать секцию, но сейчас по enabled)
+  people: Person[];
+  setPeople: (v: Person[] | ((p: Person[]) => Person[])) => void;
+  transientPhotoUrlById: Record<string, string | null>;
+  setTransientFor: (id: string, url: string | null) => void;
+  setPersonPhotoById: (personId: string, pv: PhotoValue | null) => void;
+
+  // epitaphs
   selectedEpitaphs: string[];
   setSelectedEpitaphs: (v: string[] | ((p: string[]) => string[])) => void;
   showMore: boolean;
@@ -475,6 +698,7 @@ function SideLikePlateBlock(props: {
   onRemoveEpitaph: (t: string) => void;
   epitaphList: string[];
 
+  // graphics
   catsLoading: boolean;
   catsError: string;
   cats: any[];
@@ -490,6 +714,12 @@ function SideLikePlateBlock(props: {
     title,
     enabled,
     onToggleEnabled,
+
+    people,
+    setPeople,
+    transientPhotoUrlById,
+    setPersonPhotoById,
+
     selectedEpitaphs,
     setSelectedEpitaphs,
     showMore,
@@ -500,6 +730,7 @@ function SideLikePlateBlock(props: {
     onAddCustom,
     onRemoveEpitaph,
     epitaphList,
+
     catsLoading,
     catsError,
     cats,
@@ -512,6 +743,7 @@ function SideLikePlateBlock(props: {
     onRemoveChosenItem
   } = props;
 
+  const [accPeopleOpen, setAccPeopleOpen] = useState(false);
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
@@ -593,13 +825,27 @@ function SideLikePlateBlock(props: {
                 }}
               >
                 {thumbUrl ? (
-                  <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
+                  <img
+                    src={thumbUrl}
+                    alt={name}
+                    style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }}
+                  />
                 ) : (
                   <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
                 )}
               </div>
 
-              <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
+              <div
+                title={name}
+                style={{
+                  marginTop: 6,
+                  fontSize: 12,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  opacity: 0.95
+                }}
+              >
                 {name}
               </div>
 
@@ -629,6 +875,38 @@ function SideLikePlateBlock(props: {
       <span>{title}</span>
     </label>
   );
+
+  // ===== People (CRUD) 1:1 EngravingStep =====
+  const updatePerson = (idx: number, patch: Partial<Person>) =>
+    setPeople((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  const removePerson = (idx: number) =>
+    setPeople((prev) => {
+      const next = prev.filter((_, i) => i !== idx);
+      return next.length > 0 ? next : [makeBlankPerson("p-0")];
+    });
+  const addPerson = () => setPeople((prev) => prev.concat([makeBlankPerson()]));
+  const moveUp = (idx: number) =>
+    setPeople((prev) =>
+      idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))
+    );
+  const moveDown = (idx: number) =>
+    setPeople((prev) =>
+      idx === prev.length - 1
+        ? prev
+        : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
+    );
+
+  // open map (accordion per person)
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => Object.fromEntries(people.map((p) => [p.id, true])));
+  useEffect(() => {
+    setOpenMap((prev) => {
+      const next: Record<string, boolean> = {};
+      people.forEach((p) => {
+        next[p.id] = prev[p.id] ?? true;
+      });
+      return next;
+    });
+  }, [people]);
 
   return (
     <LoudAccordion title={blockTitle} open={enabled} onToggle={() => onToggleEnabled(!enabled)}>
@@ -686,6 +964,178 @@ function SideLikePlateBlock(props: {
             {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </div>
 
+          {/* Усопшие */}
+          <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ margin: "0 0 4px 0", textAlign: "left", opacity: 0.92 }}>
+                Заполняется для тыльной стороны (хранится в editorBack.people).
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {people.map((p, idx) => {
+                  const id = p.id;
+                  const isOpen = openMap[id] ?? true;
+                  const err = validateDates(p.birthDate, p.deathDate);
+                  const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+                  const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
+
+                  return (
+                    <div key={id} style={{ ...glassPanelStyle(), padding: 0 }}>
+                      <div
+                        onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "6px 8px",
+                          background: "rgba(0,0,0,0.66)",
+                          borderRadius: "12px 12px 0 0",
+                          cursor: "pointer"
+                        }}
+                      >
+                        <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
+                        <div
+                          style={{
+                            fontSize: 16,
+                            fontWeight: 600,
+                            flex: 1,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap"
+                          }}
+                        >
+                          {nameLeft}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveUp(idx);
+                            }}
+                            disabled={idx === 0}
+                            style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
+                            title="Выше"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveDown(idx);
+                            }}
+                            disabled={idx === people.length - 1}
+                            style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }}
+                            title="Ниже"
+                          >
+                            ▼
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removePerson(idx);
+                            }}
+                            style={iconBtn()}
+                            title="Удалить"
+                          >
+                            ✖
+                          </button>
+                        </div>
+                      </div>
+
+                      {isOpen && (
+                        <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                              <Field label="Фамилия">
+                                <input
+                                  value={p.lastName ?? ""}
+                                  onChange={(e) => updatePerson(idx, { lastName: e.target.value })}
+                                  style={inputStyle()}
+                                  placeholder="Иванов"
+                                />
+                              </Field>
+                              <Field label="Имя">
+                                <input
+                                  value={p.firstName ?? ""}
+                                  onChange={(e) => updatePerson(idx, { firstName: e.target.value })}
+                                  style={inputStyle()}
+                                  placeholder="Иван"
+                                />
+                              </Field>
+                              <Field label="Отчество">
+                                <input
+                                  value={p.middleName ?? ""}
+                                  onChange={(e) => updatePerson(idx, { middleName: e.target.value })}
+                                  style={inputStyle()}
+                                  placeholder="Иванович"
+                                />
+                              </Field>
+                            </div>
+
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                              <Field label="Дата рождения">
+                                <input
+                                  value={p.birthDate ?? ""}
+                                  onChange={(e) => updatePerson(idx, { birthDate: e.target.value })}
+                                  style={{
+                                    ...inputStyle(),
+                                    borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)"
+                                  }}
+                                  placeholder="01.01.1950"
+                                />
+                              </Field>
+                              <Field label="Дата смерти">
+                                <input
+                                  value={p.deathDate ?? ""}
+                                  onChange={(e) => updatePerson(idx, { deathDate: e.target.value })}
+                                  style={{
+                                    ...inputStyle(),
+                                    borderColor:
+                                      err && (err.includes("смерти") || err.includes("раньше"))
+                                        ? "salmon"
+                                        : "rgba(255,255,255,0.18)"
+                                  }}
+                                  placeholder="01.01.2024"
+                                />
+                              </Field>
+                              {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
+                            </div>
+
+                            {/* Фото + подсказка при отсутствии */}
+                            <div>
+                              {!hasPhoto && (
+                                <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
+                                  Прикрепите фотографию. Она сохранится в заявке.
+                                </div>
+                              )}
+                              <PhotoField
+                                label="Фотография"
+                                value={{
+                                  url: transientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined,
+                                  dataUrl: p.photoDataUrl ?? undefined
+                                }}
+                                onChange={(pv) => setPersonPhotoById(p.id, pv)}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 2 }}>
+                <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>
+                  Добавить
+                </button>
+              </div>
+            </div>
+          </LoudAccordion>
+
           {/* Эпитафии */}
           <LoudAccordion title="Эпитафии" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
             <div style={{ display: "grid", gap: 10 }}>
@@ -699,7 +1149,10 @@ function SideLikePlateBlock(props: {
                         key={t}
                         type="button"
                         onClick={() => onToggleEpitaph(t)}
-                        style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
+                        style={{
+                          ...glassButtonStyle("nano"),
+                          border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)"
+                        }}
                         title={t}
                       >
                         {t}
@@ -716,7 +1169,15 @@ function SideLikePlateBlock(props: {
                 </button>
 
                 {showMore && (
-                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, padding: 2 }}>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                      gap: 8,
+                      padding: 2
+                    }}
+                  >
                     {MORE_EPITAPHS.map((t, idx) => {
                       const active = hasByNorm(selectedEpitaphs, t);
                       return (
@@ -897,9 +1358,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
    * Дополнительно (extras)
    * ========================= */
   const extras0: any = (draft as any)?.extras || {};
-  const [hasPedestal, setHasPedestal] = useState<boolean>(extras0.tumba ?? true);
-  const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(!!extras0.flowerbed);
-  const [hasVase, setHasVase] = useState<boolean>(!!extras0.vase);
+  // defaults: tumba=true, flowerbed=true, vase=false
+  const [hasPedestal, setHasPedestal] = useState<boolean>(() => (extras0.tumba ?? true));
+  const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
+  const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
 
   /* =========================
    * REAR (editorBack)
@@ -907,16 +1369,169 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const editorBack0: any = (draft as any)?.editorBack || {};
   const [rearEnabled, setRearEnabled] = useState<boolean>(() => {
     const eb: any = loadOrderDraft()?.editorBack || {};
-    return !!(eb?.selectedGraphicsIds?.length || eb?.epitaphTexts?.length || eb?.previewUrl || eb?.previewHiUrl);
+    return !!(
+      eb?.selectedGraphicsIds?.length ||
+      eb?.epitaphTexts?.length ||
+      eb?.people?.length ||
+      eb?.previewUrl ||
+      eb?.previewHiUrl
+    );
   });
 
   const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
   const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
-  const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(((editorBack0.epitaphTexts as string[]) || []).filter(Boolean));
+  const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(
+    ((editorBack0.epitaphTexts as string[]) || []).filter(Boolean)
+  );
   const [rearShowMore, setRearShowMore] = useState(false);
   const [rearCustomText, setRearCustomText] = useState("");
 
-  // if rear disabled => clear editorBack
+  // rear people (local state) from draft snapshot
+  const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
+  const [rearPeople, setRearPeople] = useState<Person[]>(
+    rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]
+  );
+
+  // transient photo urls (blob:) with revoke
+  const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
+  const setRearTransientFor = useCallback((id: string, url: string | null) => {
+    setRearTransientPhotoUrlById((prev) => {
+      const prevUrl = prev[id];
+      if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
+        try {
+          URL.revokeObjectURL(prevUrl);
+        } catch {}
+      }
+      return { ...prev, [id]: url ?? null };
+    });
+  }, []);
+  useEffect(() => {
+    return () => {
+      Object.values(rearTransientPhotoUrlById).forEach((u) => {
+        if (u && u.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
+      });
+    };
+  }, [rearTransientPhotoUrlById]);
+
+  // Photo handler (1:1 logic)
+  const photoSeqByIdRef = useRef<Record<string, number>>({});
+  const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
+
+  const setRearPersonPhotoById = useCallback(
+    (personId: string, pv: PhotoValue | null) => {
+      const nextSeq = (photoSeqByIdRef.current[personId] || 0) + 1;
+      photoSeqByIdRef.current[personId] = nextSeq;
+      const isCurrentSeq = () => photoSeqByIdRef.current[personId] === nextSeq;
+
+      const commitLocal = (patch: Partial<Person>) => {
+        if (!isCurrentSeq()) return;
+        setRearTransientFor(personId, null);
+        setRearPeople((prev) => prev.map((p) => (p.id === personId ? { ...p, ...patch } : p)));
+      };
+
+      // Очистка фото
+      if (!pv) {
+        setRearTransientFor(personId, null);
+        commitLocal({ photoUrl: null, photoDataUrl: null });
+        return;
+      }
+
+      // Источник: готовый dataUrl
+      if ((pv as any)?.dataUrl) {
+        const dataUrl = (pv as any).dataUrl as string;
+        (async () => {
+          try {
+            const blob = await (await fetch(dataUrl)).blob();
+            const safe = await compressBlobToJpegDataUrl(blob, DRAFT_IMG_MAX_BYTES);
+            commitLocal({ photoDataUrl: safe, photoUrl: safe });
+          } catch {
+            commitLocal({ photoDataUrl: dataUrl, photoUrl: (pv as any).url ?? dataUrl });
+          }
+        })();
+        return;
+      }
+
+      // Источник: File
+      const maybeFile: File | undefined = (pv as any)?.file;
+      if (maybeFile instanceof File) {
+        const tempUrl = URL.createObjectURL(maybeFile);
+        setRearTransientFor(personId, tempUrl);
+        (async () => {
+          try {
+            const safe = await compressBlobToJpegDataUrl(maybeFile, DRAFT_IMG_MAX_BYTES);
+            try {
+              URL.revokeObjectURL(tempUrl);
+            } catch {}
+            commitLocal({ photoDataUrl: safe, photoUrl: safe });
+          } catch {
+            try {
+              URL.revokeObjectURL(tempUrl);
+            } catch {}
+            commitLocal({ photoUrl: tempUrl, photoDataUrl: null });
+          }
+        })();
+        return;
+      }
+
+      // Источник: url
+      if ((pv as any)?.url) {
+        const url = (pv as any).url as string;
+        if (isBlobUrl(url)) {
+          setRearTransientFor(personId, url);
+          (async () => {
+            try {
+              const blob = await (await fetch(url)).blob();
+              const safe = await compressBlobToJpegDataUrl(blob, DRAFT_IMG_MAX_BYTES);
+              commitLocal({ photoDataUrl: safe, photoUrl: safe });
+            } catch {
+              commitLocal({ photoUrl: url, photoDataUrl: null });
+            }
+          })();
+        } else {
+          setRearTransientFor(personId, null);
+          commitLocal({ photoUrl: url, photoDataUrl: null });
+        }
+      }
+    },
+    [setRearTransientFor]
+  );
+
+  // Save people to draft ONLY on transitions (like EngravingStep)
+  const flushRearPeopleSaveNow = useCallback(() => {
+    const norm = normalizePersonsForSave(rearPeople);
+    saveOrderDraft({ editorBack: { people: norm.length ? norm : null } as any });
+    dispatchDraftUpdated();
+  }, [rearPeople]);
+
+  useEffect(() => {
+    const saveNow = () => {
+      try {
+        if (rearEnabled) flushRearPeopleSaveNow();
+      } catch {}
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") saveNow();
+    };
+    window.addEventListener("beforeunload", saveNow);
+    window.addEventListener("pagehide", saveNow);
+    window.addEventListener("hashchange", saveNow);
+    window.addEventListener("popstate", saveNow);
+    window.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      saveNow();
+      window.removeEventListener("beforeunload", saveNow);
+      window.removeEventListener("pagehide", saveNow);
+      window.removeEventListener("hashchange", saveNow);
+      window.removeEventListener("popstate", saveNow);
+      window.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [rearEnabled, flushRearPeopleSaveNow]);
+
+  // if rear disabled => clear editorBack (including people)
   useEffect(() => {
     if (rearEnabled) return;
 
@@ -936,6 +1551,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setRearIds([]);
     setRearMeta({});
     setRearSelectedEpitaphs([]);
+    setRearPeople([makeBlankPerson("p-0")]);
+    setRearTransientPhotoUrlById({});
   }, [rearEnabled]);
 
   // persist rear epitaphs
@@ -1037,7 +1654,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const meta: Record<string, any> = eb.graphicsMeta || {};
       const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
+      const graphicsUniq = Array.from(new Set(ids))
+        .map((gid) => meta[gid] || { id: gid, url: "" })
+        .filter(Boolean);
       const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
 
       const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0;
@@ -1091,7 +1710,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const d = loadOrderDraft();
     const ex: any = (d as any)?.extras || {};
     const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
-    const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
+    const single: string | undefined =
+      typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
 
@@ -1213,7 +1833,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
       const epitaphs = [...one, ...arr].map((s) => String(s || "").trim()).filter(Boolean);
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
+      const graphicsUniq = Array.from(new Set(ids))
+        .map((gid) => meta[gid] || { id: gid, url: "" })
+        .filter(Boolean);
 
       const hasPlate = !!ex.headstonePlate && (graphicsUniq.length > 0 || epitaphs.length > 0);
       if (!hasPlate) {
@@ -1248,6 +1870,23 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       clearTimeout(t);
     };
   }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
+
+  const handleBack = useCallback(() => {
+    // flush rear people before leaving
+    try {
+      if (rearEnabled) flushRearPeopleSaveNow();
+    } catch {}
+    setOutro(true);
+    setTimeout(() => onBack?.(), 320);
+  }, [flushRearPeopleSaveNow, onBack, rearEnabled]);
+
+  const handleContinue = useCallback(() => {
+    try {
+      if (rearEnabled) flushRearPeopleSaveNow();
+    } catch {}
+    setOutro(true);
+    setTimeout(() => onContinue?.(), 320);
+  }, [flushRearPeopleSaveNow, onContinue, rearEnabled]);
 
   return (
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
@@ -1313,6 +1952,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           title="Тыльная сторона"
           enabled={rearEnabled}
           onToggleEnabled={setRearEnabled}
+          people={rearPeople}
+          setPeople={setRearPeople}
+          transientPhotoUrlById={rearTransientPhotoUrlById}
+          setTransientFor={setRearTransientFor}
+          setPersonPhotoById={setRearPersonPhotoById}
           selectedEpitaphs={rearSelectedEpitaphs}
           setSelectedEpitaphs={setRearSelectedEpitaphs}
           showMore={rearShowMore}
@@ -1342,6 +1986,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           title="Надгробная плита"
           enabled={plateEnabled}
           onToggleEnabled={setPlateEnabled}
+          people={[]}
+          setPeople={() => void 0}
+          transientPhotoUrlById={{}}
+          setTransientFor={() => void 0}
+          setPersonPhotoById={() => void 0}
           selectedEpitaphs={plateSelectedEpitaphs}
           setSelectedEpitaphs={setPlateSelectedEpitaphs}
           showMore={plateShowMore}
@@ -1366,25 +2015,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       </section>
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={() => {
-            setOutro(true);
-            setTimeout(() => onBack?.(), 320);
-          }}
-          style={glassButtonStyle("sm")}
-        >
+        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
           Назад
         </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setOutro(true);
-            setTimeout(() => onContinue?.(), 320);
-          }}
-          style={glassButtonStyle("sm")}
-        >
+        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
           Продолжить
         </button>
       </div>
