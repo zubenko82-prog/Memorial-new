@@ -1203,4 +1203,3 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     </div>
   );
 }
-

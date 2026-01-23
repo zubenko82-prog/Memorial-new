@@ -1,4 +1,13 @@
 // src/screens/BackEditorStep.tsx
+//
+// Превью (тыл/плита):
+// - пропорция строго 1:2
+// - длинная сторона 900 (W=450, H=900)
+// - без hi-res (previewHiUrl/platePreviewHiUrl = null)
+// - композиция: портрет (если есть) сверху -> метрика под ним -> далее графика/эпитафии по порядку добавления
+// - всё центрируем по горизонтали, равномерно распределяем по вертикали
+// - эпитафии: сохраняем разрывы строк как в тексте (не делаем перенос по словам), только уменьшаем шрифт при необходимости
+// - для маленьких экранов масштабируем UI (не здесь; это относится к месту показа превью, но генерация корректна)
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -168,6 +177,10 @@ function LoudAccordion({
 /* ========= Preview helpers ========= */
 const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
 
+// Strict 1:2 with long side 900
+const PREVIEW_W = 450;
+const PREVIEW_H = 900;
+
 function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
     if (!src) return resolve(null);
@@ -329,60 +342,42 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
   ctx.drawImage(maskCanvas, drawX, ry);
 
   ctx.restore();
-
   return canvas.toDataURL("image/png");
 }
 
-function wrapLinesCanvas(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
-  const out: string[] = [];
-  const paras = String(text || "").split(/\r?\n/);
-  for (const para of paras) {
-    const words = para.split(/\s+/).filter(Boolean);
-    let line = "";
-    for (const w of words) {
-      const test = line ? `${line} ${w}` : w;
-      if (ctx.measureText(test).width <= maxW) line = test;
-      else {
-        if (line) out.push(line);
-        line = w;
-      }
-    }
-    if (line) out.push(line);
-  }
-  return out.length ? out : [""];
+function splitHardLines(text: string): string[] {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((s) => s.trimEnd());
 }
 
-/* ===== Templates coords (copied from src/lib/sketchTemplates.ts) ===== */
-type NormalizedRect = { x: number; y: number; w: number; h: number; padding?: number };
-type SlotType = "cross" | "photo" | "personName" | "dates" | "epitaph" | "decor" | "flower";
-type TemplateSlot = { type: SlotType; index?: number; rect: NormalizedRect; maxScale?: number };
+function measureHardLinesHeight(fontPx: number, lineH: number, linesCount: number) {
+  return Math.round(linesCount * fontPx * lineH);
+}
 
-const classicSingle: TemplateSlot[] = [
-  { type: "cross", rect: { x: 0.06, y: 0.05, w: 0.14, h: 0.14, padding: 4 }, maxScale: 1.25 },
-  { type: "photo", rect: { x: 0.28, y: 0.18, w: 0.44, h: 0.40, padding: 8 }, maxScale: 1.15 },
-  { type: "personName", rect: { x: 0.18, y: 0.62, w: 0.64, h: 0.10, padding: 6 } },
-  { type: "dates", rect: { x: 0.26, y: 0.73, w: 0.48, h: 0.07, padding: 6 } },
-  { type: "epitaph", rect: { x: 0.12, y: 0.84, w: 0.76, h: 0.10, padding: 8 } }
-];
+function fitFontToBoxHardLines(params: {
+  ctx: CanvasRenderingContext2D;
+  lines: string[];
+  maxW: number;
+  maxH: number;
+  startSize: number;
+  minSize: number;
+  lineH: number;
+}) {
+  const { ctx, lines, maxW, maxH, startSize, minSize, lineH } = params;
+  let fs = startSize;
 
-const doublePortrait: TemplateSlot[] = [
-  { type: "cross", rect: { x: 0.06, y: 0.05, w: 0.14, h: 0.14, padding: 4 }, maxScale: 1.25 },
-  { type: "photo", index: 0, rect: { x: 0.12, y: 0.22, w: 0.34, h: 0.38, padding: 8 } },
-  { type: "photo", index: 1, rect: { x: 0.54, y: 0.22, w: 0.34, h: 0.38, padding: 8 } },
-  { type: "personName", index: 0, rect: { x: 0.08, y: 0.62, w: 0.40, h: 0.10, padding: 6 } },
-  { type: "personName", index: 1, rect: { x: 0.52, y: 0.62, w: 0.40, h: 0.10, padding: 6 } },
-  { type: "dates", index: 0, rect: { x: 0.12, y: 0.73, w: 0.32, h: 0.07, padding: 6 } },
-  { type: "dates", index: 1, rect: { x: 0.56, y: 0.73, w: 0.32, h: 0.07, padding: 6 } },
-  { type: "epitaph", rect: { x: 0.12, y: 0.84, w: 0.76, h: 0.10, padding: 8 } }
-];
+  const widest = () => Math.max(...lines.map((l) => ctx.measureText(l || " ").width), 0);
 
-function rectFromNorm(W: number, H: number, nr: NormalizedRect) {
-  const pad = nr.padding ?? 0;
-  const x = Math.round(nr.x * W) + pad;
-  const y = Math.round(nr.y * H) + pad;
-  const w = Math.round(nr.w * W) - pad * 2;
-  const h = Math.round(nr.h * H) - pad * 2;
-  return { x, y, w: Math.max(1, w), h: Math.max(1, h) };
+  while (fs > minSize) {
+    ctx.font = `${fs}px "Times New Roman", serif`;
+    const w = widest();
+    const h = measureHardLinesHeight(fs, lineH, lines.length);
+    if (w <= maxW && h <= maxH) break;
+    fs -= 1;
+  }
+  return fs;
 }
 
 type PersonPreview = {
@@ -395,39 +390,21 @@ type PersonPreview = {
   deathDate: string;
 };
 
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n));
-}
+type StackItem =
+  | { kind: "photo"; url: string }
+  | { kind: "metrica"; lastName: string; firstName: string; middleName: string; dates: string }
+  | { kind: "img"; url: string }
+  | { kind: "text"; text: string };
 
-function fitTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxW: number, startSize: number, minSize: number) {
-  let fs = startSize;
-  while (fs > minSize) {
-    ctx.font = `${fs}px "Times New Roman", serif`;
-    if (ctx.measureText(text).width <= maxW) break;
-    fs -= 1;
-  }
-  return fs;
-}
-
-function splitName(p: PersonPreview) {
-  const ln = (p.lastName || "").trim();
-  const fn = [p.firstName, p.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
-  const dates = [p.birthDate, p.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
-  return { ln, fn, dates };
-}
-
-async function renderPreviewByTemplate(params: {
+async function renderStackedCenteredPreview(params: {
   W: number;
   H: number;
   bg: { type: "gradient" } | { type: "image"; url: string };
   bgFit?: "cover" | "contain";
   overlayPng?: string | null;
-
-  people: PersonPreview[];
-  graphics: { url?: string; preview?: string }[];
-  epitaphs: string[];
+  items: StackItem[];
 }): Promise<string | null> {
-  const { W, H, bg, bgFit = "cover", overlayPng, people, graphics, epitaphs } = params;
+  const { W, H, bg, bgFit = "cover", overlayPng, items } = params;
 
   const canvas = document.createElement("canvas");
   canvas.width = W;
@@ -461,131 +438,159 @@ async function renderPreviewByTemplate(params: {
     if (ov) ctx.drawImage(ov, 0, 0, W, H);
   }
 
-  const tpl = people.length <= 1 ? classicSingle : doublePortrait;
+  // layout
+  const padX = Math.round(W * 0.10);
+  const padY = Math.round(H * 0.06);
+  const colW = W - padX * 2;
 
-  // draw "cross/decor" = first graphic (if exists)
-  const decorUrl = graphics[0]?.preview || graphics[0]?.url || null;
-  if (decorUrl) {
-    const crossSlot = tpl.find((s) => s.type === "cross");
-    if (crossSlot) {
-      const r = rectFromNorm(W, H, crossSlot.rect);
-      const im = await loadImageSafe(decorUrl);
-      if (im) drawImageContain(ctx, im, r);
-    }
-  }
+  const gap = Math.max(10, Math.round(H * 0.02));
+  const top = padY;
+  const bottom = H - padY;
+  const usable = Math.max(10, bottom - top);
 
-  // draw photos
-  for (const slot of tpl.filter((s) => s.type === "photo")) {
-    const idx = slot.index ?? 0;
-    const p = people[idx];
-    if (!p?.photo) continue;
-    const r = rectFromNorm(W, H, slot.rect);
-    const im = await loadImageSafe(p.photo);
-    if (im) drawImageContain(ctx, im, r);
-  }
+  if (!items.length) return null;
 
-  // metrica: ALWAYS under photo, rendered using personName + dates slots
-  for (const slot of tpl.filter((s) => s.type === "personName")) {
-    const idx = slot.index ?? 0;
-    const p = people[idx];
-    if (!p) continue;
-    const r = rectFromNorm(W, H, slot.rect);
-    const { ln, fn } = splitName(p);
+  // allocate heights by type
+  const basePhotoH = Math.round(H * 0.26);
+  const baseMetricaH = Math.round(H * 0.14);
+  const baseImgH = Math.round(H * 0.14);
+  const baseTextH = Math.round(H * 0.14);
 
-    ctx.save();
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+  const plannedHeights = items.map((it) => {
+    if (it.kind === "photo") return basePhotoH;
+    if (it.kind === "metrica") return baseMetricaH;
+    if (it.kind === "img") return baseImgH;
+    return baseTextH;
+  });
 
-    // sizes: ln > fn
-    const baseLast = clamp(Math.floor(r.h * 0.60), 16, 34);
-    const baseFn = clamp(Math.floor(r.h * 0.42), 13, 24);
+  const totalGaps = gap * (items.length - 1);
+  const totalPlanned = plannedHeights.reduce((a, b) => a + b, 0);
 
-    let lastSize = ln ? fitTextToWidth(ctx, ln, r.w, baseLast, 12) : baseLast;
-    let fnSize = fn ? fitTextToWidth(ctx, fn, r.w, baseFn, 11) : baseFn;
+  // scale down if not fit (keep proportions)
+  const k = Math.min(1, (usable - totalGaps) / Math.max(1, totalPlanned));
+  const heights = plannedHeights.map((h) => Math.max(34, Math.floor(h * k)));
 
-    // stack two lines vertically inside slot
-    const lh1 = Math.round(lastSize * 1.05);
-    const lh2 = Math.round(fnSize * 1.05);
-    const total = (ln ? lh1 : 0) + (fn ? lh2 : 0);
-    let y = r.y + Math.round(r.h / 2 - total / 2);
+  const totalH = heights.reduce((a, b) => a + b, 0) + totalGaps;
+  let y = Math.round(top + (usable - totalH) / 2);
 
-    if (ln) {
-      ctx.font = `${lastSize}px "Times New Roman", serif`;
-      ctx.fillText(ln, r.x + r.w / 2, y + lh1 / 2);
-      y += lh1;
-    }
-    if (fn) {
-      ctx.font = `${fnSize}px "Times New Roman", serif`;
-      ctx.fillText(fn, r.x + r.w / 2, y + lh2 / 2);
-      y += lh2;
+  // draw each item centered
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const h = heights[i];
+    const r = { x: padX, y, w: colW, h };
+
+    if (it.kind === "photo" || it.kind === "img") {
+      const im = await loadImageSafe(it.url);
+      if (im) {
+        // contain inside a smaller box to avoid touching edges
+        const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
+        const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+        drawImageContain(ctx, im, rr);
+      }
     }
 
-    ctx.restore();
-  }
+    if (it.kind === "metrica") {
+      const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
+      const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
 
-  for (const slot of tpl.filter((s) => s.type === "dates")) {
-    const idx = slot.index ?? 0;
-    const p = people[idx];
-    if (!p) continue;
-    const r = rectFromNorm(W, H, slot.rect);
-    const { dates } = splitName(p);
-    if (!dates) continue;
+      const ln = (it.lastName || "").trim();
+      const fn = [it.firstName, it.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
+      const dates = (it.dates || "").trim();
 
-    ctx.save();
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    // dates smallest
-    const baseDates = clamp(Math.floor(r.h * 0.70), 12, 20);
-    const fs = fitTextToWidth(ctx, dates, r.w, baseDates, 10);
-    ctx.font = `${fs}px "Times New Roman", serif`;
-    ctx.fillText(dates, r.x + r.w / 2, r.y + r.h / 2);
-
-    ctx.restore();
-  }
-
-  // epitaph (single block, smaller)
-  const epSlot = tpl.find((s) => s.type === "epitaph");
-  if (epSlot) {
-    const r = rectFromNorm(W, H, epSlot.rect);
-    const t = epitaphs.join("\n").trim();
-    if (t) {
       ctx.save();
       ctx.fillStyle = "#fff";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      let fs = clamp(Math.floor(r.h * 0.24), 10, 14);
-      ctx.font = `${fs}px "Times New Roman", serif`;
+      // size hierarchy: lastName > first/middle > dates
+      const lastBase = Math.min(44, Math.max(18, Math.floor(rr.h * 0.42)));
+      const fnBase = Math.min(32, Math.max(14, Math.floor(rr.h * 0.30)));
+      const datesBase = Math.min(26, Math.max(12, Math.floor(rr.h * 0.22)));
 
-      const maxW = Math.max(10, r.w - 8);
-      let lines = wrapLinesCanvas(ctx, t, maxW);
-      let lh = Math.round(fs * 1.15);
+      // fit to width independently
+      const fit = (text: string, start: number, min: number) => {
+        let fs = start;
+        while (fs > min) {
+          ctx.font = `${fs}px "Times New Roman", serif`;
+          if (ctx.measureText(text || " ").width <= rr.w) break;
+          fs -= 1;
+        }
+        return fs;
+      };
 
-      while (lines.length * lh > r.h - 6 && fs > 9) {
-        fs -= 1;
-        ctx.font = `${fs}px "Times New Roman", serif`;
-        lines = wrapLinesCanvas(ctx, t, maxW);
-        lh = Math.round(fs * 1.15);
+      const lastSize = ln ? fit(ln, lastBase, 12) : lastBase;
+      const fnSize = fn ? fit(fn, fnBase, 11) : fnBase;
+      const datesSize = dates ? fit(dates, datesBase, 10) : datesBase;
+
+      const lh1 = Math.round(lastSize * 1.05);
+      const lh2 = fn ? Math.round(fnSize * 1.05) : 0;
+      const lh3 = dates ? Math.round(datesSize * 1.05) : 0;
+      const total = lh1 + lh2 + lh3;
+      let ty = rr.y + Math.round(rr.h / 2 - total / 2);
+
+      if (ln) {
+        ctx.font = `${lastSize}px "Times New Roman", serif`;
+        ctx.fillText(ln, rr.x + rr.w / 2, ty + lh1 / 2);
+        ty += lh1;
       }
-
-      const total = lines.length * lh;
-      let ty = r.y + Math.round(r.h / 2 - total / 2 + lh / 2);
-      for (const line of lines) {
-        ctx.fillText(line, r.x + r.w / 2, ty);
-        ty += lh;
+      if (fn) {
+        ctx.font = `${fnSize}px "Times New Roman", serif`;
+        ctx.fillText(fn, rr.x + rr.w / 2, ty + lh2 / 2);
+        ty += lh2;
+      }
+      if (dates) {
+        ctx.font = `${datesSize}px "Times New Roman", serif`;
+        ctx.fillText(dates, rr.x + rr.w / 2, ty + lh3 / 2);
+        ty += lh3;
       }
 
       ctx.restore();
     }
+
+    if (it.kind === "text") {
+      const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
+      const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+
+      const lines = splitHardLines(it.text);
+      // keep original \n, but fit font to box (no word wrap)
+      ctx.save();
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      const start = Math.min(26, Math.max(14, Math.floor(rr.h * 0.32)));
+      ctx.font = `${start}px "Times New Roman", serif`;
+
+      const fs = fitFontToBoxHardLines({
+        ctx,
+        lines,
+        maxW: rr.w,
+        maxH: rr.h,
+        startSize: start,
+        minSize: 10,
+        lineH: 1.18
+      });
+
+      ctx.font = `${fs}px "Times New Roman", serif`;
+      const lineH = Math.round(fs * 1.18);
+      const total = lineH * lines.length;
+      let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineH / 2);
+
+      for (const line of lines) {
+        ctx.fillText(line || " ", rr.x + rr.w / 2, ty);
+        ty += lineH;
+      }
+
+      ctx.restore();
+    }
+
+    y += h + gap;
   }
 
-  return canvas.toDataURL("image/jpeg", 0.92);
+  return canvas.toDataURL("image/jpeg", 0.9);
 }
 
-/* ========= Usopshie (rear people) ========= */
+/* ========= People (rear) types ========= */
 type Person = {
   id: string;
   lastName?: string;
@@ -665,7 +670,7 @@ function validateDates(birth?: string, death?: string): string | null {
   return null;
 }
 
-/* ===== Image compression (для безопасного сохранения в localStorage) ===== */
+/* ===== Image compression (for safe save) ===== */
 const DRAFT_IMG_MAX_BYTES = 600 * 1024;
 const DRAFT_IMG_MAX_DIM = 1600;
 const JPEG_Q_START = 0.9;
@@ -772,6 +777,7 @@ function iconBtn(): React.CSSProperties {
 }
 
 /* ========= SideLikePlateBlock ========= */
+/* (UI часть оставлена как у вас — без урезаний, только перенесена как есть) */
 function SideLikePlateBlock(props: {
   title: string;
   enabled: boolean;
@@ -805,7 +811,6 @@ function SideLikePlateBlock(props: {
   chosenList: any[];
   onRemoveChosenItem: (gid: string) => void;
 }) {
-  // (UI часть без изменений относительно вашей последней версии; не урезаю)
   const {
     title,
     enabled,
@@ -841,7 +846,6 @@ function SideLikePlateBlock(props: {
   const [accEpOpen, setAccEpOpen] = useState(false);
   const [accGraphicsOpen, setAccGraphicsOpen] = useState(false);
 
-  // grid cols
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState<number>(2);
   useEffect(() => {
@@ -956,9 +960,7 @@ function SideLikePlateBlock(props: {
     </label>
   );
 
-  // people CRUD
-  const updatePerson = (idx: number, patch: Partial<Person>) =>
-    setPeople((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  const updatePerson = (idx: number, patch: Partial<Person>) => setPeople((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   const removePerson = (idx: number) =>
     setPeople((prev) => {
       const next = prev.filter((_, i) => i !== idx);
@@ -968,9 +970,7 @@ function SideLikePlateBlock(props: {
   const moveUp = (idx: number) =>
     setPeople((prev) => (idx === 0 ? prev : prev.map((x, i) => (i === idx - 1 ? prev[idx] : i === idx ? prev[idx - 1] : x))));
   const moveDown = (idx: number) =>
-    setPeople((prev) =>
-      idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))
-    );
+    setPeople((prev) => (idx === prev.length - 1 ? prev : prev.map((x, i) => (i === idx ? prev[idx + 1] : i === idx + 1 ? prev[idx] : x))));
 
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => Object.fromEntries(people.map((p) => [p.id, true])));
   useEffect(() => {
@@ -985,7 +985,6 @@ function SideLikePlateBlock(props: {
     <LoudAccordion title={blockTitle} open={enabled} onToggle={() => onToggleEnabled(!enabled)}>
       {enabled && (
         <div style={{ display: "grid", gap: 12 }}>
-          {/* Выбрано */}
           <div style={{ ...sectionBoxStyle(), border: "1px solid rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Выбрано</div>
 
@@ -1034,7 +1033,6 @@ function SideLikePlateBlock(props: {
             {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </div>
 
-          {/* Усопшие */}
           {showPeople && (
             <LoudAccordion title="Усопшие" open={accPeopleOpen} onToggle={() => setAccPeopleOpen((v) => !v)}>
               <div style={{ display: "grid", gap: 10 }}>
@@ -1057,9 +1055,15 @@ function SideLikePlateBlock(props: {
                             {nameLeft}
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); moveUp(idx); }} disabled={idx === 0} style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }} title="Выше">▲</button>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); moveDown(idx); }} disabled={idx === people.length - 1} style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }} title="Ниже">▼</button>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); removePerson(idx); }} style={iconBtn()} title="Удалить">✖</button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); moveUp(idx); }} disabled={idx === 0} style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }} title="Выше">
+                              ▲
+                            </button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); moveDown(idx); }} disabled={idx === people.length - 1} style={{ ...iconBtn(), opacity: idx === people.length - 1 ? 0.4 : 1 }} title="Ниже">
+                              ▼
+                            </button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); removePerson(idx); }} style={iconBtn()} title="Удалить">
+                              ✖
+                            </button>
                           </div>
                         </div>
 
@@ -1115,7 +1119,6 @@ function SideLikePlateBlock(props: {
             </LoudAccordion>
           )}
 
-          {/* Эпитафии */}
           <LoudAccordion title="Эпитафии" open={accEpOpen} onToggle={() => setAccEpOpen((v) => !v)}>
             <div style={{ display: "grid", gap: 10 }}>
               <div style={sectionBoxStyle()}>
@@ -1183,7 +1186,6 @@ function SideLikePlateBlock(props: {
             </div>
           </LoudAccordion>
 
-          {/* Графика */}
           <LoudAccordion title="Графика" open={accGraphicsOpen} onToggle={() => setAccGraphicsOpen((v) => !v)}>
             {catsLoading && <div>Загрузка каталога…</div>}
             {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
@@ -1260,9 +1262,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         if (alive) setCatsLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -1287,7 +1287,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
   const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
 
-  // проставляем дефолты в draft, если отсутствуют (однократно)
   useEffect(() => {
     const d = loadOrderDraft() as any;
     const ex = (d?.extras || {}) as any;
@@ -1309,9 +1308,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   const [rearIds, setRearIds] = useState<string[]>((editorBack0.selectedGraphicsIds as string[]) || []);
   const [rearMeta, setRearMeta] = useState<Record<string, any>>((editorBack0.graphicsMeta as Record<string, any>) || {});
-  const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(
-    ((editorBack0.epitaphTexts as string[]) || []).filter(Boolean)
-  );
+  const [rearSelectedEpitaphs, setRearSelectedEpitaphs] = useState<string[]>(((editorBack0.epitaphTexts as string[]) || []).filter(Boolean));
   const [rearShowMore, setRearShowMore] = useState(false);
   const [rearCustomText, setRearCustomText] = useState("");
 
@@ -1324,9 +1321,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     setRearTransientPhotoUrlById((prev) => {
       const prevUrl = prev[id];
       if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
-        try {
-          URL.revokeObjectURL(prevUrl);
-        } catch {}
+        try { URL.revokeObjectURL(prevUrl); } catch {}
       }
       return { ...prev, [id]: url ?? null };
     });
@@ -1334,16 +1329,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   useEffect(() => {
     return () => {
       Object.values(rearTransientPhotoUrlById).forEach((u) => {
-        if (u && u.startsWith("blob:")) {
-          try {
-            URL.revokeObjectURL(u);
-          } catch {}
-        }
+        if (u && u.startsWith("blob:")) { try { URL.revokeObjectURL(u); } catch {} }
       });
     };
   }, [rearTransientPhotoUrlById]);
 
-  // photo handler
   const photoSeqByIdRef = useRef<Record<string, number>>({});
   const isBlobUrl = (url?: string | null) => !!url && url.startsWith("blob:");
 
@@ -1386,14 +1376,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         (async () => {
           try {
             const safe = await compressBlobToJpegDataUrl(maybeFile, DRAFT_IMG_MAX_BYTES);
-            try {
-              URL.revokeObjectURL(tempUrl);
-            } catch {}
+            try { URL.revokeObjectURL(tempUrl); } catch {}
             commitLocal({ photoDataUrl: safe, photoUrl: safe });
           } catch {
-            try {
-              URL.revokeObjectURL(tempUrl);
-            } catch {}
+            try { URL.revokeObjectURL(tempUrl); } catch {}
             commitLocal({ photoUrl: tempUrl, photoDataUrl: null });
           }
         })();
@@ -1423,27 +1409,26 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   );
 
   const rearPeopleForPreview = useMemo<PersonPreview[]>(() => {
-    return rearPeople
-      .slice(0, 2)
-      .map((p) => {
-        const transient = rearTransientPhotoUrlById[p.id];
-        const stable = p.photoDataUrl ?? p.photoUrl ?? null;
-        const photo = (transient ?? stable) as string | null;
+    // take first person as "portrait block" (as per requirement)
+    const p = rearPeople[0];
+    if (!p) return [];
+    const transient = rearTransientPhotoUrlById[p.id];
+    const stable = p.photoDataUrl ?? p.photoUrl ?? null;
+    const photo = (transient ?? stable) as string | null;
 
-        return {
-          id: p.id,
-          photo,
-          lastName: (p.lastName || "").trim(),
-          firstName: (p.firstName || "").trim(),
-          middleName: (p.middleName || "").trim(),
-          birthDate: (p.birthDate || "").trim(),
-          deathDate: (p.deathDate || "").trim()
-        };
-      })
-      .filter((p) => p.photo || p.lastName || p.firstName || p.middleName || p.birthDate || p.deathDate);
+    return [
+      {
+        id: p.id,
+        photo,
+        lastName: (p.lastName || "").trim(),
+        firstName: (p.firstName || "").trim(),
+        middleName: (p.middleName || "").trim(),
+        birthDate: (p.birthDate || "").trim(),
+        deathDate: (p.deathDate || "").trim()
+      }
+    ].filter((x) => x.photo || x.lastName || x.firstName || x.middleName || x.birthDate || x.deathDate);
   }, [rearPeople, rearTransientPhotoUrlById]);
 
-  // persist rear epitaphs when enabled
   const prevRearEpiJsonRef = useRef<string>("");
   useEffect(() => {
     if (!rearEnabled) return;
@@ -1525,7 +1510,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   };
   const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
 
-  // rear people save on leave (only when enabled)
   const flushRearPeopleSaveNow = useCallback(() => {
     const norm = normalizePersonsForSave(rearPeople);
     saveOrderDraft({ editorBack: { people: norm.length ? norm : null } as any });
@@ -1534,13 +1518,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   useEffect(() => {
     const saveNow = () => {
-      try {
-        if (rearEnabled) flushRearPeopleSaveNow();
-      } catch {}
+      try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
     };
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") saveNow();
-    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
     window.addEventListener("beforeunload", saveNow);
     window.addEventListener("pagehide", saveNow);
     window.addEventListener("hashchange", saveNow);
@@ -1556,22 +1536,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, [rearEnabled, flushRearPeopleSaveNow]);
 
-  // toggle rear enabled: OFF clears draft only, ON restores from memory
   useEffect(() => {
     saveOrderDraft({ editorBack: { enabled: rearEnabled } as any });
     dispatchDraftUpdated();
 
     if (!rearEnabled) {
       saveOrderDraft({
-        editorBack: {
-          enabled: false,
-          selectedGraphicsIds: null,
-          graphicsMeta: null,
-          epitaphTexts: null,
-          people: null,
-          previewUrl: null,
-          previewHiUrl: null
-        } as any
+        editorBack: { enabled: false, selectedGraphicsIds: null, graphicsMeta: null, epitaphTexts: null, people: null, previewUrl: null, previewHiUrl: null } as any
       });
       dispatchDraftUpdated();
       return;
@@ -1594,7 +1565,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rearEnabled]);
 
-  // rear preview generation (template-based)
+  // rear preview generation (stack centered)
   useEffect(() => {
     let alive = true;
 
@@ -1607,44 +1578,62 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const meta: Record<string, any> = eb.graphicsMeta || {};
       const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
-      const epitaphs = ep.map((s) => String(s || "").trim()).filter(Boolean);
+      // ORDER of graphics: as selectedGraphicsIds order (not uniq)
+      const graphicsInOrder: string[] = ids.slice();
 
-      const hasRear = graphicsUniq.length > 0 || epitaphs.length > 0 || rearPeopleForPreview.length > 0;
-      if (!hasRear) {
+      // epitaphs order: as stored array order
+      const epitaphsInOrder: string[] = ep.map((s) => String(s || "")).filter((s) => String(s || "").trim());
+
+      // build stack items
+      const items: StackItem[] = [];
+
+      const p0 = rearPeopleForPreview[0];
+      if (p0?.photo) items.push({ kind: "photo", url: p0.photo });
+
+      if (p0 && (p0.lastName || p0.firstName || p0.middleName || p0.birthDate || p0.deathDate)) {
+        const dates = [p0.birthDate, p0.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
+        items.push({
+          kind: "metrica",
+          lastName: p0.lastName,
+          firstName: p0.firstName,
+          middleName: p0.middleName,
+          dates
+        });
+      }
+
+      // then graphics/text in order added: we interleave graphics and epitaph blocks as "in order of addition"
+      // (you currently store graphics ids order separately and epitaphs separately; so we append graphics then epitaphs;
+      // if you need true global interleaving you must store a unified timeline. For now: graphics first (in add order), then epitaphs.)
+      for (const gid of graphicsInOrder) {
+        const m = meta[gid] || {};
+        const url = String(m.url || "").trim();
+        if (url) items.push({ kind: "img", url });
+      }
+
+      for (const t of epitaphsInOrder) {
+        items.push({ kind: "text", text: t });
+      }
+
+      if (items.length === 0) {
         saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
         dispatchDraftUpdated();
         return;
       }
 
-      const overlay900 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 900, H: 1200, mirrorX: true }) : null;
-      const overlay1600 = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: 1600, H: 2200, mirrorX: true }) : null;
+      const overlay = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: PREVIEW_W, H: PREVIEW_H, mirrorX: true }) : null;
 
-      const mini = await renderPreviewByTemplate({
-        W: 900,
-        H: 1200,
+      const preview = await renderStackedCenteredPreview({
+        W: PREVIEW_W,
+        H: PREVIEW_H,
         bg: { type: "gradient" },
         bgFit: "cover",
-        overlayPng: overlay900,
-        people: rearPeopleForPreview,
-        graphics: graphicsUniq,
-        epitaphs
-      });
-
-      const big = await renderPreviewByTemplate({
-        W: 1600,
-        H: 2200,
-        bg: { type: "gradient" },
-        bgFit: "cover",
-        overlayPng: overlay1600,
-        people: rearPeopleForPreview,
-        graphics: graphicsUniq,
-        epitaphs
+        overlayPng: overlay,
+        items
       });
 
       if (!alive) return;
 
-      saveOrderDraft({ editorBack: { previewUrl: mini || null, previewHiUrl: big || null } as any });
+      saveOrderDraft({ editorBack: { previewUrl: preview || null, previewHiUrl: null } as any });
       dispatchDraftUpdated();
     };
 
@@ -1653,24 +1642,21 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       alive = false;
       clearTimeout(t);
     };
-  }, [rearEnabled, itemUrl, rearPeopleForPreview]);
+  }, [rearEnabled, itemUrl, rearPeopleForPreview, rearIds, rearMeta, rearSelectedEpitaphs]);
 
   /* =========================
    * PLATE (extras)
    * ========================= */
   const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
-
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
-
   const initialPlateSelected = useMemo(() => {
-    const d = loadOrderDraft();
-    const ex: any = (d as any)?.extras || {};
+    const d0 = loadOrderDraft();
+    const ex: any = (d0 as any)?.extras || {};
     const arr: string[] | undefined = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : undefined;
     const single: string | undefined = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? ex.plateEpitaph.trim() : undefined;
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
-
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
   const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
@@ -1831,41 +1817,35 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
       const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
       const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
-      const epitaphs = [...one, ...arr].map((s) => String(s || "").trim()).filter(Boolean);
+      const epitaphsInOrder = [...one, ...arr].map((s) => String(s || "")).filter((s) => String(s || "").trim());
 
-      const graphicsUniq = Array.from(new Set(ids)).map((gid) => meta[gid] || { id: gid, url: "" }).filter(Boolean);
+      const graphicsInOrder: string[] = ids.slice();
 
-      const hasPlate = !!ex.headstonePlate && (graphicsUniq.length > 0 || epitaphs.length > 0);
-      if (!hasPlate) {
+      const items: StackItem[] = [];
+      for (const gid of graphicsInOrder) {
+        const m = meta[gid] || {};
+        const url = String(m.url || "").trim();
+        if (url) items.push({ kind: "img", url });
+      }
+      for (const t of epitaphsInOrder) items.push({ kind: "text", text: t });
+
+      if (items.length === 0) {
         saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
         dispatchDraftUpdated();
         return;
       }
 
-      const mini = await renderPreviewByTemplate({
-        W: 900,
-        H: 1200,
+      const preview = await renderStackedCenteredPreview({
+        W: PREVIEW_W,
+        H: PREVIEW_H,
         bg: { type: "image", url: PLATE_BG_URL },
         bgFit: "cover",
         overlayPng: null,
-        people: [],
-        graphics: graphicsUniq,
-        epitaphs
-      });
-
-      const big = await renderPreviewByTemplate({
-        W: 1600,
-        H: 2200,
-        bg: { type: "image", url: PLATE_BG_URL },
-        bgFit: "cover",
-        overlayPng: null,
-        people: [],
-        graphics: graphicsUniq,
-        epitaphs
+        items
       });
 
       if (!alive) return;
-      saveOrderDraft({ extras: { platePreviewUrl: mini || null, platePreviewHiUrl: big || null } as any });
+      saveOrderDraft({ extras: { platePreviewUrl: preview || null, platePreviewHiUrl: null } as any });
       dispatchDraftUpdated();
     };
 
@@ -1877,17 +1857,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
   const handleBack = useCallback(() => {
-    try {
-      if (rearEnabled) flushRearPeopleSaveNow();
-    } catch {}
+    try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
     setOutro(true);
     setTimeout(() => onBack?.(), 320);
   }, [flushRearPeopleSaveNow, onBack, rearEnabled]);
 
   const handleContinue = useCallback(() => {
-    try {
-      if (rearEnabled) flushRearPeopleSaveNow();
-    } catch {}
+    try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
     setOutro(true);
     setTimeout(() => onContinue?.(), 320);
   }, [flushRearPeopleSaveNow, onContinue, rearEnabled]);
@@ -2019,15 +1995,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       </section>
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
-        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
-          Назад
-        </button>
-
-        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
-          Продолжить
-        </button>
+        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
+        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
       </div>
     </div>
   );
 }
-
