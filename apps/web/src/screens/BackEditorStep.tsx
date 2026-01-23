@@ -1459,20 +1459,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     );
   }
 
-  /* ===== Chosen blocks ===== */
-  const rearEpitaphList = useMemo(() => rearSelectedEpitaphs, [rearSelectedEpitaphs]);
-  const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
-
-  /* ===== Plate chosen list ===== */
-  const chosenPlateList = useMemo(() => {
-    const uniq = Array.from(new Set(plateIds));
-    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
-  }, [plateIds, plateMeta]);
-
-  /* ===== Rear chosen list already computed ===== */
-
-  /* ===== Toggle/Remove epitaph handlers (rear/plate) already exist ===== */
-
   /* =========================
    * UI render
    * ========================= */
