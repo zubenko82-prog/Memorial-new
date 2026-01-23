@@ -1149,7 +1149,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Статус доставки</div>
               <div style={{ display: "grid", gap: 6 }}>
                 <div>
-                  <span style={{ opacity: 0.85 }}>Топбар (кнопка+панель) — </span>
+                  <span style={{ opacity: 0.85 }}>Состав заказа — </span>
                   <strong style={{ color: topbarDelivered == null ? "#ccc" : topbarDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {topbarDelivered == null ? "—" : topbarDelivered ? "да" : "нет"}
                   </strong>
@@ -1161,14 +1161,14 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                   </strong>
                 </div>
                 <div>
-                  <span style={{ opacity: 0.85 }}>Эскиз (лицевая) — </span>
+                  <span style={{ opacity: 0.85 }}>Превью (лицевая) — </span>
                   <strong style={{ color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}
                   </strong>
                 </div>
                 {showBack && (
                   <div>
-                    <span style={{ opacity: 0.85 }}>Эскиз (тыльная) — </span>
+                    <span style={{ opacity: 0.85 }}>Превью (тыльная) — </span>
                     <strong style={{ color: backSketchDelivered == null ? "#ccc" : backSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
                       {backSketchDelivered == null ? "—" : backSketchDelivered ? "да" : "нет"}
                     </strong>
@@ -1176,7 +1176,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
                 )}
                 {showPlate && (
                   <div>
-                    <span style={{ opacity: 0.85 }}>Эскиз (плита) — </span>
+                    <span style={{ opacity: 0.85 }}>Превью (плита) — </span>
                     <strong style={{ color: plateSketchDelivered == null ? "#ccc" : plateSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
                       {plateSketchDelivered == null ? "—" : plateSketchDelivered ? "да" : "нет"}
                     </strong>

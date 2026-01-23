@@ -1259,16 +1259,23 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   // plate size -> extras.plateSize (displayed in TopBarWithIntro)
   const plateSize0 = String((extras0 as any)?.plateSize || "").trim();
-  const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
-  type PlateSizePreset = (typeof presetSizes)[number];
+const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
+type PlateSizePreset = (typeof presetSizes)[number];
 
-  const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(
-    (presetSizes as readonly string[]).includes(plateSize0) ? (plateSize0 as PlateSizePreset) : "custom"
-  );
-  const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
-    if ((presetSizes as readonly string[]).includes(plateSize0)) return "";
-    return plateSize0;
-  });
+// ✅ если в драфте нет plateSize — выбираем "100-50-5" по умолчанию
+const defaultPreset: PlateSizePreset = "100-50-5";
+
+const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(() => {
+  if ((presetSizes as readonly string[]).includes(plateSize0)) return plateSize0 as PlateSizePreset;
+  if (!plateSize0) return defaultPreset; // <-- дефолт
+  return "custom";
+});
+
+const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
+  if (!plateSize0) return ""; // <-- когда дефолт-предустановка, custom пустой
+  if ((presetSizes as readonly string[]).includes(plateSize0)) return "";
+  return plateSize0;
+});
 
   const commitPlateSize = useCallback((value: string) => {
     const v = String(value || "").trim();
