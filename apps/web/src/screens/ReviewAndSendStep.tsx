@@ -953,13 +953,16 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       setIsSaving(true);
       await new Promise((r) => setTimeout(r, 0));
       const blob = await generateOrderPdf({
-        draft: loadOrderDraft(),
-        intro: loadIntroState(),
-        frontNode: document.getElementById("pdf-front-sketch"),
-        backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
-        backUrlFallback: showBack ? backCandidateUrl : null,
-        includeAttachedPhotos: true
-      });
+  draft: loadOrderDraft(),
+  intro: loadIntroState(),
+  frontNode: document.getElementById("pdf-front-sketch"),
+  backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
+  backUrlFallback: showBack ? backCandidateUrl : null,
+  plateNode: showPlate ? document.getElementById("pdf-plate-sketch") : null,
+  plateUrlFallback: showPlate ? plateCandidateUrl : null,
+  includeAttachedPhotos: true
+} as any);
+
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
     } catch (e: any) {
