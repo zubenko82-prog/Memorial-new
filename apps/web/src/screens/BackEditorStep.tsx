@@ -1836,13 +1836,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       }
 
       const preview = await renderStackedCenteredPreview({
-        W: PREVIEW_W,
-        H: PREVIEW_H,
-        bg: { type: "image", url: PLATE_BG_URL },
-        bgFit: "cover",
-        overlayPng: null,
-        items
-      });
+  W: PREVIEW_W,
+  H: PREVIEW_H,
+  bg: { type: "image", url: PLATE_BG_URL },
+  bgFit: "contain", // важно для "фрейма" плиты
+  overlayPng: null,
+  items
+});
+
 
       if (!alive) return;
       saveOrderDraft({ extras: { platePreviewUrl: preview || null, platePreviewHiUrl: null } as any });

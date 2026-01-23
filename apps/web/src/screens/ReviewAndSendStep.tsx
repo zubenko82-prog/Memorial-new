@@ -471,50 +471,234 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   }
 
   function buildOrderText(): string {
-    const intro = loadIntroState();
-    const d = loadOrderDraft();
+  const introState = loadIntroState();
+  const d: any = loadOrderDraft();
 
-    const persons = (((d?.engraving?.persons as any[]) || []).filter(Boolean)).map((p: any) => ({
-      last: (p?.lastName || "").trim(),
-      namePatr: [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" "),
-      dates: [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ")
-    }));
+  const orderNo = String(introState?.orderNumber || "").trim();
 
-    const lines: string[] = [];
-    lines.push(intro?.orderNumber ? `Заявка №${intro.orderNumber}` : "Заявка", "");
+  const lines: string[] = [];
+  lines.push(orderNo ? `Заявка №${orderNo}` : "Заявка");
+  lines.push("");
 
-    lines.push("Клиент:");
-    lines.push(`- Имя: ${(intro?.intro?.customerName || "").trim() || "—"}`);
-    lines.push(`- Телефон: ${(intro?.intro?.customerPhone || "").trim() || "—"}`);
-    if ((intro?.intro?.customerNotes || "").trim()) lines.push(`- Примечание: ${(intro?.intro?.customerNotes || "").trim()}`);
+  // ===== Клиент =====
+  lines.push("Клиент:");
+  lines.push(`- Имя: ${(introState?.intro?.customerName || "").trim() || "—"}`);
+  lines.push(`- Телефон: ${(introState?.intro?.customerPhone || "").trim() || "—"}`);
+  const customerNotes = String(introState?.intro?.customerNotes || "").trim();
+  if (customerNotes) lines.push(`- Примечание: ${customerNotes}`);
+  lines.push("");
+
+  // ===== Изделие / размеры =====
+  const itemName = String(d?.item?.name || "").trim();
+  const itemUrl = String(d?.item?.url || "").trim();
+  if (itemName || itemUrl) {
+    lines.push("Изделие:");
+    if (itemName) lines.push(`- Модель: ${itemName}`);
+    if (!itemName && itemUrl) lines.push(`- Файл: ${itemUrl}`);
     lines.push("");
-
-    const itemName = String((d as any)?.item?.name || "").trim();
-    if (itemName) {
-      lines.push("Изделие:");
-      lines.push(`- Модель: ${itemName}`);
-      lines.push("");
-    }
-
-    lines.push("Люди:");
-    if (persons.length === 0) lines.push("- —");
-    else {
-      persons.forEach((p) => {
-        const fio = [p.last, p.namePatr].filter(Boolean).join(" ");
-        lines.push(`- ${fio || "—"}`);
-        if (p.dates) lines.push(`  ${p.dates}`);
-      });
-    }
-    lines.push("");
-
-    const notes = String((d as any)?.extras?.orderNotes || "").trim();
-    if (notes) {
-      lines.push("Комментарий к заказу:");
-      lines.push(notes, "");
-    }
-
-    return lines.join("\n");
   }
+
+  const size = d?.size || {};
+  const w = size?.width;
+  const h = size?.height;
+  const t = size?.thickness;
+  const sizeNotes = String(size?.notes || "").trim();
+  if (w || h || t || sizeNotes) {
+    lines.push("Размеры:");
+    if (w || h || t) lines.push(`- (мм) Ш×В×Т: ${w || "—"} × ${h || "—"} × ${t || "—"}`);
+    if (sizeNotes) lines.push(`- Примечание: ${sizeNotes}`);
+    lines.push("");
+  }
+
+  // ===== Дополнительно (extras) =====
+  const ex = (d?.extras || {}) as any;
+  const tumba = ex.tumba ?? true;
+  const flowerbed = !!ex.flowerbed;
+  const vase = !!ex.vase;
+
+  lines.push("Дополнительно:");
+  lines.push(`- Тумба: ${tumba ? "да" : "нет"}`);
+  lines.push(`- Цветник: ${flowerbed ? "да" : "нет"}`);
+  lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
+  lines.push("");
+
+  // ===== Лицевая сторона =====
+  lines.push("Лицевая сторона:");
+
+  // Усопшие (front)
+  const personsFront = ((d?.engraving?.persons as any[]) || []).filter(Boolean);
+  if (personsFront.length === 0) {
+    lines.push("- Усопшие: —");
+  } else {
+    lines.push("- Усопшие:");
+    personsFront.forEach((p: any, idx: number) => {
+      const last = String(p?.lastName || "").trim();
+      const namePatr = [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+      const dates = [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ");
+      const fio = [last, namePatr].filter(Boolean).join(" ").trim();
+      lines.push(`  ${idx + 1}) ${fio || "—"}`);
+      if (dates) lines.push(`     ${dates}`);
+    });
+  }
+
+  // Эпитафии (front)
+  const engr: any = d?.engraving || {};
+  const frontEpitaphs = toParagraphs(engr.epitaphs ?? engr.epitaphText);
+  if (frontEpitaphs.length) {
+    lines.push("- Эпитафии:");
+    frontEpitaphs.forEach((t: string, i: number) => {
+      lines.push(`  ${i + 1}) ${t}`);
+    });
+  } else {
+    lines.push("- Эпитафии: —");
+  }
+
+  // Графика (front) — из draft.graphics (как у вас в обзоре)
+  const frontGraphics: any[] = (d?.graphics || []).filter(Boolean);
+  if (frontGraphics.length) {
+    const counts: Record<string, number> = {};
+    const first: Record<string, any> = {};
+    frontGraphics.forEach((g: any) => {
+      const id = String(g?.id || g?.url || g?.name || "").trim() || "unknown";
+      counts[id] = (counts[id] || 0) + 1;
+      if (!first[id]) first[id] = g;
+    });
+    lines.push("- Графика:");
+    Object.keys(first).forEach((id, i) => {
+      const g = first[id];
+      const name = String(g?.name || g?.id || g?.url || id).trim();
+      const qty = counts[id] || 1;
+      lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+    });
+  } else {
+    lines.push("- Графика: —");
+  }
+
+  const frontWishes = String(d?.editor?.wishes || "").trim();
+  if (frontWishes) {
+    lines.push("- Пожелания:");
+    lines.push(frontWishes);
+  }
+  lines.push("");
+
+  // ===== Тыльная сторона =====
+  const eb: any = d?.editorBack || {};
+  const rearEnabled = !!eb.enabled;
+  lines.push("Тыльная сторона:");
+  lines.push(`- Включено: ${rearEnabled ? "да" : "нет"}`);
+
+  if (rearEnabled) {
+    // Усопшие (rear)
+    const rearPeople = ((eb?.people as any[]) || []).filter(Boolean);
+    if (rearPeople.length) {
+      lines.push("- Усопшие:");
+      rearPeople.forEach((p: any, idx: number) => {
+        const last = String(p?.lastName || "").trim();
+        const namePatr = [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+        const dates = [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ");
+        const fio = [last, namePatr].filter(Boolean).join(" ").trim();
+        lines.push(`  ${idx + 1}) ${fio || "—"}`);
+        if (dates) lines.push(`     ${dates}`);
+      });
+    } else {
+      lines.push("- Усопшие: —");
+    }
+
+    // Эпитафии rear
+    const rearEpitaphs = ((eb?.epitaphTexts as string[]) || []).filter(Boolean);
+    if (rearEpitaphs.length) {
+      lines.push("- Эпитафии:");
+      rearEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+    } else {
+      lines.push("- Эпитафии: —");
+    }
+
+    // Графика rear: ids + meta
+    const rearIds: string[] = Array.isArray(eb?.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+    const rearMeta: Record<string, any> = eb?.graphicsMeta || {};
+    if (rearIds.length) {
+      const counts: Record<string, number> = {};
+      rearIds.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+      const uniq = Array.from(new Set(rearIds));
+      lines.push("- Графика:");
+      uniq.forEach((gid, i) => {
+        const m = rearMeta[gid] || {};
+        const name = String(m?.name || gid).trim();
+        const qty = counts[gid] || 1;
+        lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+      });
+    } else {
+      lines.push("- Графика: —");
+    }
+
+    const backWishes = String(eb?.wishes || "").trim();
+    if (backWishes) {
+      lines.push("- Пожелания:");
+      lines.push(backWishes);
+    }
+  }
+  lines.push("");
+
+  // ===== Надгробная плита =====
+  const plateEnabled = !!ex.headstonePlate;
+  lines.push("Надгробная плита:");
+  lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
+
+  if (plateEnabled) {
+    if (ex.plateSize) lines.push(`- Размер: ${String(ex.plateSize).trim()}`);
+    if (ex.plateThickness) lines.push(`- Толщина: ${String(ex.plateThickness).trim()}`);
+    if (ex.plateOrientation) lines.push(`- Ориентация: ${String(ex.plateOrientation).trim()}`);
+
+    // Эпитафии плиты: plateEpitaph / plateEpitaphs
+    const plateEpitaphs = [
+      ...toParagraphs(ex.plateEpitaph),
+      ...toParagraphs(ex.plateEpitaphs)
+    ].filter(Boolean);
+
+    if (plateEpitaphs.length) {
+      lines.push("- Эпитафии:");
+      plateEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+    } else {
+      lines.push("- Эпитафии: —");
+    }
+
+    // Графика плиты
+    const plateIds: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
+    const plateMeta: Record<string, any> = ex.plateGraphicsMeta || {};
+    if (plateIds.length) {
+      const counts: Record<string, number> = {};
+      plateIds.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+      const uniq = Array.from(new Set(plateIds));
+      lines.push("- Графика:");
+      uniq.forEach((gid, i) => {
+        const m = plateMeta[gid] || {};
+        const name = String(m?.name || gid).trim();
+        const qty = counts[gid] || 1;
+        lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+      });
+    } else {
+      lines.push("- Графика: —");
+    }
+  }
+  lines.push("");
+
+  // ===== Комментарии =====
+  const orderNotes = String(ex?.orderNotes || "").trim();
+  const genericNotes = String(d?.notes || "").trim(); // если где-то используется
+  if (orderNotes || genericNotes) {
+    lines.push("Комментарий к заказу:");
+    if (orderNotes) lines.push(orderNotes);
+    if (genericNotes && genericNotes !== orderNotes) {
+      lines.push("");
+      lines.push("Доп. заметки:");
+      lines.push(genericNotes);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 
   async function sendLargeText(fullText: string): Promise<{ ok: boolean; errors: string[] }> {
     const parts: string[] = [];
