@@ -1262,11 +1262,23 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
 type PlateSizePreset = (typeof presetSizes)[number];
 
-const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset>(() => {
-  // если в драфте валидный пресет — берём его
+const DEFAULT_PLATE_SIZE: PlateSizePreset = "100-50-5";
+
+const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(() => {
+  // если в драфте уже стоит один из пресетов — используем его
   if ((presetSizes as readonly string[]).includes(plateSize0)) return plateSize0 as PlateSizePreset;
-  // иначе дефолт
-  return "100-50-5";
+
+  // если размер задан, но не пресет — значит это "свой вариант"
+  if (plateSize0) return "custom";
+
+  // ✅ если в драфте размера нет — дефолтный пресет
+  return DEFAULT_PLATE_SIZE;
+});
+
+const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
+  // для "custom" заполняем тем, что было в драфте; если пусто — пусть будет пусто
+  if (plateSize0 && !(presetSizes as readonly string[]).includes(plateSize0)) return plateSize0;
+  return "";
 });
 
   const commitPlateSize = useCallback((value: string) => {
@@ -1278,12 +1290,13 @@ const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset>(() => {
   useEffect(() => {
   if (!plateEnabled) return;
 
-  // гарантируем что в draft всегда preset
-  const v = plateSizeMode || "100-50-5";
-  saveOrderDraft({ extras: { plateSize: v } as any });
-  dispatchDraftUpdated();
+  if (plateSizeMode === "custom") {
+    commitPlateSize(plateSizeCustom);
+  } else {
+    commitPlateSize(plateSizeMode);
+  }
   setDraft(loadOrderDraft());
-}, [plateEnabled, plateSizeMode]);
+}, [plateEnabled, plateSizeMode, plateSizeCustom, commitPlateSize]);
 
   const initialPlateSelected = useMemo(() => {
     const d0 = loadOrderDraft();
