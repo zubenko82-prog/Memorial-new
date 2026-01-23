@@ -1033,15 +1033,16 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       {showPlate && plateCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита</div>
-          <div style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "3 / 4" }}>
-            <img
-              id="pdf-plate-sketch"
-              src={plateCandidateUrl}
-              crossOrigin="anonymous"
-              alt=""
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-            />
-          </div>
+          <div style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}>
+  <img
+    id="pdf-plate-sketch"
+    src={plateCandidateUrl}
+    crossOrigin="anonymous"
+    alt=""
+    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+  />
+</div>
+
         </section>
       )}
 
