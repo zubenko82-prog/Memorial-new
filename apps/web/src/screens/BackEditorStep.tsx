@@ -1,19 +1,23 @@
 // src/screens/BackEditorStep.tsx
 //
-// UI-рефактор (без изменения логики сохранения/зависимостей):
-// - "Дополнительно" больше НЕ аккордеон — просто плашка с 3 чекбоксами.
-// - Убрана глубокая вложенность "фрейм внутри фрейма": SideLikePlateBlock больше не используется.
-// - Вместо него: на экране отдельные секции (плашки) для тыла и плиты.
-//   Для каждой стороны: переключатель enabled + блоки "Выбрано", "Усопшие"(только тыл), "Эпитафии", "Графика".
-// - "Эпитафии" визуально выделены: белая рамка 1px и фон на тон светлее.
-// - Все зависимости сохранены:
-//   - rearEnabled включает/выключает editorBack и при выключении очищает draft-поля тыла (как раньше).
-//   - plateEnabled включает/выключает extras.headstonePlate и при выключении очищает draft-поля плиты (как раньше).
-//   - Локальная "память" (selected ids/epitaphs/people) сохраняется в state и восстанавливается при повторном включении.
-// - Превью (тыл/плита) остаются как было: 1:2, 450x900, без hi-res, тот же рендер.
+// Превью (тыл/плита):
+// - пропорция строго 1:2
+// - длинная сторона 900 (W=450, H=900)
+// - без hi-res (previewHiUrl/platePreviewHiUrl = null)
+// - композиция: портрет (если есть) сверху -> метрика под ним -> далее графика/эпитафии по порядку добавления
+// - всё центрируем по горизонтали, равномерно распределяем по вертикали
+// - эпитафии: сохраняем разрывы строк как в тексте (не делаем перенос по словам), только уменьшаем шрифт при необходимости
+// - для маленьких экранов масштабируем UI (не здесь; это относится к месту показа превью, но генерация корректна)
 //
-// ВАЖНО: этот файл большой. Я НЕ менял вашу логику генерации превью и сохранения данных,
-// только разметку/структуру UI и стили "Эпитафии".
+// UI (фикс по задаче):
+// - "Дополнительно" — не аккордеон, просто плашка с 3 чекбоксами.
+// - Тыл/Плита: чекбокс перед названием (без "включено/выключено").
+// - "Выбрано" всегда видно (не аккордеон).
+// - "Усопшие", "Эпитафии", "Графика" — аккордеоны на главном экране,
+//   по умолчанию закрыты, и открыт может быть только один (на сторону).
+// - Аккордеон "Эпитафии" выделен: рамка 1px белая, фон на тон светлее.
+// - Плита: добавлен выбор размера (80×40×5, 100×50×5, 120×60×5, свой вариант) над "Выбрано (плита)".
+//   Значение пишется в extras.plateSize — TopBarWithIntro уже его отображает (plateSize).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -101,6 +105,16 @@ function Thumb({ url, alt = "", size = 60 }: { url?: string; alt?: string; size?
   );
 }
 
+function titleWithCheckbox(params: { title: string; enabled: boolean; onToggle: (v: boolean) => void }) {
+  const { title, enabled, onToggle } = params;
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}>
+      <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
+      <span style={{ fontWeight: 800, fontSize: 15 }}>{title}</span>
+    </label>
+  );
+}
+
 /* ========= Epitaph helpers ========= */
 const normEpitaph = (t: string) =>
   (t || "")
@@ -124,8 +138,68 @@ function uniqueByNorm(list: string[]): string[] {
   return out;
 }
 
+/* ========= Accordion ========= */
+function LoudAccordion({
+  title,
+  open,
+  onToggle,
+  children,
+  containerStyle
+}: {
+  title: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  containerStyle?: React.CSSProperties;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [h, setH] = useState(0);
+
+  useEffect(() => {
+    const m = () => setH(ref.current?.scrollHeight || 0);
+    m();
+    const RO = (window as any).ResizeObserver;
+    const ro = RO ? new RO(m) : null;
+    if (ref.current && ro) ro.observe(ref.current);
+    return () => ro?.disconnect?.();
+  }, [children]);
+
+  return (
+    <div style={{ ...glassPanelStyle(), padding: 0, ...(containerStyle || {}) }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          textAlign: "left",
+          padding: "12px 14px",
+          background: "rgba(255,255,255,0.06)",
+          border: "none",
+          color: "#fff",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          fontSize: 15,
+          fontWeight: 700
+        }}
+      >
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{title}</span>
+        <span aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      <div style={{ overflow: "hidden", height: open ? h : 0, transition: "height 260ms ease" }}>
+        <div ref={ref} style={{ padding: 12 }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ========= Preview helpers ========= */
 const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
+
+// Strict 1:2 with long side 900
 const PREVIEW_W = 450;
 const PREVIEW_H = 900;
 
@@ -146,7 +220,10 @@ function drawImageCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r:
   const sr = iw / ih;
   const dr = r.w / r.h;
 
-  let dw = r.w, dh = r.h, dx = r.x, dy = r.y;
+  let dw = r.w,
+    dh = r.h,
+    dx = r.x,
+    dy = r.y;
 
   if (sr > dr) {
     dh = r.h;
@@ -166,14 +243,17 @@ function drawImageContain(ctx: CanvasRenderingContext2D, img: HTMLImageElement, 
   const sr = iw / ih;
   const dr = r.w / r.h;
 
-  let dw = r.w, dh = r.h, dx = r.x, dy = r.y;
+  let dw = r.w,
+    dh = r.h,
+    dx = r.x,
+    dy = r.y;
 
   if (sr > dr) {
     dh = Math.round(r.w / sr);
     dy = r.y + Math.round((r.h - dh) / 2);
   } else {
     dw = Math.round(r.h * sr);
-    dx = r.x + Math.round((r.w - dw) / 2);
+    dx = Math.round(r.x + (r.w - dw) / 2);
   }
   ctx.drawImage(img, dx, dy, dw, dh);
 }
@@ -188,7 +268,10 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
   const sr = iw / ih;
   const dr = W / H;
 
-  let rw = W, rh = H, rx = 0, ry = 0;
+  let rw = W,
+    rh = H,
+    rx = 0,
+    ry = 0;
   if (sr > dr) {
     rh = Math.round(W / sr);
     ry = Math.round((H - rh) / 2);
@@ -210,7 +293,10 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
 
   let hasUsefulAlpha = false;
   for (let i = 3; i < d.length; i += 4) {
-    if (d[i] !== 255) { hasUsefulAlpha = true; break; }
+    if (d[i] !== 255) {
+      hasUsefulAlpha = true;
+      break;
+    }
   }
 
   const mask = octx.createImageData(rw, rh);
@@ -220,7 +306,10 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
     for (let i = 0; i < d.length; i += 4) {
       const A = d[i + 3];
       const alpha = A > 10 ? 255 : 0;
-      md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
+      md[i + 0] = 0;
+      md[i + 1] = 0;
+      md[i + 2] = 0;
+      md[i + 3] = alpha;
     }
   } else {
     const pxAt = (x: number, y: number) => {
@@ -234,10 +323,15 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
 
     const BG_DELTA = 26;
     for (let i = 0; i < d.length; i += 4) {
-      const r = d[i + 0], g = d[i + 1], b = d[i + 2];
+      const r = d[i + 0],
+        g = d[i + 1],
+        b = d[i + 2];
       const diff = Math.max(Math.abs(r - bg[0]), Math.abs(g - bg[1]), Math.abs(b - bg[2]));
       const alpha = diff > BG_DELTA ? 255 : 0;
-      md[i + 0] = 0; md[i + 1] = 0; md[i + 2] = 0; md[i + 3] = alpha;
+      md[i + 0] = 0;
+      md[i + 1] = 0;
+      md[i + 2] = 0;
+      md[i + 3] = alpha;
     }
   }
 
@@ -256,7 +350,11 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
 
   ctx.clearRect(0, 0, W, H);
   ctx.save();
-  if (mirrorX) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+
+  if (mirrorX) {
+    ctx.translate(W, 0);
+    ctx.scale(-1, 1);
+  }
 
   ctx.fillStyle = "#1b1b1b";
   ctx.fillRect(0, 0, W, H);
@@ -270,11 +368,16 @@ async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H
 }
 
 function splitHardLines(text: string): string[] {
-  return String(text || "").replace(/\r\n?/g, "\n").split("\n").map((s) => s.trimEnd());
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((s) => s.trimEnd());
 }
+
 function measureHardLinesHeight(fontPx: number, lineH: number, linesCount: number) {
   return Math.round(linesCount * fontPx * lineH);
 }
+
 function fitFontToBoxHardLines(params: {
   ctx: CanvasRenderingContext2D;
   lines: string[];
@@ -286,6 +389,7 @@ function fitFontToBoxHardLines(params: {
 }) {
   const { ctx, lines, maxW, maxH, startSize, minSize, lineH } = params;
   let fs = startSize;
+
   const widest = () => Math.max(...lines.map((l) => ctx.measureText(l || " ").width), 0);
 
   while (fs > minSize) {
@@ -330,6 +434,7 @@ async function renderStackedCenteredPreview(params: {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
+  // background
   if (bg.type === "gradient") {
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, "#6e6e6e");
@@ -344,16 +449,19 @@ async function renderStackedCenteredPreview(params: {
     ctx.fillRect(0, 0, W, H);
     const bgIm = await loadImageSafe(bg.url);
     if (bgIm) {
-      if (bgFit === "contain") drawImageContain(ctx, { ...bgIm }, { x: 0, y: 0, w: W, h: H } as any);
+      // ✅ FIX: НЕ делаем {...bgIm} — иначе drawImage падает
+      if (bgFit === "contain") drawImageContain(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
       else drawImageCover(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
     }
   }
 
+  // overlay
   if (overlayPng) {
     const ov = await loadImageSafe(overlayPng);
     if (ov) ctx.drawImage(ov, 0, 0, W, H);
   }
 
+  // layout
   const padX = Math.round(W * 0.10);
   const padY = Math.round(H * 0.06);
   const colW = W - padX * 2;
@@ -365,6 +473,7 @@ async function renderStackedCenteredPreview(params: {
 
   if (!items.length) return null;
 
+  // allocate heights by type
   const basePhotoH = Math.round(H * 0.26);
   const baseMetricaH = Math.round(H * 0.14);
   const baseImgH = Math.round(H * 0.14);
@@ -380,12 +489,14 @@ async function renderStackedCenteredPreview(params: {
   const totalGaps = gap * (items.length - 1);
   const totalPlanned = plannedHeights.reduce((a, b) => a + b, 0);
 
+  // scale down if not fit (keep proportions)
   const k = Math.min(1, (usable - totalGaps) / Math.max(1, totalPlanned));
   const heights = plannedHeights.map((h) => Math.max(34, Math.floor(h * k)));
 
   const totalH = heights.reduce((a, b) => a + b, 0) + totalGaps;
   let y = Math.round(top + (usable - totalH) / 2);
 
+  // draw each item centered
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const h = heights[i];
@@ -394,6 +505,7 @@ async function renderStackedCenteredPreview(params: {
     if (it.kind === "photo" || it.kind === "img") {
       const im = await loadImageSafe(it.url);
       if (im) {
+        // contain inside a smaller box to avoid touching edges
         const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
         const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
         drawImageContain(ctx, im, rr);
@@ -413,10 +525,12 @@ async function renderStackedCenteredPreview(params: {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
+      // size hierarchy: lastName > first/middle > dates
       const lastBase = Math.min(44, Math.max(18, Math.floor(rr.h * 0.42)));
       const fnBase = Math.min(32, Math.max(14, Math.floor(rr.h * 0.30)));
       const datesBase = Math.min(26, Math.max(12, Math.floor(rr.h * 0.22)));
 
+      // fit to width independently
       const fit = (text: string, start: number, min: number) => {
         let fs = start;
         while (fs > min) {
@@ -499,7 +613,7 @@ async function renderStackedCenteredPreview(params: {
   return canvas.toDataURL("image/jpeg", 0.9);
 }
 
-/* ========= People types ========= */
+/* ========= People (rear) types ========= */
 type Person = {
   id: string;
   lastName?: string;
@@ -563,7 +677,9 @@ function parseFlexibleDate(input?: string): Date | null {
   if (!s) return null;
   const m = s.match(/\d+/g);
   if (!m || m.length < 3) return null;
-  const d = +m[0], mo = +m[1], y = +m[2];
+  const d = +m[0],
+    mo = +m[1],
+    y = +m[2];
   if (!d || !mo || !y || y < 100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   const dt = new Date(y, mo - 1, d);
   if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
@@ -614,10 +730,16 @@ async function compressBlobToJpegDataUrl(input: Blob, maxBytes = DRAFT_IMG_MAX_B
   const ih = img.naturalHeight || img.height;
   const r = iw / ih;
 
-  let tw = iw, th = ih;
+  let tw = iw,
+    th = ih;
   if (Math.max(iw, ih) > DRAFT_IMG_MAX_DIM) {
-    if (r >= 1) { tw = DRAFT_IMG_MAX_DIM; th = Math.round(DRAFT_IMG_MAX_DIM / r); }
-    else { th = DRAFT_IMG_MAX_DIM; tw = Math.round(DRAFT_IMG_MAX_DIM * r); }
+    if (r >= 1) {
+      tw = DRAFT_IMG_MAX_DIM;
+      th = Math.round(DRAFT_IMG_MAX_DIM / r);
+    } else {
+      th = DRAFT_IMG_MAX_DIM;
+      tw = Math.round(DRAFT_IMG_MAX_DIM * r);
+    }
   }
 
   const canvas = document.createElement("canvas");
@@ -687,36 +809,6 @@ function iconBtn(): React.CSSProperties {
   };
 }
 
-function sectionTitleRow(title: string, enabled?: boolean, onToggle?: (v: boolean) => void) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "space-between" }}>
-      <div style={{ fontWeight: 800, fontSize: 15 }}>{title}</div>
-      {typeof enabled === "boolean" && onToggle && (
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-          <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
-          <span style={{ opacity: 0.92 }}>{enabled ? "Включено" : "Выключено"}</span>
-        </label>
-      )}
-    </div>
-  );
-}
-
-function epitaphAccordionShell(children: React.ReactNode): React.ReactNode {
-  // white border 1px + slightly lighter fill
-  return (
-    <div
-      style={{
-        borderRadius: 12,
-        border: "1px solid rgba(255,255,255,1)",
-        background: "rgba(255,255,255,0.08)",
-        padding: 10
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 /* ========= Main step ========= */
 type Props = { onBack?: () => void; onContinue?: (payload?: any) => void };
 
@@ -761,7 +853,9 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         if (alive) setCatsLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -814,12 +908,15 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
   const [rearPeople, setRearPeople] = useState<Person[]>(rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]);
 
+  // transient photo urls
   const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const setRearTransientFor = useCallback((id: string, url: string | null) => {
     setRearTransientPhotoUrlById((prev) => {
       const prevUrl = prev[id];
       if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
-        try { URL.revokeObjectURL(prevUrl); } catch {}
+        try {
+          URL.revokeObjectURL(prevUrl);
+        } catch {}
       }
       return { ...prev, [id]: url ?? null };
     });
@@ -827,7 +924,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   useEffect(() => {
     return () => {
       Object.values(rearTransientPhotoUrlById).forEach((u) => {
-        if (u && u.startsWith("blob:")) { try { URL.revokeObjectURL(u); } catch {} }
+        if (u && u.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
       });
     };
   }, [rearTransientPhotoUrlById]);
@@ -874,10 +975,14 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         (async () => {
           try {
             const safe = await compressBlobToJpegDataUrl(maybeFile, DRAFT_IMG_MAX_BYTES);
-            try { URL.revokeObjectURL(tempUrl); } catch {}
+            try {
+              URL.revokeObjectURL(tempUrl);
+            } catch {}
             commitLocal({ photoDataUrl: safe, photoUrl: safe });
           } catch {
-            try { URL.revokeObjectURL(tempUrl); } catch {}
+            try {
+              URL.revokeObjectURL(tempUrl);
+            } catch {}
             commitLocal({ photoUrl: tempUrl, photoDataUrl: null });
           }
         })();
@@ -926,7 +1031,6 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     ].filter((x) => x.photo || x.lastName || x.firstName || x.middleName || x.birthDate || x.deathDate);
   }, [rearPeople, rearTransientPhotoUrlById]);
 
-  // persist rear epitaphs when enabled
   const prevRearEpiJsonRef = useRef<string>("");
   useEffect(() => {
     if (!rearEnabled) return;
@@ -1016,9 +1120,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   useEffect(() => {
     const saveNow = () => {
-      try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
+      try {
+        if (rearEnabled) flushRearPeopleSaveNow();
+      } catch {}
     };
-    const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") saveNow();
+    };
     window.addEventListener("beforeunload", saveNow);
     window.addEventListener("pagehide", saveNow);
     window.addEventListener("hashchange", saveNow);
@@ -1034,14 +1142,21 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
   }, [rearEnabled, flushRearPeopleSaveNow]);
 
-  // toggle rear enabled: OFF clears draft only, ON restores from memory
   useEffect(() => {
     saveOrderDraft({ editorBack: { enabled: rearEnabled } as any });
     dispatchDraftUpdated();
 
     if (!rearEnabled) {
       saveOrderDraft({
-        editorBack: { enabled: false, selectedGraphicsIds: null, graphicsMeta: null, epitaphTexts: null, people: null, previewUrl: null, previewHiUrl: null } as any
+        editorBack: {
+          enabled: false,
+          selectedGraphicsIds: null,
+          graphicsMeta: null,
+          epitaphTexts: null,
+          people: null,
+          previewUrl: null,
+          previewHiUrl: null
+        } as any
       });
       dispatchDraftUpdated();
       return;
@@ -1064,7 +1179,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rearEnabled]);
 
-  // rear preview generation (template-based)
+  // rear preview generation (stack centered)
   useEffect(() => {
     let alive = true;
 
@@ -1081,12 +1196,18 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       const epitaphsInOrder: string[] = ep.map((s) => String(s || "")).filter((s) => String(s || "").trim());
 
       const items: StackItem[] = [];
-      const p0 = rearPeopleForPreview[0];
 
+      const p0 = rearPeopleForPreview[0];
       if (p0?.photo) items.push({ kind: "photo", url: p0.photo });
       if (p0 && (p0.lastName || p0.firstName || p0.middleName || p0.birthDate || p0.deathDate)) {
         const dates = [p0.birthDate, p0.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
-        items.push({ kind: "metrica", lastName: p0.lastName, firstName: p0.firstName, middleName: p0.middleName, dates });
+        items.push({
+          kind: "metrica",
+          lastName: p0.lastName,
+          firstName: p0.firstName,
+          middleName: p0.middleName,
+          dates
+        });
       }
 
       for (const gid of graphicsInOrder) {
@@ -1132,6 +1253,40 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
+
+  // plate size (shown in TopBarWithIntro via extras.plateSize)
+  const plateSize0 = String((extras0 as any)?.plateSize || "").trim();
+  const presetSizes = ["80×40×5", "100×50×5", "120×60×5"] as const;
+  type PlateSizePreset = (typeof presetSizes)[number];
+  const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(
+    (presetSizes as readonly string[]).includes(plateSize0) ? (plateSize0 as PlateSizePreset) : "custom"
+  );
+  const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
+    if ((presetSizes as readonly string[]).includes(plateSize0)) return "";
+    return plateSize0;
+  });
+
+  const commitPlateSize = useCallback(
+    (value: string) => {
+      const v = String(value || "").trim();
+      saveOrderDraft({ extras: { plateSize: v ? v : null } as any });
+      dispatchDraftUpdated();
+      setDraft(loadOrderDraft());
+    },
+    []
+  );
+
+  useEffect(() => {
+    // if plate disabled, keep local state but clear draft (handled below in plateEnabled effect)
+    if (!plateEnabled) return;
+
+    if (plateSizeMode === "custom") {
+      commitPlateSize(plateSizeCustom);
+    } else {
+      commitPlateSize(plateSizeMode);
+    }
+  }, [plateEnabled, plateSizeMode, plateSizeCustom, commitPlateSize]);
+
   const initialPlateSelected = useMemo(() => {
     const d0 = loadOrderDraft();
     const ex: any = (d0 as any)?.extras || {};
@@ -1247,6 +1402,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       saveOrderDraft({
         extras: {
           headstonePlate: false,
+          plateSize: null, // ✅ size cleared when disabled
           plateGraphicsIds: null,
           plateGraphicsMeta: null,
           plateEpitaph: null,
@@ -1263,6 +1419,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     const list = uniqueByNorm(plateSelectedEpitaphs);
     const patchExtras: any = {
       headstonePlate: true,
+      plateSize: plateSizeMode === "custom" ? (plateSizeCustom || "").trim() || null : plateSizeMode,
       plateGraphicsIds: plateIds.length ? plateIds : null,
       plateGraphicsMeta: Object.keys(plateMeta || {}).length ? plateMeta : null
     };
@@ -1332,10 +1489,34 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     };
 
     const t = window.setTimeout(() => void run(), 420);
-    return () => { alive = false; clearTimeout(t); };
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
   }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
-  /* ===== Catalog grid helper reused for both ===== */
+  /* =========================
+   * Single-open accordion state
+   * ========================= */
+  type RearAcc = "people" | "epitaphs" | "graphics" | null;
+  type PlateAcc = "epitaphs" | "graphics" | null;
+
+  const [rearOpen, setRearOpen] = useState<RearAcc>(null);
+  const [plateOpen, setPlateOpen] = useState<PlateAcc>(null);
+
+  useEffect(() => {
+    if (!rearEnabled) setRearOpen(null);
+  }, [rearEnabled]);
+  useEffect(() => {
+    if (!plateEnabled) setPlateOpen(null);
+  }, [plateEnabled]);
+
+  const toggleRearAcc = (k: RearAcc) => setRearOpen((prev) => (prev === k ? null : k));
+  const togglePlateAcc = (k: PlateAcc) => setPlateOpen((prev) => (prev === k ? null : k));
+
+  /* =========================
+   * Catalog grid
+   * ========================= */
   function useColsByWidth() {
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [colsCount, setColsCount] = useState<number>(2);
@@ -1458,18 +1639,22 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       </div>
     );
   }
-  
+
   /* =========================
-   * UI render
+   * Actions
    * ========================= */
   const handleBack = useCallback(() => {
-    try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
+    try {
+      if (rearEnabled) flushRearPeopleSaveNow();
+    } catch {}
     setOutro(true);
     setTimeout(() => onBack?.(), 320);
   }, [flushRearPeopleSaveNow, onBack, rearEnabled]);
 
   const handleContinue = useCallback(() => {
-    try { if (rearEnabled) flushRearPeopleSaveNow(); } catch {}
+    try {
+      if (rearEnabled) flushRearPeopleSaveNow();
+    } catch {}
     setOutro(true);
     setTimeout(() => onContinue?.(), 320);
   }, [flushRearPeopleSaveNow, onContinue, rearEnabled]);
@@ -1478,7 +1663,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
       <TopBarWithIntro title="Тыл" />
 
-      {/* Дополнительно (БЕЗ accordion) */}
+      {/* Дополнительно (НЕ accordion) */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Дополнительно</div>
         <div style={{ ...sectionBoxStyle(), padding: 10 }}>
@@ -1531,9 +1716,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         </div>
       </section>
 
-      {/* ===== Тыльная сторона (упрощено) ===== */}
+      {/* =======================
+          Тыльная сторона
+         ======================= */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        {sectionTitleRow("Тыльная сторона", rearEnabled, (v) => setRearEnabled(v))}
+        {titleWithCheckbox({ title: "Тыльная сторона", enabled: rearEnabled, onToggle: setRearEnabled })}
       </section>
 
       {rearEnabled && (
@@ -1569,7 +1756,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {rearEpitaphList.length > 0 && (
               <div style={{ display: "grid", gap: 6 }}>
                 {rearEpitaphList.map((t, idx) => (
-                  <div key={`rear-ep-preview-${idx}-${normEpitaph(t)}`} style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}>
+                  <div
+                    key={`rear-ep-preview-${idx}-${normEpitaph(t)}`}
+                    style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
+                  >
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
                     <button
                       type="button"
@@ -1587,127 +1777,168 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {rearChosenList.length === 0 && rearEpitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </section>
 
-          {/* Усопшие (тыл) */}
-          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Усопшие (тыл)</div>
+          {/* Аккордеоны тыла: только один открыт */}
+          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+            <LoudAccordion title="Усопшие" open={rearOpen === "people"} onToggle={() => toggleRearAcc("people")}>
+              <div style={{ display: "grid", gap: 10 }}>
+                {rearPeople.map((p, idx) => {
+                  const err = validateDates(p.birthDate, p.deathDate);
+                  const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+                  const hasPhoto = !!(rearTransientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
 
-            <div style={{ display: "grid", gap: 10 }}>
-              {rearPeople.map((p, idx) => {
-                const err = validateDates(p.birthDate, p.deathDate);
-                const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
-                const hasPhoto = !!(rearTransientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
-                return (
-                  <div key={p.id} style={{ ...glassPanelStyle(), padding: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                      <div style={{ fontWeight: 700 }}>{idx + 1}</div>
-                      <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.95 }}>
-                        {nameLeft}
+                  return (
+                    <div key={p.id} style={{ ...glassPanelStyle(), padding: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "6px 8px",
+                          background: "rgba(0,0,0,0.66)",
+                          borderRadius: 12
+                        }}
+                      >
+                        <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
+                        <div style={{ fontSize: 16, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {nameLeft}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRearPeople((prev) => {
+                                if (idx === 0) return prev;
+                                const next = prev.slice();
+                                const t = next[idx - 1];
+                                next[idx - 1] = next[idx];
+                                next[idx] = t;
+                                return next;
+                              });
+                            }}
+                            disabled={idx === 0}
+                            style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
+                            title="Выше"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRearPeople((prev) => {
+                                if (idx === prev.length - 1) return prev;
+                                const next = prev.slice();
+                                const t = next[idx + 1];
+                                next[idx + 1] = next[idx];
+                                next[idx] = t;
+                                return next;
+                              });
+                            }}
+                            disabled={idx === rearPeople.length - 1}
+                            style={{ ...iconBtn(), opacity: idx === rearPeople.length - 1 ? 0.4 : 1 }}
+                            title="Ниже"
+                          >
+                            ▼
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRearPeople((prev) => {
+                                const next = prev.filter((_, i) => i !== idx);
+                                return next.length > 0 ? next : [makeBlankPerson("p-0")];
+                              });
+                            }}
+                            style={iconBtn()}
+                            title="Удалить"
+                          >
+                            ✖
+                          </button>
+                        </div>
                       </div>
-                      <div style={{ display: "flex", gap: 6, whiteSpace: "nowrap" }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRearPeople((prev) => {
-                              if (idx === 0) return prev;
-                              const next = prev.slice();
-                              const t = next[idx - 1];
-                              next[idx - 1] = next[idx];
-                              next[idx] = t;
-                              return next;
-                            });
-                          }}
-                          disabled={idx === 0}
-                          style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
-                          title="Выше"
-                        >
-                          ▲
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRearPeople((prev) => {
-                              if (idx === prev.length - 1) return prev;
-                              const next = prev.slice();
-                              const t = next[idx + 1];
-                              next[idx + 1] = next[idx];
-                              next[idx] = t;
-                              return next;
-                            });
-                          }}
-                          disabled={idx === rearPeople.length - 1}
-                          style={{ ...iconBtn(), opacity: idx === rearPeople.length - 1 ? 0.4 : 1 }}
-                          title="Ниже"
-                        >
-                          ▼
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRearPeople((prev) => {
-                              const next = prev.filter((_, i) => i !== idx);
-                              return next.length > 0 ? next : [makeBlankPerson("p-0")];
-                            });
-                          }}
-                          style={iconBtn()}
-                          title="Удалить"
-                        >
-                          ✖
-                        </button>
+
+                      <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
+                        <div style={{ display: "grid", gap: 10 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                            <Field label="Фамилия">
+                              <input
+                                value={p.lastName ?? ""}
+                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, lastName: e.target.value } : x)))}
+                                style={inputStyle()}
+                                placeholder="Иванов"
+                              />
+                            </Field>
+                            <Field label="Имя">
+                              <input
+                                value={p.firstName ?? ""}
+                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, firstName: e.target.value } : x)))}
+                                style={inputStyle()}
+                                placeholder="Иван"
+                              />
+                            </Field>
+                            <Field label="Отчество">
+                              <input
+                                value={p.middleName ?? ""}
+                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, middleName: e.target.value } : x)))}
+                                style={inputStyle()}
+                                placeholder="Иванович"
+                              />
+                            </Field>
+                          </div>
+
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                            <Field label="Дата рождения">
+                              <input
+                                value={p.birthDate ?? ""}
+                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, birthDate: e.target.value } : x)))}
+                                style={{ ...inputStyle(), borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)" }}
+                                placeholder="01.01.1950"
+                              />
+                            </Field>
+                            <Field label="Дата смерти">
+                              <input
+                                value={p.deathDate ?? ""}
+                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, deathDate: e.target.value } : x)))}
+                                style={{ ...inputStyle(), borderColor: err && (err.includes("смерти") || err.includes("раньше")) ? "salmon" : "rgba(255,255,255,0.18)" }}
+                                placeholder="01.01.2024"
+                              />
+                            </Field>
+                            {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
+                          </div>
+
+                          <div>
+                            {!hasPhoto && (
+                              <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
+                                Прикрепите фотографию. Она сохранится в заявке.
+                              </div>
+                            )}
+                            <PhotoField
+                              label="Фотография"
+                              value={{ url: rearTransientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
+                              onChange={(pv) => setRearPersonPhotoById(p.id, pv)}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
+                  );
+                })}
 
-                    <div style={{ display: "grid", gap: 10 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                        <Field label="Фамилия"><input value={p.lastName ?? ""} onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, lastName: e.target.value } : x)))} style={inputStyle()} /></Field>
-                        <Field label="Имя"><input value={p.firstName ?? ""} onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, firstName: e.target.value } : x)))} style={inputStyle()} /></Field>
-                        <Field label="Отчество"><input value={p.middleName ?? ""} onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, middleName: e.target.value } : x)))} style={inputStyle()} /></Field>
-                      </div>
-
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                        <Field label="Дата рождения">
-                          <input
-                            value={p.birthDate ?? ""}
-                            onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, birthDate: e.target.value } : x)))}
-                            style={{ ...inputStyle(), borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)" }}
-                            placeholder="01.01.1950"
-                          />
-                        </Field>
-                        <Field label="Дата смерти">
-                          <input
-                            value={p.deathDate ?? ""}
-                            onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, deathDate: e.target.value } : x)))}
-                            style={{ ...inputStyle(), borderColor: err && (err.includes("смерти") || err.includes("раньше")) ? "salmon" : "rgba(255,255,255,0.18)" }}
-                            placeholder="01.01.2024"
-                          />
-                        </Field>
-                        {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
-                      </div>
-
-                      <div>
-                        {!hasPhoto && <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>Прикрепите фотографию. Она сохранится в заявке.</div>}
-                        <PhotoField
-                          label="Фотография"
-                          value={{ url: rearTransientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
-                          onChange={(pv) => setRearPersonPhotoById(p.id, pv)}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              <div style={{ marginTop: 2 }}>
-                <button type="button" onClick={() => setRearPeople((prev) => prev.concat([makeBlankPerson()]))} style={glassButtonStyle("sm")}>
-                  Добавить
-                </button>
+                <div style={{ marginTop: 2 }}>
+                  <button type="button" onClick={() => setRearPeople((prev) => prev.concat([makeBlankPerson()]))} style={glassButtonStyle("sm")}>
+                    Добавить
+                  </button>
+                </div>
               </div>
-            </div>
-          </section>
+            </LoudAccordion>
 
-          {/* Эпитафии (тыл) — выделено */}
-          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Эпитафии (тыл)</div>
-            {epitaphAccordionShell(
+            <LoudAccordion
+              title="Эпитафии"
+              open={rearOpen === "epitaphs"}
+              onToggle={() => toggleRearAcc("epitaphs")}
+              containerStyle={{
+                border: "1px solid rgba(255,255,255,1)",
+                background: "rgba(255,255,255,0.08)"
+              }}
+            >
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
@@ -1769,84 +2000,138 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    <textarea rows={3} value={rearCustomText} onChange={(e) => setRearCustomText(e.target.value)} placeholder="Введите текст и нажмите «Добавить»" style={{ ...inputStyle(), resize: "vertical" }} />
+                    <textarea
+                      rows={3}
+                      value={rearCustomText}
+                      onChange={(e) => setRearCustomText(e.target.value)}
+                      placeholder="Введите текст и нажмите «Добавить»"
+                      style={{ ...inputStyle(), resize: "vertical" }}
+                    />
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={addRearCustom}>Добавить</button>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={() => setRearSelectedEpitaphs([])}>Очистить выбранные</button>
+                      <button type="button" style={glassButtonStyle("nano")} onClick={addRearCustom}>
+                        Добавить
+                      </button>
+                      <button type="button" style={glassButtonStyle("nano")} onClick={() => setRearSelectedEpitaphs([])}>
+                        Очистить выбранные
+                      </button>
                       {rearSelectedEpitaphs.length > 0 && <div>Выбрано: {rearSelectedEpitaphs.length}</div>}
                     </div>
                   </div>
                 </div>
               </div>
-            )}
-          </section>
+            </LoudAccordion>
 
-          {/* Графика (тыл) */}
-          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Графика (тыл)</div>
+            <LoudAccordion title="Графика" open={rearOpen === "graphics"} onToggle={() => toggleRearAcc("graphics")}>
+              {catsLoading && <div>Загрузка каталога…</div>}
+              {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+              {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+              {!catsLoading && cats.length > 0 && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {cats.map((cat: any, idx: number) => {
+                    const catKey = String(cat._id || cat.name || idx);
+                    const open = !!(catOpenRear || {})[catKey];
+                    const toggle = () => setCatOpenRear({ ...(catOpenRear || {}), [catKey]: !open });
 
-            {catsLoading && <div>Загрузка каталога…</div>}
-            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-
-            {!catsLoading && cats.length > 0 && (
-              <div style={{ display: "grid", gap: 12 }}>
-                {cats.map((cat: any, idx: number) => {
-                  const catKey = String(cat._id || cat.name || idx);
-                  const open = !!(catOpenRear || {})[catKey];
-                  const toggle = () => setCatOpenRear({ ...(catOpenRear || {}), [catKey]: !open });
-
-                  return (
-                    <div key={catKey} style={{ ...sectionBoxStyle(), padding: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                        <div style={{ fontWeight: 700 }}>{cat.name || `Категория ${idx + 1}`}</div>
-                        <button type="button" onClick={toggle} style={glassButtonStyle("nano")}>
-                          {open ? "Свернуть" : "Развернуть"}
-                        </button>
-                      </div>
-
-                      {open && (
-                        <div style={{ marginTop: 10 }}>
-                          <CatGrid
-                            items={cat.items || []}
-                            ids={rearIds}
-                            addGraphic={addRearGraphic}
-                            removeGraphic={removeRearGraphic}
-                            rootRef={rearGrid.rootRef}
-                            colsCount={rearGrid.colsCount}
-                          />
-
-                          {(cat.children || []).map((sub: any, j: number) => (
-                            <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 10 }}>
-                              <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid
-                                items={sub.items || []}
-                                ids={rearIds}
-                                addGraphic={addRearGraphic}
-                                removeGraphic={removeRearGraphic}
-                                rootRef={rearGrid.rootRef}
-                                colsCount={rearGrid.colsCount}
-                              />
-                            </div>
-                          ))}
+                    return (
+                      <div key={catKey} style={{ ...sectionBoxStyle(), padding: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                          <div style={{ fontWeight: 700 }}>{cat.name || `Категория ${idx + 1}`}</div>
+                          <button type="button" onClick={toggle} style={glassButtonStyle("nano")}>
+                            {open ? "Свернуть" : "Развернуть"}
+                          </button>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+
+                        {open && (
+                          <div style={{ marginTop: 10 }}>
+                            <CatGrid
+                              items={cat.items || []}
+                              ids={rearIds}
+                              addGraphic={addRearGraphic}
+                              removeGraphic={removeRearGraphic}
+                              rootRef={rearGrid.rootRef}
+                              colsCount={rearGrid.colsCount}
+                            />
+
+                            {(cat.children || []).map((sub: any, j: number) => (
+                              <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 10 }}>
+                                <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                                <CatGrid
+                                  items={sub.items || []}
+                                  ids={rearIds}
+                                  addGraphic={addRearGraphic}
+                                  removeGraphic={removeRearGraphic}
+                                  rootRef={rearGrid.rootRef}
+                                  colsCount={rearGrid.colsCount}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </LoudAccordion>
+          </div>
         </>
       )}
 
-      {/* ===== Плита (упрощено) ===== */}
+      {/* =======================
+          Надгробная плита
+         ======================= */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        {sectionTitleRow("Надгробная плита", plateEnabled, (v) => setPlateEnabled(v))}
+        {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
       </section>
 
       {plateEnabled && (
         <>
+          {/* Размер плиты (над "Выбрано") */}
+          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Размер плиты</div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                {presetSizes.map((s) => (
+                  <label key={s} style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+                    <input
+                      type="radio"
+                      name="plate-size"
+                      checked={plateSizeMode === s}
+                      onChange={() => {
+                        setPlateSizeMode(s);
+                        setPlateSizeCustom("");
+                      }}
+                    />
+                    <span>{s}</span>
+                  </label>
+                ))}
+
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+                  <input
+                    type="radio"
+                    name="plate-size"
+                    checked={plateSizeMode === "custom"}
+                    onChange={() => setPlateSizeMode("custom")}
+                  />
+                  <span>Свой вариант</span>
+                </label>
+              </div>
+
+              {plateSizeMode === "custom" && (
+                <div style={{ display: "grid", gap: 6 }}>
+                  <input
+                    value={plateSizeCustom}
+                    onChange={(e) => setPlateSizeCustom(e.target.value)}
+                    placeholder="Например: 110-55-5"
+                    style={inputStyle()}
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.85 }}>Формат: ширина-высота-толщина</div>
+                </div>
+              )}
+            </div>
+          </section>
+
           {/* Выбрано (плита) */}
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10, borderColor: "rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Выбрано (плита)</div>
@@ -1878,7 +2163,10 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {plateEpitaphList.length > 0 && (
               <div style={{ display: "grid", gap: 6 }}>
                 {plateEpitaphList.map((t, idx) => (
-                  <div key={`plate-ep-preview-${idx}-${normEpitaph(t)}`} style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}>
+                  <div
+                    key={`plate-ep-preview-${idx}-${normEpitaph(t)}`}
+                    style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
+                  >
                     <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
                     <button
                       type="button"
@@ -1896,10 +2184,17 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
             {chosenPlateList.length === 0 && plateEpitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </section>
 
-          {/* Эпитафии (плита) — выделено */}
-          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Эпитафии (плита)</div>
-            {epitaphAccordionShell(
+          {/* Аккордеоны плиты: только один открыт */}
+          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+            <LoudAccordion
+              title="Эпитафии"
+              open={plateOpen === "epitaphs"}
+              onToggle={() => togglePlateAcc("epitaphs")}
+              containerStyle={{
+                border: "1px solid rgba(255,255,255,1)",
+                background: "rgba(255,255,255,0.08)"
+              }}
+            >
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
@@ -1961,80 +2256,90 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    <textarea rows={3} value={plateCustomText} onChange={(e) => setPlateCustomText(e.target.value)} placeholder="Введите текст и нажмите «Добавить»" style={{ ...inputStyle(), resize: "vertical" }} />
+                    <textarea
+                      rows={3}
+                      value={plateCustomText}
+                      onChange={(e) => setPlateCustomText(e.target.value)}
+                      placeholder="Введите текст и нажмите «Добавить»"
+                      style={{ ...inputStyle(), resize: "vertical" }}
+                    />
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={addPlateCustom}>Добавить</button>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={() => setPlateSelectedEpitaphs([])}>Очистить выбранные</button>
+                      <button type="button" style={glassButtonStyle("nano")} onClick={addPlateCustom}>
+                        Добавить
+                      </button>
+                      <button type="button" style={glassButtonStyle("nano")} onClick={() => setPlateSelectedEpitaphs([])}>
+                        Очистить выбранные
+                      </button>
                       {plateSelectedEpitaphs.length > 0 && <div>Выбрано: {plateSelectedEpitaphs.length}</div>}
                     </div>
                   </div>
                 </div>
               </div>
-            )}
-          </section>
+            </LoudAccordion>
 
-          {/* Графика (плита) */}
-          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Графика (плита)</div>
+            <LoudAccordion title="Графика" open={plateOpen === "graphics"} onToggle={() => togglePlateAcc("graphics")}>
+              {catsLoading && <div>Загрузка каталога…</div>}
+              {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
+              {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+              {!catsLoading && cats.length > 0 && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {cats.map((cat: any, idx: number) => {
+                    const catKey = String(cat._id || cat.name || idx);
+                    const open = !!(catOpenPlate || {})[catKey];
+                    const toggle = () => setCatOpenPlate({ ...(catOpenPlate || {}), [catKey]: !open });
 
-            {catsLoading && <div>Загрузка каталога…</div>}
-            {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-            {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-
-            {!catsLoading && cats.length > 0 && (
-              <div style={{ display: "grid", gap: 12 }}>
-                {cats.map((cat: any, idx: number) => {
-                  const catKey = String(cat._id || cat.name || idx);
-                  const open = !!(catOpenPlate || {})[catKey];
-                  const toggle = () => setCatOpenPlate({ ...(catOpenPlate || {}), [catKey]: !open });
-
-                  return (
-                    <div key={catKey} style={{ ...sectionBoxStyle(), padding: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                        <div style={{ fontWeight: 700 }}>{cat.name || `Категория ${idx + 1}`}</div>
-                        <button type="button" onClick={toggle} style={glassButtonStyle("nano")}>
-                          {open ? "Свернуть" : "Развернуть"}
-                        </button>
-                      </div>
-
-                      {open && (
-                        <div style={{ marginTop: 10 }}>
-                          <CatGrid
-                            items={cat.items || []}
-                            ids={plateIds}
-                            addGraphic={addPlateGraphic}
-                            removeGraphic={removePlateGraphic}
-                            rootRef={plateGrid.rootRef}
-                            colsCount={plateGrid.colsCount}
-                          />
-
-                          {(cat.children || []).map((sub: any, j: number) => (
-                            <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 10 }}>
-                              <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
-                              <CatGrid
-                                items={sub.items || []}
-                                ids={plateIds}
-                                addGraphic={addPlateGraphic}
-                                removeGraphic={removePlateGraphic}
-                                rootRef={plateGrid.rootRef}
-                                colsCount={plateGrid.colsCount}
-                              />
-                            </div>
-                          ))}
+                    return (
+                      <div key={catKey} style={{ ...sectionBoxStyle(), padding: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                          <div style={{ fontWeight: 700 }}>{cat.name || `Категория ${idx + 1}`}</div>
+                          <button type="button" onClick={toggle} style={glassButtonStyle("nano")}>
+                            {open ? "Свернуть" : "Развернуть"}
+                          </button>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+
+                        {open && (
+                          <div style={{ marginTop: 10 }}>
+                            <CatGrid
+                              items={cat.items || []}
+                              ids={plateIds}
+                              addGraphic={addPlateGraphic}
+                              removeGraphic={removePlateGraphic}
+                              rootRef={plateGrid.rootRef}
+                              colsCount={plateGrid.colsCount}
+                            />
+
+                            {(cat.children || []).map((sub: any, j: number) => (
+                              <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 10 }}>
+                                <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                                <CatGrid
+                                  items={sub.items || []}
+                                  ids={plateIds}
+                                  addGraphic={addPlateGraphic}
+                                  removeGraphic={removePlateGraphic}
+                                  rootRef={plateGrid.rootRef}
+                                  colsCount={plateGrid.colsCount}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </LoudAccordion>
+          </div>
         </>
       )}
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
-        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
-        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
+        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
+          Назад
+        </button>
+        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
+          Продолжить
+        </button>
       </div>
     </div>
   );
