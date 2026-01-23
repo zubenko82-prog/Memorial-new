@@ -9,15 +9,16 @@
 // - эпитафии: сохраняем разрывы строк как в тексте (не делаем перенос по словам), только уменьшаем шрифт при необходимости
 // - для маленьких экранов масштабируем UI (не здесь; это относится к месту показа превью, но генерация корректна)
 //
-// UI (фикс по задаче):
+// UI (по финальным требованиям):
 // - "Дополнительно" — не аккордеон, просто плашка с 3 чекбоксами.
 // - Тыл/Плита: чекбокс перед названием (без "включено/выключено").
 // - "Выбрано" всегда видно (не аккордеон).
 // - "Усопшие", "Эпитафии", "Графика" — аккордеоны на главном экране,
 //   по умолчанию закрыты, и открыт может быть только один (на сторону).
 // - Аккордеон "Эпитафии" выделен: рамка 1px белая, фон на тон светлее.
-// - Плита: добавлен выбор размера (80×40×5, 100×50×5, 120×60×5, свой вариант) над "Выбрано (плита)".
-//   Значение пишется в extras.plateSize — TopBarWithIntro уже его отображает (plateSize).
+// - В "Графика" категории и подкатегории — тоже аккордеоны LoudAccordion с плавным раскрытием (без отдельных кнопок).
+// - Плита: добавлен выбор размера (80-40-5, 100-50-5, 120-60-5, свой вариант) над "Выбрано (плита)".
+//   Значение сохраняется в extras.plateSize => отображается в TopBarWithIntro.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -449,7 +450,7 @@ async function renderStackedCenteredPreview(params: {
     ctx.fillRect(0, 0, W, H);
     const bgIm = await loadImageSafe(bg.url);
     if (bgIm) {
-      // ✅ FIX: НЕ делаем {...bgIm} — иначе drawImage падает
+      // ✅ FIX: do NOT spread bgIm
       if (bgFit === "contain") drawImageContain(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
       else drawImageCover(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
     }
@@ -1012,6 +1013,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   );
 
   const rearPeopleForPreview = useMemo<PersonPreview[]>(() => {
+    // take first person as "portrait block"
     const p = rearPeople[0];
     if (!p) return [];
     const transient = rearTransientPhotoUrlById[p.id];
@@ -1215,6 +1217,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         const url = String(m.url || "").trim();
         if (url) items.push({ kind: "img", url });
       }
+
       for (const t of epitaphsInOrder) items.push({ kind: "text", text: t });
 
       if (items.length === 0) {
@@ -1254,10 +1257,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
-  // plate size (shown in TopBarWithIntro via extras.plateSize)
+  // plate size -> extras.plateSize (displayed in TopBarWithIntro)
   const plateSize0 = String((extras0 as any)?.plateSize || "").trim();
-  const presetSizes = ["80×40×5", "100×50×5", "120×60×5"] as const;
+  const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
   type PlateSizePreset = (typeof presetSizes)[number];
+
   const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(
     (presetSizes as readonly string[]).includes(plateSize0) ? (plateSize0 as PlateSizePreset) : "custom"
   );
@@ -1266,25 +1270,17 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     return plateSize0;
   });
 
-  const commitPlateSize = useCallback(
-    (value: string) => {
-      const v = String(value || "").trim();
-      saveOrderDraft({ extras: { plateSize: v ? v : null } as any });
-      dispatchDraftUpdated();
-      setDraft(loadOrderDraft());
-    },
-    []
-  );
+  const commitPlateSize = useCallback((value: string) => {
+    const v = String(value || "").trim();
+    saveOrderDraft({ extras: { plateSize: v ? v : null } as any });
+    dispatchDraftUpdated();
+  }, []);
 
   useEffect(() => {
-    // if plate disabled, keep local state but clear draft (handled below in plateEnabled effect)
     if (!plateEnabled) return;
-
-    if (plateSizeMode === "custom") {
-      commitPlateSize(plateSizeCustom);
-    } else {
-      commitPlateSize(plateSizeMode);
-    }
+    if (plateSizeMode === "custom") commitPlateSize(plateSizeCustom);
+    else commitPlateSize(plateSizeMode);
+    setDraft(loadOrderDraft());
   }, [plateEnabled, plateSizeMode, plateSizeCustom, commitPlateSize]);
 
   const initialPlateSelected = useMemo(() => {
@@ -1402,7 +1398,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
       saveOrderDraft({
         extras: {
           headstonePlate: false,
-          plateSize: null, // ✅ size cleared when disabled
+          plateSize: null,
           plateGraphicsIds: null,
           plateGraphicsMeta: null,
           plateEpitaph: null,
@@ -1496,7 +1492,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
   /* =========================
-   * Single-open accordion state
+   * Single-open accordion state (per side)
    * ========================= */
   type RearAcc = "people" | "epitaphs" | "graphics" | null;
   type PlateAcc = "epitaphs" | "graphics" | null;
@@ -1515,7 +1511,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
   const togglePlateAcc = (k: PlateAcc) => setPlateOpen((prev) => (prev === k ? null : k));
 
   /* =========================
-   * Catalog grid
+   * Catalog grid helpers
    * ========================= */
   function useColsByWidth() {
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -2025,6 +2021,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
               {catsLoading && <div>Загрузка каталога…</div>}
               {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
               {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+
               {!catsLoading && cats.length > 0 && (
                 <div style={{ display: "grid", gap: 12 }}>
                   {cats.map((cat: any, idx: number) => {
@@ -2033,28 +2030,24 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                     const toggle = () => setCatOpenRear({ ...(catOpenRear || {}), [catKey]: !open });
 
                     return (
-                      <div key={catKey} style={{ ...sectionBoxStyle(), padding: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                          <div style={{ fontWeight: 700 }}>{cat.name || `Категория ${idx + 1}`}</div>
-                          <button type="button" onClick={toggle} style={glassButtonStyle("nano")}>
-                            {open ? "Свернуть" : "Развернуть"}
-                          </button>
-                        </div>
+                      <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
+                        <CatGrid
+                          items={cat.items || []}
+                          ids={rearIds}
+                          addGraphic={addRearGraphic}
+                          removeGraphic={removeRearGraphic}
+                          rootRef={rearGrid.rootRef}
+                          colsCount={rearGrid.colsCount}
+                        />
 
-                        {open && (
-                          <div style={{ marginTop: 10 }}>
-                            <CatGrid
-                              items={cat.items || []}
-                              ids={rearIds}
-                              addGraphic={addRearGraphic}
-                              removeGraphic={removeRearGraphic}
-                              rootRef={rearGrid.rootRef}
-                              colsCount={rearGrid.colsCount}
-                            />
+                        {(cat.children || []).map((sub: any, j: number) => {
+                          const subKey = String(sub._id || `${catKey}-sub-${j}`);
+                          const subOpen = !!(catOpenRear || {})[subKey];
+                          const subToggle = () => setCatOpenRear({ ...(catOpenRear || {}), [subKey]: !subOpen });
 
-                            {(cat.children || []).map((sub: any, j: number) => (
-                              <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 10 }}>
-                                <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                          return (
+                            <div key={subKey} style={{ marginTop: 10 }}>
+                              <LoudAccordion title={sub.name || `Подкатегория ${j + 1}`} open={subOpen} onToggle={subToggle}>
                                 <CatGrid
                                   items={sub.items || []}
                                   ids={rearIds}
@@ -2063,11 +2056,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                   rootRef={rearGrid.rootRef}
                                   colsCount={rearGrid.colsCount}
                                 />
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                              </LoudAccordion>
+                            </div>
+                          );
+                        })}
+                      </LoudAccordion>
                     );
                   })}
                 </div>
@@ -2108,12 +2101,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                 ))}
 
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-                  <input
-                    type="radio"
-                    name="plate-size"
-                    checked={plateSizeMode === "custom"}
-                    onChange={() => setPlateSizeMode("custom")}
-                  />
+                  <input type="radio" name="plate-size" checked={plateSizeMode === "custom"} onChange={() => setPlateSizeMode("custom")} />
                   <span>Свой вариант</span>
                 </label>
               </div>
@@ -2281,6 +2269,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
               {catsLoading && <div>Загрузка каталога…</div>}
               {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
               {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
+
               {!catsLoading && cats.length > 0 && (
                 <div style={{ display: "grid", gap: 12 }}>
                   {cats.map((cat: any, idx: number) => {
@@ -2289,28 +2278,24 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                     const toggle = () => setCatOpenPlate({ ...(catOpenPlate || {}), [catKey]: !open });
 
                     return (
-                      <div key={catKey} style={{ ...sectionBoxStyle(), padding: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                          <div style={{ fontWeight: 700 }}>{cat.name || `Категория ${idx + 1}`}</div>
-                          <button type="button" onClick={toggle} style={glassButtonStyle("nano")}>
-                            {open ? "Свернуть" : "Развернуть"}
-                          </button>
-                        </div>
+                      <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
+                        <CatGrid
+                          items={cat.items || []}
+                          ids={plateIds}
+                          addGraphic={addPlateGraphic}
+                          removeGraphic={removePlateGraphic}
+                          rootRef={plateGrid.rootRef}
+                          colsCount={plateGrid.colsCount}
+                        />
 
-                        {open && (
-                          <div style={{ marginTop: 10 }}>
-                            <CatGrid
-                              items={cat.items || []}
-                              ids={plateIds}
-                              addGraphic={addPlateGraphic}
-                              removeGraphic={removePlateGraphic}
-                              rootRef={plateGrid.rootRef}
-                              colsCount={plateGrid.colsCount}
-                            />
+                        {(cat.children || []).map((sub: any, j: number) => {
+                          const subKey = String(sub._id || `${catKey}-sub-${j}`);
+                          const subOpen = !!(catOpenPlate || {})[subKey];
+                          const subToggle = () => setCatOpenPlate({ ...(catOpenPlate || {}), [subKey]: !subOpen });
 
-                            {(cat.children || []).map((sub: any, j: number) => (
-                              <div key={sub._id || `${catKey}-sub-${j}`} style={{ marginTop: 10 }}>
-                                <div style={{ fontWeight: 600, marginBottom: 6 }}>{sub.name}</div>
+                          return (
+                            <div key={subKey} style={{ marginTop: 10 }}>
+                              <LoudAccordion title={sub.name || `Подкатегория ${j + 1}`} open={subOpen} onToggle={subToggle}>
                                 <CatGrid
                                   items={sub.items || []}
                                   ids={plateIds}
@@ -2319,11 +2304,11 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
                                   rootRef={plateGrid.rootRef}
                                   colsCount={plateGrid.colsCount}
                                 />
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                              </LoudAccordion>
+                            </div>
+                          );
+                        })}
+                      </LoudAccordion>
                     );
                   })}
                 </div>
