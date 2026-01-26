@@ -8,6 +8,10 @@
 //   Эпитафия масштабируется в разумных пределах и якорится над графикой; графика прижата к низу.
 // - Для 3+ людей слегка уменьшили метрику на телефоне и сдвинули блок чуть ниже, чтобы разгрузить низ.
 // Остальное — без изменений.
+//
+// Доп. правки (по задаче):
+// - Если эпитафия "Помним, любим, скорбим..." — рисуем лесенкой: слева / по центру / справа (3 строки).
+// - Добавлен отступ метрики от низа портрета в шаблоне 1 человек.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -62,6 +66,18 @@ function pickTplKey(n: number): "one" | "two" | "many" {
   if (n <= 1) return "one";
   if (n === 2) return "two";
   return "many";
+}
+
+function normEpitaph(t: string): string {
+  return String(t || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+}
+
+function isPomnimLubenSkorbim(t: string): boolean {
+  const x = normEpitaph(t);
+  return x === "Помним, любим, скорбим..." || x === "Помним,\nлюбим,\nскорбим...";
 }
 
 export default function SketchTemplate({
@@ -192,11 +208,14 @@ export default function SketchTemplate({
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
-  /* ===== Горизонтальный: 1 человек (без изменений) ===== */
+  /* ===== Горизонтальный: 1 человек ===== */
   const h1 = useMemo(() => {
     if (isVertical || tplKey !== "one") return null;
-    const gap = Math.round(0.015 * H);
+
+    // ✅ добавили небольшой гарантированный отступ в px поверх относительного
+    const gap = Math.max(10, Math.round(0.015 * H));
     const topOffset = Math.round(0.06 * H);
+
     let portraitH = Math.max(40, Math.round(0.40 * H));
     let portraitW = Math.round(portraitH * (3 / 4));
     if (portraitW > W * 0.9) {
@@ -206,7 +225,10 @@ export default function SketchTemplate({
     }
     const portraitTop = topOffset;
     const metricTargetH = Math.max(24, Math.round(0.20 * H));
+
+    // ✅ metricTop теперь точно ниже портрета с gap (отступ от низа портрета)
     const metricTop = portraitTop + portraitH + gap;
+
     const metricW = Math.round(W * 0.8);
     return { gap, portraitH, portraitW, portraitTop, metricTargetH, metricTop, metricW };
   }, [isVertical, tplKey, H, W]);
@@ -500,10 +522,14 @@ export default function SketchTemplate({
     );
   };
 
-  /* ===== Вертикальные раскладки (без изменений) ===== */
+  /* ===== Вертикальные раскладки ===== */
   const VerticalOne = () => {
     const p = peopleBlocks[0];
     if (!p) return null;
+
+    // ✅ явный небольшой отступ метрики от низа портрета
+    const metricGap = "2%";
+
     return (
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -512,6 +538,9 @@ export default function SketchTemplate({
               {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
             </div>
           </div>
+
+          <div style={{ height: metricGap }} />
+
           <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "82%", maxWidth: 560 }}>
             <PersonMetricText lines={p.lines} sizeMult={1.12} />
           </div>
@@ -610,20 +639,16 @@ export default function SketchTemplate({
     const bottomPadPx = Math.max(8, Math.round(0.02 * H));
     const epW = Math.round(W * 0.88);
 
-    // Натуральная высота эпитафии
     const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
 
-    // Высота графики — фиксировано по ориентации
     const desiredGfxH = isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H);
     const gfxH = desiredGfxH;
     const gfxTop = H - bottomPadPx - gfxH;
 
-    // Эпитафия: ограничиваем максимумом (чтобы была видна), но НЕ подстраиваемся под метрику
     const epMaxH = Math.round(0.20 * H);
     const finalEpitaphScale = Math.min(1, epMaxH / naturalEp);
     const scaledEpH = Math.floor(naturalEp * finalEpitaphScale);
 
-    // Якорим эпитафию над графикой; допускаем перекрытие с метрикой
     const epTop = Math.max(Math.round(0.58 * H), gfxTop - gap - scaledEpH);
 
     const gfxWrapW = Math.floor(W * 0.9);
@@ -635,6 +660,8 @@ export default function SketchTemplate({
       perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
     }
     const perItemMaxH = Math.max(16, Math.floor(gfxH * 0.9));
+
+    const specialStair = epitaphs.some((t) => isPomnimLubenSkorbim(t));
 
     return (
       <>
@@ -648,7 +675,6 @@ export default function SketchTemplate({
               transformOrigin: "top center",
               width: epW,
               color: "#fff",
-              textAlign: "center" as const,
               textShadow: "0 1px 2px rgba(0,0,0,0.6)",
               zIndex: 4,
               overflow: "hidden",
@@ -667,11 +693,24 @@ export default function SketchTemplate({
                 gap: 8
               }}
             >
-              {epitaphs.slice(0, 8).map((t, idx) => (
-                <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap" }}>
-                  {t}
-                </div>
-              ))}
+              {epitaphs.slice(0, 8).map((t, idx) => {
+                if (isPomnimLubenSkorbim(t)) {
+                  // ✅ лесенка: верх слева, середина по центру, низ справа
+                  return (
+                    <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 6 }}>
+                      <div style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>ПОМНИМ,</div>
+                      <div style={{ textAlign: "center", whiteSpace: "pre-wrap" }}>ЛЮБИМ,</div>
+                      <div style={{ textAlign: "right", whiteSpace: "pre-wrap" }}>СКОРБИМ...</div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: specialStair ? "center" : "center" }}>
+                    {t}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -732,11 +771,22 @@ export default function SketchTemplate({
                 gap: 8
               }}
             >
-              {epitaphs?.slice(0, 8).map((t, idx) => (
-                <div key={`ep-measure-${idx}`} style={{ whiteSpace: "pre-wrap" }}>
-                  {t}
-                </div>
-              ))}
+              {epitaphs?.slice(0, 8).map((t, idx) => {
+                if (isPomnimLubenSkorbim(t)) {
+                  return (
+                    <div key={`ep-measure-${idx}`} style={{ display: "grid", gap: 6 }}>
+                      <div style={{ textAlign: "left" }}>ПОМНИМ,</div>
+                      <div style={{ textAlign: "center" }}>ЛЮБИМ,</div>
+                      <div style={{ textAlign: "right" }}>СКОРБИМ...</div>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={`ep-measure-${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
+                    {t}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -746,8 +796,6 @@ export default function SketchTemplate({
 
   return (
     <>
-      
-
       <div
         ref={containerRef}
         style={{
