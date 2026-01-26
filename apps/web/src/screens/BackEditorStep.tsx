@@ -601,19 +601,22 @@ async function renderStackedCenteredPreview(params: {
   const specialStair = isPomnimLubenSkorbim(it.text);
   const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
 
-  // как в SketchTemplate: лесенка уже, чтобы не "разъезжалось" на всю ширину
-  const rr = specialStair
+  // ✅ делаем лесенку шире: ~72% ширины блока (видны “ступеньки”)
+const stairW = isPlate ? 0.78 : 0.72;          // на плите ещё шире, чтобы ступени читались
+const stairPad = (1 - stairW) / 2;
+
+const rr = specialStair
   ? {
-      // было 0.19/0.62 — сделаем уже, как будто epWStair ~ 0.56–0.58 от ширины
-      x: rr0.x + Math.round(rr0.w * 0.22),
+      x: rr0.x + Math.round(rr0.w * stairPad),
       y: rr0.y,
-      w: Math.round(rr0.w * 0.56),
+      w: Math.round(rr0.w * stairW),
       h: rr0.h
     }
   : rr0;
 
-// небольшой запас, чтобы визуально не "прилипало" к краям
-const widthSafety = specialStair ? Math.round(rr.w * 0.96) : rr.w;
+// небольшой запас от краёв
+const widthSafety = specialStair ? Math.round(rr.w * 0.98) : rr.w;
+
 
 
   ctx.save();
@@ -625,7 +628,7 @@ const widthSafety = specialStair ? Math.round(rr.w * 0.96) : rr.w;
   const fontFamily = FONT_CENTURY;
 
   // База шрифта: для плиты больше; для лесенки ещё больше (как вы сделали в SketchTemplate)
-  const plateMul = isPlate ? 0.88 : 1; // чуть меньше на плите
+  const plateMul = isPlate ? (specialStair ? 0.98 : 0.88) : 1; // чуть меньше на плите
 
 const startRaw = specialStair
   ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
