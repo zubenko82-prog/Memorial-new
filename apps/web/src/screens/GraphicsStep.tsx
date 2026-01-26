@@ -473,11 +473,11 @@ export default function GraphicsStep(props: any) {
     );
   }, []);
 
-  // Добавление с лимитом: не более 2 одинаковых изображений
+  // Добавление с лимитом: не более 4 одинаковых изображений
   const addGraphicWithLimit = useCallback((g: any) => {
     const qty = countsById[g.id] || 0;
-    if (qty >= 2) {
-      window.alert("Нельзя добавить более двух одинаковых изображений");
+    if (qty >= 4) {
+      window.alert("Нельзя добавить более 4 одинаковых изображений");
       return;
     }
     addGraphic(g);
