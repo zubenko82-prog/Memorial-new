@@ -603,13 +603,18 @@ async function renderStackedCenteredPreview(params: {
 
   // как в SketchTemplate: лесенка уже, чтобы не "разъезжалось" на всю ширину
   const rr = specialStair
-    ? {
-        x: rr0.x + Math.round(rr0.w * 0.19),
-        y: rr0.y,
-        w: Math.round(rr0.w * 0.62),
-        h: rr0.h
-      }
-    : rr0;
+  ? {
+      // было 0.19/0.62 — сделаем уже, как будто epWStair ~ 0.56–0.58 от ширины
+      x: rr0.x + Math.round(rr0.w * 0.22),
+      y: rr0.y,
+      w: Math.round(rr0.w * 0.56),
+      h: rr0.h
+    }
+  : rr0;
+
+// небольшой запас, чтобы визуально не "прилипало" к краям
+const widthSafety = specialStair ? Math.round(rr.w * 0.96) : rr.w;
+
 
   ctx.save();
   ctx.fillStyle = "#fff";
@@ -631,12 +636,24 @@ async function renderStackedCenteredPreview(params: {
   const fs = fitFontToBoxHardLines({
     ctx,
     lines: Array.from(lines),
-    maxW: rr.w,
+    maxW: widthSafety,
     maxH: rr.h,
     startSize: start,
     minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
     lineH
   });
+
+  const plateMul = isPlate ? 0.88 : 1; // ✅ чуть меньше на плите
+
+const start = specialStair
+  ? Math.round(
+      plateMul *
+        Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
+    )
+  : Math.round(
+      plateMul *
+        Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))))
+    );
 
   ctx.font = `italic ${fs}px ${fontFamily}`;
 
