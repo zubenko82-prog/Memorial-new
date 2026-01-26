@@ -210,6 +210,7 @@ const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертика�
 // Strict 1:2 with long side 900
 const PREVIEW_W = 450;
 const PREVIEW_H = 900;
+const FONT_CENTURY = `"Century Schoolbook","Times New Roman",serif`;
 
 function loadImageSafe(src?: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -593,17 +594,17 @@ async function renderStackedCenteredPreview(params: {
       ctx.restore();
     }
 
-    if (it.kind === "text") {
+   if (it.kind === "text") {
   const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
   const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
 
   const specialStair = isPomnimLubenSkorbim(it.text);
   const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
 
-  // ✅ как в SketchTemplate: лесенка уже (не на всю ширину)
+  // как в SketchTemplate: лесенка уже, чтобы не "разъезжалось" на всю ширину
   const rr = specialStair
     ? {
-        x: rr0.x + Math.round(rr0.w * 0.19), // сужаем примерно до 62% (0.19 слева + 0.19 справа)
+        x: rr0.x + Math.round(rr0.w * 0.19),
         y: rr0.y,
         w: Math.round(rr0.w * 0.62),
         h: rr0.h
@@ -614,12 +615,18 @@ async function renderStackedCenteredPreview(params: {
   ctx.fillStyle = "#fff";
   ctx.textBaseline = "middle";
 
-  // ✅ крупнее старт для лесенки (и на плите ещё крупнее)
+  // Эпитафии в SketchTemplate выглядят курсивом; для canvas используем italic
+  // (в т.ч. для лесенки)
+  const fontFamily = FONT_CENTURY;
+
+  // База шрифта: для плиты больше; для лесенки ещё больше (как вы сделали в SketchTemplate)
   const start = specialStair
     ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
     : Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
 
-  ctx.font = `${start}px "Times New Roman", serif`;
+  ctx.font = `italic ${start}px ${fontFamily}`;
+
+  const lineH = specialStair ? 1.15 : 1.18;
 
   const fs = fitFontToBoxHardLines({
     ctx,
@@ -628,11 +635,12 @@ async function renderStackedCenteredPreview(params: {
     maxH: rr.h,
     startSize: start,
     minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
-    lineH: specialStair ? 1.12 : 1.18
+    lineH
   });
 
-  ctx.font = `${fs}px "Times New Roman", serif`;
-  const lineHpx = Math.round(fs * (specialStair ? 1.12 : 1.18));
+  ctx.font = `italic ${fs}px ${fontFamily}`;
+
+  const lineHpx = Math.round(fs * lineH);
   const total = lineHpx * lines.length;
   let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineHpx / 2);
 
@@ -640,6 +648,7 @@ async function renderStackedCenteredPreview(params: {
     const line = (lines[li] || " ") as string;
 
     if (specialStair && lines.length === 3) {
+      // лесенка: слева / по центру / справа
       if (li === 0) {
         ctx.textAlign = "left";
         ctx.fillText(line, rr.x, ty);
