@@ -601,8 +601,8 @@ async function renderStackedCenteredPreview(params: {
   const specialStair = isPomnimLubenSkorbim(it.text);
   const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
 
-  // ✅ делаем лесенку шире: ~72% ширины блока (видны “ступеньки”)
-const stairW = isPlate ? 0.78 : 0.72;          // на плите ещё шире, чтобы ступени читались
+  // ✅ делаем лесенку шире: ~92% ширины блока (видны “ступеньки”)
+const stairW = isPlate ? 0.98 : 0.92;          // на плите ещё шире, чтобы ступени читались
 const stairPad = (1 - stairW) / 2;
 
 const rr = specialStair
@@ -628,7 +628,7 @@ const widthSafety = specialStair ? Math.round(rr.w * 0.98) : rr.w;
   const fontFamily = FONT_CENTURY;
 
   // База шрифта: для плиты больше; для лесенки ещё больше (как вы сделали в SketchTemplate)
-  const plateMul = isPlate ? (specialStair ? 0.98 : 0.88) : 1; // чуть меньше на плите
+  const plateMul = isPlate ? (specialStair ? 0.98 : 0.96) : 1; // чуть меньше на плите
 
 const startRaw = specialStair
   ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
