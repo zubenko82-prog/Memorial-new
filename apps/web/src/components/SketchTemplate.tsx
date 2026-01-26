@@ -16,6 +16,7 @@
 // - Вертикальный 1 человек: добавлен явный отступ метрики от низа портрета.
 // - Горизонтальный 2 и 2+ человек: размеры портрета/метрики как в horizontal 1,
 //   и уменьшаются, если не хватает места.
+// - Лесенка: крупнее и уже (не растягиваем на весь epW).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -83,7 +84,6 @@ function isPomnimLubenSkorbim(t: string): boolean {
   const x = normEpitaph(t)
     .toLowerCase()
     .replace(/[ ]+/g, " ");
-  // допускаем "..." и "…"
   const canon1 = "помним, любим, скорбим...";
   const canon2 = "помним, любим, скорбим…";
   const canon3 = "помним,\nлюбим,\nскорбим...";
@@ -92,7 +92,6 @@ function isPomnimLubenSkorbim(t: string): boolean {
 }
 
 function pomnimStairLines(): [string, string, string] {
-  // первая прописная, остальные строчные
   return ["Помним,", "любим,", "скорбим..."];
 }
 
@@ -110,14 +109,12 @@ export default function SketchTemplate({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  // Измерители (оставляем, но ниже перестаём «выталкивать» эпитафию/графику по ним)
   const [metricBottomPx, setMetricBottomPx] = useState(0);
   const metricMeasureSigRef = useRef<string>("");
   const metricRafRef = useRef<number | null>(null);
 
   const epitaphMeasureRef = useRef<HTMLDivElement | null>(null);
 
-  // Масштаб метрики (горизонтальный/1 человек)
   const metricMeasureRef = useRef<HTMLDivElement | null>(null);
   const [metricScaleH1, setMetricScaleH1] = useState(1);
   const metricH1SigRef = useRef<string>("");
@@ -166,7 +163,6 @@ export default function SketchTemplate({
   const H = imgRect.h;
   const W = imgRect.w;
 
-  /* ===== Метрика (универсальная) — уменьшенные шрифты, переносы ===== */
   function PersonMetricText({ lines, sizeMult = 1 }: { lines: string[]; sizeMult?: number }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
@@ -194,7 +190,6 @@ export default function SketchTemplate({
     );
   }
 
-  /* ===== Измерение нижней границы метрики (для справки) ===== */
   useEffect(() => {
     if (!H || !W) return;
     const root = containerRef.current;
@@ -224,12 +219,11 @@ export default function SketchTemplate({
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
-  /* ===== Базовые размеры как в horizontal one ===== */
   const hBase = useMemo(() => {
     if (!H || !W) return null;
 
     const topOffset = Math.round(0.06 * H);
-    const gap = Math.max(10, Math.round(0.015 * H)); // отступ метрики от портрета
+    const gap = Math.max(10, Math.round(0.015 * H));
 
     let portraitH = Math.max(40, Math.round(0.40 * H));
     let portraitW = Math.round(portraitH * (3 / 4));
@@ -246,16 +240,11 @@ export default function SketchTemplate({
     return { topOffset, gap, portraitW, portraitH, metricTargetH, metricW };
   }, [H, W]);
 
-  /* ===== Горизонтальный: 1 человек ===== */
   const h1 = useMemo(() => {
     if (isVertical || tplKey !== "one" || !hBase) return null;
     const portraitTop = hBase.topOffset;
     const metricTop = portraitTop + hBase.portraitH + hBase.gap;
-    return {
-      ...hBase,
-      portraitTop,
-      metricTop
-    };
+    return { ...hBase, portraitTop, metricTop };
   }, [isVertical, tplKey, hBase]);
 
   useEffect(() => {
@@ -277,7 +266,6 @@ export default function SketchTemplate({
     return () => cancelAnimationFrame(t);
   }, [h1, peopleBlocks]);
 
-  /* ===== Кресты (без изменений) ===== */
   const CrossOverlay = () => {
     if (!crosses.length) return null;
 
@@ -329,8 +317,6 @@ export default function SketchTemplate({
     }
     return null;
   };
-
-  /* ===== PEOPLE ===== */
 
   const HorizontalOne = () => {
     const p = peopleBlocks[0];
@@ -401,7 +387,6 @@ export default function SketchTemplate({
     );
   };
 
-  // ✅ Горизонтальный: ДВОЕ — базовые размеры как one, уменьшаем если не хватает места
   const HorizontalTwo = () => {
     if (!H || !W || !hBase) return null;
 
@@ -418,14 +403,10 @@ export default function SketchTemplate({
     const baseMetricW = hBase.metricW;
     const baseMetricH = hBase.metricTargetH;
 
-    // scale по ширине колонки
     const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
-
-    // scale по высоте доступного пространства (чтобы точно влезло сверху)
     const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
     const neededH = basePortraitH + hBase.gap + baseMetricH;
     const kH = Math.min(1, availableH / Math.max(1, neededH));
-
     const k = Math.min(kW, kH);
 
     const portraitW = Math.max(40, Math.round(basePortraitW * k));
@@ -474,11 +455,7 @@ export default function SketchTemplate({
 
             <div style={{ height: gapPx, width: 1 }} />
 
-            <div
-              data-sketch-el="metric"
-              data-sketch-key={p.id}
-              style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}
-            >
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <PersonMetricText lines={p.lines} sizeMult={k} />
             </div>
           </div>
@@ -487,7 +464,6 @@ export default function SketchTemplate({
     );
   };
 
-  // ✅ Горизонтальный: 3+ — базовые размеры как one, уменьшаем если не хватает места
   const HorizontalMany = () => {
     if (!H || !W || !hBase) return null;
 
@@ -505,11 +481,9 @@ export default function SketchTemplate({
     const baseMetricH = hBase.metricTargetH;
 
     const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
-
     const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
     const neededH = basePortraitH + hBase.gap + baseMetricH;
     const kH = Math.min(1, availableH / Math.max(1, neededH));
-
     const k = Math.min(kW, kH);
 
     const portraitW = Math.max(32, Math.round(basePortraitW * k));
@@ -558,11 +532,7 @@ export default function SketchTemplate({
 
             <div style={{ height: gapPx, width: 1 }} />
 
-            <div
-              data-sketch-el="metric"
-              data-sketch-key={p.id}
-              style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}
-            >
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <PersonMetricText lines={p.lines} sizeMult={k} />
             </div>
           </div>
@@ -571,12 +541,9 @@ export default function SketchTemplate({
     );
   };
 
-  /* ===== Вертикальные раскладки ===== */
   const VerticalOne = () => {
     const p = peopleBlocks[0];
     if (!p) return null;
-
-    // ✅ реальный отступ (px), а не "2%"
     const metricGapPx = Math.max(10, Math.round(0.02 * H));
 
     return (
@@ -680,13 +647,16 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  /* ===== Эпитафия + графика — не зависят от метрики, допускаем наложение ===== */
   const EpitaphAndGraphics = () => {
     if (!H || !W) return null;
 
     const gap = Math.round(0.015 * H);
     const bottomPadPx = Math.max(8, Math.round(0.02 * H));
-    const epW = Math.round(W * 0.88);
+
+    const hasStair = Array.isArray(epitaphs) && epitaphs.some((t) => isPomnimLubenSkorbim(t));
+
+    // ✅ лесенка уже
+    const epW = Math.round(W * (hasStair ? 0.62 : 0.88));
 
     const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
 
@@ -694,7 +664,8 @@ export default function SketchTemplate({
     const gfxH = desiredGfxH;
     const gfxTop = H - bottomPadPx - gfxH;
 
-    const epMaxH = Math.round(0.20 * H);
+    // ✅ для лесенки разрешаем чуть больше высоты, чтобы не ужимало
+    const epMaxH = Math.round((hasStair ? 0.24 : 0.20) * H);
     const finalEpitaphScale = Math.min(1, epMaxH / naturalEp);
     const scaledEpH = Math.floor(naturalEp * finalEpitaphScale);
 
@@ -733,25 +704,25 @@ export default function SketchTemplate({
                 fontStyle: "italic",
                 textTransform: "none",
                 fontFamily: FONT_CENTURY,
-                lineHeight: 1.2,
-                letterSpacing: "0.3px",
-                fontSize: "clamp(10px, 2.6vw, 20px)",
+                lineHeight: 1.15,
+                letterSpacing: "0.2px",
+                // ✅ крупнее для лесенки
+                fontSize: hasStair ? "clamp(16px, 3.4vw, 28px)" : "clamp(10px, 2.6vw, 20px)",
                 display: "grid",
-                gap: 8
+                gap: hasStair ? 4 : 8
               }}
             >
               {epitaphs.slice(0, 8).map((t, idx) => {
                 if (isPomnimLubenSkorbim(t)) {
                   const [a, b, c] = pomnimStairLines();
                   return (
-                    <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 6 }}>
+                    <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 4 }}>
                       <div style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{a}</div>
                       <div style={{ textAlign: "center", whiteSpace: "pre-wrap" }}>{b}</div>
                       <div style={{ textAlign: "right", whiteSpace: "pre-wrap" }}>{c}</div>
                     </div>
                   );
                 }
-
                 return (
                   <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
                     {t}
@@ -810,18 +781,18 @@ export default function SketchTemplate({
                 fontStyle: "italic",
                 textTransform: "none",
                 fontFamily: FONT_CENTURY,
-                lineHeight: 1.2,
-                letterSpacing: "0.3px",
-                fontSize: "clamp(10px, 2.6vw, 20px)",
+                lineHeight: 1.15,
+                letterSpacing: "0.2px",
+                fontSize: hasStair ? "clamp(16px, 3.4vw, 28px)" : "clamp(10px, 2.6vw, 20px)",
                 display: "grid",
-                gap: 8
+                gap: hasStair ? 4 : 8
               }}
             >
               {epitaphs?.slice(0, 8).map((t, idx) => {
                 if (isPomnimLubenSkorbim(t)) {
                   const [a, b, c] = pomnimStairLines();
                   return (
-                    <div key={`ep-measure-${idx}`} style={{ display: "grid", gap: 6 }}>
+                    <div key={`ep-measure-${idx}`} style={{ display: "grid", gap: 4 }}>
                       <div style={{ textAlign: "left" }}>{a}</div>
                       <div style={{ textAlign: "center" }}>{b}</div>
                       <div style={{ textAlign: "right" }}>{c}</div>
