@@ -25,6 +25,9 @@ export interface TemplateSlot {
   rect: NormalizedRect;
   // Сколько максимально можно увеличивать элемент (1 = не увеличивать сверх его базового размера)
   maxScale?: number;
+
+  // Optional rendering hint for special cases (e.g. staircase epitaph).
+  variant?: "staircase";
 }
 
 export interface SketchTemplate {
@@ -40,9 +43,13 @@ export const classicSingle: SketchTemplate = {
   slots: [
     { type: "cross", rect: { x: 0.06, y: 0.05, w: 0.14, h: 0.14, padding: 4 }, maxScale: 1.25 },
     { type: "photo", rect: { x: 0.28, y: 0.18, w: 0.44, h: 0.40, padding: 8 }, maxScale: 1.15 },
-    { type: "personName", rect: { x: 0.18, y: 0.62, w: 0.64, h: 0.10, padding: 6 } },
-    { type: "dates", rect: { x: 0.26, y: 0.73, w: 0.48, h: 0.07, padding: 6 } },
-    { type: "epitaph", rect: { x: 0.12, y: 0.84, w: 0.76, h: 0.10, padding: 8 } }
+
+    // Added vertical gap from the photo bottom (photo ends at y=0.58).
+    { type: "personName", rect: { x: 0.18, y: 0.635, w: 0.64, h: 0.10, padding: 6 } },
+    { type: "dates", rect: { x: 0.26, y: 0.755, w: 0.48, h: 0.07, padding: 6 } },
+
+    // Epitaph slot can be rendered as staircase for "Помним, любим, скорбим..." when needed.
+    { type: "epitaph", rect: { x: 0.12, y: 0.865, w: 0.76, h: 0.095, padding: 8 }, variant: "staircase" }
   ]
 };
 

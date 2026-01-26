@@ -9,6 +9,12 @@
 // - эпитафии: сохраняем разрывы строк как в тексте (не делаем перенос по словам), только уменьшаем шрифт при необходимости
 // - для маленьких экранов масштабируем UI (не здесь; это относится к месту показа превью, но генерация корректна)
 //
+// Доп. требования к превью:
+// - эпитафия "Помним, любим, скорбим..." рисуется лесенкой:
+//   "Помним," слева, "любим," по центру, "скорбим..." справа (3 строки).
+// - на плите элементы (графика/эпитафии/метрика) делаем крупнее, но автоматически уменьшаем,
+//   если элементов много и они начинают мешать друг другу.
+//
 // UI (по финальным требованиям):
 // - "Дополнительно" — не аккордеон, просто плашка с 3 чекбоксами.
 // - Тыл/Плита: чекбокс перед названием (без "включено/выключено").
@@ -19,6 +25,7 @@
 // - В "Графика" категории и подкатегории — тоже аккордеоны LoudAccordion с плавным раскрытием (без отдельных кнопок).
 // - Плита: добавлен выбор размера (80-40-5, 100-50-5, 120-60-5, свой вариант) над "Выбрано (плита)".
 //   Значение сохраняется в extras.plateSize => отображается в TopBarWithIntro.
+// - Радио по умолчанию: 100-50-5 (если plateSize отсутствует).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -375,6 +382,11 @@ function splitHardLines(text: string): string[] {
     .map((s) => s.trimEnd());
 }
 
+function isPomnimLubenSkorbim(text: string): boolean {
+  const t = normEpitaph(String(text || ""));
+  return t === "Помним, любим, скорбим..." || t === "Помним,\nлюбим,\nскорбим...";
+}
+
 function measureHardLinesHeight(fontPx: number, lineH: number, linesCount: number) {
   return Math.round(linesCount * fontPx * lineH);
 }
@@ -426,8 +438,9 @@ async function renderStackedCenteredPreview(params: {
   bgFit?: "cover" | "contain";
   overlayPng?: string | null;
   items: StackItem[];
+  profile?: "rear" | "plate";
 }): Promise<string | null> {
-  const { W, H, bg, bgFit = "cover", overlayPng, items } = params;
+  const { W, H, bg, bgFit = "cover", overlayPng, items, profile = "rear" } = params;
 
   const canvas = document.createElement("canvas");
   canvas.width = W;
@@ -450,7 +463,6 @@ async function renderStackedCenteredPreview(params: {
     ctx.fillRect(0, 0, W, H);
     const bgIm = await loadImageSafe(bg.url);
     if (bgIm) {
-      // ✅ FIX: do NOT spread bgIm
       if (bgFit === "contain") drawImageContain(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
       else drawImageCover(ctx, bgIm, { x: 0, y: 0, w: W, h: H });
     }
@@ -461,6 +473,8 @@ async function renderStackedCenteredPreview(params: {
     const ov = await loadImageSafe(overlayPng);
     if (ov) ctx.drawImage(ov, 0, 0, W, H);
   }
+
+  const isPlate = profile === "plate";
 
   // layout
   const padX = Math.round(W * 0.10);
@@ -474,11 +488,11 @@ async function renderStackedCenteredPreview(params: {
 
   if (!items.length) return null;
 
-  // allocate heights by type
-  const basePhotoH = Math.round(H * 0.26);
-  const baseMetricaH = Math.round(H * 0.14);
-  const baseImgH = Math.round(H * 0.14);
-  const baseTextH = Math.round(H * 0.14);
+  // allocate heights by type (plate larger, then auto-scale down by k if crowded)
+  const basePhotoH = Math.round(H * (isPlate ? 0.28 : 0.26));
+  const baseMetricaH = Math.round(H * (isPlate ? 0.16 : 0.14));
+  const baseImgH = Math.round(H * (isPlate ? 0.18 : 0.14));
+  const baseTextH = Math.round(H * (isPlate ? 0.18 : 0.14));
 
   const plannedHeights = items.map((it) => {
     if (it.kind === "photo") return basePhotoH;
@@ -506,7 +520,6 @@ async function renderStackedCenteredPreview(params: {
     if (it.kind === "photo" || it.kind === "img") {
       const im = await loadImageSafe(it.url);
       if (im) {
-        // contain inside a smaller box to avoid touching edges
         const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
         const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
         drawImageContain(ctx, im, rr);
@@ -526,12 +539,10 @@ async function renderStackedCenteredPreview(params: {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      // size hierarchy: lastName > first/middle > dates
-      const lastBase = Math.min(44, Math.max(18, Math.floor(rr.h * 0.42)));
-      const fnBase = Math.min(32, Math.max(14, Math.floor(rr.h * 0.30)));
-      const datesBase = Math.min(26, Math.max(12, Math.floor(rr.h * 0.22)));
+      const lastBase = Math.min(isPlate ? 52 : 44, Math.max(18, Math.floor(rr.h * 0.44)));
+      const fnBase = Math.min(isPlate ? 40 : 32, Math.max(14, Math.floor(rr.h * 0.32)));
+      const datesBase = Math.min(isPlate ? 32 : 26, Math.max(12, Math.floor(rr.h * 0.24)));
 
-      // fit to width independently
       const fit = (text: string, start: number, min: number) => {
         let fs = start;
         while (fs > min) {
@@ -575,14 +586,14 @@ async function renderStackedCenteredPreview(params: {
       const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
       const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
 
-      const lines = splitHardLines(it.text);
+      const specialStair = isPomnimLubenSkorbim(it.text);
+      const lines = specialStair ? ["Помним,", "любим,", "скорбим..."] : splitHardLines(it.text);
 
       ctx.save();
       ctx.fillStyle = "#fff";
-      ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      const start = Math.min(26, Math.max(14, Math.floor(rr.h * 0.32)));
+      const start = Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
       ctx.font = `${start}px "Times New Roman", serif`;
 
       const fs = fitFontToBoxHardLines({
@@ -591,18 +602,35 @@ async function renderStackedCenteredPreview(params: {
         maxW: rr.w,
         maxH: rr.h,
         startSize: start,
-        minSize: 10,
+        minSize: isPlate ? 11 : 10,
         lineH: 1.18
       });
 
       ctx.font = `${fs}px "Times New Roman", serif`;
-      const lineH = Math.round(fs * 1.18);
-      const total = lineH * lines.length;
-      let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineH / 2);
+      const lineHpx = Math.round(fs * 1.18);
+      const total = lineHpx * lines.length;
+      let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineHpx / 2);
 
-      for (const line of lines) {
-        ctx.fillText(line || " ", rr.x + rr.w / 2, ty);
-        ty += lineH;
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li] || " ";
+
+        if (specialStair && lines.length === 3) {
+          if (li === 0) {
+            ctx.textAlign = "left";
+            ctx.fillText(line, rr.x, ty);
+          } else if (li === 1) {
+            ctx.textAlign = "center";
+            ctx.fillText(line, rr.x + rr.w / 2, ty);
+          } else {
+            ctx.textAlign = "right";
+            ctx.fillText(line, rr.x + rr.w, ty);
+          }
+        } else {
+          ctx.textAlign = "center";
+          ctx.fillText(line, rr.x + rr.w / 2, ty);
+        }
+
+        ty += lineHpx;
       }
 
       ctx.restore();
@@ -1234,7 +1262,8 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
         bg: { type: "gradient" },
         bgFit: "cover",
         overlayPng: overlay,
-        items
+        items,
+        profile: "rear"
       });
 
       if (!alive) return;
@@ -1259,27 +1288,21 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   // plate size -> extras.plateSize (displayed in TopBarWithIntro)
   const plateSize0 = String((extras0 as any)?.plateSize || "").trim();
-const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
-type PlateSizePreset = (typeof presetSizes)[number];
+  const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
+  type PlateSizePreset = (typeof presetSizes)[number];
 
-const DEFAULT_PLATE_SIZE: PlateSizePreset = "100-50-5";
+  const DEFAULT_PLATE_SIZE: PlateSizePreset = "100-50-5";
 
-const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(() => {
-  // если в драфте уже стоит один из пресетов — используем его
-  if ((presetSizes as readonly string[]).includes(plateSize0)) return plateSize0 as PlateSizePreset;
+  const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(() => {
+    if ((presetSizes as readonly string[]).includes(plateSize0)) return plateSize0 as PlateSizePreset;
+    if (plateSize0) return "custom";
+    return DEFAULT_PLATE_SIZE;
+  });
 
-  // если размер задан, но не пресет — значит это "свой вариант"
-  if (plateSize0) return "custom";
-
-  // ✅ если в драфте размера нет — дефолтный пресет
-  return DEFAULT_PLATE_SIZE;
-});
-
-const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
-  // для "custom" заполняем тем, что было в драфте; если пусто — пусть будет пусто
-  if (plateSize0 && !(presetSizes as readonly string[]).includes(plateSize0)) return plateSize0;
-  return "";
-});
+  const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
+    if (plateSize0 && !(presetSizes as readonly string[]).includes(plateSize0)) return plateSize0;
+    return "";
+  });
 
   const commitPlateSize = useCallback((value: string) => {
     const v = String(value || "").trim();
@@ -1288,15 +1311,15 @@ const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
   }, []);
 
   useEffect(() => {
-  if (!plateEnabled) return;
+    if (!plateEnabled) return;
 
-  if (plateSizeMode === "custom") {
-    commitPlateSize(plateSizeCustom);
-  } else {
-    commitPlateSize(plateSizeMode);
-  }
-  setDraft(loadOrderDraft());
-}, [plateEnabled, plateSizeMode, plateSizeCustom, commitPlateSize]);
+    if (plateSizeMode === "custom") {
+      commitPlateSize(plateSizeCustom);
+    } else {
+      commitPlateSize(plateSizeMode);
+    }
+    setDraft(loadOrderDraft());
+  }, [plateEnabled, plateSizeMode, plateSizeCustom, commitPlateSize]);
 
   const initialPlateSelected = useMemo(() => {
     const d0 = loadOrderDraft();
@@ -1491,7 +1514,8 @@ const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
         bg: { type: "image", url: PLATE_BG_URL },
         bgFit: "contain",
         overlayPng: null,
-        items
+        items,
+        profile: "plate"
       });
 
       if (!alive) return;
