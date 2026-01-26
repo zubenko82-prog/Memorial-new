@@ -383,9 +383,20 @@ function splitHardLines(text: string): string[] {
 }
 
 function isPomnimLubenSkorbim(text: string): boolean {
-  const t = normEpitaph(String(text || ""));
-  return t === "Помним, любим, скорбим..." || t === "Помним,\nлюбим,\nскорбим...";
+  const x = normEpitaph(String(text || ""))
+    .toLowerCase()
+    .replace(/[ ]+/g, " ");
+  const canon1 = "помним, любим, скорбим...";
+  const canon2 = "помним, любим, скорбим…";
+  const canon3 = "помним,\nлюбим,\nскорбим...";
+  const canon4 = "помним,\nлюбим,\nскорбим…";
+  return x === canon1 || x === canon2 || x === canon3 || x === canon4;
 }
+
+function pomnimStairLines(): [string, string, string] {
+  return ["Помним,", "любим,", "скорбим..."];
+}
+
 
 function measureHardLinesHeight(fontPx: number, lineH: number, linesCount: number) {
   return Math.round(linesCount * fontPx * lineH);
@@ -583,58 +594,73 @@ async function renderStackedCenteredPreview(params: {
     }
 
     if (it.kind === "text") {
-      const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
-      const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+  const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
+  const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
 
-      const specialStair = isPomnimLubenSkorbim(it.text);
-      const lines = specialStair ? ["Помним,", "любим,", "скорбим..."] : splitHardLines(it.text);
+  const specialStair = isPomnimLubenSkorbim(it.text);
+  const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
 
-      ctx.save();
-      ctx.fillStyle = "#fff";
-      ctx.textBaseline = "middle";
-
-      const start = Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
-      ctx.font = `${start}px "Times New Roman", serif`;
-
-      const fs = fitFontToBoxHardLines({
-        ctx,
-        lines,
-        maxW: rr.w,
-        maxH: rr.h,
-        startSize: start,
-        minSize: isPlate ? 11 : 10,
-        lineH: 1.18
-      });
-
-      ctx.font = `${fs}px "Times New Roman", serif`;
-      const lineHpx = Math.round(fs * 1.18);
-      const total = lineHpx * lines.length;
-      let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineHpx / 2);
-
-      for (let li = 0; li < lines.length; li++) {
-        const line = lines[li] || " ";
-
-        if (specialStair && lines.length === 3) {
-          if (li === 0) {
-            ctx.textAlign = "left";
-            ctx.fillText(line, rr.x, ty);
-          } else if (li === 1) {
-            ctx.textAlign = "center";
-            ctx.fillText(line, rr.x + rr.w / 2, ty);
-          } else {
-            ctx.textAlign = "right";
-            ctx.fillText(line, rr.x + rr.w, ty);
-          }
-        } else {
-          ctx.textAlign = "center";
-          ctx.fillText(line, rr.x + rr.w / 2, ty);
-        }
-
-        ty += lineHpx;
+  // ✅ как в SketchTemplate: лесенка уже (не на всю ширину)
+  const rr = specialStair
+    ? {
+        x: rr0.x + Math.round(rr0.w * 0.19), // сужаем примерно до 62% (0.19 слева + 0.19 справа)
+        y: rr0.y,
+        w: Math.round(rr0.w * 0.62),
+        h: rr0.h
       }
+    : rr0;
 
-      ctx.restore();
+  ctx.save();
+  ctx.fillStyle = "#fff";
+  ctx.textBaseline = "middle";
+
+  // ✅ крупнее старт для лесенки (и на плите ещё крупнее)
+  const start = specialStair
+    ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
+    : Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
+
+  ctx.font = `${start}px "Times New Roman", serif`;
+
+  const fs = fitFontToBoxHardLines({
+    ctx,
+    lines: Array.from(lines),
+    maxW: rr.w,
+    maxH: rr.h,
+    startSize: start,
+    minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
+    lineH: specialStair ? 1.12 : 1.18
+  });
+
+  ctx.font = `${fs}px "Times New Roman", serif`;
+  const lineHpx = Math.round(fs * (specialStair ? 1.12 : 1.18));
+  const total = lineHpx * lines.length;
+  let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineHpx / 2);
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = (lines[li] || " ") as string;
+
+    if (specialStair && lines.length === 3) {
+      if (li === 0) {
+        ctx.textAlign = "left";
+        ctx.fillText(line, rr.x, ty);
+      } else if (li === 1) {
+        ctx.textAlign = "center";
+        ctx.fillText(line, rr.x + rr.w / 2, ty);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(line, rr.x + rr.w, ty);
+      }
+    } else {
+      ctx.textAlign = "center";
+      ctx.fillText(line, rr.x + rr.w / 2, ty);
     }
+
+    ty += lineHpx;
+  }
+
+  ctx.restore();
+}
+
 
     y += h + gap;
   }
