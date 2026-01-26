@@ -418,7 +418,7 @@ function fitFontToBoxHardLines(params: {
   const widest = () => Math.max(...lines.map((l) => ctx.measureText(l || " ").width), 0);
 
   while (fs > minSize) {
-    ctx.font = `${fs}px "Times New Roman", serif`;
+    ctx.font = `${fs}px ${FONT_CENTURY}`;
     const w = widest();
     const h = measureHardLinesHeight(fs, lineH, lines.length);
     if (w <= maxW && h <= maxH) break;
@@ -625,37 +625,29 @@ const widthSafety = specialStair ? Math.round(rr.w * 0.96) : rr.w;
   const fontFamily = FONT_CENTURY;
 
   // База шрифта: для плиты больше; для лесенки ещё больше (как вы сделали в SketchTemplate)
-  const start = specialStair
-    ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
-    : Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
+  const plateMul = isPlate ? 0.88 : 1; // чуть меньше на плите
 
-  ctx.font = `italic ${start}px ${fontFamily}`;
+const startRaw = specialStair
+  ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
+  : Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
 
-  const lineH = specialStair ? 1.15 : 1.18;
+const start = Math.round(startRaw * plateMul);
 
-  const fs = fitFontToBoxHardLines({
-    ctx,
-    lines: Array.from(lines),
-    maxW: widthSafety,
-    maxH: rr.h,
-    startSize: start,
-    minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
-    lineH
-  });
+ctx.font = `italic ${start}px ${fontFamily}`;
+const lineH = specialStair ? 1.15 : 1.18;
 
-  const plateMul = isPlate ? 0.88 : 1; // ✅ чуть меньше на плите
+const fs = fitFontToBoxHardLines({
+  ctx,
+  lines: Array.from(lines),
+  maxW: widthSafety,
+  maxH: rr.h,
+  startSize: start,
+  minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
+  lineH
+});
 
-const start = specialStair
-  ? Math.round(
-      plateMul *
-        Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
-    )
-  : Math.round(
-      plateMul *
-        Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))))
-    );
+ctx.font = `italic ${fs}px ${fontFamily}`;
 
-  ctx.font = `italic ${fs}px ${fontFamily}`;
 
   const lineHpx = Math.round(fs * lineH);
   const total = lineHpx * lines.length;
