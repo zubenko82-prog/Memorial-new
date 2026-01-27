@@ -146,6 +146,35 @@ function uniqueByNorm(list: string[]): string[] {
   return out;
 }
 
+function emptyPlate(): PlateDraft {
+  return {
+    plateSize: null,
+    plateGraphicsIds: null,
+    plateGraphicsMeta: null,
+    plateEpitaph: null,
+    plateEpitaphs: null,
+    plateEpitaphTexts: null,
+    platePreviewUrl: null,
+    platePreviewHiUrl: null
+  };
+}
+
+// Миграция старого формата extras (когда поля плиты лежали прямо в extras)
+function legacyExtrasToPlate0(ex: any): PlateDraft {
+  if (!ex || typeof ex !== "object") return emptyPlate();
+
+  return {
+    plateSize: ex?.plateSize ?? null,
+    plateGraphicsIds: Array.isArray(ex?.plateGraphicsIds) ? ex.plateGraphicsIds : null,
+    plateGraphicsMeta: ex?.plateGraphicsMeta || null,
+    plateEpitaph: typeof ex?.plateEpitaph === "string" ? ex.plateEpitaph : null,
+    plateEpitaphs: Array.isArray(ex?.plateEpitaphs) ? ex.plateEpitaphs : null,
+    plateEpitaphTexts: ex?.plateEpitaphTexts ?? null,
+    platePreviewUrl: ex?.platePreviewUrl ?? null,
+    platePreviewHiUrl: ex?.platePreviewHiUrl ?? null
+  };
+}
+
 function ensurePlates(ex: any): PlateDraft[] {
   const arr = Array.isArray(ex?.plates) ? ex.plates : null;
   const plates: PlateDraft[] = (arr || []).filter(Boolean).slice(0, 3).map((p: any) => ({
@@ -163,6 +192,10 @@ function ensurePlates(ex: any): PlateDraft[] {
   while (plates.length < 3) plates.push(legacyExtrasToPlate0({}));
   return plates;
 }
+
+const PLATE_PRESET_SIZES = ["80-40-5", "100-50-5", "120-60-5"] as const;
+type PlateSizePreset = (typeof PLATE_PRESET_SIZES)[number];
+const DEFAULT_PLATE_SIZE: PlateSizePreset = "100-50-5";
 /* ========= Accordion ========= */
 function LoudAccordion({
   title,
@@ -221,6 +254,47 @@ function LoudAccordion({
   );
 }
 
+function PlateHeader({
+  title,
+  enabled,
+  qty,
+  onToggle,
+  onQty
+}: {
+  title: string;
+  enabled: boolean;
+  qty: number;
+  onToggle: (v: boolean) => void;
+  onQty: (v: number) => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%" }}>
+      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
+        <span style={{ fontWeight: 800, fontSize: 15 }}>{title}</span>
+      </label>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ opacity: 0.85, fontSize: 13 }}>шт.</span>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={qty}
+          onChange={(e) => onQty(Number(e.target.value))}
+          style={{
+            width: 70,
+            padding: "6px 8px",
+            borderRadius: 8,
+            border: "1px solid rgba(255,255,255,0.25)",
+            background: "rgba(255,255,255,0.10)",
+            color: "#fff"
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 /* ========= Preview helpers ========= */
 const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
 
@@ -1380,6 +1454,43 @@ const [plateCount, setPlateCount] = useState<number>(() => {
       return uniqueByNorm(arr);
     }).slice(0, 3);
   });
+  const [plateEnabledByPlate, setPlateEnabledByPlate] = useState<boolean[]>(() => {
+    const all = ensurePlates(extras0 as any);
+    return all.map((p) => (p as any)?.enabled ?? true).slice(0, 3);
+  });
+
+  const [plateQtyByPlate, setPlateQtyByPlate] = useState<number[]>(() => {
+    const all = ensurePlates(extras0 as any);
+    return all
+      .map((p) => (Number.isFinite((p as any)?.qty) ? Math.max(1, Math.floor(Number((p as any).qty))) : 1))
+      .slice(0, 3);
+  });
+
+  function setPlateEnabled(i: number, v: boolean) {
+    setPlateEnabledByPlate((a) => a.map((x, k) => (k === i ? v : x)));
+  }
+  function setPlateQty(i: number, v: number) {
+    const n = Math.max(1, Math.floor(Number(v) || 1));
+    setPlateQtyByPlate((a) => a.map((x, k) => (k === i ? n : x)));
+  }
+
+
+
+
+
+
+
+ plate0Enabled = !!plateEnabledByPlate?.[0];
+ plate0Qty = plateQtyByPlate?.[0] || 1;
+
+
+ plate0Enabled = !!plateEnabledByPlate?.[0];
+ plate0Qty = plateQtyByPlate?.[0] || 1;
+
+
+  // Aliases for legacy (plate #1) code: source of truth is per-plate state.
+  const plate0Enabled = !!plateEnabledByPlate?.[0];
+  const plate0Qty = plateQtyByPlate?.[0] || 1;
 
   const [plateOpenByPlate, setPlateOpenByPlate] = useState<Array<"epitaphs" | "graphics" | null>>(() => [null, null, null]);
   const [plateShowMoreByPlate, setPlateShowMoreByPlate] = useState<boolean[]>(() => [false, false, false]);
@@ -1389,7 +1500,7 @@ const [plateCount, setPlateCount] = useState<number>(() => {
     const all = ensurePlates(extras0 as any);
     return all.map((p) => {
       const v = String((p as any)?.plateSize || "").trim();
-      if ((presetSizes as readonly string[]).includes(v)) return v as any;
+      if ((PLATE_PRESET_SIZES as readonly string[]).includes(v)) return v as any;
       if (v) return "custom";
       return DEFAULT_PLATE_SIZE;
     }).slice(0, 3);
@@ -1398,7 +1509,7 @@ const [plateCount, setPlateCount] = useState<number>(() => {
     const all = ensurePlates(extras0 as any);
     return all.map((p) => {
       const v = String((p as any)?.plateSize || "").trim();
-      if (v && !(presetSizes as readonly string[]).includes(v)) return v;
+      if (v && !(PLATE_PRESET_SIZES as readonly string[]).includes(v)) return v;
       return "";
     }).slice(0, 3);
   });
@@ -1409,19 +1520,14 @@ const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as 
 
   // plate size -> extras.plateSize (displayed in TopBarWithIntro)
   const plateSize0 = String((extras0 as any)?.plateSize || "").trim();
-  const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
-  type PlateSizePreset = (typeof presetSizes)[number];
-
-  const DEFAULT_PLATE_SIZE: PlateSizePreset = "100-50-5";
-
   const [plateSizeMode, setPlateSizeMode] = useState<PlateSizePreset | "custom">(() => {
-    if ((presetSizes as readonly string[]).includes(plateSize0)) return plateSize0 as PlateSizePreset;
+    if ((PLATE_PRESET_SIZES as readonly string[]).includes(plateSize0)) return plateSize0 as PlateSizePreset;
     if (plateSize0) return "custom";
     return DEFAULT_PLATE_SIZE;
   });
 
   const [plateSizeCustom, setPlateSizeCustom] = useState<string>(() => {
-    if (plateSize0 && !(presetSizes as readonly string[]).includes(plateSize0)) return plateSize0;
+    if (plateSize0 && !(PLATE_PRESET_SIZES as readonly string[]).includes(plateSize0)) return plateSize0;
     return "";
   });
 
@@ -1833,7 +1939,11 @@ function savePlateAtIndex(idx: number, patch: Partial<PlateDraft>) {
   const all = ensurePlates(ex);
   const i = Math.min(2, Math.max(0, Math.floor(Number(idx) || 0)));
 
-  all[i] = { ...(all[i] || emptyPlateDraft()), ...patch };
+  // Always persist enabled/qty from UI state (so disabling doesn't wipe data)
+  const enabled = (plateEnabledByPlate?.[i] ?? true) as boolean;
+  const qty = Math.max(1, Math.floor(Number(plateQtyByPlate?.[i] ?? 1)));
+
+  all[i] = { ...(all[i] || emptyPlateDraft()), enabled, qty, ...patch };
 
   const extrasPatch: any = { plates: all.slice(0, 3) };
   if (i === 0) Object.assign(extrasPatch, plate0ToLegacyExtras(all[0]));
@@ -1841,652 +1951,69 @@ function savePlateAtIndex(idx: number, patch: Partial<PlateDraft>) {
   saveOrderDraft({ extras: extrasPatch } as any);
   dispatchDraftUpdated();
 }
-function plate0ToLegacyExtras(p0: PlateDraft): any {
-  return {
-    plateSize: p0.plateSize ?? null,
-    plateGraphicsIds: p0.plateGraphicsIds ?? null,
-    plateGraphicsMeta: p0.plateGraphicsMeta ?? null,
-    plateEpitaph: p0.plateEpitaph ?? null,
-    plateEpitaphs: p0.plateEpitaphs ?? null,
-    plateEpitaphTexts: p0.plateEpitaphTexts ?? null,
-    platePreviewUrl: p0.platePreviewUrl ?? null,
-    platePreviewHiUrl: p0.platePreviewHiUrl ?? null
-  };
-}
 
-  const [rearOpen, setRearOpen] = useState<RearAcc>(null);
-  const [plateOpen, setPlateOpen] = useState<PlateAcc>(null);
 
-  useEffect(() => {
-    if (!rearEnabled) setRearOpen(null);
-  }, [rearEnabled]);
-  useEffect(() => {
-    if (!plateEnabled) setPlateOpenByPlate([null, null, null] as any);
-  }, [plateEnabled]);
-
-  const toggleRearAcc = (k: RearAcc) => setRearOpen((prev) => (prev === k ? null : k));
-  const togglePlateAcc = (i: number, k: PlateAcc) =>
-  setPlateOpenByPlate((prev) => prev.map((v, idx) => (idx === i ? (v === k ? null : k) : v)) as any);
-
-  useEffect(() => {
-  if (!plateEnabled) return;
-  const v = Math.max(1, Math.floor(Number(plateQty) || 1));
-  saveOrderDraft({ extras: { plateQty: v } as any });
-  dispatchDraftUpdated();
-}, [plateEnabled, plateQty]);
-
-useEffect(() => {
-  if (!plateEnabled) return;
-  const v = Math.min(3, Math.max(1, Math.floor(Number(plateCount) || 1)));
-  saveOrderDraft({ extras: { plateCount: v } as any });
-  dispatchDraftUpdated();
-}, [plateEnabled, plateCount]);
-
-  /* =========================
-   * Catalog grid helpers
-   * ========================= */
-  function useColsByWidth() {
-    const rootRef = useRef<HTMLDivElement | null>(null);
-    const [colsCount, setColsCount] = useState<number>(2);
-    useEffect(() => {
-      const el = rootRef.current;
-      if (!el) return;
-      const ro = new ResizeObserver((entries) => {
-        const w = entries[0]?.contentRect?.width || el.clientWidth || 0;
-        setColsCount(Math.max(2, Math.floor(w / 160)));
-      });
-      ro.observe(el);
-      return () => ro.disconnect();
-    }, []);
-    return { rootRef, colsCount };
-  }
-
-  const rearGrid = useColsByWidth();
-  const plateGridByPlate = [useColsByWidth(), useColsByWidth(), useColsByWidth()];
-
-  function CatGrid({
-    items,
-    ids,
-    addGraphic,
-    removeGraphic,
-    rootRef,
-    colsCount
-  }: {
-    items: any[];
-    ids: string[];
-    addGraphic: (g: any) => void;
-    removeGraphic: (gid: string) => void;
-    rootRef: React.RefObject<HTMLDivElement | null>;
-    colsCount: number;
-  }) {
-    return (
-      <div ref={rootRef} style={{ display: "grid", gridTemplateColumns: `repeat(${colsCount}, minmax(0, 1fr))`, gap: 12 }}>
-        {items.map((g: any, idx: number) => {
-          const gid = String(g.id || g.relPath || g.url || g.name || idx);
-          const qty = ids.filter((x) => x === gid).length;
-          const selected = qty > 0;
-          const thumbUrl = g.preview || g.url || "";
-          const name = g.name || gid;
-
-          return (
-            <div
-              key={gid}
-              aria-selected={selected}
-              style={{
-                ...glassPanelStyle(),
-                padding: 8,
-                borderRadius: 12,
-                position: "relative",
-                borderColor: selected ? "#9cc4ff" : "rgba(255,255,255,0.14)",
-                boxShadow: selected ? "0 0 0 1px #9cc4ff inset" : undefined
-              }}
+              title={
+                <PlateHeader
+                  title={`Надгробная плита +${plateIndex + 1}`}
+                  enabled={!!plateEnabledByPlate[plateIndex]}
+                  qty={plateQtyByPlate[plateIndex] || 1}
+                  onToggle={(v) => { setPlateEnabled(plateIndex, v); savePlateAtIndex(plateIndex, {}); }}
+                  onQty={(v) => { setPlateQty(plateIndex, v); savePlateAtIndex(plateIndex, {}); }}
+                />
+              }
             >
-              <div
-                aria-hidden
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 8,
-                  display: selected ? "inline-flex" : "none",
-                  alignItems: "center",
-                  gap: 4,
-                  background: "rgba(10,127,46,0.95)",
-                  color: "#fff",
-                  borderRadius: 999,
-                  padding: "0 6px",
-                  fontSize: 11,
-                  lineHeight: "18px",
-                  height: 18
-                }}
-                title={`Выбрано: ${qty}`}
-              >
-                <span>✓</span>
-                <span>{qty}</span>
-              </div>
-
-              <div
-                role="button"
-                title={name}
-                onClick={() => addGraphic(g)}
-                style={{
-                  borderRadius: 10,
-                  overflow: "hidden",
-                  background: selected ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
-                  aspectRatio: "1/1",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  border: selected ? "1px solid #9cc4ff" : "1px solid rgba(255,255,255,0.12)",
-                  cursor: "pointer",
-                  outline: "none"
-                }}
-              >
-                {thumbUrl ? (
-                  <img src={thumbUrl} alt={name} style={{ maxWidth: "90%", maxHeight: "90%", width: "auto", height: "auto", display: "block" }} />
-                ) : (
-                  <div style={{ opacity: 0.8, fontSize: 12 }}>нет</div>
-                )}
-              </div>
-
-              <div title={name} style={{ marginTop: 6, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.95 }}>
-                {name}
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                <button type="button" onClick={() => removeGraphic(gid)} disabled={qty === 0} style={glassButtonStyle("nano", qty === 0)}>
-                  −
-                </button>
-                <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-                <button type="button" onClick={() => addGraphic(g)} style={glassButtonStyle("nano")}>
-                  +
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  /* =========================
-   * Actions
-   * ========================= */
-  const handleBack = useCallback(() => {
-    try {
-      if (rearEnabled) flushRearPeopleSaveNow();
-    } catch {}
-    setOutro(true);
-    setTimeout(() => onBack?.(), 320);
-  }, [flushRearPeopleSaveNow, onBack, rearEnabled]);
-
-  const handleContinue = useCallback(() => {
-    try {
-      if (rearEnabled) flushRearPeopleSaveNow();
-    } catch {}
-    setOutro(true);
-    setTimeout(() => onContinue?.(), 320);
-  }, [flushRearPeopleSaveNow, onContinue, rearEnabled]);
-
-  return (
-    <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
-      <TopBarWithIntro title="Тыл" />
-
-      {/* Дополнительно (НЕ accordion) */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Дополнительно</div>
-        <div style={{ ...sectionBoxStyle(), padding: 10 }}>
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={hasPedestal}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  setHasPedestal(v);
-                  saveOrderDraft({ extras: { tumba: v } as any });
-                  dispatchDraftUpdated();
-                  setDraft(loadOrderDraft());
-                }}
-              />
-              <span>Тумба</span>
-            </label>
-
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={hasFlowerbed}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  setHasFlowerbed(v);
-                  saveOrderDraft({ extras: { flowerbed: v } as any });
-                  dispatchDraftUpdated();
-                  setDraft(loadOrderDraft());
-                }}
-              />
-              <span>Цветник</span>
-            </label>
-
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={hasVase}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  setHasVase(v);
-                  saveOrderDraft({ extras: { vase: v } as any });
-                  dispatchDraftUpdated();
-                  setDraft(loadOrderDraft());
-                }}
-              />
-              <span>Ваза</span>
-            </label>
-          </div>
-        </div>
-      </section>
-
-      {/* =======================
-          Тыльная сторона
-         ======================= */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        {titleWithCheckbox({ title: "Тыльная сторона", enabled: rearEnabled, onToggle: setRearEnabled })}
-      </section>
-
-      {rearEnabled && (
-        <>
-          {/* Выбрано (тыл) */}
-          <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10, borderColor: "rgba(255,80,80,0.95)" }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Выбрано (тыл)</div>
-
-            {rearChosenList.length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: rearEpitaphList.length ? 8 : 0 }}>
-                {rearChosenList.map((g: any, i: number) => {
-                  const gid = String(g.id || g.url || i);
-                  return (
-                    <div key={`rear-chosen-${gid}-${i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
-                      <Thumb url={g.url} />
-                      <div title={g.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {g.name || g.id}
-                      </div>
-                      <button
-                        type="button"
-                        title="Удалить"
-                        onClick={() => removeRearGraphic(String(g.id || g.name || g.url || ""))}
-                        style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {rearEpitaphList.length > 0 && (
-              <div style={{ display: "grid", gap: 6 }}>
-                {rearEpitaphList.map((t, idx) => (
-                  <div
-                    key={`rear-ep-preview-${idx}-${normEpitaph(t)}`}
-                    style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
-                  >
-                    <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
-                    <button
-                      type="button"
-                      title="Удалить эпитафию"
-                      onClick={() => removeRearEpitaph(t)}
-                      style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {rearChosenList.length === 0 && rearEpitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
-          </section>
-
-          {/* Аккордеоны тыла: только один открыт */}
-          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-            <LoudAccordion title="Усопшие" open={rearOpen === "people"} onToggle={() => toggleRearAcc("people")}>
-              <div style={{ display: "grid", gap: 10 }}>
-                {rearPeople.map((p, idx) => {
-                  const err = validateDates(p.birthDate, p.deathDate);
-                  const nameLeft = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
-                  const hasPhoto = !!(rearTransientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
-
-                  return (
-                    <div key={p.id} style={{ ...glassPanelStyle(), padding: 0 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "6px 8px",
-                          background: "rgba(0,0,0,0.66)",
-                          borderRadius: 12
-                        }}
-                      >
-                        <span style={{ opacity: 0.9 }}>{idx + 1} -</span>
-                        <div style={{ fontSize: 16, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {nameLeft}
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRearPeople((prev) => {
-                                if (idx === 0) return prev;
-                                const next = prev.slice();
-                                const t = next[idx - 1];
-                                next[idx - 1] = next[idx];
-                                next[idx] = t;
-                                return next;
-                              });
-                            }}
-                            disabled={idx === 0}
-                            style={{ ...iconBtn(), opacity: idx === 0 ? 0.4 : 1 }}
-                            title="Выше"
-                          >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRearPeople((prev) => {
-                                if (idx === prev.length - 1) return prev;
-                                const next = prev.slice();
-                                const t = next[idx + 1];
-                                next[idx + 1] = next[idx];
-                                next[idx] = t;
-                                return next;
-                              });
-                            }}
-                            disabled={idx === rearPeople.length - 1}
-                            style={{ ...iconBtn(), opacity: idx === rearPeople.length - 1 ? 0.4 : 1 }}
-                            title="Ниже"
-                          >
-                            ▼
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRearPeople((prev) => {
-                                const next = prev.filter((_, i) => i !== idx);
-                                return next.length > 0 ? next : [makeBlankPerson("p-0")];
-                              });
-                            }}
-                            style={iconBtn()}
-                            title="Удалить"
-                          >
-                            ✖
-                          </button>
-                        </div>
-                      </div>
-
-                      <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.14)" }}>
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                            <Field label="Фамилия">
-                              <input
-                                value={p.lastName ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, lastName: e.target.value } : x)))}
-                                style={inputStyle()}
-                                placeholder="Иванов"
-                              />
-                            </Field>
-                            <Field label="Имя">
-                              <input
-                                value={p.firstName ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, firstName: e.target.value } : x)))}
-                                style={inputStyle()}
-                                placeholder="Иван"
-                              />
-                            </Field>
-                            <Field label="Отчество">
-                              <input
-                                value={p.middleName ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, middleName: e.target.value } : x)))}
-                                style={inputStyle()}
-                                placeholder="Иванович"
-                              />
-                            </Field>
-                          </div>
-
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                            <Field label="Дата рождения">
-                              <input
-                                value={p.birthDate ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, birthDate: e.target.value } : x)))}
-                                style={{ ...inputStyle(), borderColor: err && err.includes("рождения") ? "salmon" : "rgba(255,255,255,0.18)" }}
-                                placeholder="01.01.1950"
-                              />
-                            </Field>
-                            <Field label="Дата смерти">
-                              <input
-                                value={p.deathDate ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, deathDate: e.target.value } : x)))}
-                                style={{ ...inputStyle(), borderColor: err && (err.includes("смерти") || err.includes("раньше")) ? "salmon" : "rgba(255,255,255,0.18)" }}
-                                placeholder="01.01.2024"
-                              />
-                            </Field>
-                            {!!err && <div style={{ color: "salmon", fontSize: 12, marginTop: -4 }}>{err}</div>}
-                          </div>
-
-                          <div>
-                            {!hasPhoto && (
-                              <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>
-                                Прикрепите фотографию. Она сохранится в заявке.
-                              </div>
-                            )}
-                            <PhotoField
-                              label="Фотография"
-                              value={{ url: rearTransientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
-                              onChange={(pv) => setRearPersonPhotoById(p.id, pv)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                <div style={{ marginTop: 2 }}>
-                  <button type="button" onClick={() => setRearPeople((prev) => prev.concat([makeBlankPerson()]))} style={glassButtonStyle("sm")}>
-                    Добавить
-                  </button>
-                </div>
-              </div>
-            </LoudAccordion>
-
-            <LoudAccordion
-              title="Эпитафии"
-              open={rearOpen === "epitaphs"}
-              onToggle={() => toggleRearAcc("epitaphs")}
-              containerStyle={{
-                border: "1px solid rgba(255,255,255,1)",
-                background: "rgba(255,255,255,0.08)"
-              }}
-            >
-              <div style={{ display: "grid", gap: 10 }}>
-                <div style={sectionBoxStyle()}>
-                  <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {QUICK_EPITAPHS.map((t) => {
-                      const active = hasByNorm(rearSelectedEpitaphs, t);
-                      return (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => toggleRearEpitaph(t)}
-                          style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
-                          title={t}
-                        >
-                          {t}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div style={sectionBoxStyle()}>
-                  <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
-                  <button type="button" onClick={() => setRearShowMore((v) => !v)} style={glassButtonStyle("nano")}>
-                    {rearShowMore ? "Свернуть список" : "Развернуть список"}
-                  </button>
-
-                  {rearShowMore && (
-                    <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, padding: 2 }}>
-                      {MORE_EPITAPHS.map((t, idx) => {
-                        const active = hasByNorm(rearSelectedEpitaphs, t);
-                        return (
-                          <button
-                            key={`rear-more-${idx}-${normEpitaph(t)}`}
-                            type="button"
-                            onClick={() => toggleRearEpitaph(t)}
-                            title={t}
-                            style={{
-                              textAlign: "left",
-                              ...glassPanelStyle(),
-                              borderRadius: 10,
-                              padding: 10,
-                              cursor: "pointer",
-                              outline: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.14)",
-                              fontSize: 13,
-                              lineHeight: 1.25,
-                              whiteSpace: "pre-wrap"
-                            }}
-                          >
-                            {t}
-                            <div style={{ marginTop: 6, fontSize: 12 }}>{active ? "Удалить из выбранных" : "Добавить к выбранным"}</div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div style={sectionBoxStyle()}>
-                  <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <textarea
-                      rows={3}
-                      value={rearCustomText}
-                      onChange={(e) => setRearCustomText(e.target.value)}
-                      placeholder="Введите текст и нажмите «Добавить»"
-                      style={{ ...inputStyle(), resize: "vertical" }}
-                    />
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={addRearCustom}>
-                        Добавить
-                      </button>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={() => setRearSelectedEpitaphs([])}>
-                        Очистить выбранные
-                      </button>
-                      {rearSelectedEpitaphs.length > 0 && <div>Выбрано: {rearSelectedEpitaphs.length}</div>}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </LoudAccordion>
-
-            <LoudAccordion title="Графика" open={rearOpen === "graphics"} onToggle={() => toggleRearAcc("graphics")}>
-              {catsLoading && <div>Загрузка каталога…</div>}
-              {catsError && <div style={{ color: "#ffb4b4" }}>{catsError}</div>}
-              {!catsLoading && cats.length === 0 && !catsError && <div>Каталог пуст.</div>}
-
-              {!catsLoading && cats.length > 0 && (
-                <div style={{ display: "grid", gap: 12 }}>
-                  {cats.map((cat: any, idx: number) => {
-                    const catKey = String(cat._id || cat.name || idx);
-                    const open = !!(catOpenRear || {})[catKey];
-                    const toggle = () => setCatOpenRear({ ...(catOpenRear || {}), [catKey]: !open });
-
-                    return (
-                      <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
-                        <CatGrid
-                          items={cat.items || []}
-                          ids={rearIds}
-                          addGraphic={addRearGraphic}
-                          removeGraphic={removeRearGraphic}
-                          rootRef={rearGrid.rootRef}
-                          colsCount={rearGrid.colsCount}
-                        />
-
-                        {(cat.children || []).map((sub: any, j: number) => {
-                          const subKey = String(sub._id || `${catKey}-sub-${j}`);
-                          const subOpen = !!(catOpenRear || {})[subKey];
-                          const subToggle = () => setCatOpenRear({ ...(catOpenRear || {}), [subKey]: !subOpen });
-
-                          return (
-                            <div key={subKey} style={{ marginTop: 10 }}>
-                              <LoudAccordion title={sub.name || `Подкатегория ${j + 1}`} open={subOpen} onToggle={subToggle}>
-                                <CatGrid
-                                  items={sub.items || []}
-                                  ids={rearIds}
-                                  addGraphic={addRearGraphic}
-                                  removeGraphic={removeRearGraphic}
-                                  rootRef={rearGrid.rootRef}
-                                  colsCount={rearGrid.colsCount}
-                                />
-                              </LoudAccordion>
-                            </div>
-                          );
-                        })}
-                      </LoudAccordion>
-                    );
-                  })}
-                </div>
+              {!plateEnabledByPlate[plateIndex] ? (
+                <div style={{ opacity: 0.75, fontSize: 13 }}>Плита отключена</div>
+              ) : (
+                <div style={{ opacity: 0.75, fontSize: 13 }}>Настройки ниже применяются к этой плите.</div>
               )}
             </LoudAccordion>
-          </div>
-        </>
-      )}
-
-      {/* =======================
-          Надгробная плита
-         ======================= */}
-      <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-    {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
-
-    {plateEnabled && (
-      <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-        <span style={{ opacity: 0.9, fontSize: 13, fontWeight: 700 }}>Кол-во одинаковых плит</span>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <button
-            type="button"
-            style={glassButtonStyle("nano", plateQty <= 1)}
-            disabled={plateQty <= 1}
-            onClick={() => setPlateQty((v) => Math.max(1, Math.floor((v || 1) - 1)))}
-          >
-            −
-          </button>
-          <div style={{ minWidth: 22, textAlign: "center", fontWeight: 800 }}>{plateQty}</div>
-          <button
-            type="button"
-            style={glassButtonStyle("nano")}
-            onClick={() => setPlateQty((v) => Math.max(1, Math.floor((v || 1) + 1)))}
-          >
-            +
-          </button>
+          ))}
         </div>
-      </div>
-    )}
-  </div>
-</section>
+      </section>
 
 
-      {plateEnabled && (
-        <>
+
           {Array.from({ length: plateCount }).map((_, plateIndex) => (
             <React.Fragment key={`plate-${plateIndex}`}>
+              {(() => {
+                const plateRO = !plateEnabledByPlate[plateIndex];
+                return (
+                  <div style={{ position: "relative" }} aria-disabled={plateRO}>
+                    {plateRO && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          background: "rgba(0,0,0,0.25)",
+                          borderRadius: 12,
+                          zIndex: 3,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding: 12,
+                          pointerEvents: "auto"
+                        }}
+                      >
+                        <div style={{ ...glassPanelStyle(), padding: 10, textAlign: "center" }}>
+                          <div style={{ fontWeight: 900 }}>Плита отключена</div>
+                          <div style={{ fontSize: 13, opacity: 0.9, marginTop: 6 }}>
+                            Включите чекбокс в заголовке, чтобы редактировать. Данные сохранены.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ opacity: plateRO ? 0.55 : 1, pointerEvents: plateRO ? "none" : "auto" }}>
+
           {/* Размер плиты (над "Выбрано") */}
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Размер плиты</div>
 
             <div style={{ display: "grid", gap: 10 }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-                {presetSizes.map((s) => (
+                {PLATE_PRESET_SIZES.map((s) => (
                   <label key={s} style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
                     <input
                       type="radio"
@@ -2726,7 +2253,7 @@ useEffect(() => {
                 </div>
               )}
             </LoudAccordion>
-            {plateEnabled && plateIndex === plateCount - 1 && (
+            {(plateEnabledByPlate?.[0]) && plateIndex === plateCount - 1 && (
   <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
     <button
       type="button"
@@ -2757,6 +2284,11 @@ useEffect(() => {
 )}
 
           </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
                     </React.Fragment>
           ))}</>
       )}
