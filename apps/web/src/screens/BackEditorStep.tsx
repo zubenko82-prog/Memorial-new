@@ -1337,6 +1337,13 @@ const [plateQty, setPlateQty] = useState<number>(() => {
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
 });
 
+const [plateCount, setPlateCount] = useState<number>(() => {
+  const v = Number((extras0 as any)?.plateCount);
+  // How many different plates are configured (1..3). Qty is how many identical copies.
+  if (Number.isFinite(v) && v >= 1) return Math.min(3, Math.floor(v));
+  return 1;
+});
+
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
@@ -1609,6 +1616,13 @@ const [plateQty, setPlateQty] = useState<number>(() => {
   saveOrderDraft({ extras: { plateQty: v } as any });
   dispatchDraftUpdated();
 }, [plateEnabled, plateQty]);
+
+useEffect(() => {
+  if (!plateEnabled) return;
+  const v = Math.min(3, Math.max(1, Math.floor(Number(plateCount) || 1)));
+  saveOrderDraft({ extras: { plateCount: v } as any });
+  dispatchDraftUpdated();
+}, [plateEnabled, plateCount]);
 
   /* =========================
    * Catalog grid helpers
@@ -2176,6 +2190,20 @@ const [plateQty, setPlateQty] = useState<number>(() => {
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
     {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
+
+{plateEnabled && (
+  <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+    <button
+      type="button"
+      style={glassButtonStyle("tiny", plateCount >= 3)}
+      disabled={plateCount >= 3}
+      onClick={() => setPlateCount((v) => Math.min(3, Math.max(1, Math.floor((v || 1) + 1))))}
+    >
+      Добавить плиту с другим содержанием
+    </button>
+  </div>
+)}
+
 
     {plateEnabled && (
       <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
