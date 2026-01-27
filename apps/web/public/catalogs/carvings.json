@@ -593,76 +593,28 @@
       "slug": "frezernye",
       "items": [
         {
-          "id": "frezernye-16",
-          "name": "16",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/16.jpg",
-          "relPath": "carvings/Фрезерные/16.jpg"
+          "id": "frezernye-orden-muzhestva",
+          "name": "Орден Мужества",
+          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/%D0%9E%D1%80%D0%B4%D0%B5%D0%BD%20%D0%BC%D1%83%D0%B6%D0%B5%D1%81%D1%82%D0%B2%D0%B0.png",
+          "relPath": "carvings/Фрезерные/Орден мужества.png"
         },
         {
-          "id": "frezernye-22-2",
-          "name": "22 2",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/22-2.jpg",
-          "relPath": "carvings/Фрезерные/22-2.jpg"
+          "id": "frezernye-soldat-277",
+          "name": "Солдат 277",
+          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/%D0%A1%D0%BE%D0%BB%D0%B4%D0%B0%D1%82%20277.png",
+          "relPath": "carvings/Фрезерные/Солдат 277.png"
         },
         {
-          "id": "frezernye-26",
-          "name": "26",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/26.jpg",
-          "relPath": "carvings/Фрезерные/26.jpg"
+          "id": "frezernye-soldat-282",
+          "name": "Солдат 282",
+          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/%D0%A1%D0%BE%D0%BB%D0%B4%D0%B0%D1%82%20282.png",
+          "relPath": "carvings/Фрезерные/Солдат 282.png"
         },
         {
-          "id": "frezernye-32",
-          "name": "32",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/32.jpg",
-          "relPath": "carvings/Фрезерные/32.jpg"
-        },
-        {
-          "id": "frezernye-49",
-          "name": "49",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/49.JPG",
-          "relPath": "carvings/Фрезерные/49.JPG"
-        },
-        {
-          "id": "frezernye-50",
-          "name": "50",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/50.JPG",
-          "relPath": "carvings/Фрезерные/50.JPG"
-        },
-        {
-          "id": "frezernye-51",
-          "name": "51",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/51.jpg",
-          "relPath": "carvings/Фрезерные/51.jpg"
-        },
-        {
-          "id": "frezernye-52-2",
-          "name": "52(2)",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/52(2).jpg",
-          "relPath": "carvings/Фрезерные/52(2).jpg"
-        },
-        {
-          "id": "frezernye-52",
-          "name": "52",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/52.JPG",
-          "relPath": "carvings/Фрезерные/52.JPG"
-        },
-        {
-          "id": "frezernye-img-20180305-135951",
-          "name": "IMG 20180305 135951",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/IMG_20180305_135951.jpg",
-          "relPath": "carvings/Фрезерные/IMG_20180305_135951.jpg"
-        },
-        {
-          "id": "frezernye-img-20180305-140017-burst1",
-          "name": "IMG 20180305 140017 BURST1",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/IMG_20180305_140017_BURST1.jpg",
-          "relPath": "carvings/Фрезерные/IMG_20180305_140017_BURST1.jpg"
-        },
-        {
-          "id": "frezernye-img-20180305-140037-burst4",
-          "name": "IMG 20180305 140037 BURST4",
-          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/IMG_20180305_140037_BURST4.jpg",
-          "relPath": "carvings/Фрезерные/IMG_20180305_140037_BURST4.jpg"
+          "id": "frezernye-soldat-286",
+          "name": "Солдат 286",
+          "url": "/images/carvings/%D0%A4%D1%80%D0%B5%D0%B7%D0%B5%D1%80%D0%BD%D1%8B%D0%B5/%D0%A1%D0%BE%D0%BB%D0%B4%D0%B0%D1%82%20286.png",
+          "relPath": "carvings/Фрезерные/Солдат 286.png"
         }
       ]
     }

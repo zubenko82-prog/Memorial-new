@@ -1346,6 +1346,12 @@ const [plateCount, setPlateCount] = useState<number>(() => {
 
   const [plates, setPlates] = useState<PlateDraft[]>(() => ensurePlates(extras0 as any));
 
+const [plateCount, setPlateCount] = useState<number>(() => {
+  const v = Number((extras0 as any)?.plateCount);
+  // How many different plates are configured (1..3). Qty is how many identical copies.
+  if (Number.isFinite(v) && v >= 1) return Math.min(3, Math.floor(v));
+  return 1;
+});
 
     // Multi-plate (1..3): per-plate UI state. Plate 0 stays compatible with legacy extras.* fields.
   const [plateIdsByPlate, setPlateIdsByPlate] = useState<string[][]>(() => {
@@ -2771,7 +2777,6 @@ useEffect(() => {
     </div>
   );
 }
-
 
 
 
