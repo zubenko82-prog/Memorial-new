@@ -146,6 +146,23 @@ function uniqueByNorm(list: string[]): string[] {
   return out;
 }
 
+function ensurePlates(ex: any): PlateDraft[] {
+  const arr = Array.isArray(ex?.plates) ? ex.plates : null;
+  const plates: PlateDraft[] = (arr || []).filter(Boolean).slice(0, 3).map((p: any) => ({
+    plateSize: p?.plateSize ?? null,
+    plateGraphicsIds: Array.isArray(p?.plateGraphicsIds) ? p.plateGraphicsIds : null,
+    plateGraphicsMeta: p?.plateGraphicsMeta || null,
+    plateEpitaph: typeof p?.plateEpitaph === "string" ? p.plateEpitaph : null,
+    plateEpitaphs: Array.isArray(p?.plateEpitaphs) ? p.plateEpitaphs : null,
+    plateEpitaphTexts: p?.plateEpitaphTexts ?? null,
+    platePreviewUrl: p?.platePreviewUrl ?? null,
+    platePreviewHiUrl: p?.platePreviewHiUrl ?? null
+  }));
+
+  if (plates.length === 0) plates.push(legacyExtrasToPlate0(ex));
+  while (plates.length < 3) plates.push(legacyExtrasToPlate0({}));
+  return plates;
+}
 /* ========= Accordion ========= */
 function LoudAccordion({
   title,
@@ -1804,23 +1821,7 @@ function legacyExtrasToPlate0(ex: any): PlateDraft {
   };
 }
 
-function ensurePlates(ex: any): PlateDraft[] {
-  const arr = Array.isArray(ex?.plates) ? ex.plates : null;
-  const plates: PlateDraft[] = (arr || []).filter(Boolean).slice(0, 3).map((p: any) => ({
-    plateSize: p?.plateSize ?? null,
-    plateGraphicsIds: Array.isArray(p?.plateGraphicsIds) ? p.plateGraphicsIds : null,
-    plateGraphicsMeta: p?.plateGraphicsMeta || null,
-    plateEpitaph: typeof p?.plateEpitaph === "string" ? p.plateEpitaph : null,
-    plateEpitaphs: Array.isArray(p?.plateEpitaphs) ? p.plateEpitaphs : null,
-    plateEpitaphTexts: p?.plateEpitaphTexts ?? null,
-    platePreviewUrl: p?.platePreviewUrl ?? null,
-    platePreviewHiUrl: p?.platePreviewHiUrl ?? null
-  }));
 
-  if (plates.length === 0) plates.push(legacyExtrasToPlate0(ex));
-  while (plates.length < 3) plates.push(legacyExtrasToPlate0({}));
-  return plates;
-}
 
 function emptyPlateDraft(): PlateDraft {
   return { plateSize: null, plateGraphicsIds: null, plateGraphicsMeta: null, plateEpitaph: null, plateEpitaphs: null, plateEpitaphTexts: null, platePreviewUrl: null, platePreviewHiUrl: null };
