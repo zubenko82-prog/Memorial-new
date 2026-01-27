@@ -2191,20 +2191,6 @@ useEffect(() => {
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
     {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
 
-{plateEnabled && (
-  <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
-    <button
-      type="button"
-      style={glassButtonStyle("tiny", plateCount >= 3)}
-      disabled={plateCount >= 3}
-      onClick={() => setPlateCount((v) => Math.min(3, Math.max(1, Math.floor((v || 1) + 1))))}
-    >
-      Добавить плиту с другим содержанием
-    </button>
-  </div>
-)}
-
-
     {plateEnabled && (
       <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
         <span style={{ opacity: 0.9, fontSize: 13, fontWeight: 700 }}>Кол-во одинаковых плит</span>
@@ -2469,6 +2455,19 @@ useEffect(() => {
                 </div>
               )}
             </LoudAccordion>
+            {plateEnabled && (
+  <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+    <button
+      type="button"
+      style={glassButtonStyle("tiny", plateCount >= 3)}
+      disabled={plateCount >= 3}
+      onClick={() => setPlateCount((v) => Math.min(3, Math.max(1, Math.floor((v || 1) + 1))))}
+    >
+      Добавить плиту с другим содержанием
+    </button>
+  </div>
+)}
+
           </div>
         </>
       )}
