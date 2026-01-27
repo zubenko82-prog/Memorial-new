@@ -1439,6 +1439,7 @@ const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as 
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
+  const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
@@ -1508,134 +1509,6 @@ const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as 
       return idx === -1 ? prev : prev.filter((_, i) => i !== idx);
     });
   };
-  // ---------- Multi-plate indexed actions (plates[0..2]) ----------
-  const chosenPlateListAt = (i: number) => {
-    const ids = i === 0 ? plateIds : (plateIdsByPlate[i] || []);
-    const meta = i === 0 ? plateMeta : (plateMetaByPlate[i] || {});
-    const uniq = Array.from(new Set(ids));
-    return uniq.map((gid) => meta[gid] || { id: gid, name: gid, url: "" });
-  };
-
-  const getEpitaphsAt = (i: number) => (i === 0 ? plateSelectedEpitaphs : (plateSelectedEpitaphsByPlate[i] || []));
-
-  const persistEpitaphsAt = (i: number, listRaw: string[]) => {
-    const list = uniqueByNorm(listRaw);
-    if (list.length === 0) {
-      savePlateAtIndex(i, { plateEpitaph: null, plateEpitaphs: null, plateEpitaphTexts: null });
-    } else if (list.length === 1) {
-      savePlateAtIndex(i, { plateEpitaph: list[0], plateEpitaphs: null, plateEpitaphTexts: null });
-    } else {
-      savePlateAtIndex(i, { plateEpitaph: null, plateEpitaphs: list.slice(), plateEpitaphTexts: null });
-    }
-  };
-
-  const addPlateGraphicAt = (i: number, g: any) => {
-    if (!plateEnabled) return;
-    const gid = String(g.id || g.relPath || g.url || g.name);
-    if (!gid) return;
-
-    if (i === 0) {
-      addPlateGraphic(g);
-      return;
-    }
-
-    const ids = plateIdsByPlate[i] || [];
-    const meta = plateMetaByPlate[i] || {};
-    const qty = (ids || []).filter((x) => x === gid).length;
-    if (qty >= 3) {
-      window.alert("Нельзя добавить более трёх одинаковых изображений");
-      return;
-    }
-
-    const nextIds = [...ids, gid];
-    const nextMeta = { ...meta, [gid]: { id: gid, name: g.name || gid, url: g.preview || g.url || "" } };
-
-    setPlateIdsByPlate((prev) => prev.map((v, idx) => (idx === i ? nextIds : v)));
-    setPlateMetaByPlate((prev) => prev.map((v, idx) => (idx === i ? nextMeta : v)));
-    savePlateAtIndex(i, { plateGraphicsIds: nextIds, plateGraphicsMeta: nextMeta });
-    setDraft(loadOrderDraft());
-  };
-
-  const removePlateGraphicAt = (i: number, gid: string) => {
-    if (!plateEnabled) return;
-
-    if (i === 0) {
-      removePlateGraphic(gid);
-      return;
-    }
-
-    const ids = plateIdsByPlate[i] || [];
-    const meta = plateMetaByPlate[i] || {};
-    const idx = ids.findIndex((x) => x === gid);
-    if (idx === -1) return;
-    const nextIds = ids.slice();
-    nextIds.splice(idx, 1);
-
-    setPlateIdsByPlate((prev) => prev.map((v, j) => (j === i ? nextIds : v)));
-    savePlateAtIndex(i, { plateGraphicsIds: nextIds, plateGraphicsMeta: meta });
-    setDraft(loadOrderDraft());
-  };
-
-  const togglePlateEpitaphAt = (i: number, text: string) => {
-    if (!plateEnabled) return;
-    const t = normEpitaph(text);
-    if (!t) return;
-
-    if (i === 0) {
-      togglePlateEpitaph(text);
-      return;
-    }
-
-    setPlateSelectedEpitaphsByPlate((prev) => {
-      const cur = prev[i] || [];
-      const idx = indexOfByNorm(cur, t);
-      const next = idx !== -1 ? cur.filter((_, k) => k !== idx) : cur.concat([text]);
-      const out = prev.map((v, j) => (j === i ? next : v));
-      persistEpitaphsAt(i, next);
-      return out;
-    });
-  };
-
-  const addPlateCustomAt = (i: number) => {
-    if (!plateEnabled) return;
-
-    if (i === 0) {
-      addPlateCustom();
-      return;
-    }
-
-    const raw = String((plateCustomTextByPlate[i] || "")).trim();
-    const t = normEpitaph(raw);
-    if (!t) return;
-
-    setPlateSelectedEpitaphsByPlate((prev) => {
-      const cur = prev[i] || [];
-      const next = hasByNorm(cur, t) ? cur : cur.concat([raw]);
-      const out = prev.map((v, j) => (j === i ? next : v));
-      persistEpitaphsAt(i, next);
-      return out;
-    });
-    setPlateCustomTextByPlate((prev) => prev.map((v, j) => (j === i ? "" : v)));
-  };
-
-  const removePlateEpitaphAt = (i: number, text: string) => {
-    if (!plateEnabled) return;
-
-    if (i === 0) {
-      removePlateEpitaph(text);
-      return;
-    }
-
-    setPlateSelectedEpitaphsByPlate((prev) => {
-      const cur = prev[i] || [];
-      const idx = indexOfByNorm(cur, text);
-      const next = idx === -1 ? cur : cur.filter((_, k) => k !== idx);
-      const out = prev.map((v, j) => (j === i ? next : v));
-      persistEpitaphsAt(i, next);
-      return out;
-    });
-  };
-
 
   const prevPlateEpiJsonRef = useRef<string>("");
   useEffect(() => {
@@ -2483,8 +2356,6 @@ useEffect(() => {
 
       {plateEnabled && (
         <>
-          {Array.from({ length: plateCount }).map((_, plateIndex) => (
-            <React.Fragment key={`plate-${plateIndex}`}>
           {/* Размер плиты (над "Выбрано") */}
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Размер плиты</div>
@@ -2495,17 +2366,11 @@ useEffect(() => {
                   <label key={s} style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
                     <input
                       type="radio"
-                      name={`plate-size-${plateIndex}`}
-                      checked={(plateIndex === 0 ? plateSizeMode : (plateSizeModeByPlate[plateIndex] || DEFAULT_PLATE_SIZE)) === s}
+                      name="plate-size"
+                      checked={plateSizeMode === s}
                       onChange={() => {
-                        if (plateIndex === 0) {
-                          setPlateSizeMode(s);
-                          setPlateSizeCustom("");
-                        } else {
-                          setPlateSizeModeByPlate((prev) => prev.map((v, i) => (i === plateIndex ? (s as any) : v)) as any);
-                          setPlateSizeCustomByPlate((prev) => prev.map((v, i) => (i === plateIndex ? "" : v)));
-                        }
-                        savePlateAtIndex(plateIndex, { plateSize: s as any });
+                        setPlateSizeMode(s);
+                        setPlateSizeCustom("");
                       }}
                     />
                     <span>{s}</span>
@@ -2513,21 +2378,16 @@ useEffect(() => {
                 ))}
 
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-                  <input type="radio" name={`plate-size-${plateIndex}`} checked={(plateIndex === 0 ? plateSizeMode : (plateSizeModeByPlate[plateIndex] || DEFAULT_PLATE_SIZE)) === "custom"} onChange={() => (plateIndex === 0 ? setPlateSizeMode("custom") : setPlateSizeModeByPlate((prev) => prev.map((v, i) => (i === plateIndex ? "custom" : v)) as any))} />
+                  <input type="radio" name="plate-size" checked={plateSizeMode === "custom"} onChange={() => setPlateSizeMode("custom")} />
                   <span>Свой вариант</span>
                 </label>
               </div>
 
-              {(plateIndex === 0 ? plateSizeMode : (plateSizeModeByPlate[plateIndex] || DEFAULT_PLATE_SIZE)) === "custom" && (
+              {plateSizeMode === "custom" && (
                 <div style={{ display: "grid", gap: 6 }}>
                   <input
-                    value={plateIndex === 0 ? plateSizeCustom : (plateSizeCustomByPlate[plateIndex] || "")}
-                    onChange={(e) => {
-                      const v = String(e.target.value || "");
-                      if (plateIndex === 0) setPlateSizeCustom(v);
-                      else setPlateSizeCustomByPlate((prev) => prev.map((x, i) => (i === plateIndex ? v : x)));
-                      savePlateAtIndex(plateIndex, { plateSize: v.trim() ? v.trim() : null });
-                    }}
+                    value={plateSizeCustom}
+                    onChange={(e) => setPlateSizeCustom(e.target.value)}
                     placeholder="Например: 110-55-5"
                     style={inputStyle()}
                   />
@@ -2541,9 +2401,9 @@ useEffect(() => {
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10, borderColor: "rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Выбрано (плита)</div>
 
-            {chosenPlateListAt(plateIndex).length > 0 && (
-              <div style={{ display: "grid", gap: 8, marginBottom: getEpitaphsAt(plateIndex).length ? 8 : 0 }}>
-                {chosenPlateListAt(plateIndex).map((g: any, i: number) => {
+            {chosenPlateList.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: plateEpitaphList.length ? 8 : 0 }}>
+                {chosenPlateList.map((g: any, i: number) => {
                   const gid = String(g.id || g.url || i);
                   return (
                     <div key={`plate-chosen-${gid}-${i}`} style={{ display: "grid", gridTemplateColumns: "60px 1fr auto", gap: 8, alignItems: "center" }}>
@@ -2554,7 +2414,7 @@ useEffect(() => {
                       <button
                         type="button"
                         title="Удалить"
-                        onClick={() => removePlateGraphicAt(plateIndex, String(g.id || g.name || g.url || ""))}
+                        onClick={() => removePlateGraphic(String(g.id || g.name || g.url || ""))}
                         style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
                       >
                         ×
@@ -2565,9 +2425,9 @@ useEffect(() => {
               </div>
             )}
 
-            {getEpitaphsAt(plateIndex).length > 0 && (
+            {plateEpitaphList.length > 0 && (
               <div style={{ display: "grid", gap: 6 }}>
-                {getEpitaphsAt(plateIndex).map((t, idx) => (
+                {plateEpitaphList.map((t, idx) => (
                   <div
                     key={`plate-ep-preview-${idx}-${normEpitaph(t)}`}
                     style={{ ...sectionBoxStyle(), padding: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}
@@ -2576,7 +2436,7 @@ useEffect(() => {
                     <button
                       type="button"
                       title="Удалить эпитафию"
-                      onClick={() => removePlateEpitaphAt(plateIndex, t)}
+                      onClick={() => removePlateEpitaph(t)}
                       style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
                     >
                       ×
@@ -2586,7 +2446,7 @@ useEffect(() => {
               </div>
             )}
 
-            {chosenPlateListAt(plateIndex).length === 0 && getEpitaphsAt(plateIndex).length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
+            {chosenPlateList.length === 0 && plateEpitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </section>
 
           {/* Аккордеоны плиты: только один открыт */}
@@ -2605,12 +2465,12 @@ useEffect(() => {
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Быстрый выбор:</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {QUICK_EPITAPHS.map((t) => {
-                      const active = hasByNorm(getEpitaphsAt(plateIndex), t);
+                      const active = hasByNorm(plateSelectedEpitaphs, t);
                       return (
                         <button
                           key={t}
                           type="button"
-                          onClick={() => togglePlateEpitaphAt(plateIndex, t)}
+                          onClick={() => togglePlateEpitaph(t)}
                           style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
                           title={t}
                         >
@@ -2623,19 +2483,19 @@ useEffect(() => {
 
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
-                  <button type="button" onClick={() => setPlateShowMoreByPlate((prev) => prev.map((v, i) => (i === plateIndex ? !v : v)))} style={glassButtonStyle("nano")}>
-                    {(plateShowMoreByPlate[plateIndex] || false) ? "Свернуть список" : "Развернуть список"}
+                  <button type="button" onClick={() => setPlateShowMore((v) => !v)} style={glassButtonStyle("nano")}>
+                    {plateShowMore ? "Свернуть список" : "Развернуть список"}
                   </button>
 
-                  {(plateShowMoreByPlate[plateIndex] || false) && (
+                  {plateShowMore && (
                     <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, padding: 2 }}>
                       {MORE_EPITAPHS.map((t, idx) => {
-                        const active = hasByNorm(getEpitaphsAt(plateIndex), t);
+                        const active = hasByNorm(plateSelectedEpitaphs, t);
                         return (
                           <button
                             key={`plate-more-${idx}-${normEpitaph(t)}`}
                             type="button"
-                            onClick={() => togglePlateEpitaphAt(plateIndex, t)}
+                            onClick={() => togglePlateEpitaph(t)}
                             title={t}
                             style={{
                               textAlign: "left",
@@ -2663,19 +2523,19 @@ useEffect(() => {
                   <div style={{ display: "grid", gap: 8 }}>
                     <textarea
                       rows={3}
-                      value={plateIndex === 0 ? plateCustomText : (plateCustomTextByPlate[plateIndex] || "")}
-                      onChange={(e) => (plateIndex === 0 ? setPlateCustomText(e.target.value) : setPlateCustomTextByPlate((prev) => prev.map((v, i) => (i === plateIndex ? e.target.value : v))))}
+                      value={plateCustomText}
+                      onChange={(e) => setPlateCustomText(e.target.value)}
                       placeholder="Введите текст и нажмите «Добавить»"
                       style={{ ...inputStyle(), resize: "vertical" }}
                     />
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={() => addPlateCustomAt(plateIndex)}>
+                      <button type="button" style={glassButtonStyle("nano")} onClick={addPlateCustom}>
                         Добавить
                       </button>
-                      <button type="button" style={glassButtonStyle("nano")} onClick={() => (plateIndex === 0 ? setPlateSelectedEpitaphs([]) : (setPlateSelectedEpitaphsByPlate((prev) => prev.map((v, i) => (i === plateIndex ? [] : v))), persistEpitaphsAt(plateIndex, [])))}>
+                      <button type="button" style={glassButtonStyle("nano")} onClick={() => setPlateSelectedEpitaphs([])}>
                         Очистить выбранные
                       </button>
-                      {getEpitaphsAt(plateIndex).length > 0 && <div>Выбрано: {getEpitaphsAt(plateIndex).length}</div>}
+                      {plateSelectedEpitaphs.length > 0 && <div>Выбрано: {plateSelectedEpitaphs.length}</div>}
                     </div>
                   </div>
                 </div>
@@ -2698,9 +2558,9 @@ useEffect(() => {
                       <LoudAccordion key={catKey} title={cat.name || `Категория ${idx + 1}`} open={open} onToggle={toggle}>
                         <CatGrid
                           items={cat.items || []}
-                          ids={plateIndex === 0 ? plateIds : (plateIdsByPlate[plateIndex] || [])}
-                          addGraphic={(g) => addPlateGraphicAt(plateIndex, g)}
-                          removeGraphic={(gid) => removePlateGraphicAt(plateIndex, gid)}
+                          ids={plateIds}
+                          addGraphic={addPlateGraphic}
+                          removeGraphic={removePlateGraphic}
                           rootRef={plateGridByPlate[plateIndex].rootRef}
                           colsCount={plateGridByPlate[plateIndex].colsCount}
                         />
@@ -2715,9 +2575,9 @@ useEffect(() => {
                               <LoudAccordion title={sub.name || `Подкатегория ${j + 1}`} open={subOpen} onToggle={subToggle}>
                                 <CatGrid
                                   items={sub.items || []}
-                                  ids={plateIndex === 0 ? plateIds : (plateIdsByPlate[plateIndex] || [])}
-                                  addGraphic={(g) => addPlateGraphicAt(plateIndex, g)}
-                                  removeGraphic={(gid) => removePlateGraphicAt(plateIndex, gid)}
+                                  ids={plateIds}
+                                  addGraphic={addPlateGraphic}
+                                  removeGraphic={removePlateGraphic}
                                   rootRef={plateGridByPlate[plateIndex].rootRef}
                                   colsCount={plateGridByPlate[plateIndex].colsCount}
                                 />
@@ -2731,7 +2591,7 @@ useEffect(() => {
                 </div>
               )}
             </LoudAccordion>
-            {plateEnabled && plateIndex === plateCount - 1 && (
+            {plateEnabled && (
   <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
     <button
       type="button"
@@ -2762,8 +2622,7 @@ useEffect(() => {
 )}
 
           </div>
-                    </React.Fragment>
-          ))}</>
+        </>
       )}
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
@@ -2777,20 +2636,6 @@ useEffect(() => {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

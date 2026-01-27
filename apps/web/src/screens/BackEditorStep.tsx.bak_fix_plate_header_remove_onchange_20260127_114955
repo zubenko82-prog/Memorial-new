@@ -1439,6 +1439,7 @@ const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as 
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
+  const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
@@ -2452,7 +2453,7 @@ useEffect(() => {
          ======================= */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-    {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
+    {titleWithCheckbox({ title: `Надгробная плита ${plateIndex + 1}`, enabled: plateEnabled, onToggle: setPlateEnabled })}
 
     {plateEnabled && (
       <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
@@ -2498,14 +2499,8 @@ useEffect(() => {
                       name={`plate-size-${plateIndex}`}
                       checked={(plateIndex === 0 ? plateSizeMode : (plateSizeModeByPlate[plateIndex] || DEFAULT_PLATE_SIZE)) === s}
                       onChange={() => {
-                        if (plateIndex === 0) {
-                          setPlateSizeMode(s);
-                          setPlateSizeCustom("");
-                        } else {
-                          setPlateSizeModeByPlate((prev) => prev.map((v, i) => (i === plateIndex ? (s as any) : v)) as any);
-                          setPlateSizeCustomByPlate((prev) => prev.map((v, i) => (i === plateIndex ? "" : v)));
-                        }
-                        savePlateAtIndex(plateIndex, { plateSize: s as any });
+                        setPlateSizeMode(s);
+                        setPlateSizeCustom("");
                       }}
                     />
                     <span>{s}</span>
@@ -2554,7 +2549,7 @@ useEffect(() => {
                       <button
                         type="button"
                         title="Удалить"
-                        onClick={() => removePlateGraphicAt(plateIndex, String(g.id || g.name || g.url || ""))}
+                        onClick={() => removePlateGraphic(String(g.id || g.name || g.url || ""))}
                         style={{ ...glassButtonStyle("nano"), padding: "6px 10px", borderColor: "rgba(255,80,80,0.9)" }}
                       >
                         ×
@@ -2623,11 +2618,11 @@ useEffect(() => {
 
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
-                  <button type="button" onClick={() => setPlateShowMoreByPlate((prev) => prev.map((v, i) => (i === plateIndex ? !v : v)))} style={glassButtonStyle("nano")}>
-                    {(plateShowMoreByPlate[plateIndex] || false) ? "Свернуть список" : "Развернуть список"}
+                  <button type="button" onClick={() => setPlateShowMore((v) => !v)} style={glassButtonStyle("nano")}>
+                    {plateShowMore ? "Свернуть список" : "Развернуть список"}
                   </button>
 
-                  {(plateShowMoreByPlate[plateIndex] || false) && (
+                  {plateShowMore && (
                     <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, padding: 2 }}>
                       {MORE_EPITAPHS.map((t, idx) => {
                         const active = hasByNorm(getEpitaphsAt(plateIndex), t);
@@ -2731,7 +2726,7 @@ useEffect(() => {
                 </div>
               )}
             </LoudAccordion>
-            {plateEnabled && plateIndex === plateCount - 1 && (
+            {plateEnabled && (
   <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
     <button
       type="button"
@@ -2777,17 +2772,6 @@ useEffect(() => {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 

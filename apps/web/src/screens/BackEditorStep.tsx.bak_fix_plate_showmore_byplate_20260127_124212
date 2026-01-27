@@ -1439,6 +1439,7 @@ const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as 
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
+  const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
@@ -2623,11 +2624,11 @@ useEffect(() => {
 
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 8, textAlign: "left" }}>Еще варианты:</div>
-                  <button type="button" onClick={() => setPlateShowMoreByPlate((prev) => prev.map((v, i) => (i === plateIndex ? !v : v)))} style={glassButtonStyle("nano")}>
-                    {(plateShowMoreByPlate[plateIndex] || false) ? "Свернуть список" : "Развернуть список"}
+                  <button type="button" onClick={() => setPlateShowMore((v) => !v)} style={glassButtonStyle("nano")}>
+                    {plateShowMore ? "Свернуть список" : "Развернуть список"}
                   </button>
 
-                  {(plateShowMoreByPlate[plateIndex] || false) && (
+                  {plateShowMore && (
                     <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, padding: 2 }}>
                       {MORE_EPITAPHS.map((t, idx) => {
                         const active = hasByNorm(getEpitaphsAt(plateIndex), t);
@@ -2777,8 +2778,6 @@ useEffect(() => {
     </div>
   );
 }
-
-
 
 
 

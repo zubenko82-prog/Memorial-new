@@ -1439,6 +1439,7 @@ const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as 
     return uniqueByNorm((arr && arr.length ? arr : single ? [single] : []) as string[]);
   }, []);
   const [plateSelectedEpitaphs, setPlateSelectedEpitaphs] = useState<string[]>(initialPlateSelected);
+  const [plateShowMore, setPlateShowMore] = useState(false);
   const [plateCustomText, setPlateCustomText] = useState("");
   const plateEpitaphList = useMemo(() => plateSelectedEpitaphs, [plateSelectedEpitaphs]);
 
@@ -2777,7 +2778,6 @@ useEffect(() => {
     </div>
   );
 }
-
 
 
 
