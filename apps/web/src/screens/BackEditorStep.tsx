@@ -1330,6 +1330,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
    * PLATE (extras)
    * ========================= */
   const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
+
+// Show counter only when plate is enabled.
+const [plateQty, setPlateQty] = useState<number>(() => {
+  const v = Number((extras0 as any)?.plateQty);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
+});
+
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
@@ -1595,6 +1602,13 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
 
   const toggleRearAcc = (k: RearAcc) => setRearOpen((prev) => (prev === k ? null : k));
   const togglePlateAcc = (k: PlateAcc) => setPlateOpen((prev) => (prev === k ? null : k));
+
+  useEffect(() => {
+  if (!plateEnabled) return;
+  const v = Math.max(1, Math.floor(Number(plateQty) || 1));
+  saveOrderDraft({ extras: { plateQty: v } as any });
+  dispatchDraftUpdated();
+}, [plateEnabled, plateQty]);
 
   /* =========================
    * Catalog grid helpers
@@ -2160,8 +2174,35 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           Надгробная плита
          ======================= */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
-        {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
-      </section>
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+    {titleWithCheckbox({ title: "Надгробная плита", enabled: plateEnabled, onToggle: setPlateEnabled })}
+
+    {plateEnabled && (
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+        <span style={{ opacity: 0.9, fontSize: 13, fontWeight: 700 }}>Кол-во одинаковых плит</span>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <button
+            type="button"
+            style={glassButtonStyle("nano", plateQty <= 1)}
+            disabled={plateQty <= 1}
+            onClick={() => setPlateQty((v) => Math.max(1, Math.floor((v || 1) - 1)))}
+          >
+            −
+          </button>
+          <div style={{ minWidth: 22, textAlign: "center", fontWeight: 800 }}>{plateQty}</div>
+          <button
+            type="button"
+            style={glassButtonStyle("nano")}
+            onClick={() => setPlateQty((v) => Math.max(1, Math.floor((v || 1) + 1)))}
+          >
+            +
+          </button>
+        </div>
+      </div>
+    )}
+  </div>
+</section>
+
 
       {plateEnabled && (
         <>
