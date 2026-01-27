@@ -2313,38 +2313,6 @@ useEffect(() => {
     {plateEnabled && (
       <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
         <span style={{ opacity: 0.9, fontSize: 13, fontWeight: 700 }}>Кол-во одинаковых плит</span>
-        <span style={{ opacity: 0.9, fontSize: 13, fontWeight: 700, marginLeft: 14 }}>Кол-во разных плит</span>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <button
-            type="button"
-            style={glassButtonStyle("nano", plateCount <= 1)}
-            disabled={plateCount <= 1}
-            onClick={() => {
-              const next = Math.max(1, Math.floor((plateCount || 1) - 1));
-              setPlateCount(next);
-              if (activePlateIndex >= next) setActivePlateIndex(next - 1);
-            }}
-            title="Уменьшить количество разных плит"
-          >
-            −
-          </button>
-          <div style={{ minWidth: 22, textAlign: "center", fontWeight: 800 }}>{plateCount}</div>
-          <button
-            type="button"
-            style={glassButtonStyle("nano", plateCount >= 3)}
-            disabled={plateCount >= 3}
-            onClick={() => {
-              const next = Math.min(3, Math.floor((plateCount || 1) + 1));
-              setPlateCount(next);
-              // Jump to the newly added plate for immediate editing.
-              if (next > plateCount) setActivePlateIndex(next - 1);
-            }}
-            title="Добавить плиту с другим содержанием"
-          >
-            +
-          </button>
-        </div>
-
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <button
             type="button"
@@ -2634,7 +2602,6 @@ useEffect(() => {
     </div>
   );
 }
-
 
 
 
