@@ -618,28 +618,92 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     (rearEpitaphs && rearEpitaphs.length > 0) ||
     (backWishes && backWishes.trim().length > 0);
 
-  // Extras (плита)
+    // Extras (плита)
   const extras: any = (order as any)?.extras || {};
-  const plateEnabled: boolean = !!extras.headstonePlate;
-  const plateIds: string[] = (extras.plateGraphicsIds as string[]) || [];
-  const plateMeta: Record<string, any> = (extras.plateGraphicsMeta as Record<string, any>) || {};
-  const plateSize = extras.plateSize as string | undefined;
-  const plateThickness = extras.plateThickness as string | undefined;
-  const plateOrientation = extras.plateOrientation as string | undefined;
 
-  const plateChosen = useMemo(() => {
-    const uniq = Array.from(new Set(plateIds || []));
-    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
-  }, [plateIds, plateMeta]);
+  // ===== Plates (topbar) =====
+  // legacy plate#1 stored flat in extras (headstonePlate/plateQty/plateGraphicsIds/plateGraphicsMeta/plateEpitaph/plateEpitaphs/plateSize...)
+  // new plates stored in extras.plates[]
+  function ensurePlatesTopbar(ex: any): any[] {
+    const a = ex?.plates;
+    if (Array.isArray(a)) {
+      const out = a.slice(0, 3);
+      while (out.length < 3) out.push({});
+      return out;
+    }
+    return [{}, {}, {}];
+  }
 
-  // ✅ ВАЖНО: читаем эпитафии плиты ТОЛЬКО из plateEpitaph / plateEpitaphs
-  const plateEpitaphItems = useMemo(() => {
-    const a = normalizeEpitaphItems(extras.plateEpitaph);
-    const b = normalizeEpitaphItems(extras.plateEpitaphs);
+  function getPlateObj(ex: any, index: 0 | 1 | 2): any {
+    if (index === 0) {
+      return {
+        enabled: !!ex?.headstonePlate,
+        plateQty: ex?.plateQty,
+        plateGraphicsIds: ex?.plateGraphicsIds,
+        plateGraphicsMeta: ex?.plateGraphicsMeta,
+        plateSize: ex?.plateSize,
+        plateThickness: ex?.plateThickness,
+        plateOrientation: ex?.plateOrientation,
+        plateEpitaph: ex?.plateEpitaph,
+        plateEpitaphs: ex?.plateEpitaphs
+      };
+    }
+    const all = ensurePlatesTopbar(ex);
+    return all[index] || {};
+  }
+
+  const plate1 = useMemo(() => getPlateObj(extras, 0), [extras]);
+  const plate2 = useMemo(() => getPlateObj(extras, 1), [extras]);
+  const plate3 = useMemo(() => getPlateObj(extras, 2), [extras]);
+
+  const plate1Enabled: boolean = !!plate1.enabled;
+  const plate2Enabled: boolean = !!plate2.enabled;
+  const plate3Enabled: boolean = !!plate3.enabled;
+
+  const plate1Qty: number = useMemo(() => {
+    const v = Number(plate1.plateQty);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
+  }, [plate1.plateQty]);
+
+  const plate2Qty: number = useMemo(() => {
+    const v = Number(plate2.plateQty);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
+  }, [plate2.plateQty]);
+
+  const plate3Qty: number = useMemo(() => {
+    const v = Number(plate3.plateQty);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
+  }, [plate3.plateQty]);
+
+  function plateChosenFrom(p: any) {
+    const ids: string[] = (p?.plateGraphicsIds as string[]) || [];
+    const meta: Record<string, any> = (p?.plateGraphicsMeta as Record<string, any>) || {};
+    const uniq = Array.from(new Set(ids || []));
+    return uniq.map((gid) => meta[gid] || { id: gid, name: gid, url: "" });
+  }
+
+  const plate1Chosen = useMemo(() => plateChosenFrom(plate1), [plate1]);
+  const plate2Chosen = useMemo(() => plateChosenFrom(plate2), [plate2]);
+  const plate3Chosen = useMemo(() => plateChosenFrom(plate3), [plate3]);
+
+  const plate1EpitaphItems = useMemo(() => {
+    const a = normalizeEpitaphItems(plate1.plateEpitaph);
+    const b = normalizeEpitaphItems(plate1.plateEpitaphs);
     return uniqByNorm([...a, ...b]);
-  }, [extras.plateEpitaph, extras.plateEpitaphs]);
+  }, [plate1.plateEpitaph, plate1.plateEpitaphs]);
 
-  // Дополнительно (строка)
+  const plate2EpitaphItems = useMemo(() => {
+    const a = normalizeEpitaphItems(plate2.plateEpitaph);
+    const b = normalizeEpitaphItems(plate2.plateEpitaphs);
+    return uniqByNorm([...a, ...b]);
+  }, [plate2.plateEpitaph, plate2.plateEpitaphs]);
+
+  const plate3EpitaphItems = useMemo(() => {
+    const a = normalizeEpitaphItems(plate3.plateEpitaph);
+    const b = normalizeEpitaphItems(plate3.plateEpitaphs);
+    return uniqByNorm([...a, ...b]);
+  }, [plate3.plateEpitaph, plate3.plateEpitaphs]);
+// Дополнительно (строка)
   const extrasParts = useMemo(() => {
     const tumba = (extras.tumba ?? true) ? true : false;
     const flowerbed = !!extras.flowerbed;
@@ -1198,23 +1262,23 @@ async function handleClearAll() {
               </section>
             )}
 
-            {/* Плита */}
-            {plateEnabled && (
+                        {/* Плита */}
+            {plate1Enabled && (
               <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита — выбрано</div>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита — {plate1Qty} шт.</div>
 
-                {(plateSize || plateThickness || plateOrientation) && (
+                {(plate1.plateSize || plate1.plateThickness || plate1.plateOrientation) && (
                   <div style={{ marginBottom: 8, opacity: 0.95 }}>
-                    {plateSize && <div>Размер: {plateSize}</div>}
-                    {plateThickness && <div>Толщина: {plateThickness}</div>}
-                    {plateOrientation && <div>Ориентация: {plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
+                    {plate1.plateSize && <div>Размер: {plate1.plateSize}</div>}
+                    {plate1.plateThickness && <div>Толщина: {plate1.plateThickness}</div>}
+                    {plate1.plateOrientation && <div>Ориентация: {plate1.plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
                   </div>
                 )}
 
                 <div style={{ display: "grid", gap: 8 }}>
-                  {plateChosen.length > 0 ? (
-                    plateChosen.map((g: any, i: number) => (
-                      <div key={`plate-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                  {plate1Chosen.length > 0 ? (
+                    plate1Chosen.map((g: any, i: number) => (
+                      <div key={`plate1-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
                         <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
                           <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
                             {g.url ? (
@@ -1232,12 +1296,12 @@ async function handleClearAll() {
                   )}
                 </div>
 
-                {plateEpitaphItems.length > 0 && (
+                {plate1EpitaphItems.length > 0 && (
                   <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
                     <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
                     <div style={epitaphListStyle()}>
-                      {plateEpitaphItems.map((t, idx) => (
-                        <div key={`plate-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                      {plate1EpitaphItems.map((t, idx) => (
+                        <div key={`plate1-ep-${idx}`} style={epitaphItemStyle(theme)}>
                           <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
                         </div>
                       ))}
@@ -1247,7 +1311,102 @@ async function handleClearAll() {
               </section>
             )}
 
-            {/* Дополнительно */}
+            {plate1Enabled && (
+              <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита 2 — {plate2Qty} шт.</div>
+
+                {(plate2.plateSize || plate2.plateThickness || plate2.plateOrientation) && (
+                  <div style={{ marginBottom: 8, opacity: 0.95 }}>
+                    {plate2.plateSize && <div>Размер: {plate2.plateSize}</div>}
+                    {plate2.plateThickness && <div>Толщина: {plate2.plateThickness}</div>}
+                    {plate2.plateOrientation && <div>Ориентация: {plate2.plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
+                  </div>
+                )}
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  {plate2Chosen.length > 0 ? (
+                    plate2Chosen.map((g: any, i: number) => (
+                      <div key={`plate2-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                        <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                          <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                            {g.url ? (
+                              <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
+                            ) : (
+                              <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ color: palette(theme).subText }}>Графика не выбрана</div>
+                  )}
+                </div>
+
+                {plate2EpitaphItems.length > 0 && (
+                  <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
+                    <div style={epitaphListStyle()}>
+                      {plate2EpitaphItems.map((t, idx) => (
+                        <div key={`plate2-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {plate2Enabled && (
+              <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита 3 — {plate3Qty} шт.</div>
+
+                {(plate3.plateSize || plate3.plateThickness || plate3.plateOrientation) && (
+                  <div style={{ marginBottom: 8, opacity: 0.95 }}>
+                    {plate3.plateSize && <div>Размер: {plate3.plateSize}</div>}
+                    {plate3.plateThickness && <div>Толщина: {plate3.plateThickness}</div>}
+                    {plate3.plateOrientation && <div>Ориентация: {plate3.plateOrientation === "horizontal" ? "горизонтально" : "вертикально"}</div>}
+                  </div>
+                )}
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  {plate3Chosen.length > 0 ? (
+                    plate3Chosen.map((g: any, i: number) => (
+                      <div key={`plate3-${g.id || g.url || i}`} style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, alignItems: "center" }}>
+                        <div style={{ ...galleryThumbBoxStyle(), width: 56, height: 56 }}>
+                          <div style={{ ...thumbBackdropStyle(theme), width: "100%", height: "100%" }}>
+                            {g.url ? (
+                              <img src={g.url} alt={g.name || g.id || ""} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", borderRadius: 8 }} />
+                            ) : (
+                              <div style={{ color: palette(theme).subText, fontSize: 11 }}>нет</div>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name || g.id}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ color: palette(theme).subText }}>Графика не выбрана</div>
+                  )}
+                </div>
+
+                {plate3EpitaphItems.length > 0 && (
+                  <div style={{ ...glassPanelStyle(theme), padding: 8, marginTop: 10 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Эпитафии (плита)</div>
+                    <div style={epitaphListStyle()}>
+                      {plate3EpitaphItems.map((t, idx) => (
+                        <div key={`plate3-ep-${idx}`} style={epitaphItemStyle(theme)}>
+                          <div style={{ whiteSpace: "pre-wrap" }}>{t}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+{/* Дополнительно */}
             <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
               <span style={{ opacity: 0.9 }}>Дополнительно: </span>
               <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>Тумба: {extrasParts.tumba ? "да" : "нет"}</span>
@@ -1278,3 +1437,5 @@ async function handleClearAll() {
     </div>
   );
 }
+
+
