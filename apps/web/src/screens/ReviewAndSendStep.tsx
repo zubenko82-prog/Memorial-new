@@ -705,7 +705,8 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
   const platesArr = ensurePlates(ex); // [0..2]
 
   // --- Плита 1 (legacy) ---
-  if (plateEnabled) {
+  const p1PreviewUrl = String(ex?.platePreviewHiUrl || ex?.platePreviewUrl || "").trim();
+if (plateEnabled && p1PreviewUrl) {
     lines.push("Плита 1:");
     if (ex.plateSize) lines.push(`- Размер: ${String(ex.plateSize).trim()}`);
     if (ex.plateThickness) lines.push(`- Толщина: ${String(ex.plateThickness).trim()}`);
@@ -739,43 +740,46 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
 
   // --- Плита 2 и 3 (new extras.plates[1], extras.plates[2]) ---
   for (const i of [1, 2] as const) {
-    const p: any = platesArr[i] || {};
-    const enabled = !!p.enabled;
+  const p: any = platesArr[i] || {};
 
-    // показываем только если включена
-    if (!enabled) continue;
+  const previewUrl = String(p?.platePreviewHiUrl || p?.platePreviewUrl || "").trim();
+  const enabled = !!p.enabled;
 
-    lines.push(`Плита ${i + 1}:`);
+  // Печатаем ТОЛЬКО если плита добавлена: включена и есть превью
+  if (!enabled || !previewUrl) continue;
 
-    if (p.plateSize) lines.push(`- Размер: ${String(p.plateSize).trim()}`);
-    if (p.plateThickness) lines.push(`- Толщина: ${String(p.plateThickness).trim()}`);
-    if (p.plateOrientation) lines.push(`- Ориентация: ${String(p.plateOrientation).trim()}`);
+  lines.push(`Плита ${i + 1}:`);
 
-    const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
-    if (ep.length) {
-      lines.push("- Эпитафии:");
-      ep.forEach((t: string, k: number) => lines.push(`  ${k + 1}) ${t}`));
-    } else {
-      lines.push("- Эпитафии: —");
-    }
+  if (p.plateSize) lines.push(`- Размер: ${String(p.plateSize).trim()}`);
+  if (p.plateThickness) lines.push(`- Толщина: ${String(p.plateThickness).trim()}`);
+  if (p.plateOrientation) lines.push(`- Ориентация: ${String(p.plateOrientation).trim()}`);
 
-    const ids: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
-    const meta: Record<string, any> = p.plateGraphicsMeta || {};
-    if (ids.length) {
-      const counts: Record<string, number> = {};
-      ids.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
-      const uniq = Array.from(new Set(ids));
-      lines.push("- Графика:");
-      uniq.forEach((gid, k) => {
-        const m = meta[gid] || {};
-        const name = String(m?.name || gid).trim();
-        const qty = counts[gid] || 1;
-        lines.push(`  ${k + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
-      });
-    } else {
-      lines.push("- Графика: —");
-    }
+  const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
+  if (ep.length) {
+    lines.push("- Эпитафии:");
+    ep.forEach((t: string, k: number) => lines.push(`  ${k + 1}) ${t}`));
+  } else {
+    lines.push("- Эпитафии: —");
   }
+
+  const ids: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
+  const meta: Record<string, any> = p.plateGraphicsMeta || {};
+  if (ids.length) {
+    const counts: Record<string, number> = {};
+    ids.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+    const uniq = Array.from(new Set(ids));
+    lines.push("- Графика:");
+    uniq.forEach((gid, k) => {
+      const m = meta[gid] || {};
+      const name = String(m?.name || gid).trim();
+      const qty = counts[gid] || 1;
+      lines.push(`  ${k + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+    });
+  } else {
+    lines.push("- Графика: —");
+  }
+}
+
 
   lines.push("");
 
@@ -909,31 +913,48 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
   }
 
   function collectPersonPhotosWithCaptions(d: any): { file: File; caption: string; name: string }[] {
-    const persons = (((d || {}).engraving || {}).persons || []).filter(Boolean);
-    const out: { file: File; caption: string; name: string }[] = [];
-    for (const p of persons) {
+  const out: { file: File; caption: string; name: string }[] = [];
+
+  const pushFromList = (persons: any[], tag?: string) => {
+    for (const p of (persons || []).filter(Boolean)) {
       const lastName = (p?.lastName || "").trim();
       const first = (p?.firstName || "").trim();
       const middle = (p?.middleName || "").trim();
       const birth = (p?.birthDate || "").trim();
       const death = (p?.deathDate || "").trim();
-      const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ");
-      const dates = [birth, death].filter(Boolean).join(" — ");
-      const caption = [fio, dates].filter(Boolean).join("\n");
+      const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ").trim();
+      const dates = [birth, death].filter(Boolean).join(" — ").trim();
 
-      const dataUrl = (p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
+      const baseCaption = [fio || "—", dates].filter(Boolean).join("\n");
+      const caption = tag ? `${baseCaption}\n(${tag})` : baseCaption;
+
+      const dataUrl = String(p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
       if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
 
       const bin = atob(dataUrl.split(",")[1] || "");
       const u8 = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
 
-      const safeName = (fio || "photo").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+      const safeNameBase = (fio || "photo").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+      const safeName = tag ? `${safeNameBase}__${tag}` : safeNameBase;
+
       const file = new File([u8], `${safeName}.jpg`, { type: "image/jpeg" });
       out.push({ file, caption, name: `${safeName}.jpg` });
     }
-    return out;
+  };
+
+  // Лицевая
+  pushFromList((((d || {}).engraving || {}).persons || []) as any[], undefined);
+
+  // Тыльная (добавляем (ТЫЛ))
+  const rearEnabled = !!d?.editorBack?.enabled;
+  if (rearEnabled) {
+    pushFromList(((d?.editorBack?.people || []) as any[]), "ТЫЛ");
   }
+
+  return out;
+}
+
 
   async function notifyUserAfterSend(orderNoCur: string) {
     const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
