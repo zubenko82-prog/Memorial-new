@@ -1311,7 +1311,7 @@ async function handleClearAll() {
               </section>
             )}
 
-            {plate2Enabled && (
+            {plate1Enabled && (
               <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита 2 — {plate2Qty} шт.</div>
 
@@ -1359,7 +1359,7 @@ async function handleClearAll() {
               </section>
             )}
 
-            {plate3Enabled && (
+            {plate2Enabled && (
               <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита 3 — {plate3Qty} шт.</div>
 
@@ -1437,6 +1437,5 @@ async function handleClearAll() {
     </div>
   );
 }
-
 
 

@@ -899,9 +899,10 @@ function legacyExtrasToPlate0(ex: any) {
     plateEpitaph: typeof ex?.plateEpitaph === "string" ? ex.plateEpitaph : null,
     plateEpitaphs: Array.isArray(ex?.plateEpitaphs) ? ex.plateEpitaphs : null,
 
-    // preview
-    previewUrl: ex?.previewUrl ?? ex?.platePreviewUrl ?? null,
-    previewHiUrl: ex?.previewHiUrl ?? ex?.platePreviewHiUrl ?? null,
+    // preview (KEEP NAMES AS STORED IN extras.plates[i])
+    platePreviewUrl: ex?.platePreviewUrl ?? ex?.previewUrl ?? null,
+    platePreviewHiUrl: ex?.platePreviewHiUrl ?? ex?.previewHiUrl ?? null,
+
   };
 }
 
@@ -960,6 +961,24 @@ const plateX = plates[index] || legacyExtrasToPlate0({ enabled: false });
 const [enabledLocal, setEnabledLocal] = useState<boolean>(() => (isLegacy0 ? !!ex0.headstonePlate : !!plateX.enabled));
 const enabled = enabledProp ?? enabledLocal;
 const setEnabled = onEnabledChange ?? setEnabledLocal;
+
+// ✅ Persist "enabled" to draft so TopBar + reload state are correct
+useEffect(() => {
+  // enabledProp means parent controls it; we still persist because UI expects storage truth
+  if (isLegacy0) {
+    saveOrderDraft({ extras: { headstonePlate: !!enabled } as any });
+  } else {
+    const d = loadOrderDraft();
+    const ex: any = (d as any)?.extras || {};
+    const all = ensurePlates(ex);
+    all[index] = { ...(all[index] || {}), enabled: !!enabled };
+    saveOrderDraft({ extras: { plates: all } as any } as any);
+  }
+  dispatchDraftUpdated();
+  setDraft(loadOrderDraft());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [enabled, index, isLegacy0]);
+
 
 // qty (identical copies)
 const [qty, setQty] = useState<number>(() => {
@@ -1202,8 +1221,83 @@ useEffect(() => {
   setDraft(loadOrderDraft());
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [enabled, selectedEpitaphs]);
+/* AUTO-PATCH: PLATE PREVIEW EFFECT (per PlateBlock) */
+useEffect(() => {
+  let alive = true;
+
+  const run = async () => {
+  if (!enabled) {
+    // ✅ MIN FIX: when plate is disabled, clear preview in draft immediately
+    if (isLegacy0) {
+      saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
+    } else {
+      const d2 = loadOrderDraft();
+      const ex2: any = (d2 as any)?.extras || {};
+      const all = ensurePlates(ex2);
+      all[index] = { ...(all[index] || {}), platePreviewUrl: null, platePreviewHiUrl: null };
+      saveOrderDraft({ extras: { plates: all } as any } as any);
+    }
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+    return;
+  }
+
+  const items: StackItem[] = [];
 
 
+    // graphics in add order
+    for (const gid of ids) {
+      const m = meta[gid] || {};
+      const url = String(m.url || "").trim();
+      if (url) items.push({ kind: "img", url });
+    }
+
+    // epitaphs in selected order
+    for (const t of uniqueByNorm(selectedEpitaphs)) {
+      const tt = String(t || "").trim();
+      if (tt) items.push({ kind: "text", text: tt });
+    }
+
+    const write = (val: string | null) => {
+      if (isLegacy0) {
+        saveOrderDraft({ extras: { platePreviewUrl: val, platePreviewHiUrl: null } as any });
+      } else {
+        const d2 = loadOrderDraft();
+        const ex2: any = (d2 as any)?.extras || {};
+        const all = ensurePlates(ex2);
+        all[index] = { ...(all[index] || {}), platePreviewUrl: val, platePreviewHiUrl: null };
+        saveOrderDraft({ extras: { plates: all } as any } as any);
+      }
+      dispatchDraftUpdated();
+      setDraft(loadOrderDraft());
+    };
+
+    if (items.length === 0) {
+      write(null);
+      return;
+    }
+
+    const preview = await renderStackedCenteredPreview({
+      W: PREVIEW_W,
+      H: PREVIEW_H,
+      bg: { type: "image", url: PLATE_BG_URL },
+      bgFit: "contain",
+      overlayPng: null,
+      items,
+      profile: "plate"
+    });
+
+    if (!alive) return;
+    write(preview || null);
+  };
+
+  const t = window.setTimeout(() => void run(), 420);
+  return () => {
+    alive = false;
+    clearTimeout(t);
+  };
+}, [enabled, ids, meta, selectedEpitaphs, index, isLegacy0, setDraft]);
+/* END AUTO-PATCH: PLATE PREVIEW EFFECT (per PlateBlock) */
 
 // отдельное "single-open accordion" для каждой плиты
 type PlateAccLocal = "epitaphs" | "graphics" | null;
@@ -1466,22 +1560,7 @@ return (
 export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [outro, setOutro] = useState(false);
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
-  // Plate blocks enabled chain (checkbox-driven visibility)
-  const [plate1Enabled, setPlate1Enabled] = useState(true);
-  const [plate2Enabled, setPlate2Enabled] = useState(false);
-  const [plate3Enabled, setPlate3Enabled] = useState(false);
-
-  useEffect(() => {
-    if (!plate1Enabled) {
-      setPlate2Enabled(false);
-      setPlate3Enabled(false);
-    }
-  }, [plate1Enabled]);
-
-  useEffect(() => {
-    if (!plate2Enabled) setPlate3Enabled(false);
-  }, [plate2Enabled]);
-
+  
   useEffect(() => {
     const sync = () => setDraft(loadOrderDraft());
     window.addEventListener(DRAFT_UPDATED_EVENT, sync);
@@ -1542,6 +1621,12 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
    * Дополнительно (extras) — НЕ accordion
    * ========================= */
   const extras0: any = (draft as any)?.extras || {};
+/* AUTO-PATCH: DERIVE PLATE2/3 ENABLED FROM DRAFT */
+  const platesFromDraft = useMemo(() => ensurePlates(extras0), [extras0]);
+  const plate2Enabled = !!platesFromDraft[1]?.enabled;
+  const plate3Enabled = !!platesFromDraft[2]?.enabled;
+/* END AUTO-PATCH: DERIVE PLATE2/3 ENABLED FROM DRAFT */
+
   const [hasPedestal, setHasPedestal] = useState<boolean>(() => (extras0.tumba ?? true));
   const [hasFlowerbed, setHasFlowerbed] = useState<boolean>(() => (extras0.flowerbed ?? true));
   const [hasVase, setHasVase] = useState<boolean>(() => (extras0.vase ?? false));
@@ -1821,7 +1906,7 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
           graphicsMeta: null,
           epitaphTexts: null,
           people: null,
-          previewUrl: null,
+
           previewHiUrl: null
         } as any
       });
@@ -2079,23 +2164,38 @@ const [activePlateIndex, setActivePlateIndex] = useState<number>(0);
     saveOrderDraft({ extras: { headstonePlate: plateEnabled } as any });
     dispatchDraftUpdated();
 
-    if (!plateEnabled) {
-      saveOrderDraft({
-        extras: {
-          headstonePlate: false,
-          plateSize: null,
-          plateGraphicsIds: null,
-          plateGraphicsMeta: null,
-          plateEpitaph: null,
-          plateEpitaphs: null,
-          plateEpitaphTexts: null,
-          platePreviewUrl: null,
-          platePreviewHiUrl: null
-        } as any
-      });
-      dispatchDraftUpdated();
-      return;
-    }
+   if (!plateEnabled) {
+  const d = loadOrderDraft();
+  const ex: any = (d as any)?.extras || {};
+
+  // важно: сохранить plates как есть, чтобы 2/3 не отключались
+  const plates = ex.plates ?? null;
+
+  saveOrderDraft({
+    extras: {
+      headstonePlate: false,
+
+      // чистим только legacy plate #1
+      plateSize: null,
+      plateGraphicsIds: null,
+      plateGraphicsMeta: null,
+      plateEpitaph: null,
+      plateEpitaphs: null,
+      plateEpitaphTexts: null,
+      platePreviewUrl: null,
+      platePreviewHiUrl: null,
+
+      // НЕ ТРОГАЕМ 2/3
+      plates
+    } as any
+  });
+
+  dispatchDraftUpdated();
+  setDraft(loadOrderDraft());
+  return;
+}
+
+
 
     const list = uniqueByNorm(plateSelectedEpitaphs);
     const patchExtras: any = {
@@ -2125,68 +2225,7 @@ const [activePlateIndex, setActivePlateIndex] = useState<number>(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plateEnabled]);
 
-  useEffect(() => {
-    let alive = true;
-    const run = async () => {
-      if (!plateEnabled) return;
 
-      const d = loadOrderDraft();
-      const ex: any = (d as any)?.extras || {};
-      const ids: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
-      const meta: Record<string, any> = ex.plateGraphicsMeta || {};
-
-      const arr: string[] = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
-      const one: string[] = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
-      const epitaphsInOrder = [...one, ...arr].map((s) => String(s || "")).filter((s) => String(s || "").trim());
-
-      const graphicsInOrder: string[] = ids.slice();
-
-      const items: StackItem[] = [];
-      for (const gid of graphicsInOrder) {
-        const m = meta[gid] || {};
-        const url = String(m.url || "").trim();
-        if (url) items.push({ kind: "img", url });
-      }
-      for (const t of epitaphsInOrder) items.push({ kind: "text", text: t });
-
-      if (items.length === 0) {
-        if (isLegacy0) {
-          saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
-        } else {
-          const d = loadOrderDraft();
-          const ex: any = (d as any)?.extras || {};
-          const all = ensurePlates(ex);
-          all[index] = { ...all[index], platePreviewUrl: preview || null, platePreviewHiUrl: null };
-
-          saveOrderDraft({ extras: { plates: all } as any } as any);
-        }
-        dispatchDraftUpdated();
-        return;
-      }
-
-      const preview = await renderStackedCenteredPreview({
-        W: PREVIEW_W,
-        H: PREVIEW_H,
-        bg: { type: "image", url: PLATE_BG_URL },
-        bgFit: "contain",
-        overlayPng: null,
-        items,
-        profile: "plate"
-      });
-
-     if (!alive) return;
-
-saveOrderDraft({ extras: { platePreviewUrl: preview || null, platePreviewHiUrl: null } as any });
-dispatchDraftUpdated();
-
-    };
-
-    const t = window.setTimeout(() => void run(), 420);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [plateEnabled, plateIds, plateMeta, plateSelectedEpitaphs]);
 
 /* =========================
    * Single-open accordion state (per side)
@@ -2351,6 +2390,26 @@ const plateCtx: PlateCtx = {
     plateGrid,
     CatGrid
   };
+  // enable/disable plates[1]/plates[2] (plate #2/#3) safely
+  const setPlateNEnabled = useCallback(
+    (idx: 1 | 2, v: boolean) => {
+      const d = loadOrderDraft();
+      const ex: any = (d as any)?.extras || {};
+      const all = ensurePlates(ex);
+
+      all[idx] = {
+        ...(all[idx] || {}),
+        enabled: v,
+        ...(v ? {} : { platePreviewUrl: null, platePreviewHiUrl: null })
+      };
+
+      saveOrderDraft({ extras: { plates: all } as any } as any);
+      dispatchDraftUpdated();
+      setDraft(loadOrderDraft());
+    },
+    [setDraft]
+  );
+
   
   /* =========================
    * Actions
@@ -2787,78 +2846,35 @@ const plateCtx: PlateCtx = {
       )}
 
       {/* =======================
-          Надгробная плита
-         ======================= */}
-      <PlateBlock index={0} ctx={plateCtx} />
+    Надгробная плита
+   ======================= */}
+<PlateBlock index={0} ctx={plateCtx} />
+
+{/* Плита 2 (не прячем, если уже включена) */}
+{plate2Enabled && <PlateBlock index={1} ctx={plateCtx} />}
+
+{/* Кнопка добавления плиты 2 — в конце блока плиты 1 */}
+{plateEnabled && !plate2Enabled && (
+  <div style={{ margin: "10px 0" }}>
+    <button type="button" style={glassButtonStyle("sm")} onClick={() => setPlateNEnabled(1, true)}>
+      Добавить 2-ю надгробную плиту
+    </button>
+  </div>
+)}
+
+{/* Кнопка добавления плиты 3 — показываем только когда включена плита 2 и плита 3 ещё не включена */}
+{plateEnabled && plate2Enabled && !plate3Enabled && (
+  <div style={{ margin: "10px 0" }}>
+    <button type="button" style={glassButtonStyle("sm")} onClick={() => setPlateNEnabled(2, true)}>
+      Добавить 3-ю надгробную плиту
+    </button>
+  </div>
+)}
 
 
-      {plate1Enabled && (
-        <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0" }}>
-          <input
-  type="checkbox"
-  checked={plate2Enabled}
-  disabled={!plate1Enabled}
-  onChange={(e) => {
-    const v = e.currentTarget.checked;
 
-    // мгновенно обновляем UI
-    setPlate2Enabled(v);
-    if (!v) setPlate3Enabled(false); // если хочешь пока старое поведение; если нет — убери
-
-    // сохраняем в draft
-    const d = loadOrderDraft();
-    const ex: any = (d as any)?.extras || {};
-    const all = ensurePlates(ex);
-
-    all[1] = { ...all[1], enabled: v };
-
-    // если выключили 2-ю и хочешь выключать 3-ю в draft тоже:
-    if (!v) all[2] = { ...all[2], enabled: false };
-
-    saveOrderDraft({ extras: { plates: all } as any } as any);
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  }}
-/>
-
-          Добавить 2-ю надгробную плиту
-        </label>
-      )}
-
-      {plate2Enabled && (
-        <>
-          <PlateBlock index={1} ctx={plateCtx} enabled={plate2Enabled} />
-
-
-          <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0" }}>
-            <input
-  type="checkbox"
-  checked={plate3Enabled}
-  disabled={!plate2Enabled}
-  onChange={(e) => {
-    const v = e.currentTarget.checked;
-
-    setPlate3Enabled(v);
-
-    const d = loadOrderDraft();
-    const ex: any = (d as any)?.extras || {};
-    const all = ensurePlates(ex);
-
-    all[2] = { ...all[2], enabled: v };
-
-    saveOrderDraft({ extras: { plates: all } as any } as any);
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-  }}
-/>
-
-
-            Добавить 3-ю надгробную плиту
-          </label>
-        </>
-      )}
-
-      {plate3Enabled && <PlateBlock index={2} ctx={plateCtx} enabled={plate3Enabled} />}
+    {/* Плита 3: показываем только если включены 2-я и 3-я (чтобы сохранялась “лесенка” как раньше) */}
+    {plate3Enabled && <PlateBlock index={2} ctx={plateCtx} />}
 
 
 
@@ -2874,31 +2890,6 @@ const plateCtx: PlateCtx = {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

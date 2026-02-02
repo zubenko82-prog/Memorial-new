@@ -204,6 +204,12 @@ function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   return new File([u8], name, { type: mime });
 }
 
+function ensurePlates(ex: any): any[] {
+  const cur = Array.isArray(ex?.plates) ? ex.plates.slice() : [];
+  while (cur.length < 3) cur.push({});
+  return cur;
+}
+
 /* ========= Main component ========= */
 export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [draft, setDraft] = useState(loadOrderDraft());
@@ -324,41 +330,86 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
 
   const showBack = !!backCandidateUrl && backIsRenderable;
 
-  // ===== Plate sketch: detect "empty" by actual image size =====
-  function getPlateSketchUrl(d: any): string | null {
-    const ex: any = (d as any)?.extras || {};
-    const raw = String((ex?.platePreviewHiUrl || ex?.platePreviewUrl || "") ?? "").trim();
-    if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
-    return raw;
+// ===== Plate sketches (1..3): detect "empty" by actual image size =====
+type PlateSketch = { index: 0 | 1 | 2; url: string };
+
+function getPlateSketchUrls(d: any): PlateSketch[] {
+  const ex: any = (d as any)?.extras || {};
+  const plates = ensurePlates(ex);
+
+  const norm = (raw: any): string | null => {
+    const s = String(raw ?? "").trim();
+    if (!s || s === "#" || s.toLowerCase() === "about:blank") return null;
+    return s;
+  };
+
+  const out: PlateSketch[] = [];
+
+  // plate #1 (legacy)
+  const p1Enabled = !!ex.headstonePlate;
+  const p1Url = norm(ex?.platePreviewHiUrl || ex?.platePreviewUrl);
+  if (p1Enabled && p1Url) out.push({ index: 0, url: p1Url });
+
+  // plate #2/#3 (new)
+  for (const i of [1, 2] as const) {
+    const p = plates[i] || {};
+    const enabled = !!p.enabled;
+    const url = norm(p?.platePreviewHiUrl || p?.platePreviewUrl);
+    if (enabled && url) out.push({ index: i, url });
   }
-  const [plateCandidateUrl, setPlateCandidateUrl] = useState<string | null>(getPlateSketchUrl(draft));
-  useEffect(() => setPlateCandidateUrl(getPlateSketchUrl(draft)), [draft]);
 
-  const [plateIsRenderable, setPlateIsRenderable] = useState(false);
-  useEffect(() => {
-    setPlateIsRenderable(false);
-    if (!plateCandidateUrl) return;
+  return out;
+}
 
-    let alive = true;
-    const img = new Image();
-    img.onload = () => {
-      if (!alive) return;
-      const w = img.naturalWidth || 0;
-      const h = img.naturalHeight || 0;
-      setPlateIsRenderable(w >= 50 && h >= 50);
-    };
-    img.onerror = () => {
-      if (!alive) return;
-      setPlateIsRenderable(false);
-    };
-    img.crossOrigin = "anonymous";
-    img.src = plateCandidateUrl;
-    return () => {
-      alive = false;
-    };
-  }, [plateCandidateUrl]);
+const [plateCandidates, setPlateCandidates] = useState<PlateSketch[]>(() => getPlateSketchUrls(draft));
+useEffect(() => setPlateCandidates(getPlateSketchUrls(draft)), [draft]);
 
-  const showPlate = !!plateCandidateUrl && plateIsRenderable;
+const [plateRenderable, setPlateRenderable] = useState<Record<number, boolean>>({});
+useEffect(() => {
+  let alive = true;
+  setPlateRenderable({});
+
+  const run = async () => {
+    const entries = await Promise.all(
+      plateCandidates.map(
+        (p) =>
+          new Promise<[number, boolean]>((res) => {
+            const img = new Image();
+            img.onload = () => {
+              const w = img.naturalWidth || 0;
+              const h = img.naturalHeight || 0;
+              res([p.index, w >= 50 && h >= 50]);
+            };
+            img.onerror = () => res([p.index, false]);
+            img.crossOrigin = "anonymous";
+            img.src = p.url;
+          })
+      )
+    );
+
+    if (!alive) return;
+    const m: Record<number, boolean> = {};
+    for (const [idx, ok] of entries) m[idx] = ok;
+    setPlateRenderable(m);
+  };
+
+  run();
+  return () => {
+    alive = false;
+  };
+}, [plateCandidates]);
+
+const plateToShow = useMemo(
+  () => plateCandidates.filter((p) => !!plateRenderable[p.index]),
+  [plateCandidates, plateRenderable]
+);
+
+const showPlate = plateToShow.length > 0;
+
+// пригодится для отправки по URL (fallback)
+const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToShow]);
+
+
 
   // Front
   const item = (draft as any)?.item || null;
@@ -898,13 +949,26 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
         setBackSketchDelivered(null);
       }
 
-      if (showPlate && plateCandidateUrl) {
-        const plateRes = await sendSketchFromNode("pdf-plate-sketch", "Эскиз (надгробная плита)", plateCandidateUrl);
-        setPlateSketchDelivered(plateRes.ok);
-        if (!plateRes.ok && plateRes.error) warnings.push(`Эскиз (плита) не отправлен: ${plateRes.error}`);
-      } else {
-        setPlateSketchDelivered(null);
-      }
+      if (showPlate && plateToShow.length > 0) {
+  // отправим каждую активную плиту отдельным фото
+  let allOk = true;
+
+  for (const p of plateToShow) {
+    const caption = `Эскиз (надгробная плита ${p.index + 1})`;
+    const res = await sendSketchFromNode(`pdf-plate-sketch-${p.index}`, caption, p.url);
+
+    // у тебя plateSketchDelivered один флаг; сделаем true только если все ок
+    allOk = allOk && res.ok;
+
+    if (!res.ok && res.error) warnings.push(`${caption} не отправлен: ${res.error}`);
+    await sleep(120);
+  }
+
+  setPlateSketchDelivered(allOk);
+} else {
+  setPlateSketchDelivered(null);
+}
+
 
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
@@ -952,16 +1016,27 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     try {
       setIsSaving(true);
       await new Promise((r) => setTimeout(r, 0));
-      const blob = await generateOrderPdf({
+     const plateNodes = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
+const plateUrlFallbacks = showPlate ? plateToShow.map((p) => p.url) : [];
+
+const blob = await generateOrderPdf({
   draft: loadOrderDraft(),
   intro: loadIntroState(),
   frontNode: document.getElementById("pdf-front-sketch"),
   backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
   backUrlFallback: showBack ? backCandidateUrl : null,
-  plateNode: showPlate ? document.getElementById("pdf-plate-sketch") : null,
-  plateUrlFallback: showPlate ? plateCandidateUrl : null,
+
+  // NEW:
+  plateNodes,
+  plateUrlFallbacks,
+
+  // legacy fields keep (for backward compat inside generateOrderPdf):
+  plateNode: plateNodes[0] || null,
+  plateUrlFallback: plateUrlFallbacks[0] || null,
+
   includeAttachedPhotos: true
 } as any);
+
 
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
@@ -1033,21 +1108,28 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
       )}
 
       {/* Эскиз надгробной плиты (только если есть) */}
-      {showPlate && plateCandidateUrl && (
-        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита</div>
-          <div style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}>
-  <img
-    id="pdf-plate-sketch"
-    src={plateCandidateUrl}
-    crossOrigin="anonymous"
-    alt=""
-    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-  />
-</div>
+{showPlate && (
+  <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
+    <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита</div>
 
-        </section>
-      )}
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${plateToShow.length}, 1fr)`, gap: 10 }}>
+      {plateToShow.map((p) => (
+        <div
+          key={`plate-sketch-${p.index}`}
+          style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}
+        >
+          <img
+            id={`pdf-plate-sketch-${p.index}`}
+            src={p.url}
+            crossOrigin="anonymous"
+            alt=""
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+          />
+        </div>
+      ))}
+    </div>
+  </section>
+)}
 
       {/* Комментарий к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
@@ -1058,19 +1140,20 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
           Не беспокойтесь: даже при отсутствии нужного пункта финальное подтверждение — по телефону или лично.
         </div>
         <textarea
-          id="order-notes"
-          rows={3}
-          defaultValue={String(((draft as any)?.extras?.orderNotes || "")).trim()}
-          onBlur={(e) => {
-            const v = String(e.target.value || "").trim();
-            saveOrderDraft({ extras: { orderNotes: v ? v : null } as any });
-            dispatchDraftUpdated();
-            setDraft(loadOrderDraft());
-            if (sentOk) setIsDirtyAfterSend(true);
-          }}
-          placeholder="Добавьте комментарий…"
-          style={{ ...inputStyle(), resize: "vertical" }}
-        />
+  id="order-notes"
+  rows={3}
+  defaultValue={String(((draft as any)?.extras?.orderNotes || "")).trim()}
+  onBlur={(e) => {
+    const v = String(e.target.value || "").trim();
+    saveOrderDraft({ extras: { orderNotes: v ? v : null } as any });
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+    if (sentOk) setIsDirtyAfterSend(true);
+  }}
+  placeholder="Добавьте комментарий…"
+  style={{ ...inputStyle(), resize: "vertical" }}
+/>
+
       </section>
 
       {/* Кнопки */}
@@ -1227,5 +1310,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
     </div>
   );
 }
+
+
 
 

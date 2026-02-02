@@ -171,24 +171,32 @@ export type GeneratePdfArgs = {
   backNode?: HTMLElement | null;
   backUrlFallback?: string | null;
 
-  // NEW: plate preview
+  // legacy single-plate (keep)
   plateNode?: HTMLElement | null;
   plateUrlFallback?: string | null;
+
+  // NEW: multi-plate
+  plateNodes?: Array<HTMLElement | null>;
+  plateUrlFallbacks?: Array<string | null>;
 
   onProgress?: (stage: string) => void;
 };
 
+
 export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const {
-    draft,
-    intro,
-    frontNode,
-    backNode,
-    backUrlFallback,
-    plateNode,
-    plateUrlFallback,
-    onProgress
-  } = args;
+  draft,
+  intro,
+  frontNode,
+  backNode,
+  backUrlFallback,
+  plateNode,
+  plateUrlFallback,
+  plateNodes,
+  plateUrlFallbacks,
+  onProgress
+} = args;
+
 
   onProgress?.("init");
   const jsPDF = await ensureJsPdf();
@@ -329,14 +337,34 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
           null
       );
 
-  const platePng = plateNode
-    ? await nodeToPng(plateNode)
+  // normalize plates input (prefer new arrays, fallback to old single values)
+const normPlateNodes: Array<HTMLElement | null> =
+  Array.isArray(plateNodes) && plateNodes.length ? plateNodes : [plateNode || null];
+
+const normPlateFallbacks: Array<string | null> =
+  Array.isArray(plateUrlFallbacks) && plateUrlFallbacks.length
+    ? plateUrlFallbacks
+    : [plateUrlFallback || null];
+
+const plateCount = Math.max(normPlateNodes.length, normPlateFallbacks.length, 1);
+
+const platePngs: Array<string | null> = [];
+for (let i = 0; i < plateCount; i++) {
+  const n = normPlateNodes[i] || null;
+  const fb = normPlateFallbacks[i] || null;
+
+  const png = n
+    ? await nodeToPng(n)
     : await urlToDataUrl(
-        plateUrlFallback ||
+        fb ||
           (draft as any)?.extras?.platePreviewHiUrl ||
           (draft as any)?.extras?.platePreviewUrl ||
           null
       );
+
+  platePngs.push(png || null);
+}
+
 
   /* ===== Measure left column (for fitting) ===== */
   function measureLeft() {
@@ -662,10 +690,11 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   // --- NEW: distribute available height among existing previews (front/back/plate) ---
   // We only place previews that are реально доступны (dataUrl not null).
   const previewList: Array<{ key: "front" | "back" | "plate"; data: string | null }> = [
-    { key: "front", data: frontPng },
-    { key: "back", data: backPng },
-    { key: "plate", data: platePng }
-  ].filter((x) => !!x.data);
+  { key: "front", data: frontPng },
+  { key: "back", data: backPng },
+  ...platePngs.map((data) => ({ key: "plate" as const, data }))
+].filter((x) => !!x.data);
+
 
   if (previewList.length > 0) {
     const gaps = 18;
