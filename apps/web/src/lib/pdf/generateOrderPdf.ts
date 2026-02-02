@@ -106,6 +106,12 @@ function fileNameFromUrl(url?: string): string {
   }
 }
 
+function ensurePlates(ex: any): any[] {
+  const cur = Array.isArray(ex?.plates) ? ex.plates.slice() : [];
+  while (cur.length < 3) cur.push({});
+  return cur;
+}
+
 /* ===== Fallback: рисуем нелатинские строки в canvas и вставляем в PDF как PNG ===== */
 function hasNonLatin(text: string): boolean {
   return /[^\x00-\x7E]/.test(text);
@@ -311,6 +317,28 @@ export async function generateOrderPdf(args: GeneratePdfArgs): Promise<Blob> {
   const plateSize = (draft as any)?.extras?.plateSize || "";
   const plateThick = (draft as any)?.extras?.plateThickness || "";
   const plateOrient = (draft as any)?.extras?.plateOrientation || "";
+    const ex: any = (draft as any)?.extras || {};
+  const plates = ensurePlates(ex);
+
+  const plate2On = !!plates[1]?.enabled;
+  const plate3On = !!plates[2]?.enabled;
+
+  const plate2Size = plates[1]?.plateSize || "";
+  const plate2Thick = plates[1]?.plateThickness || "";
+  const plate2Orient = plates[1]?.plateOrientation || "";
+  const plate2Ids: string[] = Array.isArray(plates[1]?.plateGraphicsIds) ? plates[1].plateGraphicsIds : [];
+  const plate2Meta: Record<string, any> = plates[1]?.plateGraphicsMeta || {};
+  const plate2Unique = Array.from(new Set(plate2Ids)).map((id) => plate2Meta[id] || { id, name: id, url: "" });
+  const plate2Eps = toParagraphsSafe(((plates[1]?.plateEpitaph || "").trim() || ""));
+
+  const plate3Size = plates[2]?.plateSize || "";
+  const plate3Thick = plates[2]?.plateThickness || "";
+  const plate3Orient = plates[2]?.plateOrientation || "";
+  const plate3Ids: string[] = Array.isArray(plates[2]?.plateGraphicsIds) ? plates[2].plateGraphicsIds : [];
+  const plate3Meta: Record<string, any> = plates[2]?.plateGraphicsMeta || {};
+  const plate3Unique = Array.from(new Set(plate3Ids)).map((id) => plate3Meta[id] || { id, name: id, url: "" });
+  const plate3Eps = toParagraphsSafe(((plates[2]?.plateEpitaph || "").trim() || ""));
+
 
   const plateIds: string[] = ((draft as any)?.extras?.plateGraphicsIds as string[]) || [];
   const plateMeta: Record<string, any> = (draft as any)?.extras?.plateGraphicsMeta || {};
@@ -431,6 +459,36 @@ for (let i = 0; i < plateCount; i++) {
     if (notes) {
       y += lh(base);
       y += split(notes, leftW, base).length * lh(base);
+    }
+
+        if (plate2On) {
+      y += lh(TITLE);
+      if (plate2Size) y += lh(base);
+      if (plate2Thick) y += lh(base);
+      if (plate2Orient) y += lh(base);
+      if (plate2Unique.length) {
+        y += lh(base);
+        y += measureGraphics(plate2Unique.map((p) => ({ name: p.name || p.id || "—", url: p.url })), plateH);
+      }
+      if (plate2Eps.length) {
+        y += lh(base);
+        y += measureEpitaphs(plate2Eps) + 10;
+      }
+    }
+
+    if (plate3On) {
+      y += lh(TITLE);
+      if (plate3Size) y += lh(base);
+      if (plate3Thick) y += lh(base);
+      if (plate3Orient) y += lh(base);
+      if (plate3Unique.length) {
+        y += lh(base);
+        y += measureGraphics(plate3Unique.map((p) => ({ name: p.name || p.id || "—", url: p.url })), plateH);
+      }
+      if (plate3Eps.length) {
+        y += lh(base);
+        y += measureEpitaphs(plate3Eps) + 10;
+      }
     }
 
     return { total: y - margin };
@@ -643,6 +701,70 @@ for (let i = 0; i < plateCount; i++) {
     if (plateEps.length) {
       y = headingCentered("Эпитафии (плита)", y, base);
       y = drawEpitaphs(y, plateEps) + 10;
+    }
+  }
+
+    if (plate2On) {
+    y = headingCentered("Надгробная плита 2", y);
+    useFont(false, base);
+
+    if (plate2Size) {
+      doc.text(`Размер: ${plate2Size}`, margin, y);
+      y += lh(base);
+    }
+    if (plate2Thick) {
+      doc.text(`Толщина: ${plate2Thick}`, margin, y);
+      y += lh(base);
+    }
+    if (plate2Orient) {
+      doc.text(`Ориентация: ${plate2Orient === "horizontal" ? "горизонтально" : "вертикально"}`, margin, y);
+      y += lh(base);
+    }
+
+    if (plate2Unique.length) {
+      y = headingCentered("Графика (плита 2)", y, base);
+      y = await drawGraphics(
+        y,
+        plate2Unique.map((p) => ({ name: p.name || p.id || "—", url: p.url })),
+        plateH
+      );
+    }
+
+    if (plate2Eps.length) {
+      y = headingCentered("Эпитафии (плита 2)", y, base);
+      y = drawEpitaphs(y, plate2Eps) + 10;
+    }
+  }
+
+  if (plate3On) {
+    y = headingCentered("Надгробная плита 3", y);
+    useFont(false, base);
+
+    if (plate3Size) {
+      doc.text(`Размер: ${plate3Size}`, margin, y);
+      y += lh(base);
+    }
+    if (plate3Thick) {
+      doc.text(`Толщина: ${plate3Thick}`, margin, y);
+      y += lh(base);
+    }
+    if (plate3Orient) {
+      doc.text(`Ориентация: ${plate3Orient === "horizontal" ? "горизонтально" : "вертикально"}`, margin, y);
+      y += lh(base);
+    }
+
+    if (plate3Unique.length) {
+      y = headingCentered("Графика (плита 3)", y, base);
+      y = await drawGraphics(
+        y,
+        plate3Unique.map((p) => ({ name: p.name || p.id || "—", url: p.url })),
+        plateH
+      );
+    }
+
+    if (plate3Eps.length) {
+      y = headingCentered("Эпитафии (плита 3)", y, base);
+      y = drawEpitaphs(y, plate3Eps) + 10;
     }
   }
 

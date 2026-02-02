@@ -690,22 +690,21 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
   }
   lines.push("");
 
-  // ===== Надгробная плита =====
+    // ===== Надгробная плита =====
   const plateEnabled = !!ex.headstonePlate;
   lines.push("Надгробная плита:");
   lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
 
+  const platesArr = ensurePlates(ex); // [0..2]
+
+  // --- Плита 1 (legacy) ---
   if (plateEnabled) {
+    lines.push("Плита 1:");
     if (ex.plateSize) lines.push(`- Размер: ${String(ex.plateSize).trim()}`);
     if (ex.plateThickness) lines.push(`- Толщина: ${String(ex.plateThickness).trim()}`);
     if (ex.plateOrientation) lines.push(`- Ориентация: ${String(ex.plateOrientation).trim()}`);
 
-    // Эпитафии плиты: plateEpitaph / plateEpitaphs
-    const plateEpitaphs = [
-      ...toParagraphs(ex.plateEpitaph),
-      ...toParagraphs(ex.plateEpitaphs)
-    ].filter(Boolean);
-
+    const plateEpitaphs = [...toParagraphs(ex.plateEpitaph), ...toParagraphs(ex.plateEpitaphs)].filter(Boolean);
     if (plateEpitaphs.length) {
       lines.push("- Эпитафии:");
       plateEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
@@ -713,7 +712,6 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       lines.push("- Эпитафии: —");
     }
 
-    // Графика плиты
     const plateIds: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
     const plateMeta: Record<string, any> = ex.plateGraphicsMeta || {};
     if (plateIds.length) {
@@ -731,6 +729,47 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       lines.push("- Графика: —");
     }
   }
+
+  // --- Плита 2 и 3 (new extras.plates[1], extras.plates[2]) ---
+  for (const i of [1, 2] as const) {
+    const p: any = platesArr[i] || {};
+    const enabled = !!p.enabled;
+
+    // показываем только если включена
+    if (!enabled) continue;
+
+    lines.push(`Плита ${i + 1}:`);
+
+    if (p.plateSize) lines.push(`- Размер: ${String(p.plateSize).trim()}`);
+    if (p.plateThickness) lines.push(`- Толщина: ${String(p.plateThickness).trim()}`);
+    if (p.plateOrientation) lines.push(`- Ориентация: ${String(p.plateOrientation).trim()}`);
+
+    const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
+    if (ep.length) {
+      lines.push("- Эпитафии:");
+      ep.forEach((t: string, k: number) => lines.push(`  ${k + 1}) ${t}`));
+    } else {
+      lines.push("- Эпитафии: —");
+    }
+
+    const ids: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
+    const meta: Record<string, any> = p.plateGraphicsMeta || {};
+    if (ids.length) {
+      const counts: Record<string, number> = {};
+      ids.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+      const uniq = Array.from(new Set(ids));
+      lines.push("- Графика:");
+      uniq.forEach((gid, k) => {
+        const m = meta[gid] || {};
+        const name = String(m?.name || gid).trim();
+        const qty = counts[gid] || 1;
+        lines.push(`  ${k + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+      });
+    } else {
+      lines.push("- Графика: —");
+    }
+  }
+
   lines.push("");
 
   // ===== Комментарии =====
