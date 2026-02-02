@@ -7,6 +7,7 @@ import GraphicsStep from "./screens/GraphicsStep";
 import EpitaphStep from "./screens/EpitaphStep";
 import BackEditorStep from "./screens/BackEditorStep";
 import ReviewAndSendStep from "./screens/ReviewAndSendStep";
+import { loadIntroState, saveIntro } from "./lib/intro";
 
 import StepNav from "./components/StepNav";
 import { STEPS, type StepId } from "./wizard/steps";
@@ -345,6 +346,91 @@ export default function App() {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     } catch {}
   };
+
+  const resetProgressOnly = () => {
+  try {
+    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem(NAV_UNLOCK_KEY);
+  } catch {}
+  setSelectedItem(null);
+  setSizeResult(null);
+  setEngraving(null);
+  setDecor({});
+  setEditorBackState(null);
+  setNavUnlocked(false);
+  setStep("start");
+};
+
+const wipeAllDataIncludingOrderNo = () => {
+  resetProgressOnly();
+  try {
+    localStorage.removeItem("memorial:orderDraft");
+  } catch {}
+  try {
+    localStorage.removeItem("memorial:introState");
+    localStorage.removeItem("memorial:intro");
+    localStorage.removeItem("memorial:orderNumber");
+  } catch {}
+};
+
+const wipeKeepCustomer = () => {
+  const st: any = loadIntroState();
+  const intro = st?.intro || null;
+
+  resetProgressOnly();
+  try {
+    localStorage.removeItem("memorial:orderDraft");
+  } catch {}
+
+  if (intro) {
+    // сохраняем заказчика, но сбрасываем номер/lock
+    saveIntro(
+      {
+        customerName: String(intro.customerName || "").trim(),
+        customerPhone: String(intro.customerPhone || "").trim(),
+        customerNotes: String(intro.customerNotes || "").trim() || undefined
+      },
+      { lock: false }
+    );
+    // на всякий случай убираем номер принудительно
+    try {
+      const st2: any = loadIntroState();
+      localStorage.setItem(
+        "memorial:introState",
+        JSON.stringify({ ...(st2 || {}), locked: false, orderNumber: null })
+      );
+    } catch {}
+  } else {
+    try {
+      localStorage.removeItem("memorial:introState");
+      localStorage.removeItem("memorial:intro");
+      localStorage.removeItem("memorial:orderNumber");
+    } catch {}
+  }
+};
+
+const keepAllButNewOrderNo = () => {
+  // оставляем все данные (включая draft), но сбрасываем номер заказа (чтобы Start выдал новый)
+  resetProgressOnly();
+  try {
+    const st2: any = loadIntroState();
+    if (st2?.intro) {
+      saveIntro(
+        {
+          customerName: String(st2.intro.customerName || "").trim(),
+          customerPhone: String(st2.intro.customerPhone || "").trim(),
+          customerNotes: String(st2.intro.customerNotes || "").trim() || undefined
+        },
+        { lock: false }
+      );
+    }
+    const st3: any = loadIntroState();
+    localStorage.setItem(
+      "memorial:introState",
+      JSON.stringify({ ...(st3 || {}), locked: false, orderNumber: null })
+    );
+  } catch {}
+};
 
   const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
 

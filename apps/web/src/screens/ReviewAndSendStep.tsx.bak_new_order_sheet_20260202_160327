@@ -16,7 +16,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
-import { loadIntroState, saveIntro } from "../lib/intro";
+import { loadIntroState } from "../lib/intro";
 import { generateOrderPdf, downloadBlob } from "../lib/pdf/generateOrderPdf";
 import { compressImageFileToMaxBytes } from "../lib/media/resize";
 
@@ -144,13 +144,6 @@ function dispatchDraftUpdated() {
     window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
   } catch {}
 }
-
-
-function __setHashForStep(id: string) {
-  window.location.hash = "#/wizard/" + encodeURIComponent(id);
-}
-
-
 
 /* ========= Top hint ========= */
 function TopHintNotice() {
@@ -1347,9 +1340,6 @@ const blob = await generateOrderPdf({
               <button type="button" onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>
                 {isSaving ? "Формируем PDF…" : "Скачать PDF"}
               </button>
-              <button type="button" onClick={() => setNewOrderOpen(true)} disabled={isSaving || uploading || isSending} style={glassButtonStyle("sm", isSaving || uploading || isSending)}>
-                Новая заявка
-              </button>
             </div>
           </section>
         </div>
@@ -1359,13 +1349,6 @@ const blob = await generateOrderPdf({
     </div>
   );
 }
-
-
-
-
-
-
-
 
 
 
