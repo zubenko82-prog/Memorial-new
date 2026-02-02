@@ -222,6 +222,11 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
+    const [newOrderOpen, setNewOrderOpen] = useState(false);
+  const [newOrderConfirm, setNewOrderConfirm] =
+    useState<null | "wipe_all" | "wipe_keep_customer" | "keep_all_new_no">(null);
+  const [pdfSavedOnce, setPdfSavedOnce] = useState(false);
+
 
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
@@ -1107,6 +1112,8 @@ const blob = await generateOrderPdf({
 
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
+            setPdfSavedOnce(true);
+
     } catch (e: any) {
       alert(`Не удалось сформировать PDF\n\n${e?.message || e}`);
     } finally {
