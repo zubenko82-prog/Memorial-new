@@ -1475,7 +1475,7 @@ const blob = await generateOrderPdf({
 
 
       {/* Предупреждение о необходимости сначала скачать PDF */}
-      {showWipeWarn && (
+  {showWipeWarn && (
   <div
     style={{
       position: "fixed",
@@ -1483,7 +1483,7 @@ const blob = await generateOrderPdf({
       zIndex: 10002,
       background: "rgba(0,0,0,.25)",
       display: "flex",
-      alignItems: "flex-end",
+      alignItems: "flex-end"
     }}
     onClick={() => setShowWipeWarn(null)}
   >
@@ -1501,7 +1501,11 @@ const blob = await generateOrderPdf({
       onClick={e => e.stopPropagation()}
     >
       <div style={{fontWeight:700, marginBottom:10}}>Сначала сохраните PDF</div>
-      <div style={{marginBottom:14, fontSize:15}}>Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа — иначе ваши данные будут безвозвратно утеряны.</div>
+      <div style={{marginBottom:14, fontSize:15}}>
+        Перед началом новой заявки
+        <span style={{color:'#c00'}}> настоятельно рекомендуем</span>
+        &nbsp;скачать и сохранить PDF заказа — иначе ваши данные будут безвозвратно утеряны.
+      </div>
       <button
         style={glassButtonStyle("sm")}
         onClick={() => {
@@ -1509,21 +1513,21 @@ const blob = await generateOrderPdf({
           handleSavePdf();
         }}
       >Скачать PDF</button>
-      <button
-        style={glassButtonStyle("sm")}
-        onClick={() => {
-          setShowWipeWarn(null);
-          if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
-          if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
-          if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
-        }}
-      >Продолжить с потерей данных</button>
+      <div style={{display:'flex', gap:12, justifyContent:'center', marginTop:10}}>
+        <button
+          style={glassButtonStyle("sm")}
+          onClick={() => {
+            setShowWipeWarn(null);
+            if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
+            if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
+            if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
+          }}
+        >Продолжить с потерей данных</button>
+        <button
+          style={glassButtonStyle("sm")}
+          onClick={() => setShowWipeWarn(null)}
+        >Отмена</button>
+      </div>
     </div>
   </div>
 )}
-
-
-</div>
-  );
-}
-
