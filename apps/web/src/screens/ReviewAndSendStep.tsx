@@ -226,10 +226,7 @@ export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
   const [newOrderConfirm, setNewOrderConfirm] =
     useState<null | "wipe_all" | "wipe_keep_customer" | "keep_all_new_no">(null);
   const [pdfSavedOnce, setPdfSavedOnce] = useState(false);
-  const [newOrderOpen, setNewOrderOpen] = useState(false);
-  const [newOrderConfirm, setNewOrderConfirm] =
-    useState<null | "wipe_all" | "wipe_keep_customer" | "keep_all_new_no">(null);
-  const [pdfSavedOnce, setPdfSavedOnce] = useState(false);
+
 
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
