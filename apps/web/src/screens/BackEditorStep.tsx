@@ -1931,20 +1931,75 @@ export default function BackEditorStep({ onBack, onContinue }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rearEnabled]);
 
-  // rear preview generation (stack centered)
+  // ⬇️ 1. ОЧИСТКА превью при rearEnabled=false
 useEffect(() => {
-  let alive = true;
+  if (rearEnabled) return;
+  // Очищаем превью ТОЛЬКО в момент отключения чекбокса!
+  saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
+  dispatchDraftUpdated();
+  setDraft(loadOrderDraft());
+}, [rearEnabled]);
 
+// ⬇️ 2. ГЕНЕРАЦИЯ превью (только когда включено)
+useEffect(() => {
+  if (!rearEnabled) return;
+
+  let alive = true;
   const run = async () => {
-    if (!rearEnabled) {
-      // Если отключено — всегда чистим превью и hi-res!
+    const d = loadOrderDraft();
+    const eb: any = (d as any)?.editorBack || {};
+    const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+    const meta: Record<string, any> = eb.graphicsMeta || {};
+    const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
+
+    const graphicsInOrder: string[] = ids.slice();
+    const epitaphsInOrder: string[] = ep.map((s) => String(s || "")).filter((s) => String(s || "").trim());
+
+    const items: StackItem[] = [];
+
+    const p0 = rearPeopleForPreview[0];
+    if (p0?.photo) items.push({ kind: "photo", url: p0.photo });
+    if (p0 && (p0.lastName || p0.firstName || p0.middleName || p0.birthDate || p0.deathDate)) {
+      const dates = [p0.birthDate, p0.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
+      items.push({
+        kind: "metrica",
+        lastName: p0.lastName,
+        firstName: p0.firstName,
+        middleName: p0.middleName,
+        dates
+      });
+    }
+
+    for (const gid of graphicsInOrder) {
+      const m = meta[gid] || {};
+      const url = String(m.url || "").trim();
+      if (url) items.push({ kind: "img", url });
+    }
+
+    for (const t of epitaphsInOrder) items.push({ kind: "text", text: t });
+
+    if (items.length === 0) {
       saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
       dispatchDraftUpdated();
-      setDraft(loadOrderDraft());
       return;
     }
 
-    // ... остальной код генерации превью как был ...
+    const overlay = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: PREVIEW_W, H: PREVIEW_H, mirrorX: true }) : null;
+
+    const preview = await renderStackedCenteredPreview({
+      W: PREVIEW_W,
+      H: PREVIEW_H,
+      bg: { type: "gradient" },
+      bgFit: "cover",
+      overlayPng: overlay,
+      items,
+      profile: "rear"
+    });
+
+    if (!alive) return;
+
+    saveOrderDraft({ editorBack: { previewUrl: preview || null, previewHiUrl: null } as any });
+    dispatchDraftUpdated();
   };
 
   const t = window.setTimeout(() => void run(), 420);
@@ -1952,7 +2007,8 @@ useEffect(() => {
     alive = false;
     clearTimeout(t);
   };
-}, [rearEnabled, itemUrl, rearPeopleForPreview, rearIds, rearMeta, rearSelectedEpitaphs, setDraft]);
+}, [rearEnabled, itemUrl, rearPeopleForPreview, rearIds, rearMeta, rearSelectedEpitaphs]);
+
 
 
   /* =========================
