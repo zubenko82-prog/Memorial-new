@@ -124,9 +124,9 @@ function coloredOutlineButtonStyle(color: string = "#4977ff"): React.CSSProperti
   return {
     ...glassButtonStyle("md"),
     border: `1px solid ${color}`,
-    color,
+    color: "#f7f7fa",
     fontWeight: 600,
-    background: "#fff",
+    background: "#15161a",
     transition: "box-shadow 120ms, border-color 150ms, color 120ms",
     boxShadow: "0 2px 18px 0px rgba(34,54,120,0.08)",
     marginBottom: 12,
@@ -1287,7 +1287,7 @@ const blob = await generateOrderPdf({
               left: 0,
               right: 0,
               bottom: 0,
-              background: "#fff",
+              background: "#15161a",
               color: "#111",
               borderTopLeftRadius: 16,
               borderTopRightRadius: 16,
@@ -1443,7 +1443,7 @@ const blob = await generateOrderPdf({
         padding: 24,
         borderTopLeftRadius: 14,
         borderTopRightRadius: 14,
-        background: "#fff",
+        background: "#15161a",
         color: "#222",
         boxShadow: "0 -20px 68px rgba(30,36,75,0.32),0 1.5px 0 #eaeaea",
         opacity: 1,
@@ -1452,7 +1452,7 @@ const blob = await generateOrderPdf({
         display: "flex",
         flexDirection: "column",
         gap: 12
-      }}
+      , maxHeight: newOrderOpen ? "900px" : "0", opacity: newOrderOpen ? 1 : 0, transition: "max-height 330ms cubic-bezier(.32,1.08,.31,1.11), opacity 220ms cubic-bezier(.23,1.01,.32,1)", overflow:"hidden"}}
       onClick={e => e.stopPropagation()}
     >
       <div style={{ fontWeight: 700, fontSize: 20, textAlign: "center", marginBottom: 8 }}>
@@ -1517,7 +1517,7 @@ const blob = await generateOrderPdf({
         >
           <div
             style={{
-              background: "#fffbe0",
+              background: "#15161a",
               borderTopLeftRadius: 18,
               borderTopRightRadius: 18,
               color: "#222",
@@ -1554,6 +1554,7 @@ const blob = await generateOrderPdf({
 </div>
   );
 }
+
 
 
 
