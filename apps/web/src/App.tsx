@@ -499,7 +499,13 @@ const keepAllButNewOrderNo = () => {
         <BackEditorStep onBack={onBackEditorBack} onContinue={(payload) => onBackEditorDone(payload)} />
       )}
 
-      {step === "review" && <ReviewAndSendStep onBack={onReviewBack} onSend={onReviewSend} />}
+      {step === "review" && <ReviewAndSendStep
+  onBack={onReviewBack}
+  onSend={onReviewSend}
+  onNewOrderWipeAll={wipeAllDataIncludingOrderNo}
+  onNewOrderWipeKeepCustomer={wipeKeepCustomer}
+  onNewOrderKeepAllNewNo={keepAllButNewOrderNo}
+>}
 
       {step === "done" && (
         <div style={{ padding: 16 }}>
@@ -527,3 +533,4 @@ const keepAllButNewOrderNo = () => {
     </div>
   );
 }
+
