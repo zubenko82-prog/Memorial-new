@@ -1270,8 +1270,8 @@ const blob = await generateOrderPdf({
   left: 0,
   right: 0,
   bottom: 0,
-  opacity: menuOpen ? 1 : 0,
-  transform: menuOpen ? "translateY(0)" : "translateY(90px)",
+  opacity: 1,
+  transform: "translateY(0)",
   transition: "opacity 220ms, transform 280ms cubic-bezier(.23,1.01,.32,1)"
 }}
           onPointerUp={() => {
@@ -1526,3 +1526,4 @@ const blob = await generateOrderPdf({
 </div>
   );
 }
+
