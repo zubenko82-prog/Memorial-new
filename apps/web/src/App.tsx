@@ -193,6 +193,13 @@ export default function App() {
     };
     window.addEventListener("hashchange", onChange);
     window.addEventListener("popstate", onChange);
+const keepAllButNewOrderNo = () => {
+  try {
+    localStorage.removeItem("memorial.orderNo.v1");
+    localStorage.removeItem("memorial.intro.locked.v1");
+  } catch {}
+  setStep("start");
+};
     return () => {
       window.removeEventListener("hashchange", onChange);
       window.removeEventListener("popstate", onChange);
@@ -218,6 +225,13 @@ export default function App() {
       } catch {}
     };
     window.addEventListener("memorial:resetAll", onResetAll as any);
+const keepAllButNewOrderNo = () => {
+  try {
+    localStorage.removeItem("memorial.orderNo.v1");
+    localStorage.removeItem("memorial.intro.locked.v1");
+  } catch {}
+  setStep("start");
+};
     return () => window.removeEventListener("memorial:resetAll", onResetAll as any);
   }, []);
 
@@ -263,6 +277,13 @@ export default function App() {
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       } catch {}
     }, 150);
+const keepAllButNewOrderNo = () => {
+  try {
+    localStorage.removeItem("memorial.orderNo.v1");
+    localStorage.removeItem("memorial.intro.locked.v1");
+  } catch {}
+  setStep("start");
+};
     return () => {
       clearTimeout(t0);
       clearTimeout(t1);
@@ -409,6 +430,13 @@ const wipeKeepCustomer = () => {
   const topCompensation = navUnlocked
   ? "calc(min(var(--global-stepnav-h, 0px), 44px) + env(safe-area-inset-top, 0px))"
   : "0px";
+const keepAllButNewOrderNo = () => {
+  try {
+    localStorage.removeItem("memorial.orderNo.v1");
+    localStorage.removeItem("memorial.intro.locked.v1");
+  } catch {}
+  setStep("start");
+};
 
 
 
@@ -507,6 +535,7 @@ const wipeKeepCustomer = () => {
     </div>
   );
 }
+
 
 
 
