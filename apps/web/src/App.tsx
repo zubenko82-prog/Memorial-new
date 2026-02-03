@@ -364,12 +364,12 @@ export default function App() {
 const wipeAllDataIncludingOrderNo = () => {
   resetProgressOnly();
   try {
-    localStorage.removeItem("memorial:orderDraft");
+    localStorage.removeItem("memorial.order.draft.v1");
   } catch {}
   try {
-    localStorage.removeItem("memorial:introState");
-    localStorage.removeItem("memorial:intro");
-    localStorage.removeItem("memorial:orderNumber");
+    localStorage.removeItem("memorial.intro.v1");
+    localStorage.removeItem("memorial.intro.v1");
+    localStorage.removeItem("memorial.orderNo.v1");
   } catch {}
 };
 
@@ -379,7 +379,7 @@ const wipeKeepCustomer = () => {
 
   resetProgressOnly();
   try {
-    localStorage.removeItem("memorial:orderDraft");
+    localStorage.removeItem("memorial.order.draft.v1");
   } catch {}
 
   if (intro) {
@@ -396,40 +396,25 @@ const wipeKeepCustomer = () => {
     try {
       const st2: any = loadIntroState();
       localStorage.setItem(
-        "memorial:introState",
+        "memorial.intro.v1",
         JSON.stringify({ ...(st2 || {}), locked: false, orderNumber: null })
       );
     } catch {}
   } else {
     try {
-      localStorage.removeItem("memorial:introState");
-      localStorage.removeItem("memorial:intro");
-      localStorage.removeItem("memorial:orderNumber");
+      localStorage.removeItem("memorial.intro.v1");
+      localStorage.removeItem("memorial.intro.v1");
+      localStorage.removeItem("memorial.orderNo.v1");
     } catch {}
   }
 };
 
 const keepAllButNewOrderNo = () => {
-  console.log("WIPING: оставить все, новый номер заказа!"); // оставляем все данные (включая draft), но сбрасываем номер заказа (чтобы Start выдал новый)
-  resetProgressOnly();
-  try {
-    const st2: any = loadIntroState();
-    if (st2?.intro) {
-      saveIntro(
-        {
-          customerName: String(st2.intro.customerName || "").trim(),
-          customerPhone: String(st2.intro.customerPhone || "").trim(),
-          customerNotes: String(st2.intro.customerNotes || "").trim() || undefined
-        },
-        { lock: false }
-      );
-    }
-    const st3: any = loadIntroState();
-    localStorage.setItem(
-      "memorial:introState",
-      JSON.stringify({ ...(st3 || {}), locked: false, orderNumber: null })
-    );
-  } catch {}
+  console.log("WIPING: оставить все, новый номер заказа (по новым ключам)!");
+  localStorage.removeItem("memorial.orderNo.v1");
+  localStorage.removeItem("memorial.intro.locked.v1");
+  setStep("start");
+
 };
 
   const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
@@ -536,5 +521,6 @@ const keepAllButNewOrderNo = () => {
     </div>
   );
 }
+
 
 
