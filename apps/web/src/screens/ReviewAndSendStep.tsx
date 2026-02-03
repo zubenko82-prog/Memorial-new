@@ -1274,7 +1274,23 @@ const blob = await generateOrderPdf({
         <div
           role="dialog"
           aria-modal
-          style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.35)" }}
+          style={
+  background: "#181922",
+  color: "#fff",
+  borderTopLeftRadius: 16,
+  borderTopRightRadius: 16,
+  boxShadow: "0 -20px 60px rgba(0,0,0,0.47)",
+  padding: 24,
+  maxWidth: 430,
+  margin: "0 auto",
+  position: "fixed",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  opacity: menuOpen ? 1 : 0,
+  transform: menuOpen ? "translateY(0)" : "translateY(90px)",
+  transition: "opacity 220ms, transform 280ms cubic-bezier(.23,1.01,.32,1)"
+}}
           onPointerUp={() => {
             if (!isSending && !uploading) setConfirmOpen(false);
           }}
@@ -1300,14 +1316,14 @@ const blob = await generateOrderPdf({
           >
             <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
             <div style={{ position: "absolute", top: 8, right: 8 }}>
-              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть" className="btn" disabled={isSending || uploading}>
+              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть"  disabled={isSending || uploading}>
                 ×
               </button>
             </div>
             <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам в Telegram?</div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button
-                className="btn"
+                
                 onPointerUp={handleSend}
                 onClick={handleSend}
                 disabled={isSending || uploading}
@@ -1432,27 +1448,23 @@ const blob = await generateOrderPdf({
     <div
       role="dialog"
       aria-modal="true"
-      style={{
-        position: "fixed",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 2147483601,
-        maxWidth: 430,
-        margin: "0 auto",
-        padding: 24,
-        borderTopLeftRadius: 14,
-        borderTopRightRadius: 14,
-        background: "#15161a",
-        color: "#fff",
-        boxShadow: "0 -20px 68px rgba(30,36,75,0.32),0 1.5px 0 #eaeaea",
-        opacity: 1,
-        transform: "translateY(0)",
-        transition: "opacity 220ms, transform 220ms cubic-bezier(.26,.71,.43,1.08)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 12
-      , maxHeight: newOrderOpen ? "900px" : "0", opacity: newOrderOpen ? 1 : 0, transition: "max-height 330ms cubic-bezier(.32,1.08,.31,1.11), opacity 220ms cubic-bezier(.23,1.01,.32,1)", overflow:"hidden"}}
+      style={
+  background: "#181922",
+  color: "#fff",
+  borderTopLeftRadius: 16,
+  borderTopRightRadius: 16,
+  boxShadow: "0 -20px 60px rgba(0,0,0,0.47)",
+  padding: 24,
+  maxWidth: 430,
+  margin: "0 auto",
+  position: "fixed",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  opacity: menuOpen ? 1 : 0,
+  transform: menuOpen ? "translateY(0)" : "translateY(90px)",
+  transition: "opacity 220ms, transform 280ms cubic-bezier(.23,1.01,.32,1)"
+}}
       onClick={e => e.stopPropagation()}
     >
       <div style={{ fontWeight: 700, fontSize: 20, textAlign: "center", marginBottom: 8 }}>
@@ -1488,7 +1500,7 @@ const blob = await generateOrderPdf({
             return;
           }
           setNewOrderOpen(false);
-          onNewOrderKeepAllNewNo?.();
+          
         }}
       >Оставить все поля, новый номер заказа</button>
       <button
@@ -1531,7 +1543,7 @@ const blob = await generateOrderPdf({
             <div style={{fontWeight:700, marginBottom:10}}>Сначала сохраните PDF</div>
             <div style={{marginBottom:14, fontSize:15}}>Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа — иначе ваши данные будут безвозвратно утеряны.</div>
             <button
-              style={{margin:'0 0 10px', borderRadius:10, border:'1px solid #cab', padding:'12px 22px', background:'#fff', fontWeight:600, fontSize:17, boxShadow:'0 2px 8px #0002'}}
+              style={{margin:'0 0 10px', borderRadius:10, border:'1px solid #cab', padding:'12px 22px', background: "#181922", fontWeight:600, fontSize:17, boxShadow:'0 2px 8px #0002'}}
               onClick={() => {
                 setShowWipeWarn(null);
                 handleSavePdf();
@@ -1544,7 +1556,7 @@ const blob = await generateOrderPdf({
                 setShowWipeWarn(null);
                 if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
                 if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
-                if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
+                if (showWipeWarn === "wipeKeepAll") 
               }}
             >Продолжить с потерей данных</button>
           </div>
@@ -1554,6 +1566,7 @@ const blob = await generateOrderPdf({
 </div>
   );
 }
+
 
 
 
