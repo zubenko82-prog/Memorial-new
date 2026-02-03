@@ -115,7 +115,7 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
           }}
         />
         <div>{text}</div>
-        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+        <style>{`@keyframes spin { to { transform: rotate(360deg) }}`}</style>
       </div>
     </div>
   );
@@ -154,8 +154,7 @@ function dispatchDraftUpdated() {
   try {
     window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
     window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-  } catch {}
-}
+  } catch {}}
 
 
 function __setHashForStep(id: string) {
@@ -266,8 +265,7 @@ export default function ReviewAndSendStep({
         tg?.ready?.();
         tg?.expand?.();
         tg?.requestViewport?.();
-      } catch {}
-    };
+      } catch {}};
     const t1 = setTimeout(() => alive && run(), 0);
     const t2 = setTimeout(() => alive && run(), 120);
     const t3 = setTimeout(() => alive && run(), 400);
@@ -308,8 +306,7 @@ export default function ReviewAndSendStep({
     const openTopbar = () => {
       try {
         window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-      } catch {}
-    };
+      } catch {}};
 
     openTopbar();
     const timer = window.setInterval(() => {
@@ -520,8 +517,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       return { ok: !!(resp.ok && json?.ok), error: json?.error || json?.description || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
-    }
-  }
+    }}
 
   async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: string }> {
     try {
@@ -536,8 +532,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       return { ok: false, error: json?.error || json?.description || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
-    }
-  }
+    }}
 
   async function sendDmToUser(userId: number, text: string): Promise<void> {
     try {
@@ -548,8 +543,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       });
     } catch {
       // ignore
-    }
-  }
+    }}
 
   function startMarkerText(no: string): string {
     const n = no || "—";
@@ -725,8 +719,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
     if (backWishes) {
       lines.push("- Пожелания:");
       lines.push(backWishes);
-    }
-  }
+    }}
   lines.push("");
 
     // ===== Надгробная плита =====
@@ -767,8 +760,7 @@ if (plateEnabled && p1PreviewUrl) {
       });
     } else {
       lines.push("- Графика: —");
-    }
-  }
+    }}
 
   // --- Плита 2 и 3 (new extras.plates[1], extras.plates[2]) ---
   for (const i of [1, 2] as const) {
@@ -809,8 +801,7 @@ if (plateEnabled && p1PreviewUrl) {
     });
   } else {
     lines.push("- Графика: —");
-  }
-}
+  }}
 
 
   lines.push("");
@@ -849,8 +840,7 @@ if (plateEnabled && p1PreviewUrl) {
     const openTopbar = () => {
       try {
         window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-      } catch {}
-    };
+      } catch {}};
     const isOpen = () => {
       const el = document.querySelector('[data-topbar-panel="1"]') as HTMLElement | null;
       return el?.getAttribute("data-topbar-open") === "1";
@@ -897,8 +887,7 @@ if (plateEnabled && p1PreviewUrl) {
       return await sendManagerPhoto(fd);
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
-    }
-  }
+    }}
 
   async function sendSketchFromNode(
     nodeId: string,
@@ -926,8 +915,7 @@ if (plateEnabled && p1PreviewUrl) {
 
           const r = await sendManagerPhoto(fd);
           if (r.ok) return { ok: true };
-        }
-      }
+        }}
     } catch {
       // ignore, try URL
     }
@@ -972,8 +960,7 @@ if (plateEnabled && p1PreviewUrl) {
 
       const file = new File([u8], `${safeName}.jpg`, { type: "image/jpeg" });
       out.push({ file, caption, name: `${safeName}.jpg` });
-    }
-  };
+    }};
 
   // Лицевая
   pushFromList((((d || {}).engraving || {}).persons || []) as any[], undefined);
@@ -1108,8 +1095,7 @@ if (plateEnabled && p1PreviewUrl) {
       await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
-    }
-  };
+    }};
 
   async function handleSavePdf() {
     try {
@@ -1145,8 +1131,7 @@ const blob = await generateOrderPdf({
       alert(`Не удалось сформировать PDF\n\n${e?.message || e}`);
     } finally {
       setIsSaving(false);
-    }
-  }
+    }}
 
   async function handleSend() {
     if (isSending) return;
@@ -1158,8 +1143,7 @@ const blob = await generateOrderPdf({
       setTimeout(() => afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 150);
     } finally {
       setIsSending(false);
-    }
-  }
+    }}
 
   const overlayText =
     uploading ? `Отправляем в Telegram… ${Math.max(0, Math.min(100, uploadProgress || 0))}%` :
@@ -1274,8 +1258,7 @@ const blob = await generateOrderPdf({
         <div
           role="dialog"
           aria-modal
-          style={
-  background: "#181922",
+          style={{ background: "#181922",
   color: "#fff",
   borderTopLeftRadius: 16,
   borderTopRightRadius: 16,
@@ -1314,7 +1297,7 @@ const blob = await generateOrderPdf({
               animation: "sheetIn 180ms ease forwards"
             }}
           >
-            <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; } } .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
+            <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; }} .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
             <div style={{ position: "absolute", top: 8, right: 8 }}>
               <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть"  disabled={isSending || uploading}>
                 ×
@@ -1429,9 +1412,8 @@ const blob = await generateOrderPdf({
       {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
           
       {/* Меню "Новая заявка" (модальное красивое с анимацией) */}
-      {newOrderOpen && (
+     {newOrderOpen && (
   <div>
-    {/* Подложка */}
     <div
       aria-hidden
       style={{
@@ -1444,27 +1426,26 @@ const blob = await generateOrderPdf({
       }}
       onClick={() => setNewOrderOpen(false)}
     />
-    {/* Само меню-лист */}
     <div
       role="dialog"
       aria-modal="true"
-      style={
-  background: "#181922",
-  color: "#fff",
-  borderTopLeftRadius: 16,
-  borderTopRightRadius: 16,
-  boxShadow: "0 -20px 60px rgba(0,0,0,0.47)",
-  padding: 24,
-  maxWidth: 430,
-  margin: "0 auto",
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  opacity: menuOpen ? 1 : 0,
-  transform: menuOpen ? "translateY(0)" : "translateY(90px)",
-  transition: "opacity 220ms, transform 280ms cubic-bezier(.23,1.01,.32,1)"
-}}
+      style={{
+        background: "#181922",
+        color: "#fff",
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        boxShadow: "0 -20px 60px rgba(0,0,0,0.47)",
+        padding: 24,
+        maxWidth: 430,
+        margin: "0 auto",
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        opacity: 1,
+        transform: "translateY(0)",
+        transition: "opacity 220ms, transform 280ms cubic-bezier(.23,1.01,.32,1)"
+      }}
       onClick={e => e.stopPropagation()}
     >
       <div style={{ fontWeight: 700, fontSize: 20, textAlign: "center", marginBottom: 8 }}>
@@ -1472,36 +1453,15 @@ const blob = await generateOrderPdf({
       </div>
       <button
         style={glassButtonStyle("sm")}
-        onClick={() => {
-          if (!pdfSavedOnce) {
-            setShowWipeWarn("wipeAll");
-            return;
-          }
-          setNewOrderOpen(false);
-          onNewOrderWipeAll?.();
-        }}
+        onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
       >Стереть все (очистить полностью)</button>
       <button
         style={glassButtonStyle("sm")}
-        onClick={() => {
-          if (!pdfSavedOnce) {
-            setShowWipeWarn("wipeKeepCustomer");
-            return;
-          }
-          setNewOrderOpen(false);
-          onNewOrderWipeKeepCustomer?.();
-        }}
+        onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeKeepCustomer"); }}
       >Стереть все, оставить заказчика</button>
       <button
         style={glassButtonStyle("sm")}
-        onClick={() => {
-          if (!pdfSavedOnce) {
-            setShowWipeWarn("wipeKeepAll");
-            return;
-          }
-          setNewOrderOpen(false);
-          
-        }}
+        onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeKeepAll"); }}
       >Оставить все поля, новый номер заказа</button>
       <button
         style={glassButtonStyle("sm")}
@@ -1516,70 +1476,53 @@ const blob = await generateOrderPdf({
 
       {/* Предупреждение о необходимости сначала скачать PDF */}
       {showWipeWarn && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10002,
-            background: "rgba(0,0,0,.25)",
-            display: "flex",
-            alignItems: "flex-end",
-          }}
-          onClick={() => setShowWipeWarn(null)}
-        >
-          <div
-            style={{
-              background: "#15161a",
-              borderTopLeftRadius: 18,
-              borderTopRightRadius: 18,
-              color: "#fff",
-              padding: 22,
-              margin: "0 auto", maxWidth: 420, width: "100%",
-              boxShadow: "0 -8px 38px #0006", textAlign: "center",
-              fontSize: 17
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{fontWeight:700, marginBottom:10}}>Сначала сохраните PDF</div>
-            <div style={{marginBottom:14, fontSize:15}}>Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа — иначе ваши данные будут безвозвратно утеряны.</div>
-            <button
-              style={{margin:'0 0 10px', borderRadius:10, border:'1px solid #cab', padding:'12px 22px', background: "#181922", fontWeight:600, fontSize:17, boxShadow:'0 2px 8px #0002'}}
-              onClick={() => {
-                setShowWipeWarn(null);
-                handleSavePdf();
-              }}
-            >Скачать PDF</button>
-            <button
-              style={{margin:'0', borderRadius:10, border:'none', padding:'12px 22px', background:'#dbffd9', fontWeight:600, fontSize:16, boxShadow:'0 2px 8px #0002'}}
-              onClick={() => {
-                setNewOrderOpen(false);
-                setShowWipeWarn(null);
-                if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
-                if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
-                if (showWipeWarn === "wipeKeepAll") 
-              }}
-            >Продолжить с потерей данных</button>
-          </div>
-        </div>
-      )}
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10002,
+      background: "rgba(0,0,0,.25)",
+      display: "flex",
+      alignItems: "flex-end",
+    }}
+    onClick={() => setShowWipeWarn(null)}
+  >
+    <div
+      style={{
+        background: "#15161a",
+        borderTopLeftRadius: 18,
+        borderTopRightRadius: 18,
+        color: "#fff",
+        padding: 22,
+        margin: "0 auto", maxWidth: 420, width: "100%",
+        boxShadow: "0 -8px 38px #0006", textAlign: "center",
+        fontSize: 17
+      }}
+      onClick={e => e.stopPropagation()}
+    >
+      <div style={{fontWeight:700, marginBottom:10}}>Сначала сохраните PDF</div>
+      <div style={{marginBottom:14, fontSize:15}}>Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа — иначе ваши данные будут безвозвратно утеряны.</div>
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setShowWipeWarn(null);
+          handleSavePdf();
+        }}
+      >Скачать PDF</button>
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setShowWipeWarn(null);
+          if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
+          if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
+          if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
+        }}
+      >Продолжить с потерей данных</button>
+    </div>
+  </div>
+)}
+
 
 </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
