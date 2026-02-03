@@ -1384,9 +1384,56 @@ const blob = await generateOrderPdf({
       )}
 
       {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
-    </div>
+          {/* Меню "Новая заявка" */}
+      {newOrderOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10001,
+            background: "rgba(0,0,0,0.32)",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center"
+          }}
+          onClick={() => setNewOrderOpen(false)}
+        >
+          <div
+            style={{
+              background: "#fff",
+              color: "#111",
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              padding: 20,
+              width: "100%",
+              maxWidth: 400,
+              boxShadow: "0 -8px 32px #0004",
+              marginBottom: 0
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 10, fontSize: 18 }}>
+              Начать новую заявку?
+            </div>
+            <button onClick={() => { setNewOrderOpen(false); onNewOrderWipeAll?.(); }}>
+              Новая заявка (стереть всё)
+            </button>
+            <button onClick={() => { setNewOrderOpen(false); onNewOrderWipeKeepCustomer?.(); }}>
+              Стереть всё, оставить заказчика
+            </button>
+            <button onClick={() => { setNewOrderOpen(false); onNewOrderKeepAllNewNo?.(); }}>
+              Оставить все поля, новый номер заказа
+            </button>
+            <button onClick={() => setNewOrderOpen(false)}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+</div>
   );
 }
+
 
 
 
