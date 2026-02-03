@@ -374,48 +374,34 @@ const wipeAllDataIncludingOrderNo = () => {
 };
 
 const wipeKeepCustomer = () => {
-  const st: any = loadIntroState();
-  const intro = st?.intro || null;
-
-  resetProgressOnly();
+  // Прочитать (до сброса!) заказчика
+  let customer = {};
   try {
-    localStorage.removeItem("memorial.order.draft.v1");
+    const introStr = localStorage.getItem("memorial.intro.v1");
+    customer = introStr ? JSON.parse(introStr) : {};
   } catch {}
-
-  if (intro) {
-    // сохраняем заказчика, но сбрасываем номер/lock
-    saveIntro(
-      {
-        customerName: String(intro.customerName || "").trim(),
-        customerPhone: String(intro.customerPhone || "").trim(),
-        customerNotes: String(intro.customerNotes || "").trim() || undefined
-      },
-      { lock: false }
-    );
-    // на всякий случай убираем номер принудительно
-    try {
-      const st2: any = loadIntroState();
-      localStorage.setItem(
-        "memorial.intro.v1",
-        JSON.stringify({ ...(st2 || {}), locked: false, orderNumber: null })
-      );
-    } catch {}
-  } else {
-    try {
-      localStorage.removeItem("memorial.intro.v1");
-      localStorage.removeItem("memorial.intro.v1");
-      localStorage.removeItem("memorial.orderNo.v1");
-    } catch {}
-  }
-};
-
-const keepAllButNewOrderNo = () => {
-  console.log("WIPING: оставить все, новый номер заказа (по новым ключам)!");
-  localStorage.removeItem("memorial.orderNo.v1");
-  localStorage.removeItem("memorial.intro.locked.v1");
+  [
+    "memorial.order.draft.v1",
+    "memorial.progress.v6",
+    "memorial.orderNo.v1",
+    "memorial.intro.locked.v1",
+    "memorial.navEnabled.reviewOnly"
+  ].forEach(k => localStorage.removeItem(k));
+  // Оставить только ФИО + телефон/заметку заказчика
+  localStorage.setItem("memorial.intro.v1", JSON.stringify({
+    customerName: customer.customerName || "",
+    customerPhone: customer.customerPhone || "",
+    customerNotes: customer.customerNotes || ""
+  }));
+  setSelectedItem(null);
+  setSizeResult(null);
+  setEngraving(null);
+  setDecor({});
+  setEditorBackState(null);
+  setNavUnlocked(false);
   setStep("start");
-
 };
+
 
   const currentWizardId = useMemo<StepId>(() => idFromLocalStep(step), [step]);
 

@@ -120,6 +120,18 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
     </div>
   );
 }
+function coloredOutlineButtonStyle(color: string = "#4977ff"): React.CSSProperties {
+  return {
+    ...glassButtonStyle("md"),
+    border: `1px solid ${color}`,
+    color,
+    fontWeight: 600,
+    background: "#fff",
+    transition: "box-shadow 120ms, border-color 150ms, color 120ms",
+    boxShadow: "0 2px 18px 0px rgba(34,54,120,0.08)",
+    marginBottom: 12,
+  };
+}
 
 /* ========= Utils ========= */
 function personLines(p: any): string[] {
@@ -1402,109 +1414,93 @@ const blob = await generateOrderPdf({
           
       {/* Меню "Новая заявка" (модальное красивое с анимацией) */}
       {newOrderOpen && (
-        <div
-          className="wipe-modal-outer"
-          onClick={() => setNewOrderOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10001,
-            background: "rgba(0,0,0,0.22)",
-            transition: "background 240ms cubic-bezier(.23,1.01,.32,1)",
-          }}
-        >
-          <div
-            className="wipe-modal-sheet"
-            tabIndex={-1}
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: "#fff",
-              color: "#222",
-              borderTopLeftRadius: 18,
-              borderTopRightRadius: 18,
-              boxShadow: "0 -12px 48px #0007",
-              padding: 26,
-              animation: "wipeSheetShow 350ms cubic-bezier(.23,1.01,.32,1)"
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{fontWeight:700, fontSize:20, textAlign:"center", marginBottom:12}}>
-              Начать новую заявку?
-            </div>
+  <div>
+    {/* Подложка */}
+    <div
+      aria-hidden
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 2147483600,
+        background: "rgba(12, 8, 8, 0.45)",
+        opacity: 1,
+        transition: "opacity 220ms ease"
+      }}
+      onClick={() => setNewOrderOpen(false)}
+    />
+    {/* Само меню-лист */}
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 2147483601,
+        maxWidth: 430,
+        margin: "0 auto",
+        padding: 24,
+        borderTopLeftRadius: 14,
+        borderTopRightRadius: 14,
+        background: "#fff",
+        color: "#222",
+        boxShadow: "0 -20px 68px rgba(30,36,75,0.32),0 1.5px 0 #eaeaea",
+        opacity: 1,
+        transform: "translateY(0)",
+        transition: "opacity 220ms, transform 220ms cubic-bezier(.26,.71,.43,1.08)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12
+      }}
+      onClick={e => e.stopPropagation()}
+    >
+      <div style={{ fontWeight: 700, fontSize: 20, textAlign: "center", marginBottom: 8 }}>
+        Начать новую заявку?
+      </div>
+      <button
+        style={coloredOutlineButtonStyle("#e24537")}
+        onClick={() => {
+          if (!pdfSavedOnce) {
+            setShowWipeWarn("wipeAll");
+            return;
+          }
+          setNewOrderOpen(false);
+          onNewOrderWipeAll?.();
+        }}
+      >Стереть все (очистить полностью)</button>
+      <button
+        style={coloredOutlineButtonStyle("#19a54c")}
+        onClick={() => {
+          if (!pdfSavedOnce) {
+            setShowWipeWarn("wipeKeepCustomer");
+            return;
+          }
+          setNewOrderOpen(false);
+          onNewOrderWipeKeepCustomer?.();
+        }}
+      >Стереть все, оставить заказчика</button>
+      <button
+        style={coloredOutlineButtonStyle("#4967ff")}
+        onClick={() => {
+          if (!pdfSavedOnce) {
+            setShowWipeWarn("wipeKeepAll");
+            return;
+          }
+          setNewOrderOpen(false);
+          onNewOrderKeepAllNewNo?.();
+        }}
+      >Оставить все поля, новый номер заказа</button>
+      <button
+        style={coloredOutlineButtonStyle("#aaa")}
+        onClick={() => setNewOrderOpen(false)}
+      >
+        Отмена
+      </button>
+    </div>
+  </div>
+)}
 
-            <button
-              className="wipe-btn"
-              style={{background: "#ffe1e1"}}
-              onClick={() => {
-                if (!pdfSavedOnce) {
-                  setShowWipeWarn("wipeAll");
-                  return;
-                }
-                setNewOrderOpen(false);
-                onNewOrderWipeAll?.();
-              }}
-            >Начать с начала и стереть все данные</button>
-
-            <button
-              className="wipe-btn"
-              style={{background: "#ffeedd"}}
-              onClick={() => {
-                if (!pdfSavedOnce) {
-                  setShowWipeWarn("wipeKeepCustomer");
-                  return;
-                }
-                setNewOrderOpen(false);
-                onNewOrderWipeKeepCustomer?.();
-              }}
-            >Начать с начала и оставить данные заказчика</button>
-
-            <button
-              className="wipe-btn"
-              style={{background: "#e9f7e1"}}
-              onClick={() => {
-                if (!pdfSavedOnce) {
-                  setShowWipeWarn("wipeKeepAll");
-                  return;
-                }
-                setNewOrderOpen(false);
-                onNewOrderKeepAllNewNo?.();
-              }}
-            >Начать с начала и оставить данные</button>
-
-            <button
-              className="wipe-btn"
-              style={{background: "#eee"}}
-              onClick={() => setNewOrderOpen(false)}
-            >
-              Отмена
-            </button>
-          </div>
-          <style>{`
-            @keyframes wipeSheetShow { 
-              from { transform: translateY(82%); opacity: 0 }
-              to   { transform: translateY(0); opacity: 1 }
-            }
-            .wipe-modal-outer { user-select:none }
-            .wipe-modal-sheet { outline:none }
-            .wipe-btn {
-              display: block;
-              width: 100%;
-              border: none;
-              border-radius: 12px;
-              margin: 0 0 12px;
-              font-size: 17px;
-              padding: 13px 0 10px 0;
-              font-weight: 600;
-              cursor: pointer;
-              transition: background 110ms, box-shadow 210ms;
-            }
-            .wipe-btn:active { filter:brightness(.97) }
-          `}</style>
-        </div>
-      )}
 
       {/* Предупреждение о необходимости сначала скачать PDF */}
       {showWipeWarn && (
