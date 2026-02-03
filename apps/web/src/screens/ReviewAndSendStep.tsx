@@ -1444,7 +1444,7 @@ const blob = await generateOrderPdf({
         borderTopLeftRadius: 14,
         borderTopRightRadius: 14,
         background: "#15161a",
-        color: "#222",
+        color: "#fff",
         boxShadow: "0 -20px 68px rgba(30,36,75,0.32),0 1.5px 0 #eaeaea",
         opacity: 1,
         transform: "translateY(0)",
@@ -1459,7 +1459,7 @@ const blob = await generateOrderPdf({
         Начать новую заявку?
       </div>
       <button
-        style={coloredOutlineButtonStyle("#e24537")}
+        style={glassButtonStyle("sm")}
         onClick={() => {
           if (!pdfSavedOnce) {
             setShowWipeWarn("wipeAll");
@@ -1470,7 +1470,7 @@ const blob = await generateOrderPdf({
         }}
       >Стереть все (очистить полностью)</button>
       <button
-        style={coloredOutlineButtonStyle("#19a54c")}
+        style={glassButtonStyle("sm")}
         onClick={() => {
           if (!pdfSavedOnce) {
             setShowWipeWarn("wipeKeepCustomer");
@@ -1481,7 +1481,7 @@ const blob = await generateOrderPdf({
         }}
       >Стереть все, оставить заказчика</button>
       <button
-        style={coloredOutlineButtonStyle("#4967ff")}
+        style={glassButtonStyle("sm")}
         onClick={() => {
           if (!pdfSavedOnce) {
             setShowWipeWarn("wipeKeepAll");
@@ -1492,7 +1492,7 @@ const blob = await generateOrderPdf({
         }}
       >Оставить все поля, новый номер заказа</button>
       <button
-        style={coloredOutlineButtonStyle("#aaa")}
+        style={glassButtonStyle("sm")}
         onClick={() => setNewOrderOpen(false)}
       >
         Отмена
@@ -1520,7 +1520,7 @@ const blob = await generateOrderPdf({
               background: "#15161a",
               borderTopLeftRadius: 18,
               borderTopRightRadius: 18,
-              color: "#222",
+              color: "#fff",
               padding: 22,
               margin: "0 auto", maxWidth: 420, width: "100%",
               boxShadow: "0 -8px 38px #0006", textAlign: "center",
@@ -1554,6 +1554,7 @@ const blob = await generateOrderPdf({
 </div>
   );
 }
+
 
 
 
