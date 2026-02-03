@@ -218,7 +218,21 @@ function ensurePlates(ex: any): any[] {
 }
 
 /* ========= Main component ========= */
-export default function ReviewAndSendStep({ onBack }: { onBack?: () => void }) {
+export default function ReviewAndSendStep({
+  onBack,
+  onSend,
+  onNewOrderWipeAll,
+  onNewOrderWipeKeepCustomer,
+  onNewOrderKeepAllNewNo
+}: {
+  onBack?: () => void,
+  onSend?: () => void,
+  onNewOrderWipeAll?: () => void,
+  onNewOrderWipeKeepCustomer?: () => void,
+  onNewOrderKeepAllNewNo?: () => void
+}) {
+
+
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
@@ -461,6 +475,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
   }, [draft?.engraving]);
 
   // ===== Sending state =====
+  const [showWipeWarn, setShowWipeWarn] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -1384,52 +1399,162 @@ const blob = await generateOrderPdf({
       )}
 
       {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
-          {/* Меню "Новая заявка" */}
+          
+      {/* Меню "Новая заявка" (модальное красивое с анимацией) */}
       {newOrderOpen && (
         <div
+          className="wipe-modal-outer"
+          onClick={() => setNewOrderOpen(false)}
           style={{
             position: "fixed",
             inset: 0,
             zIndex: 10001,
-            background: "rgba(0,0,0,0.32)",
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "center"
+            background: "rgba(0,0,0,0.22)",
+            transition: "background 240ms cubic-bezier(.23,1.01,.32,1)",
           }}
-          onClick={() => setNewOrderOpen(false)}
         >
           <div
+            className="wipe-modal-sheet"
+            tabIndex={-1}
             style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
               background: "#fff",
-              color: "#111",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              padding: 20,
-              width: "100%",
-              maxWidth: 400,
-              boxShadow: "0 -8px 32px #0004",
-              marginBottom: 0
+              color: "#222",
+              borderTopLeftRadius: 18,
+              borderTopRightRadius: 18,
+              boxShadow: "0 -12px 48px #0007",
+              padding: 26,
+              animation: "wipeSheetShow 350ms cubic-bezier(.23,1.01,.32,1)"
             }}
             onClick={e => e.stopPropagation()}
           >
-            <div style={{ fontWeight: 700, marginBottom: 10, fontSize: 18 }}>
+            <div style={{fontWeight:700, fontSize:20, textAlign:"center", marginBottom:12}}>
               Начать новую заявку?
             </div>
-            <button onClick={() => { setNewOrderOpen(false); onNewOrderWipeAll?.(); }}>
-              Новая заявка (стереть всё)
-            </button>
-            <button onClick={() => { setNewOrderOpen(false); onNewOrderWipeKeepCustomer?.(); }}>
-              Стереть всё, оставить заказчика
-            </button>
-            <button onClick={() => { setNewOrderOpen(false); onNewOrderKeepAllNewNo?.(); }}>
-              Оставить все поля, новый номер заказа
-            </button>
-            <button onClick={() => setNewOrderOpen(false)}>
+
+            <button
+              className="wipe-btn"
+              style={{background: "#ffe1e1"}}
+              onClick={() => {
+                if (!pdfSavedOnce) {
+                  setShowWipeWarn("wipeAll");
+                  return;
+                }
+                setNewOrderOpen(false);
+                onNewOrderWipeAll?.();
+              }}
+            >Начать с начала и стереть все данные</button>
+
+            <button
+              className="wipe-btn"
+              style={{background: "#ffeedd"}}
+              onClick={() => {
+                if (!pdfSavedOnce) {
+                  setShowWipeWarn("wipeKeepCustomer");
+                  return;
+                }
+                setNewOrderOpen(false);
+                onNewOrderWipeKeepCustomer?.();
+              }}
+            >Начать с начала и оставить данные заказчика</button>
+
+            <button
+              className="wipe-btn"
+              style={{background: "#e9f7e1"}}
+              onClick={() => {
+                if (!pdfSavedOnce) {
+                  setShowWipeWarn("wipeKeepAll");
+                  return;
+                }
+                setNewOrderOpen(false);
+                onNewOrderKeepAllNewNo?.();
+              }}
+            >Начать с начала и оставить данные</button>
+
+            <button
+              className="wipe-btn"
+              style={{background: "#eee"}}
+              onClick={() => setNewOrderOpen(false)}
+            >
               Отмена
             </button>
           </div>
+          <style>{`
+            @keyframes wipeSheetShow { 
+              from { transform: translateY(82%); opacity: 0 }
+              to   { transform: translateY(0); opacity: 1 }
+            }
+            .wipe-modal-outer { user-select:none }
+            .wipe-modal-sheet { outline:none }
+            .wipe-btn {
+              display: block;
+              width: 100%;
+              border: none;
+              border-radius: 12px;
+              margin: 0 0 12px;
+              font-size: 17px;
+              padding: 13px 0 10px 0;
+              font-weight: 600;
+              cursor: pointer;
+              transition: background 110ms, box-shadow 210ms;
+            }
+            .wipe-btn:active { filter:brightness(.97) }
+          `}</style>
         </div>
       )}
+
+      {/* Предупреждение о необходимости сначала скачать PDF */}
+      {showWipeWarn && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10002,
+            background: "rgba(0,0,0,.25)",
+            display: "flex",
+            alignItems: "flex-end",
+          }}
+          onClick={() => setShowWipeWarn(null)}
+        >
+          <div
+            style={{
+              background: "#fffbe0",
+              borderTopLeftRadius: 18,
+              borderTopRightRadius: 18,
+              color: "#222",
+              padding: 22,
+              margin: "0 auto", maxWidth: 420, width: "100%",
+              boxShadow: "0 -8px 38px #0006", textAlign: "center",
+              fontSize: 17
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{fontWeight:700, marginBottom:10}}>Сначала сохраните PDF</div>
+            <div style={{marginBottom:14, fontSize:15}}>Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа — иначе ваши данные будут безвозвратно утеряны.</div>
+            <button
+              style={{margin:'0 0 10px', borderRadius:10, border:'1px solid #cab', padding:'12px 22px', background:'#fff', fontWeight:600, fontSize:17, boxShadow:'0 2px 8px #0002'}}
+              onClick={() => {
+                setShowWipeWarn(null);
+                handleSavePdf();
+              }}
+            >Скачать PDF</button>
+            <button
+              style={{margin:'0', borderRadius:10, border:'none', padding:'12px 22px', background:'#dbffd9', fontWeight:600, fontSize:16, boxShadow:'0 2px 8px #0002'}}
+              onClick={() => {
+                setNewOrderOpen(false);
+                setShowWipeWarn(null);
+                if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
+                if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
+                if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
+              }}
+            >Продолжить с потерей данных</button>
+          </div>
+        </div>
+      )}
+
 </div>
   );
 }
