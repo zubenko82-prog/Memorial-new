@@ -410,7 +410,7 @@ const wipeKeepCustomer = () => {
 };
 
 const keepAllButNewOrderNo = () => {
-  // оставляем все данные (включая draft), но сбрасываем номер заказа (чтобы Start выдал новый)
+  console.log("WIPING: оставить все, новый номер заказа!"); // оставляем все данные (включая draft), но сбрасываем номер заказа (чтобы Start выдал новый)
   resetProgressOnly();
   try {
     const st2: any = loadIntroState();
@@ -536,4 +536,5 @@ const keepAllButNewOrderNo = () => {
     </div>
   );
 }
+
 
