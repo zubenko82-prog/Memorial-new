@@ -1530,4 +1530,10 @@ const blob = await generateOrderPdf({
       </div>
     </div>
   </div>
-)}
+  )}
+
+  {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
+      
+</div>
+  );
+}
