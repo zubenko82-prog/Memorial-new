@@ -346,12 +346,7 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   }
 
   const abs = Math.abs(Number(msg.chat.id));
-  const meta = {
-    text: baseTextNoHint || '',
-    absChatId: abs,
-    messageId: msg.message_id,
-  };
-  await setPostMeta(sourceToken, meta);
+  await setPostMeta(sourceToken, { text: baseTextNoHint || '', absChatId: abs, messageId: msg.message_id });
 
   return { primary: msg, sourceToken };
 }
@@ -507,57 +502,181 @@ function isAdmin(ctx) {
   return uid && BOT_ADMINS.includes(uid);
 }
 
-// ---------- UI helpers for /post wizard ----------
-function fmtBtn(label, price) {
-  // Вы просили: "на кнопках пишем цену"
-  // Формат: "<label> — <price>₽"
-  if (price && Number(price) > 0) return `${label} — ${formatRub(price)}₽`;
-  return label;
+function isPrivate(ctx) {
+  return ctx.chat?.type === 'private';
 }
 
-function splitTwoColumns(arr) {
-  const rows = [];
-  for (let i = 0; i < arr.length; i += 2) rows.push(arr.slice(i, i + 2));
-  return rows;
+// ---------------- /post Inline Wizard ----------------
+const PW_STEPS = ['MENU', 'UPDATE', 'UPDATE_WAIT_FWD', 'STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'GRAPHICS', 'CONFIRM'];
+
+function pwReset(session) {
+  session.postWizard = null;
 }
 
-// --- Wizard message cleanup: стараемся не плодить сообщения ---
-// Мы будем использовать один "экран" и редактировать его, если возможно.
-// Если редактирование не удалось — отправим новое и запомним его id, затем при следующем шаге будем удалять старое.
-async function wizShow(ctx, text, keyboard) {
-  const wiz = ctx.session?.postWizard;
-  if (!wiz) return;
+function pwEnsure(session) {
+  if (!session.postWizard) session.postWizard = {};
+  return session.postWizard;
+}
 
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
+function pwCb(data) {
+  // callback_data max 64 bytes
+  return data;
+}
 
-  const prevMsgId = wiz.ui?.msgId;
+function kbInline(rows) {
+  return Markup.inlineKeyboard(rows);
+}
 
-  // 1) пробуем edit, если есть prevMsgId
-  if (prevMsgId) {
-    try {
-      await ctx.telegram.editMessageText(chatId, prevMsgId, undefined, text, {
-        ...keyboard,
-        disable_web_page_preview: true,
-      });
-      return;
-    } catch {
-      // ignore
+function btn(text, data) {
+  return Markup.button.callback(text, pwCb(data));
+}
+
+function btnUrl(text, url) {
+  return Markup.button.url(text, url);
+}
+
+async function pwRender(ctx) {
+  const pw = ctx.session?.postWizard;
+  if (!pw?.panel) return;
+
+  const chatId = ctx.chat.id;
+  const msgId = pw.panel.messageId;
+
+  const { text, keyboard } = await pwBuildPanel(ctx);
+
+  try {
+    await ctx.telegram.editMessageText(chatId, msgId, undefined, text, {
+      disable_web_page_preview: true,
+      reply_markup: keyboard.reply_markup,
+    });
+  } catch (e) {
+    // если текст такой же, Telegram может ругаться "message is not modified" — игнор
+    const desc = e?.response?.description || e?.message || '';
+    if (!/message is not modified/i.test(desc)) {
+      console.error('[bot] pwRender edit error:', desc);
     }
   }
+}
 
-  // 2) если edit не вышло — отправляем новое, и удаляем старое
-  const sent = await ctx.reply(text, keyboard);
-  wiz.ui = wiz.ui || {};
-  wiz.ui.msgId = sent.message_id;
+async function pwBuildPanel(ctx) {
+  const pw = ctx.session.postWizard;
+  const step = pw.step;
 
-  if (prevMsgId) {
-    try {
-      await ctx.telegram.deleteMessage(chatId, prevMsgId);
-    } catch {
-      // ignore
-    }
+  const baseInfo = pw.baseTextNoHint ? `Текст поста: ${pw.baseTextNoHint}\n` : '';
+  const mediaInfo =
+    pw.mediaPayload?.kind && pw.mediaPayload.kind !== 'text' ? `Медиа: ${pw.mediaPayload.kind}\n` : `Медиа: текст\n`;
+
+  const header = `Публикация (/post)\n${baseInfo}${mediaInfo}\n`;
+
+  if (step === 'MENU') {
+    const text = `${header}Выберите действие:`;
+    const keyboard = kbInline([
+      [btn('♻️ Обновить цены', 'pw:go:UPDATE')],
+      [btn('➕ Новая публикация', 'pw:go:STELA')],
+      [btn('❌ Отмена', 'pw:cancel')],
+    ]);
+    return { text, keyboard };
   }
+
+  if (step === 'UPDATE') {
+    const text = `${header}Обновление цен:\n\n• «По пересланному посту» — перешлите пост из канала.\n• «Обновить все» — только посты, опубликованные через этот мастер.`;
+    const keyboard = kbInline([
+      [btn('🧾 По пересланному посту', 'pw:go:UPDATE_WAIT_FWD')],
+      [btn('🔁 Обновить все', 'pw:update_all')],
+      [btn('⬅️ Назад', 'pw:go:MENU'), btn('❌ Отмена', 'pw:cancel')],
+    ]);
+    return { text, keyboard };
+  }
+
+  if (step === 'UPDATE_WAIT_FWD') {
+    const text = `${header}Перешлите сюда (в ЛС боту) сообщение из канала, которое нужно обновить.\n\nПосле пересылки бот обновит caption.`;
+    const keyboard = kbInline([[btn('⬅️ Назад', 'pw:go:UPDATE'), btn('❌ Отмена', 'pw:cancel')]]);
+    return { text, keyboard };
+  }
+
+  // выбор single
+  const singleTitles = {
+    STELA: 'Стела (обязательно)',
+    TUMBA: 'Тумба (обязательно)',
+    CVETNIK: 'Цветник (можно пропустить)',
+    PLITA: 'Плита (можно пропустить)',
+    WORK: 'Работа (можно пропустить)',
+  };
+
+  if (['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'].includes(step)) {
+    const { items } = await loadCatalogFromXlsx();
+    let list = items.filter((it) => it.group === step);
+
+    if (step === 'WORK') list = list.slice(0, 4);
+
+    const picked = pw.selected?.[step] || null;
+    const rows = [];
+
+    for (const it of list) {
+      const t = `${picked === it.sku ? '✅ ' : ''}${it.label} — ${formatRub(it.price)}₽`;
+      rows.push([btn(t, `pw:pick:${step}:${it.sku}`)]);
+    }
+
+    if (['CVETNIK', 'PLITA', 'WORK'].includes(step)) {
+      rows.push([btn(picked ? '— Нет —' : '✅ — Нет —', `pw:none:${step}`)]);
+    }
+
+    const back = step === 'STELA' ? 'MENU' : PW_STEPS[PW_STEPS.indexOf(step) - 1];
+    rows.push([btn('⬅️ Назад', `pw:go:${back}`), btn('Далее ➡️', `pw:next:${step}`)]);
+    rows.push([btn('❌ Отмена', 'pw:cancel')]);
+
+    const text = `${header}${singleTitles[step]}\n\nВыбрано: ${picked || '—'}`;
+    return { text, keyboard: kbInline(rows) };
+  }
+
+  // GRAPHICS = OPTION + GRAFIKA (оба multi), всего график 4
+  if (step === 'GRAPHICS') {
+    const { items } = await loadCatalogFromXlsx();
+    const options = items.filter((it) => it.group === 'OPTION');
+    const graf = items.filter((it) => it.group === 'GRAFIKA').slice(0, 4);
+    const list = [...options, ...graf];
+
+    const arr = Array.isArray(pw.selected?.EXTRA) ? pw.selected.EXTRA : [];
+    const set = new Set(arr);
+
+    const rows = [];
+    for (const it of list) {
+      const t = `${set.has(it.sku) ? '✅ ' : ''}${it.label} — ${formatRub(it.price)}₽`;
+      rows.push([btn(t, `pw:toggle:EXTRA:${it.sku}`)]);
+    }
+
+    rows.push([btn('🧹 Сбросить', 'pw:clear:EXTRA')]);
+    rows.push([btn('⬅️ Назад', 'pw:go:WORK'), btn('Далее ➡️', 'pw:go:CONFIRM')]);
+    rows.push([btn('❌ Отмена', 'pw:cancel')]);
+
+    const text = `${header}Портрет / Метрика / Графика (можно несколько)\nВыбрано: ${arr.length ? arr.join(', ') : '—'}`;
+    return { text, keyboard: kbInline(rows) };
+  }
+
+  if (step === 'CONFIRM') {
+    const catalog = await loadCatalogFromXlsx();
+    const { caption, total } = calcCaptionAndTags(catalog, pw.selected);
+
+    const baseText = (pw.baseTextNoHint || '').trim();
+    const fullCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+    const canPublish = Boolean(pw.selected?.STELA && pw.selected?.TUMBA);
+
+    const text =
+      `${header}Предпросмотр caption для канала:\n\n` +
+      `${fullCaption}\n\n` +
+      `Итог: ${formatRub(total)}₽\n` +
+      `${canPublish ? '' : '\nНужно выбрать: STELA и TUMBA.'}`;
+
+    const keyboard = kbInline([
+      [btn(canPublish ? '✅ Опубликовать' : '🚫 Опубликовать', canPublish ? 'pw:publish' : 'pw:noop')],
+      [btn('⬅️ Назад', 'pw:go:GRAPHICS'), btn('❌ Отмена', 'pw:cancel')],
+    ]);
+
+    return { text, keyboard };
+  }
+
+  return { text: `${header}Неизвестный шаг`, keyboard: kbInline([[btn('❌ Отмена', 'pw:cancel')]]) };
 }
 
 // ---------------- BOT ----------------
@@ -596,9 +715,12 @@ if (token) {
     const chat = ctx.chat || {};
     const from = ctx.from || {};
     const me = ctx.botInfo || (await ctx.telegram.getMe());
-    const info = [`chat_id = ${chat.id}`, `chat_type = ${chat.type}`, `user_id = ${from.id}`, `username = ${me.username}`].join(
-      '\n'
-    );
+    const info = [
+      `chat_id = ${chat.id}`,
+      `chat_type = ${chat.type}`,
+      `user_id = ${from.id}`,
+      `username = ${me.username}`,
+    ].join('\n');
     return ctx.reply('DEBUG:\n' + info);
   });
   bot.command('id', async (ctx) => {
@@ -609,19 +731,15 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // ======================= /post (АДМИН) =======================
-  // Обновления по вашему ТЗ:
-  // - портрет и метрика => мультивыбор, но мы переносим их "в меню графики"
-  //   т.е. на шаге "Графика" показываем: Портрет, Метрика, Графика 1..4
-  // - не плодим сообщения: один экран редактируется/пересоздается с удалением
-  // - кнопка Назад на каждом шаге
+  // ===================== /post (Admin, private only) =====================
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
       if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
       if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
+      if (!isPrivate(ctx)) return ctx.reply('Мастер /post работает только в ЛС с ботом.');
 
-      // Чтобы не мешать клиентской анкете
+      // чтобы не мешать анкете
       if (ctx.session?.order) {
         return ctx.reply('Сейчас активна анкета. Завершите или отмените её командой /cancel, затем используйте /post.');
       }
@@ -645,422 +763,333 @@ if (token) {
       }
 
       ctx.session.postWizard = {
-        step: 'menu',
-        prevStack: [],
+        step: 'MENU',
         baseTextNoHint,
         mediaPayload,
-        selected: {
-          STELA: null,
-          TUMBA: null,
-          CVETNIK: null,
-          PLITA: null,
-          WORK: null,
-          // OPTION и GRAFIKA объединяем в один список на шаге "GRAPHICS"
-          EXTRA: [], // сюда будут попадать OPT_PORTRAIT/OPT_METRICA и GRAFIKA_1..4
-        },
-        ui: { msgId: null },
+        selected: { STELA: null, TUMBA: null, CVETNIK: null, PLITA: null, WORK: null, EXTRA: [] },
+        panel: null,
       };
 
-      await wizShow(ctx, 'Меню /post:', kbPostMenu());
+      const sent = await ctx.reply('Загружаю меню…', Markup.inlineKeyboard([[Markup.button.callback('…', 'pw:noop')]]));
+      ctx.session.postWizard.panel = { chatId: sent.chat.id, messageId: sent.message_id };
+
+      await pwRender(ctx);
     } catch (e) {
-      console.error('[bot]/post wizard menu error:', e);
+      console.error('[bot]/post error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
       return ctx.reply(`Ошибка /post: ${desc}`);
     }
   });
 
-  function kbPostMenu() {
-    return Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
-  }
+  // ---- Inline actions ----
+  bot.action('pw:noop', async (ctx) => ctx.answerCbQuery().catch(() => {}));
 
-  function kbUpdateMenu() {
-    return Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize();
-  }
-
-  function kbBackCancel() {
-    return Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize();
-  }
-
-  // --- update prices menu
-  bot.hears('♻️ Обновить цены', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
-
-    ctx.session.postWizard.prevStack = ['menu'];
-    ctx.session.postWizard.step = 'update_prices';
-    await wizShow(
-      ctx,
-      'Обновление цен постов:\n\n• Обновить один пост: перешлите сюда сообщение из канала.\n• Обновить все: обновит только посты, которые публиковались через этот /post (чтобы бот знал состав).',
-      kbUpdateMenu()
-    );
-  });
-
-  bot.hears('🧾 Обновить по пересланному посту', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
-
-    ctx.session.postWizard.prevStack.push('update_prices');
-    ctx.session.postWizard.step = 'update_wait_forward';
-    await wizShow(ctx, 'Перешлите сюда пост из канала.', kbBackCancel());
-  });
-
-  bot.hears('🔁 Обновить все', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
-
-    const channelId = getChannelId();
-    if (!channelId) return ctx.reply('CHANNEL_ID не задан.');
-
-    let updated = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    const keys = await getAllCatalogPostKeys();
-    if (!keys.length) {
-      ctx.session.postWizard.step = 'menu';
-      return wizShow(
-        ctx,
-        'Нет сохраненных данных о постах для обновления.\n\nВажно: массовое обновление работает только для постов, которые публиковались через этот /post.',
-        kbPostMenu()
-      );
-    }
-
-    const catalog = await loadCatalogFromXlsx();
-
-    for (const key of keys) {
-      try {
-        const meta = await getCatalogPostMetaByKey(key);
-        if (!meta?.selected) {
-          skipped++;
-          continue;
-        }
-        const messageId = Number(String(key).split(':').at(-1));
-        if (!messageId) {
-          skipped++;
-          continue;
-        }
-
-        const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
-        const baseText = (meta.baseTextNoHint || '').trim();
-        const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
-
-        if (Number(meta.last_total_price) === Number(total)) {
-          skipped++;
-          continue;
-        }
-
-        await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
-        await setCatalogPostMetaByKey(key, { ...meta, last_total_price: total, updatedAt: Date.now() });
-        updated++;
-      } catch {
-        errors++;
-      }
-    }
-
-    ctx.session.postWizard.step = 'menu';
-    await wizShow(ctx, `Готово.\nОбновлено: ${updated}\nБез изменений: ${skipped}\nОшибок: ${errors}`, kbPostMenu());
-  });
-
-  // --- publish flow start
-  bot.hears('▶️ Новая публикация', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
-
-    ctx.session.postWizard.prevStack = ['menu'];
-    ctx.session.postWizard.step = 'STELA';
-    await showStep(ctx, 'STELA');
-  });
-
-  // --- back
-  bot.hears('⬅️ Назад', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const wiz = ctx.session?.postWizard;
-    if (!wiz) return;
-
-    const prev = wiz.prevStack?.pop();
-    if (!prev) {
-      wiz.step = 'menu';
-      return wizShow(ctx, 'Меню /post:', kbPostMenu());
-    }
-
-    wiz.step = prev;
-
-    if (prev === 'menu') return wizShow(ctx, 'Меню /post:', kbPostMenu());
-    if (prev === 'update_prices') return wizShow(ctx, 'Обновление цен постов:', kbUpdateMenu());
-    if (prev === 'update_wait_forward') return wizShow(ctx, 'Перешлите сюда пост из канала.', kbBackCancel());
-
-    return showStep(ctx, prev);
-  });
-
-  async function showStep(ctx, step) {
-    const wiz = ctx.session.postWizard;
-    if (!wiz) return;
-
-    const { items } = await loadCatalogFromXlsx();
-
-    const titleMap = {
-      STELA: 'Выберите стелу:',
-      TUMBA: 'Выберите тумбу:',
-      CVETNIK: 'Цветник (или — Нет —):',
-      PLITA: 'Плита (или — Нет —):',
-      WORK: 'Резная/Фрезерная (выберите вариант или — Нет —):',
-      GRAPHICS: 'Портрет / Метрика / Графика (можно несколько). Нажмите «Далее» когда закончите:',
-    };
-
-    // single groups
-    if (['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'].includes(step)) {
-      let list = items.filter((it) => it.group === step);
-
-      // по 4 варианта на WORK (лучше ограничивать через active в Excel, но держим ограничение)
-      if (step === 'WORK') list = list.slice(0, 4);
-
-      const optional = ['CVETNIK', 'PLITA', 'WORK'].includes(step);
-
-      const btns = list.map((it) => fmtBtn(it.label, it.price));
-      const rows = splitTwoColumns(btns);
-      if (optional) rows.push(['— Нет —']);
-      rows.push(['⬅️ Назад']);
-      rows.push(['Отменить']);
-
-      return wizShow(ctx, titleMap[step] || `Выберите ${step}:`, Markup.keyboard(rows).resize());
-    }
-
-    if (step === 'GRAPHICS') {
-      // объединяем OPTION + GRAFIKA
-      // по вашему ТЗ: Портрет, Метрика, Графика 1, ... и графики всего 4
-      const options = items.filter((it) => it.group === 'OPTION');
-      const graf = items.filter((it) => it.group === 'GRAFIKA').slice(0, 4);
-      const list = [...options, ...graf];
-
-      const rows = [];
-      rows.push(['Далее', 'Сбросить']);
-      rows.push(...splitTwoColumns(list.map((it) => fmtBtn(it.label, it.price))));
-      rows.push(['⬅️ Назад']);
-      rows.push(['Отменить']);
-
-      return wizShow(ctx, titleMap[step], Markup.keyboard(rows).resize());
-    }
-  }
-
-  async function advance(ctx) {
-    const wiz = ctx.session.postWizard;
-    if (!wiz) return;
-
-    const order = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'GRAPHICS', 'PREVIEW'];
-    const idx = order.indexOf(wiz.step);
-    const next = order[idx + 1] || 'PREVIEW';
-
-    wiz.prevStack.push(wiz.step);
-    wiz.step = next;
-
-    if (next === 'PREVIEW') return showPreview(ctx);
-    return showStep(ctx, next);
-  }
-
-  async function showPreview(ctx) {
-    const wiz = ctx.session.postWizard;
-    if (!wiz) return;
-
-    const catalog = await loadCatalogFromXlsx();
-    const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
-
-    const baseText = (wiz.baseTextNoHint || '').trim();
-    const fullCaption = baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
-
-    wiz.prevStack.push('GRAPHICS');
-    wiz.step = 'CONFIRM';
-    wiz._computed = { total, captionOnly: caption, fullCaption: fullCaption.slice(0, 1024) };
-
-    return wizShow(
-      ctx,
-      `Предпросмотр:\n\n${fullCaption}\n\nЕсли всё верно — нажмите «Опубликовать».`,
-      Markup.keyboard([['Опубликовать'], ['⬅️ Назад'], ['Отменить']]).resize()
-    );
-  }
-
-  async function cleanupWizardUI(ctx) {
-    const wiz = ctx.session?.postWizard;
-    if (!wiz?.ui?.msgId) return;
+  bot.action(/^pw:go:(\w+)$/, async (ctx) => {
     try {
-      await ctx.telegram.deleteMessage(ctx.chat.id, wiz.ui.msgId);
-    } catch {}
-    wiz.ui.msgId = null;
-  }
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      if (!isPrivate(ctx)) return ctx.answerCbQuery('Только ЛС');
+      const pw = ctx.session?.postWizard;
+      if (!pw?.panel) return ctx.answerCbQuery('Нет мастера');
 
-  // Универсальный обработчик сообщений (и для апдейта по forward, и для выбора в мастере)
-  bot.on('message', async (ctx, next) => {
-    const wiz = ctx.session?.postWizard;
-    if (!wiz) return next();
-
-    // если прилетело не текстом — пускай дальше (в анкете)
-    if (!('text' in ctx.message) || !ctx.message.text) return next();
-
-    const text = ctx.message.text.trim();
-
-    // Отменить: удаляем экран и убираем клавиатуру
-    if (text === 'Отменить') {
-      await cleanupWizardUI(ctx);
-      ctx.session.postWizard = null;
-      await ctx.reply('Отменено.', Markup.removeKeyboard());
-      return;
+      const to = ctx.match[1];
+      pw.step = to;
+      await ctx.answerCbQuery();
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:go error:', e);
+      return ctx.answerCbQuery('Ошибка');
     }
+  });
 
-    // update forward
-    if (wiz.step === 'update_wait_forward') {
-      // ждём пересланный пост (это не text-only сценарий, но Telegram всё равно присылает text/caption)
-      const fwd = ctx.message?.forward_from_chat;
-      const messageId = ctx.message?.forward_from_message_id;
+  bot.action(/^pw:pick:(\w+):(.+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      const pw = ctx.session?.postWizard;
+      if (!pw) return ctx.answerCbQuery('Нет мастера');
 
-      if (!fwd || !messageId) {
-        await wizShow(ctx, 'Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbBackCancel());
-        return;
+      const step = ctx.match[1];
+      const sku = ctx.match[2];
+      pw.selected[step] = sku;
+
+      await ctx.answerCbQuery('Выбрано');
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:pick error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action(/^pw:none:(\w+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      const pw = ctx.session?.postWizard;
+      if (!pw) return ctx.answerCbQuery('Нет мастера');
+
+      const step = ctx.match[1];
+      pw.selected[step] = null;
+
+      await ctx.answerCbQuery('Ок');
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:none error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action(/^pw:toggle:(\w+):(.+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      const pw = ctx.session?.postWizard;
+      if (!pw) return ctx.answerCbQuery('Нет мастера');
+
+      const key = ctx.match[1]; // EXTRA
+      const sku = ctx.match[2];
+      const arr = Array.isArray(pw.selected[key]) ? pw.selected[key] : [];
+      const idx = arr.indexOf(sku);
+      if (idx >= 0) arr.splice(idx, 1);
+      else arr.push(sku);
+      pw.selected[key] = arr;
+
+      await ctx.answerCbQuery('Ок');
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:toggle error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action(/^pw:clear:(\w+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      const pw = ctx.session?.postWizard;
+      if (!pw) return ctx.answerCbQuery('Нет мастера');
+      const key = ctx.match[1];
+      pw.selected[key] = [];
+      await ctx.answerCbQuery('Сброшено');
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:clear error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action(/^pw:next:(\w+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      const pw = ctx.session?.postWizard;
+      if (!pw) return ctx.answerCbQuery('Нет мастера');
+
+      const step = ctx.match[1];
+
+      // обязательные
+      if (step === 'STELA' && !pw.selected.STELA) return ctx.answerCbQuery('Выберите стелу');
+      if (step === 'TUMBA' && !pw.selected.TUMBA) return ctx.answerCbQuery('Выберите тумбу');
+
+      // переходы
+      const nextMap = { STELA: 'TUMBA', TUMBA: 'CVETNIK', CVETNIK: 'PLITA', PLITA: 'WORK', WORK: 'GRAPHICS' };
+      pw.step = nextMap[step] || 'CONFIRM';
+
+      await ctx.answerCbQuery();
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:next error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action('pw:cancel', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      const pw = ctx.session?.postWizard;
+      if (!pw?.panel) return ctx.answerCbQuery();
+
+      const { chatId, messageId } = pw.panel;
+      pwReset(ctx.session);
+
+      await ctx.answerCbQuery('Отменено');
+
+      try {
+        await ctx.telegram.deleteMessage(chatId, messageId);
+      } catch {
+        // если нельзя удалить — просто ничего
       }
+    } catch (e) {
+      console.error('[bot] pw:cancel error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action('pw:update_all', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
 
       const channelId = getChannelId();
-      if (!channelId) {
-        wiz.step = 'menu';
-        return wizShow(ctx, 'CHANNEL_ID не задан.', kbPostMenu());
-      }
+      if (!channelId) return ctx.answerCbQuery('CHANNEL_ID не задан');
 
-      if (String(fwd.id) !== String(channelId)) {
-        await wizShow(ctx, 'Пост переслан не из того канала.', kbBackCancel());
-        return;
-      }
-
-      const meta = await getCatalogPostMeta(messageId);
-      if (!meta?.selected) {
-        wiz.step = 'menu';
-        return wizShow(
-          ctx,
-          'У меня нет сохранённого состава для этого поста.\nОн должен быть опубликован через новый /post.',
-          kbPostMenu()
-        );
-      }
+      const keys = await getAllCatalogPostKeys();
+      if (!keys.length) return ctx.answerCbQuery('Нет сохраненных постов');
 
       const catalog = await loadCatalogFromXlsx();
-      const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
-      const baseText = (meta.baseTextNoHint || '').trim();
-      const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
-      await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
-      await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
+      let updated = 0;
+      let skipped = 0;
+      let errors = 0;
 
-      wiz.step = 'menu';
-      return wizShow(ctx, `Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
+      for (const key of keys) {
+        try {
+          const meta = await getCatalogPostMetaByKey(key);
+          if (!meta?.selected) {
+            skipped++;
+            continue;
+          }
+          const messageId = Number(String(key).split(':').at(-1));
+          if (!messageId) {
+            skipped++;
+            continue;
+          }
+
+          const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
+          const baseText = (meta.baseTextNoHint || '').trim();
+          const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+          if (Number(meta.last_total_price) === Number(total)) {
+            skipped++;
+            continue;
+          }
+
+          await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
+          await setCatalogPostMetaByKey(key, { ...meta, last_total_price: total, updatedAt: Date.now() });
+          updated++;
+        } catch {
+          errors++;
+        }
+      }
+
+      await ctx.answerCbQuery(`Обновлено: ${updated}, без изм.: ${skipped}, ошибок: ${errors}`.slice(0, 200));
+      await pwRender(ctx);
+    } catch (e) {
+      console.error('[bot] pw:update_all error:', e);
+      return ctx.answerCbQuery('Ошибка');
     }
+  });
 
-    // confirm publish
-    if (wiz.step === 'CONFIRM') {
-      if (text !== 'Опубликовать') return;
+  bot.action('pw:publish', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Нет прав');
+      if (!isPrivate(ctx)) return ctx.answerCbQuery('Только ЛС');
+
+      const pw = ctx.session?.postWizard;
+      if (!pw) return ctx.answerCbQuery('Нет мастера');
+
+      if (!pw.selected.STELA || !pw.selected.TUMBA) return ctx.answerCbQuery('Нужно: стела и тумба');
+
+      const catalog = await loadCatalogFromXlsx();
+      const { caption, total } = calcCaptionAndTags(catalog, pw.selected);
+
+      const baseText = (pw.baseTextNoHint || '').trim();
+      const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+      const payload = pw.mediaPayload || { kind: 'text' };
+      const kind = payload.kind;
+
+      let published;
+      if (kind === 'photo') {
+        const { primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText);
+        published = primary;
+      } else if (kind === 'video') {
+        const { primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText);
+        published = primary;
+      } else if (kind === 'document') {
+        const { primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText);
+        published = primary;
+      } else {
+        const { primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText);
+        published = primary;
+      }
+
+      await setCatalogPostMeta(published.message_id, {
+        selected: pw.selected,
+        baseTextNoHint: baseText,
+        last_total_price: total,
+        createdAt: Date.now(),
+      });
+
+      // закрываем панель
+      const { chatId, messageId } = pw.panel;
+      pwReset(ctx.session);
+
+      await ctx.answerCbQuery('Опубликовано');
 
       try {
-        const channelId = getChannelId();
-        if (!channelId) {
-          wiz.step = 'menu';
-          return wizShow(ctx, 'CHANNEL_ID не задан.', kbPostMenu());
-        }
-
-        if (!wiz.selected.STELA || !wiz.selected.TUMBA) {
-          wiz.step = 'menu';
-          return wizShow(ctx, 'Нужно выбрать стелу и тумбу.', kbPostMenu());
-        }
-
-        const catalog = await loadCatalogFromXlsx();
-        const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
-
-        const baseText = (wiz.baseTextNoHint || '').trim();
-        const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
-
-        const payload = wiz.mediaPayload || { kind: 'text' };
-        const kind = payload.kind;
-
-        let published;
-        if (kind === 'photo') {
-          const { primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText);
-          published = primary;
-        } else if (kind === 'video') {
-          const { primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText);
-          published = primary;
-        } else if (kind === 'document') {
-          const { primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText);
-          published = primary;
-        } else {
-          const { primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText);
-          published = primary;
-        }
-
-        // сохраняем для обновления
-        await setCatalogPostMeta(published.message_id, {
-          selected: wiz.selected,
-          baseTextNoHint: baseText,
-          last_total_price: total,
-          createdAt: Date.now(),
+        await ctx.telegram.editMessageText(chatId, messageId, undefined, `Опубликовано.\nmessage_id: ${published.message_id}`, {
+          reply_markup: kbInline([[btn('Закрыть', 'pw:close')]]).reply_markup,
         });
-
-        // чистим UI мастера
-        await cleanupWizardUI(ctx);
-        ctx.session.postWizard = null;
-
-        await ctx.reply(`Опубликовано.\nmessage_id: ${published.message_id}`, Markup.removeKeyboard());
-        return;
-      } catch (e) {
-        console.error('[bot] publish error:', e);
-        const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-        wiz.step = 'menu';
-        return wizShow(ctx, `Ошибка публикации: ${desc}`, kbPostMenu());
+      } catch {
+        // если не смогли отредактировать — просто отправим новое
+        await ctx.reply(`Опубликовано.\nmessage_id: ${published.message_id}`);
       }
+    } catch (e) {
+      console.error('[bot] pw:publish error:', e);
+      const desc = e?.response?.description || e?.message || 'Ошибка';
+      return ctx.answerCbQuery(String(desc).slice(0, 200));
     }
+  });
 
-    // Step handlers
-    if (wiz.step === 'menu') return;
-    if (wiz.step === 'update_prices') return;
-    if (wiz.step === 'update_wait_forward') return;
+  bot.action('pw:close', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery();
+      const pw = ctx.session?.postWizard;
+      // мастер уже сброшен после publish; просто удалим текущее сообщение
+      await ctx.answerCbQuery();
+      try {
+        await ctx.deleteMessage();
+      } catch {}
+    } catch {
+      return;
+    }
+  });
 
-    // GRAPHICS multi
-    if (wiz.step === 'GRAPHICS') {
-      if (text === 'Далее') return advance(ctx);
-      if (text === 'Сбросить') {
-        wiz.selected.EXTRA = [];
-        return showStep(ctx, 'GRAPHICS');
-      }
+  // ---- Forward handling for UPDATE_WAIT_FWD ----
+  bot.on('message', async (ctx, next) => {
+    const pw = ctx.session?.postWizard;
+    if (!pw || pw.step !== 'UPDATE_WAIT_FWD') return next();
 
-      // toggle by matching button text
-      const { items } = await loadCatalogFromXlsx();
-      const options = items.filter((it) => it.group === 'OPTION');
-      const graf = items.filter((it) => it.group === 'GRAFIKA').slice(0, 4);
-      const list = [...options, ...graf];
+    if (!isAdmin(ctx) || !isPrivate(ctx)) return next();
 
-      const it = list.find((x) => fmtBtn(x.label, x.price) === text);
-      if (!it) return;
+    const fwd = ctx.message?.forward_from_chat;
+    const messageId = ctx.message?.forward_from_message_id;
 
-      const arr = Array.isArray(wiz.selected.EXTRA) ? wiz.selected.EXTRA : [];
-      const idx = arr.indexOf(it.sku);
-      if (idx >= 0) arr.splice(idx, 1);
-      else arr.push(it.sku);
-      wiz.selected.EXTRA = arr;
+    if (!fwd || !messageId) {
+      await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.');
       return;
     }
 
-    // single steps
-    const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
-    if (singleGroups.includes(wiz.step)) {
-      if (text === '— Нет —') {
-        wiz.selected[wiz.step] = null;
-        return advance(ctx);
-      }
-
-      const { items } = await loadCatalogFromXlsx();
-      let list = items.filter((it) => it.group === wiz.step);
-      if (wiz.step === 'WORK') list = list.slice(0, 4);
-
-      const it = list.find((x) => fmtBtn(x.label, x.price) === text);
-      if (!it) return;
-
-      wiz.selected[wiz.step] = it.sku;
-      return advance(ctx);
+    const channelId = getChannelId();
+    if (!channelId) {
+      await ctx.reply('CHANNEL_ID не задан.');
+      return;
     }
 
-    return;
+    if (String(fwd.id) !== String(channelId)) {
+      await ctx.reply('Пост переслан не из того канала.');
+      return;
+    }
+
+    const meta = await getCatalogPostMeta(messageId);
+    if (!meta?.selected) {
+      await ctx.reply('Нет сохранённого состава для этого поста. Он должен быть опубликован через мастер /post.');
+      return;
+    }
+
+    const catalog = await loadCatalogFromXlsx();
+    const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
+    const baseText = (meta.baseTextNoHint || '').trim();
+    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+    await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
+    await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
+
+    await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`);
   });
 
   // --------- Анкета: клавиши (reply‑клавиатура) ---------
