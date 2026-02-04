@@ -123,6 +123,8 @@ async function getCatalogPostMeta(messageId) {
 async function getAllCatalogPostKeys() {
   const r = await getRedis();
   if (r) {
+    // Upstash REST: KEYS может быть запрещен/нежелателен.
+    // Поэтому делаем мягко: если keys недоступен — вернем пусто.
     try {
       const keys = await r.keys('catalogpost:*');
       return Array.isArray(keys) ? keys : [];
@@ -514,18 +516,6 @@ function isAdmin(ctx) {
   return uid && BOT_ADMINS.includes(uid);
 }
 
-// ---------- UI helpers for /post wizard ----------
-function fmtBtn(label, price) {
-  if (price && Number(price) > 0) return `${label} — ${formatRub(price)}₽`;
-  return label;
-}
-
-function splitTwoColumns(arr) {
-  const rows = [];
-  for (let i = 0; i < arr.length; i += 2) rows.push(arr.slice(i, i + 2));
-  return rows;
-}
-
 // ---------------- BOT ----------------
 let bot = null;
 
@@ -576,14 +566,12 @@ if (token) {
   });
 
   // ======================= /post (АДМИН) =======================
-  // Требования:
-  // - меню как заявка (reply-клавиатура)
-  // - 1-я кнопка: обновить цены
-  // - НАЗАД на каждом шаге
-  // - на кнопках писать цену
-  // - выбор single везде, кроме графики (multi)
-  // - резная/фрезерная/графика: по 4 варианта, и "вместо номера пишем цену" => это делается через label в Excel
-  //   (то есть в Excel label должен быть "Резная 5000" или "Фрезерная 7000", "Графика 1000" и т.п.)
+  // Теперь /post работает как "анкета" (reply-клавиатура), без inline и без кнопки в канале.
+  // 1-я кнопка: "Обновить цены"
+  // Дальше: Стела -> Тумба -> Цветник -> Плита -> Работа -> Опции -> Графика -> Публикация
+  //
+  // Везде один вариант, кроме Графики (мультивыбор). Для опций тоже один? (у вас портрет/метрика - можно несколько)
+  // Здесь: Опции = мультивыбор (портрет+метрика), Графика = мульти.
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
@@ -615,7 +603,6 @@ if (token) {
 
       ctx.session.postWizard = {
         step: 'menu',
-        prevStack: [],
         baseTextNoHint,
         mediaPayload,
         selected: {
@@ -624,8 +611,8 @@ if (token) {
           CVETNIK: null,
           PLITA: null,
           WORK: null,
-          OPTION: null, // single (по вашему "везде один вариант", опции можно оставить single)
-          GRAFIKA: [], // multi
+          OPTION: [],
+          GRAFIKA: [],
         },
       };
 
@@ -637,38 +624,36 @@ if (token) {
     }
   });
 
+  // кнопки меню /post (reply-клавиатура)
   function kbPostMenu() {
     return Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
-  }
-
-  function kbPostBackCancel() {
-    return Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize();
   }
 
   function kbPostCancelOnly() {
     return Markup.keyboard([['Отменить']]).resize();
   }
 
-  // --- update prices menu
+  function kbPostNextCancel() {
+    return Markup.keyboard([['Отменить']]).resize();
+  }
+
+  // обработчик для reply-кнопок /post мастера
   bot.hears('♻️ Обновить цены', async (ctx) => {
     if (!isAdmin(ctx)) return;
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
 
-    ctx.session.postWizard.prevStack = ['menu'];
     ctx.session.postWizard.step = 'update_prices';
     await ctx.reply(
-      'Обновление цен постов:\n\n• Обновить один пост: перешлите сюда сообщение из канала.\n• Обновить все: обновит только посты, которые публиковались через этот /post (чтобы бот знал состав).',
+      'Обновление цен постов:\n\n1) Перешлите сюда пост из канала, который нужно обновить, и я обновлю цену.\n\nИли нажмите «Обновить все» (если хранение меты включено и доступно).',
       Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
     );
   });
 
-  bot.hears('🧾 Обновить по пересланному посту', async (ctx) => {
+  bot.hears('⬅️ Назад', async (ctx) => {
     if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
-
-    ctx.session.postWizard.prevStack.push('update_prices');
-    ctx.session.postWizard.step = 'update_wait_forward';
-    await ctx.reply('Перешлите сюда пост из канала.', kbPostBackCancel());
+    if (!ctx.session?.postWizard) return;
+    ctx.session.postWizard.step = 'menu';
+    await ctx.reply('Меню /post:', kbPostMenu());
   });
 
   bot.hears('🔁 Обновить все', async (ctx) => {
@@ -685,8 +670,7 @@ if (token) {
     const keys = await getAllCatalogPostKeys();
     if (!keys.length) {
       return ctx.reply(
-        'Нет сохраненных данных о постах для обновления.\n\nВажно: массовое обновление работает только для постов, которые публиковались через этот /post.',
-        kbPostMenu()
+        'Нет сохраненных данных о постах для обновления.\n\nВажно: массовое обновление работает только для постов, которые публиковались через новый мастер /post (чтобы бот сохранил состав).'
       );
     }
 
@@ -704,63 +688,47 @@ if (token) {
           skipped++;
           continue;
         }
-
         const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
         const baseText = (meta.baseTextNoHint || '').trim();
         const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
+        // обновляем только если изменилась цена
         if (Number(meta.last_total_price) === Number(total)) {
           skipped++;
           continue;
         }
 
         await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
+
         await setCatalogPostMetaByKey(key, { ...meta, last_total_price: total, updatedAt: Date.now() });
         updated++;
-      } catch {
+      } catch (e) {
         errors++;
       }
     }
 
-    ctx.session.postWizard.step = 'menu';
     await ctx.reply(`Готово.\nОбновлено: ${updated}\nБез изменений: ${skipped}\nОшибок: ${errors}`, kbPostMenu());
+    ctx.session.postWizard.step = 'menu';
   });
 
-  // --- publish flow start
+  bot.hears('🧾 Обновить по пересланному посту', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
+
+    ctx.session.postWizard.step = 'update_wait_forward';
+    await ctx.reply(
+      'Перешлите сюда сообщение из канала (тот самый пост). Я попробую обновить цену.\n\nВажно: пост должен быть опубликован через новый мастер /post, иначе у бота нет состава для пересчёта.',
+      kbPostCancelOnly()
+    );
+  });
+
   bot.hears('▶️ Новая публикация', async (ctx) => {
     if (!isAdmin(ctx)) return;
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
 
-    ctx.session.postWizard.prevStack = ['menu'];
+    // стартуем шаг 1 (Стела)
     ctx.session.postWizard.step = 'STELA';
     await askPostWizardStep(ctx, 'STELA');
-  });
-
-  // --- back
-  bot.hears('⬅️ Назад', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const wiz = ctx.session?.postWizard;
-    if (!wiz) return;
-
-    const prev = wiz.prevStack?.pop();
-    if (!prev) {
-      wiz.step = 'menu';
-      return ctx.reply('Меню /post:', kbPostMenu());
-    }
-
-    wiz.step = prev;
-
-    if (prev === 'menu') return ctx.reply('Меню /post:', kbPostMenu());
-    if (prev === 'update_prices') {
-      return ctx.reply(
-        'Обновление цен постов:',
-        Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
-      );
-    }
-    if (prev === 'update_wait_forward') return ctx.reply('Перешлите сюда пост из канала.', kbPostBackCancel());
-    if (prev === 'CONFIRM') return; // тут назад не нужен отдельно
-
-    return askPostWizardStep(ctx, prev);
   });
 
   async function askPostWizardStep(ctx, group) {
@@ -768,54 +736,42 @@ if (token) {
     if (!wiz) return;
 
     const { items } = await loadCatalogFromXlsx();
-    let list = items.filter((it) => it.group === group);
 
-    // Ограничения "по 4" для WORK и GRAFIKA:
-    // ВАЖНО: правильно сделать в Excel: просто оставьте 4 активные строки.
-    // Но на всякий случай ограничим первые 4.
-    if (group === 'WORK' || group === 'GRAFIKA') list = list.slice(0, 4);
-
-    if (!list.length) return advancePostWizard(ctx);
-
-    const optional = ['CVETNIK', 'PLITA', 'WORK'];
-
-    // Кнопки с ценой: "label — 10 000₽"
-    // ВАЖНО: вы просили "вместо номера пишем цену" для резной/фрезер/графика.
-    // Это достигается тем, что label в Excel должен быть уже "Резная 5000" / "Фрезерная 7000" / "Графика 1000" и т.д.
-    // А здесь мы добавляем цену ещё раз справа — если хотите, можно убрать добавку для этих групп.
-    const rows = [];
-
-    if (group === 'GRAFIKA') {
-      // multi
-      rows.push(['Далее', 'Сбросить']);
-      const btns = list.map((it) => fmtBtn(it.label, it.price));
-      rows.push(...splitTwoColumns(btns));
-      rows.push(['⬅️ Назад']);
-      rows.push(['Отменить']);
-    } else {
-      // single
-      const btns = list.map((it) => fmtBtn(it.label, it.price));
-      rows.push(...splitTwoColumns(btns));
-      if (optional.includes(group)) rows.push(['— Нет —']);
-      rows.push(['⬅️ Назад']);
-      rows.push(['Отменить']);
+    const list = items.filter((it) => it.group === group);
+    if (!list.length) {
+      // если группа пустая — сразу дальше
+      return advancePostWizard(ctx);
     }
+
+    // Reply-клавиатура: по 2 кнопки в ряд, + "Нет" если опционально, + "Отменить"
+    const buttons = [];
+    for (const it of list) buttons.push(it.label);
+
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+
+    // optional groups
+    const optional = ['CVETNIK', 'PLITA', 'WORK'];
+    if (optional.includes(group)) rows.push(['— Нет —']);
+
+    rows.push(['Отменить']);
 
     const titleMap = {
       STELA: 'Выберите стелу:',
       TUMBA: 'Выберите тумбу:',
       CVETNIK: 'Цветник (или — Нет —):',
       PLITA: 'Плита (или — Нет —):',
-      WORK: 'Резная/Фрезерная (выберите вариант или — Нет —):',
-      OPTION: 'Опции (выберите один вариант или — Нет —):',
+      WORK: 'Работа (или — Нет —):',
+      OPTION: 'Опции (можно несколько):',
       GRAFIKA: 'Графика (можно несколько). Нажмите «Далее» когда закончите:',
     };
 
-    // OPTION — single (по вашему "везде один вариант")
-    if (group === 'OPTION') {
-      rows.push(['— Нет —']);
-      rows.push(['⬅️ Назад']);
-      rows.push(['Отменить']);
+    if (group === 'OPTION' || group === 'GRAFIKA') {
+      // multi: показываем список с toggle через текстовый выбор невозможно “подсветить”.
+      // поэтому делаем: список кнопок + "Далее" + "Сбросить"
+      rows.unshift(['Далее', 'Сбросить']);
+      await ctx.reply(titleMap[group] || `Выберите ${group}:`, Markup.keyboard(rows).resize());
+      return;
     }
 
     await ctx.reply(titleMap[group] || `Выберите ${group}:`, Markup.keyboard(rows).resize());
@@ -826,11 +782,8 @@ if (token) {
     if (!wiz) return;
 
     const order = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'OPTION', 'GRAFIKA', 'PREVIEW'];
-
     const idx = order.indexOf(wiz.step);
     const next = order[idx + 1] || 'PREVIEW';
-
-    wiz.prevStack.push(wiz.step);
     wiz.step = next;
 
     if (next === 'PREVIEW') return showPostWizardPreview(ctx);
@@ -847,40 +800,32 @@ if (token) {
     const baseText = (wiz.baseTextNoHint || '').trim();
     const fullCaption = baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
 
-    wiz.prevStack.push('GRAFIKA');
     wiz.step = 'CONFIRM';
     await ctx.reply(
       `Предпросмотр:\n\n${fullCaption}\n\nЕсли всё верно — нажмите «Опубликовать».`,
-      Markup.keyboard([['Опубликовать'], ['⬅️ Назад'], ['Отменить']]).resize()
+      Markup.keyboard([['Опубликовать'], ['Отменить']]).resize()
     );
-
-    // сохраним для публикации
-    wiz._computed = { total, captionOnly: caption, fullCaption: fullCaption.slice(0, 1024) };
   }
 
-  // Универсальный обработчик сообщений (и для апдейта по forward, и для выбора в мастере)
+  // Универсальный обработчик сообщений для мастера /post (reply-клавиатура)
   bot.on('message', async (ctx, next) => {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
 
-    if (!('text' in ctx.message) || !ctx.message.text) return;
-
-    const text = ctx.message.text.trim();
-
     // отмена
-    if (text === 'Отменить') {
+    if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;
       await ctx.reply('Отменено.', Markup.removeKeyboard());
       return;
     }
 
-    // update forward
+    // update wait forward
     if (wiz.step === 'update_wait_forward') {
       const fwd = ctx.message?.forward_from_chat;
       const messageId = ctx.message?.forward_from_message_id;
 
       if (!fwd || !messageId) {
-        await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostBackCancel());
+        await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostCancelOnly());
         return;
       }
 
@@ -891,15 +836,16 @@ if (token) {
         return;
       }
 
+      // проверим что переслали из нужного канала
       if (String(fwd.id) !== String(channelId)) {
-        await ctx.reply('Пост переслан не из того канала.', kbPostBackCancel());
+        await ctx.reply('Пост переслан не из того канала.', kbPostCancelOnly());
         return;
       }
 
       const meta = await getCatalogPostMeta(messageId);
       if (!meta?.selected) {
         await ctx.reply(
-          'У меня нет сохранённого состава для этого поста.\nОн должен быть опубликован через новый /post.',
+          'У меня нет сохранённого состава для этого поста.\nОн должен быть опубликован через новый мастер /post.',
           kbPostMenu()
         );
         ctx.session.postWizard.step = 'menu';
@@ -914,128 +860,133 @@ if (token) {
       await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
       await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
 
-      ctx.session.postWizard.step = 'menu';
       await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
+      ctx.session.postWizard.step = 'menu';
       return;
     }
 
-    // publish confirm
+    // обработка выбора по шагам
+    if (!('text' in ctx.message) || !ctx.message.text) return;
+
+    const text = ctx.message.text.trim();
+
+    // меню
+    if (wiz.step === 'menu') return;
+
+    // confirm
     if (wiz.step === 'CONFIRM') {
-      if (text !== 'Опубликовать') return;
+      if (text === 'Опубликовать') {
+        try {
+          const channelId = getChannelId();
+          if (!channelId) return ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
 
-      try {
-        const channelId = getChannelId();
-        if (!channelId) {
-          wiz.step = 'menu';
-          return ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
+          // обязательные поля
+          if (!wiz.selected.STELA || !wiz.selected.TUMBA) {
+            await ctx.reply('Нужно выбрать стелу и тумбу.', kbPostMenu());
+            ctx.session.postWizard.step = 'menu';
+            return;
+          }
+
+          const catalog = await loadCatalogFromXlsx();
+          const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
+
+          const baseText = (wiz.baseTextNoHint || '').trim();
+          const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+          // публикуем в канал используя старую логику кнопок (заказать + webapp)
+          const payload = wiz.mediaPayload || { kind: 'text' };
+          const kind = payload.kind;
+
+          if (kind === 'photo') {
+            const { primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText);
+            await setCatalogPostMeta(primary.message_id, {
+              selected: wiz.selected,
+              baseTextNoHint: baseText,
+              last_total_price: total,
+              createdAt: Date.now(),
+            });
+            await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
+          } else if (kind === 'video') {
+            const { primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText);
+            await setCatalogPostMeta(primary.message_id, {
+              selected: wiz.selected,
+              baseTextNoHint: baseText,
+              last_total_price: total,
+              createdAt: Date.now(),
+            });
+            await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
+          } else if (kind === 'document') {
+            const { primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText);
+            await setCatalogPostMeta(primary.message_id, {
+              selected: wiz.selected,
+              baseTextNoHint: baseText,
+              last_total_price: total,
+              createdAt: Date.now(),
+            });
+            await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
+          } else {
+            const { primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText);
+            await setCatalogPostMeta(primary.message_id, {
+              selected: wiz.selected,
+              baseTextNoHint: baseText,
+              last_total_price: total,
+              createdAt: Date.now(),
+            });
+            await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
+          }
+
+          ctx.session.postWizard = null;
+          return;
+        } catch (e) {
+          console.error('[bot] publish error:', e);
+          const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
+          await ctx.reply(`Ошибка публикации: ${desc}`, kbPostMenu());
+          ctx.session.postWizard.step = 'menu';
+          return;
         }
-
-        if (!wiz.selected.STELA || !wiz.selected.TUMBA) {
-          wiz.step = 'menu';
-          return ctx.reply('Нужно выбрать стелу и тумбу.', kbPostMenu());
-        }
-
-        const catalog = await loadCatalogFromXlsx();
-        const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
-
-        const baseText = (wiz.baseTextNoHint || '').trim();
-        const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
-
-        const payload = wiz.mediaPayload || { kind: 'text' };
-        const kind = payload.kind;
-
-        if (kind === 'photo') {
-          const { primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText);
-          await setCatalogPostMeta(primary.message_id, {
-            selected: wiz.selected,
-            baseTextNoHint: baseText,
-            last_total_price: total,
-            createdAt: Date.now(),
-          });
-          await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
-        } else if (kind === 'video') {
-          const { primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText);
-          await setCatalogPostMeta(primary.message_id, {
-            selected: wiz.selected,
-            baseTextNoHint: baseText,
-            last_total_price: total,
-            createdAt: Date.now(),
-          });
-          await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
-        } else if (kind === 'document') {
-          const { primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText);
-          await setCatalogPostMeta(primary.message_id, {
-            selected: wiz.selected,
-            baseTextNoHint: baseText,
-            last_total_price: total,
-            createdAt: Date.now(),
-          });
-          await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
-        } else {
-          const { primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText);
-          await setCatalogPostMeta(primary.message_id, {
-            selected: wiz.selected,
-            baseTextNoHint: baseText,
-            last_total_price: total,
-            createdAt: Date.now(),
-          });
-          await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
-        }
-
-        ctx.session.postWizard = null;
-        return;
-      } catch (e) {
-        console.error('[bot] publish error:', e);
-        const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-        wiz.step = 'menu';
-        return ctx.reply(`Ошибка публикации: ${desc}`, kbPostMenu());
       }
+      return;
     }
 
-    // multi step: GRAFIKA
-    if (wiz.step === 'GRAFIKA') {
-      if (text === 'Далее') return advancePostWizard(ctx);
-      if (text === 'Сбросить') {
-        wiz.selected.GRAFIKA = [];
-        return askPostWizardStep(ctx, 'GRAFIKA');
+    // multi steps
+    if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
+      if (text === 'Далее') {
+        return advancePostWizard(ctx);
       }
-      if (text === '⬅️ Назад') return; // обработан отдельным hears
+      if (text === 'Сбросить') {
+        wiz.selected[wiz.step] = [];
+        return askPostWizardStep(ctx, wiz.step);
+      }
 
+      // toggle by label
       const { items } = await loadCatalogFromXlsx();
-      let list = items.filter((it) => it.group === 'GRAFIKA').slice(0, 4);
-
-      // На кнопке "label — price₽" => для матчинга надо сравнить с fmtBtn
-      const it = list.find((x) => fmtBtn(x.label, x.price) === text);
+      const it = items.find((x) => x.group === wiz.step && x.label === text);
       if (!it) return;
 
-      const arr = Array.isArray(wiz.selected.GRAFIKA) ? wiz.selected.GRAFIKA : [];
+      const arr = Array.isArray(wiz.selected[wiz.step]) ? wiz.selected[wiz.step] : [];
       const idx = arr.indexOf(it.sku);
       if (idx >= 0) arr.splice(idx, 1);
       else arr.push(it.sku);
-      wiz.selected.GRAFIKA = arr;
+      wiz.selected[wiz.step] = arr;
+      // без подтверждений, но остаемся на шаге
       return;
     }
 
-    // single steps: STELA/TUMBA/CVETNIK/PLITA/WORK/OPTION
-    const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'OPTION'];
+    // single steps
+    const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
       if (text === '— Нет —') {
-        if (wiz.step === 'OPTION') wiz.selected.OPTION = null;
-        else wiz.selected[wiz.step] = null;
+        wiz.selected[wiz.step] = null;
         return advancePostWizard(ctx);
       }
 
       const { items } = await loadCatalogFromXlsx();
-      let list = items.filter((it) => it.group === wiz.step);
-
-      if (wiz.step === 'WORK') list = list.slice(0, 4);
-
-      const it = list.find((x) => fmtBtn(x.label, x.price) === text);
+      const it = items.find((x) => x.group === wiz.step && x.label === text);
       if (!it) return;
 
-      if (wiz.step === 'OPTION') wiz.selected.OPTION = it.sku;
-      else wiz.selected[wiz.step] = it.sku;
+      wiz.selected[wiz.step] = it.sku;
 
+      // без подтверждения: сразу следующий шаг
       return advancePostWizard(ctx);
     }
 
