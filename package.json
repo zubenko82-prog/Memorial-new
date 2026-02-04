@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.21.0",
   "dependencies": {
     "@vercel/blob": "0.24.0",
+    "exceljs": "^4.4.0",
     "formidable": "^2.1.5"
   }
 }

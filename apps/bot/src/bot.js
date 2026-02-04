@@ -3,6 +3,7 @@ import { resolve, dirname as pathDirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as dotenv from 'dotenv';
 import { Telegraf, Markup } from 'telegraf';
+import ExcelJS from 'exceljs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = pathDirname(__filename);
@@ -30,6 +31,9 @@ const DEEPLINK_PREFIX = 'order'; // /start order_<token>
 const HINT_TEXT =
   'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
 
+// Путь к Excel рядом с ботом
+const CATALOG_XLSX_PATH = resolve(__dirname, '../catalog.xlsx'); // /Memorial/apps/bot/catalog.xlsx
+
 // CHANNEL_ID может быть -100… (число) или @username (строка)
 function getChannelId() {
   if (!CHANNEL_ID_RAW) return null;
@@ -41,7 +45,10 @@ function getChannelId() {
 // ---------------- Optional Redis (Upstash) ----------------
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
 const mem = new Map(); // фолбэк для сессий
-const memPosts = new Map(); // фолбэк для пост-меты
+const memPosts = new Map(); // фолбэк для пост-меты (sourceToken->meta)
+
+// Публикации памятников: message_id -> { selected, last_total_price, channel_id }
+const memCatalogPosts = new Map();
 
 async function getRedis() {
   if (redisInstance !== undefined) return redisInstance;
@@ -95,6 +102,25 @@ async function getPostMeta(sourceToken) {
     return (await r.get(key)) || null;
   }
   return memPosts.get(key) || null;
+}
+
+// ---- Публикации памятников: messageId -> meta (для обновления цены) ----
+async function setCatalogPostMeta(messageId, meta) {
+  const key = `catalogpost:${messageId}`;
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 }); // 1 год (можно увеличить)
+  } else {
+    memCatalogPosts.set(key, meta);
+  }
+}
+async function getCatalogPostMeta(messageId) {
+  const key = `catalogpost:${messageId}`;
+  const r = await getRedis();
+  if (r) {
+    return (await r.get(key)) || null;
+  }
+  return memCatalogPosts.get(key) || null;
 }
 
 // ---------------- Helpers ----------------
@@ -214,6 +240,29 @@ function channelPostKbFallback(botUsername, sourceToken) {
   ]);
 }
 
+// Инлайн-клавиатура для админа (обновление цены/тегов) + стандартные кнопки
+function channelPostKbAdmin(botUsername, sourceToken, messageId) {
+  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  const webAppUrl = new URL(WEBAPP_URL).toString();
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
+      Markup.button.webApp('Подобрать памятник', webAppUrl),
+    ],
+    [Markup.button.callback('♻️ Обновить цену', `cupd:${messageId}`)],
+  ]);
+}
+
+function channelPostKbAdminFallback(botUsername, sourceToken, messageId) {
+  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  const webAppUrl = new URL(WEBAPP_URL).toString();
+  return Markup.inlineKeyboard([
+    [Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)],
+    [Markup.button.url('Подобрать памятник', webAppUrl)],
+    [Markup.button.callback('♻️ Обновить цену', `cupd:${messageId}`)],
+  ]);
+}
+
 // Отправка поста в канал сразу с reply_markup; если web_app не принимается — fallback (URL)
 async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const chatId = getChannelId();
@@ -314,6 +363,273 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   return { primary: msg, sourceToken };
 }
 
+// ---------------- Catalog (Excel) helpers ----------------
+async function loadCatalogFromXlsx() {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(CATALOG_XLSX_PATH);
+
+  const wsCat = wb.getWorksheet('Каталог');
+  if (!wsCat) throw new Error('В catalog.xlsx отсутствует лист "Каталог".');
+
+  const header = wsCat.getRow(1).values; // 1-based
+  const colIndex = (name) => header.findIndex((v) => String(v || '').trim() === name);
+
+  const idxSku = colIndex('sku');
+  const idxGroup = colIndex('group');
+  const idxLabel = colIndex('label');
+  const idxPrice = colIndex('price');
+  const idxActive = colIndex('active');
+  const idxTag = colIndex('tag_ru');
+
+  if ([idxSku, idxGroup, idxLabel, idxPrice, idxActive].some((i) => i < 1)) {
+    throw new Error('Лист "Каталог" должен содержать колонки: sku, group, label, price, active, tag_ru');
+  }
+
+  const items = [];
+  wsCat.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const sku = String(row.getCell(idxSku).value || '').trim();
+    if (!sku) return;
+    const active = row.getCell(idxActive).value;
+    const isActive = String(active).trim() === '1' || active === 1 || active === true;
+    if (!isActive) return;
+
+    items.push({
+      sku,
+      group: String(row.getCell(idxGroup).value || '').trim(),
+      label: String(row.getCell(idxLabel).value || '').trim(),
+      price: Number(row.getCell(idxPrice).value || 0),
+      tag_ru: String(row.getCell(idxTag)?.value || '').trim(),
+    });
+  });
+
+  const wsBands = wb.getWorksheet('PriceBands');
+  if (!wsBands) throw new Error('В catalog.xlsx отсутствует лист "PriceBands".');
+
+  const headerB = wsBands.getRow(1).values;
+  const bMin = headerB.findIndex((v) => String(v || '').trim() === 'min');
+  const bMax = headerB.findIndex((v) => String(v || '').trim() === 'max');
+  const bTag = headerB.findIndex((v) => String(v || '').trim() === 'tag_ru');
+  if ([bMin, bMax, bTag].some((i) => i < 1)) {
+    throw new Error('Лист "PriceBands" должен содержать колонки: min, max, tag_ru');
+  }
+
+  const bands = [];
+  wsBands.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const min = Number(row.getCell(bMin).value);
+    const max = Number(row.getCell(bMax).value);
+    const tag = String(row.getCell(bTag).value || '').trim();
+    if (!Number.isFinite(min) || !Number.isFinite(max) || !tag) return;
+    bands.push({ min, max, tag });
+  });
+
+  return { items, bands };
+}
+
+function formatRub(n) {
+  const s = Math.round(Number(n) || 0).toString();
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+function pickBandTag(bands, total) {
+  for (const b of bands) {
+    if (total >= b.min && total <= b.max) return b.tag;
+  }
+  return '';
+}
+
+function normalizeSelectedToSkuList(selected) {
+  // selected: { STELA: 'sku', TUMBA:'sku', CVETNIK?:'sku', PLITA?:'sku', WORK?:'sku', OPTION?:['sku'], GRAFIKA?:['sku'] }
+  const res = [];
+  for (const v of Object.values(selected || {})) {
+    if (!v) continue;
+    if (Array.isArray(v)) res.push(...v);
+    else res.push(v);
+  }
+  // уникализация, но порядок сохраняем
+  const seen = new Set();
+  const out = [];
+  for (const sku of res) {
+    if (!seen.has(sku)) {
+      seen.add(sku);
+      out.push(sku);
+    }
+  }
+  return out;
+}
+
+function calcCaptionAndTags({ items, bands }, selected) {
+  const skuList = normalizeSelectedToSkuList(selected);
+
+  const bySku = new Map(items.map((it) => [it.sku, it]));
+  let total = 0;
+
+  let stelaTag = '';
+  let plitaTag = '';
+  let workTag = '';
+
+  let hasPlita = false;
+  let hasCvetnik = false;
+
+  for (const sku of skuList) {
+    const it = bySku.get(sku);
+    if (!it) continue;
+    total += Number(it.price || 0);
+
+    if (it.group === 'STELA' && it.tag_ru) stelaTag = it.tag_ru;
+    if (it.group === 'PLITA') {
+      hasPlita = true;
+      if (it.tag_ru) plitaTag = it.tag_ru;
+    }
+    if (it.group === 'CVETNIK') hasCvetnik = true;
+    if (it.group === 'WORK' && it.tag_ru) workTag = it.tag_ru;
+  }
+
+  // Теги строго по вашим правилам:
+  const tags = [];
+  if (stelaTag) tags.push(stelaTag);
+
+  if (hasPlita) {
+    if (plitaTag) tags.push(plitaTag);
+  } else {
+    tags.push('#без_плиты');
+  }
+
+  if (!hasCvetnik) tags.push('#без_цветника');
+
+  if (workTag) tags.push(workTag);
+
+  const bandTag = pickBandTag(bands, total);
+  if (bandTag) tags.push(bandTag);
+
+  // Уникализация тегов (на всякий)
+  const seen = new Set();
+  const uniqTags = [];
+  for (const t of tags) {
+    if (!t) continue;
+    if (!seen.has(t)) {
+      seen.add(t);
+      uniqTags.push(t);
+    }
+  }
+
+  const caption = `Цена: ${formatRub(total)} ₽\n${uniqTags.join(' ')}`.trim();
+  return { total, tags: uniqTags, caption };
+}
+
+// ---------------- Publish wizard ----------------
+const WZ = {
+  // шаги мастера (соответствуют group в Excel)
+  steps: [
+    { key: 'STELA', title: 'Выберите стелу', mode: 'single', required: true },
+    { key: 'TUMBA', title: 'Выберите тумбу', mode: 'single', required: true },
+    { key: 'CVETNIK', title: 'Цветник (можно пропустить)', mode: 'single', required: false },
+    { key: 'PLITA', title: 'Надгробная плита (можно пропустить)', mode: 'single', required: false },
+    { key: 'WORK', title: 'Работа (резная/фрезерная, можно пропустить)', mode: 'single', required: false },
+    { key: 'OPTION', title: 'Опции (портрет/метрика)', mode: 'multi', required: false },
+    { key: 'GRAFIKA', title: 'Графика (можно несколько)', mode: 'multi', required: false },
+  ],
+};
+
+function isAdmin(ctx) {
+  const uid = ctx.from?.id;
+  return uid && BOT_ADMINS.includes(uid);
+}
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+function buildWizardKeyboard(items, step, selected) {
+  const rows = [];
+
+  if (step.mode === 'single') {
+    const buttons = items.map((it) => {
+      const picked = selected?.[step.key] === it.sku;
+      const title = `${picked ? '✅ ' : ''}${it.label}${Number.isFinite(it.price) ? ` (${formatRub(it.price)}₽)` : ''}`;
+      return Markup.button.callback(title, `wz:pick:${step.key}:${it.sku}`);
+    });
+
+    for (const r of chunk(buttons, 2)) rows.push(r);
+
+    if (!step.required) {
+      const nonePicked = !selected?.[step.key];
+      rows.push([Markup.button.callback(`${nonePicked ? '✅ ' : ''}— Нет —`, `wz:none:${step.key}`)]);
+    }
+  } else {
+    // multi
+    const arr = Array.isArray(selected?.[step.key]) ? selected[step.key] : [];
+    const set = new Set(arr);
+    const buttons = items.map((it) => {
+      const picked = set.has(it.sku);
+      const title = `${picked ? '✅ ' : ''}${it.label}${Number.isFinite(it.price) ? ` (${formatRub(it.price)}₽)` : ''}`;
+      return Markup.button.callback(title, `wz:toggle:${step.key}:${it.sku}`);
+    });
+    for (const r of chunk(buttons, 2)) rows.push(r);
+  }
+
+  // навигация
+  const nav = [];
+  nav.push(Markup.button.callback('⬅️ Назад', 'wz:back'));
+  nav.push(Markup.button.callback('Далее ➡️', 'wz:next'));
+  rows.push(nav);
+  rows.push([Markup.button.callback('❌ Отмена', 'wz:cancel')]);
+
+  return Markup.inlineKeyboard(rows);
+}
+
+async function wizardStart(ctx, baseTextNoHint, mediaPayload) {
+  // mediaPayload: { kind:'photo'|'video'|'document'|'text', fileId?, text? }
+  ctx.session.publish = {
+    stepIndex: 0,
+    selected: {},
+    baseTextNoHint: baseTextNoHint || '',
+    mediaPayload,
+  };
+  await wizardRenderStep(ctx);
+}
+
+async function wizardRenderStep(ctx) {
+  const pub = ctx.session.publish;
+  if (!pub) return;
+
+  const { items } = await loadCatalogFromXlsx();
+  const step = WZ.steps[pub.stepIndex];
+  const stepItems = items.filter((it) => String(it.group).toUpperCase() === step.key);
+
+  // отдельное сообщение, чтобы не конфликтовать с reply-клавиатурами анкеты
+  const kb = buildWizardKeyboard(stepItems, step, pub.selected);
+  const hint = pub.baseTextNoHint ? `Текст к посту:\n${pub.baseTextNoHint}\n\n` : '';
+  await ctx.reply(`${hint}${step.title}:`, kb);
+}
+
+async function wizardPreview(ctx) {
+  const pub = ctx.session.publish;
+  if (!pub) return;
+
+  const catalog = await loadCatalogFromXlsx();
+  const { caption, total } = calcCaptionAndTags(catalog, pub.selected);
+
+  const baseText = (pub.baseTextNoHint || '').trim();
+  const fullCaption = baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback('✅ Опубликовать', 'wz:publish')],
+    [Markup.button.callback('⬅️ Назад', 'wz:back')],
+    [Markup.button.callback('❌ Отмена', 'wz:cancel')],
+  ]);
+
+  await ctx.reply(`Предпросмотр:\n\n${fullCaption}\n\n(Итог: ${formatRub(total)} ₽)`, kb);
+}
+
+async function wizardCancel(ctx, text = 'Публикация отменена.') {
+  ctx.session.publish = null;
+  await ctx.reply(text);
+}
+
 // ---------------- BOT ----------------
 let bot = null;
 
@@ -366,44 +682,307 @@ if (token) {
     return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
-  // /post — публикует в канал пост с кнопками (web_app+fallback) и deep-link в ЛС
+  // ========= /post (АДМИН): теперь запускает мастер (Excel) и публикует в канал =========
   bot.command('post', async (ctx) => {
     try {
       const channelId = getChannelId();
       if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
       if (!BOT_ADMINS.includes(ctx.from.id)) return ctx.reply('Недостаточно прав.');
 
+      // блокируем пересечение с анкетой
+      if (ctx.session?.order) {
+        return ctx.reply('Сейчас у вас активна анкета. Завершите или отмените её командой /cancel, затем публикуйте /post.');
+      }
+
       const raw = ctx.message?.text || '';
       const base = raw.replace(/^\/post(@\S+)?\s*/i, '').trim(); // исходный текст поста (без подсказки)
-      const finalText = base ? `${base}\n\n${HINT_TEXT}` : HINT_TEXT;
 
       const r = ctx.message?.reply_to_message;
+
+      // Фото / видео / документ (поддержим, как было)
       if (r?.photo?.length) {
         const fileId = r.photo.at(-1).file_id;
-        const { primary } = await postToChannelWithKb(ctx, 'photo', { fileId, caption: finalText }, base);
-        return ctx.reply(`Фото‑пост опубликован в канал.\nmessage_id: ${primary.message_id}`);
+        await wizardStart(ctx, base, { kind: 'photo', fileId });
+        return;
       }
       if (r?.video) {
-        const { primary } = await postToChannelWithKb(ctx, 'video', { fileId: r.video.file_id, caption: finalText }, base);
-        return ctx.reply(`Видео‑пост опубликован в канал.\nmessage_id: ${primary.message_id}`);
+        await wizardStart(ctx, base, { kind: 'video', fileId: r.video.file_id });
+        return;
       }
       if (r?.document) {
-        const { primary } = await postToChannelWithKb(ctx, 'document', { fileId: r.document.file_id, caption: finalText }, base);
-        return ctx.reply(`Документ‑пост опубликован в канал.\nmessage_id: ${primary.message_id}`);
+        await wizardStart(ctx, base, { kind: 'document', fileId: r.document.file_id });
+        return;
       }
+
+      // Текстовый пост без медиа — тоже можно, но мастер всё равно нужен (цена/теги)
       if (!base) {
-        return ctx.reply('Добавьте текст после /post или ответьте командой /post на фото/видео/документ.');
+        return ctx.reply('Ответьте /post на фото/видео/документ или добавьте текст после /post.');
       }
-      const { primary } = await postToChannelWithKb(ctx, 'text', { text: finalText }, base);
-      return ctx.reply(`Текстовый пост опубликован в канал.\nmessage_id: ${primary.message_id}`);
+      await wizardStart(ctx, base, { kind: 'text', text: '' });
     } catch (e) {
-      console.error('[bot]/post error:', e);
+      console.error('[bot]/post wizard start error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
-      return ctx.reply(
-        `Ошибка публикации: ${desc}\nПроверьте права бота, CHANNEL_ID и /setdomain у @BotFather (должен быть ${new URL(
-          WEBAPP_URL
-        ).origin}).`
-      );
+      return ctx.reply(`Ошибка запуска мастера публикации: ${desc}`);
+    }
+  });
+
+  // ========= Wizard actions =========
+  bot.action(/^wz:pick:(\w+):(.+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+      const pub = ctx.session.publish;
+      if (!pub) return ctx.answerCbQuery('Мастер не активен.');
+
+      const [, stepKey, sku] = ctx.match;
+      pub.selected[stepKey] = sku;
+
+      await ctx.answerCbQuery('Выбрано');
+      return wizardRenderStep(ctx);
+    } catch (e) {
+      console.error('[bot] wz:pick error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action(/^wz:none:(\w+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+      const pub = ctx.session.publish;
+      if (!pub) return ctx.answerCbQuery('Мастер не активен.');
+      const [, stepKey] = ctx.match;
+      delete pub.selected[stepKey];
+      await ctx.answerCbQuery('Ок');
+      return wizardRenderStep(ctx);
+    } catch (e) {
+      console.error('[bot] wz:none error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action(/^wz:toggle:(\w+):(.+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+      const pub = ctx.session.publish;
+      if (!pub) return ctx.answerCbQuery('Мастер не активен.');
+
+      const [, stepKey, sku] = ctx.match;
+      const arr = Array.isArray(pub.selected[stepKey]) ? pub.selected[stepKey] : [];
+      const idx = arr.indexOf(sku);
+      if (idx >= 0) arr.splice(idx, 1);
+      else arr.push(sku);
+      pub.selected[stepKey] = arr;
+
+      await ctx.answerCbQuery('Ок');
+      return wizardRenderStep(ctx);
+    } catch (e) {
+      console.error('[bot] wz:toggle error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action('wz:back', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+      const pub = ctx.session.publish;
+      if (!pub) return ctx.answerCbQuery('Мастер не активен.');
+      pub.stepIndex = Math.max(0, Number(pub.stepIndex || 0) - 1);
+      await ctx.answerCbQuery('Назад');
+      return wizardRenderStep(ctx);
+    } catch (e) {
+      console.error('[bot] wz:back error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action('wz:next', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+      const pub = ctx.session.publish;
+      if (!pub) return ctx.answerCbQuery('Мастер не активен.');
+
+      const step = WZ.steps[pub.stepIndex];
+
+      // валидация обязательных
+      if (step.required && !pub.selected[step.key]) {
+        await ctx.answerCbQuery('Нужно выбрать вариант');
+        return;
+      }
+
+      const nextIndex = Number(pub.stepIndex || 0) + 1;
+      if (nextIndex >= WZ.steps.length) {
+        await ctx.answerCbQuery('Ок');
+        return wizardPreview(ctx);
+      }
+      pub.stepIndex = nextIndex;
+      await ctx.answerCbQuery('Ок');
+      return wizardRenderStep(ctx);
+    } catch (e) {
+      console.error('[bot] wz:next error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action('wz:cancel', async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+      await ctx.answerCbQuery('Отмена');
+      return wizardCancel(ctx);
+    } catch (e) {
+      console.error('[bot] wz:cancel error:', e);
+      return ctx.answerCbQuery('Ошибка');
+    }
+  });
+
+  bot.action('wz:publish', async (ctx) => {
+    try {
+      const channelId = getChannelId();
+      if (!channelId) return ctx.answerCbQuery('CHANNEL_ID не задан');
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+
+      const pub = ctx.session.publish;
+      if (!pub) return ctx.answerCbQuery('Мастер не активен.');
+
+      // финальная валидация обязательных шагов
+      for (const st of WZ.steps) {
+        if (st.required && !pub.selected[st.key]) {
+          await ctx.answerCbQuery(`Нужно выбрать: ${st.key}`);
+          return;
+        }
+      }
+
+      const catalog = await loadCatalogFromXlsx();
+      const { caption, total } = calcCaptionAndTags(catalog, pub.selected);
+
+      const baseText = (pub.baseTextNoHint || '').trim();
+      const finalCaption = baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
+
+      const me = ctx.botInfo || (await ctx.telegram.getMe());
+      const botUsername = me.username;
+
+      // Создаем sourceToken и отправляем пост так, чтобы сохранилась старая логика deep-link и webapp
+      const sourceToken = makeSourceToken();
+
+      // Пытаемся поставить клавиатуру с web_app; если нельзя — fallback
+      const kbFull = channelPostKbAdmin(botUsername, sourceToken, 0).reply_markup; // messageId подставим после
+      const kbFallback = channelPostKbAdminFallback(botUsername, sourceToken, 0).reply_markup;
+
+      const sendCommon = async ({ reply_markup }) => {
+        const kind = pub.mediaPayload?.kind;
+        if (kind === 'photo') {
+          return await ctx.telegram.sendPhoto(channelId, pub.mediaPayload.fileId, {
+            caption: finalCaption.slice(0, 1024),
+            reply_markup,
+          });
+        }
+        if (kind === 'video') {
+          return await ctx.telegram.sendVideo(channelId, pub.mediaPayload.fileId, {
+            caption: finalCaption.slice(0, 1024),
+            reply_markup,
+          });
+        }
+        if (kind === 'document') {
+          const canCaption = finalCaption.length <= 1024 ? finalCaption : undefined;
+          return await ctx.telegram.sendDocument(channelId, pub.mediaPayload.fileId, {
+            caption: canCaption,
+            reply_markup,
+          });
+        }
+        // text
+        return await ctx.telegram.sendMessage(channelId, finalCaption, {
+          reply_markup,
+          disable_web_page_preview: true,
+        });
+      };
+
+      const isWebAppIssue = (desc) =>
+        /BUTTON_TYPE_INVALID/i.test(desc) || /web_app/i.test(desc) || /domain/i.test(desc) || /not allowed/i.test(desc);
+
+      let msg;
+      try {
+        msg = await sendCommon({ reply_markup: kbFull });
+      } catch (e) {
+        const desc = e?.response?.description || e?.message || String(e);
+        if (isWebAppIssue(desc)) msg = await sendCommon({ reply_markup: kbFallback });
+        else throw e;
+      }
+
+      // ВАЖНО: теперь нужно поправить callback-data на реальный message_id
+      // (проще — второй editMessageReplyMarkup с правильной клавиатурой)
+      const kbFinalFull = channelPostKbAdmin(botUsername, sourceToken, msg.message_id).reply_markup;
+      const kbFinalFallback = channelPostKbAdminFallback(botUsername, sourceToken, msg.message_id).reply_markup;
+
+      try {
+        await ctx.telegram.editMessageReplyMarkup(channelId, msg.message_id, undefined, kbFinalFull);
+      } catch {
+        try {
+          await ctx.telegram.editMessageReplyMarkup(channelId, msg.message_id, undefined, kbFinalFallback);
+        } catch {}
+      }
+
+      // сохраняем мету поста для анкеты (по sourceToken) как раньше
+      const abs = Math.abs(Number(msg.chat.id));
+      await setPostMeta(sourceToken, { text: baseText || '', absChatId: abs, messageId: msg.message_id });
+
+      // сохраняем мету для обновления цены
+      await setCatalogPostMeta(msg.message_id, {
+        channel_id: channelId,
+        selected: pub.selected,
+        last_total_price: total,
+        createdAt: Date.now(),
+      });
+
+      ctx.session.publish = null;
+
+      await ctx.answerCbQuery('Опубликовано');
+      return ctx.reply(`Пост опубликован.\nmessage_id: ${msg.message_id}`);
+    } catch (e) {
+      console.error('[bot] wz:publish error:', e);
+      const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
+      try {
+        await ctx.answerCbQuery('Ошибка');
+      } catch {}
+      return ctx.reply(`Ошибка публикации: ${desc}`);
+    }
+  });
+
+  // ========= Обновление цены/тегов (кнопка под постом канала) =========
+  bot.action(/^cupd:(\d+)$/, async (ctx) => {
+    try {
+      if (!isAdmin(ctx)) return ctx.answerCbQuery('Недостаточно прав.');
+
+      const channelId = getChannelId();
+      if (!channelId) return ctx.answerCbQuery('CHANNEL_ID не задан');
+
+      const messageId = Number(ctx.match[1]);
+      const meta = await getCatalogPostMeta(messageId);
+      if (!meta?.selected) return ctx.answerCbQuery('Нет данных для обновления');
+
+      const catalog = await loadCatalogFromXlsx();
+      const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
+
+      // ВАЖНО: мы не знаем исходный baseText/HINT_TEXT внутри caption канального сообщения.
+      // Поэтому обновляем только строку с ценой/тегами в простом формате:
+      // Чтобы было стабильнее, будем заменять caption целиком на: "Цена...\nтеги\n\nHINT_TEXT"
+      // (Если вы хотите сохранять baseText — его тоже нужно хранить в meta при публикации)
+      const newCaption = `${caption}\n\n${HINT_TEXT}`.slice(0, 1024);
+
+      await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
+
+      await setCatalogPostMeta(messageId, {
+        ...meta,
+        last_total_price: total,
+        updatedAt: Date.now(),
+      });
+
+      return ctx.answerCbQuery('Обновлено');
+    } catch (e) {
+      console.error('[bot] cupd error:', e);
+      const desc = e?.response?.description || e?.message || 'Ошибка';
+      try {
+        return ctx.answerCbQuery(`Ошибка: ${desc}`.slice(0, 200));
+      } catch {
+        return;
+      }
     }
   });
 
