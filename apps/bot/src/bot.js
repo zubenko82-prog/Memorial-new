@@ -744,7 +744,7 @@ if (token) {
       return;
     }
 
-    if (!('text' in ctx.message) || !ctx.message.text) return;
+    if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
     if (text === '⬅️ Назад') {
@@ -868,8 +868,9 @@ if (token) {
   });
 
   bot.on('message', async (ctx) => {
-    const st = ctx.session?.order?.step;
-    if (!st) return;
+  if (ctx.session?.postWizard) return; // <-- ДОБАВИТЬ
+  const st = ctx.session?.order?.step;
+  if (!st) return;
 
     if ('text' in ctx.message && ctx.message.text) {
       const text = ctx.message.text.trim();
