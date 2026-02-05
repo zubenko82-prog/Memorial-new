@@ -1253,72 +1253,6 @@ const blob = await generateOrderPdf({
         </div>
       )}
 
-      {/* Подтверждение */}
-      {confirmOpen && (
-        <div
-          role="dialog"
-          aria-modal
-          style={{ background: "#181922",
-  color: "#fff",
-  borderTopLeftRadius: 16,
-  borderTopRightRadius: 16,
-  boxShadow: "0 -20px 60px rgba(0,0,0,0.47)",
-  padding: 24,
-  maxWidth: 430,
-  margin: "0 auto",
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  opacity: 1,
-  transform: "translateY(0)",
-  transition: "opacity 220ms, transform 280ms cubic-bezier(.23,1.01,.32,1)"
-}}
-          onPointerUp={() => {
-            if (!isSending && !uploading) setConfirmOpen(false);
-          }}
-        >
-          <div
-            onPointerUp={(e) => e.stopPropagation()}
-            onClick={(e) => (e.stopPropagation() as any)}
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: "#15161a",
-              color: "#111",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              padding: 16,
-              boxShadow: "0 -20px 60px rgba(0,0,0,0.45)",
-              transform: "translateY(8px)",
-              opacity: 0,
-              animation: "sheetIn 180ms ease forwards"
-            }}
-          >
-            <style>{`@keyframes sheetIn { to { transform: translateY(0); opacity: 1; }} .btn{padding:8px 12px;border-radius:8px;border:1px solid #999;background:#f7f7f7;cursor:pointer}`}</style>
-            <div style={{ position: "absolute", top: 8, right: 8 }}>
-              <button onPointerUp={() => setConfirmOpen(false)} onClick={() => setConfirmOpen(false)} title="Закрыть"  disabled={isSending || uploading}>
-                ×
-              </button>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Отправить заказ менеджерам в Telegram?</div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                
-                onPointerUp={handleSend}
-                onClick={handleSend}
-                disabled={isSending || uploading}
-                style={{ background: "#e5ffe5", borderColor: "#99d199" }}
-              >
-                {isSending || uploading ? "Отправляем…" : "Отправить"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Статус */}
       {(deliveryVisible || sentOk) && (
         <div ref={afterHintRef}>
@@ -1408,9 +1342,7 @@ const blob = await generateOrderPdf({
           </section>
         </div>
       )}
-
-      {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
-          
+             
             {/* Меню "Новая заявка" */}
       {newOrderOpen && (
         <div>
@@ -1533,7 +1465,62 @@ const blob = await generateOrderPdf({
         </div>
       )}
 
-      
+      {/* Подтверждение "Отправить заказ менеджерам в Telegram" */}
+      {confirmOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(0,0,0,0.47)",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center"
+          }}
+          onClick={() => {
+            if (!isSending && !uploading) setConfirmOpen(false);
+          }}
+        >
+          <div
+            onPointerUp={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: "#181922",
+              color: "#fff",
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              padding: 24,
+              boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
+              margin: "0 auto",
+              maxWidth: 420,
+              width: "100%",
+              fontSize: 17,
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+              position: "relative"
+            }}
+          >
+            <div style={{ position: "absolute", top: 10, right: 12 }}>
+              <button
+                onPointerUp={() => setConfirmOpen(false)}
+                onClick={() => setConfirmOpen(false)}
+                title="Закрыть"
+                style={{ ...glassButtonStyle("sm"), width: 36, height: 36, fontWeight: 600, fontSize: 24, padding: 0, lineHeight: 1 }}
+                disabled={isSending || uploading}
+              >×</button>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 5 }}>
+              Отправить заказ менеджерам в Telegram?
+            </div>
+            <button
+              style={glassButtonStyle("sm")}
+              onPointerUp={handleSend}
+              onClick={handleSend}
+              disabled={isSending || uploading}
+            >
+              {isSending || uploading ? "Отправляем…" : "Отправить"}
+            </button>
             <button
               style={glassButtonStyle("sm")}
               onClick={() => setConfirmOpen(false)}
@@ -1550,5 +1537,8 @@ const blob = await generateOrderPdf({
 </div>
   );
 }
+
+
+
 
 
