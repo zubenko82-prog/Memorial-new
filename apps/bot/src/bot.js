@@ -572,7 +572,7 @@ if (token) {
         },
       };
 
-      await ctx.reply('Меню /post:', kbPostMenu());
+      await ctx.reply('Меню /post:', await kbPostMenuWithPrice(ctx));
     } catch (e) {
       console.error('[bot]/post wizard menu error:', e);
       const desc = e?.response?.description || e?.message || 'Неизвестная ошибка';
