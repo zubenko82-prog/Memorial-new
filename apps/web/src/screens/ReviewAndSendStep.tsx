@@ -1533,62 +1533,7 @@ const blob = await generateOrderPdf({
         </div>
       )}
 
-      {/* Подтверждение "Отправить заказ менеджерам в Telegram" */}
-      {confirmOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10000,
-            background: "rgba(0,0,0,0.47)",
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "center"
-          }}
-          onPointerUp={() => {
-            if (!isSending && !uploading) setConfirmOpen(false);
-          }}
-        >
-          <div
-            onPointerUp={e => e.stopPropagation()}
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: "#181922",
-              color: "#fff",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              padding: 24,
-              boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
-              margin: "0 auto",
-              maxWidth: 420,
-              width: "100%",
-              fontSize: 17,
-              display: "flex",
-              flexDirection: "column",
-              gap: 14,
-              position: "relative"
-            }}
-          >
-            <div style={{ position: "absolute", top: 10, right: 12 }}>
-              <button
-                onPointerUp={() => setConfirmOpen(false)}
-                onClick={() => setConfirmOpen(false)}
-                title="Закрыть"
-                style={{ ...glassButtonStyle("sm"), width: 36, height: 36, fontWeight: 600, fontSize: 24, padding: 0, lineHeight: 1 }}
-                disabled={isSending || uploading}
-              >×</button>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 5 }}>
-              Отправить заказ менеджерам в Telegram?
-            </div>
-            <button
-              style={glassButtonStyle("sm")}
-              onPointerUp={handleSend}
-              onClick={handleSend}
-              disabled={isSending || uploading}
-            >
-              {isSending || uploading ? "Отправляем…" : "Отправить"}
-            </button>
+      
             <button
               style={glassButtonStyle("sm")}
               onClick={() => setConfirmOpen(false)}
