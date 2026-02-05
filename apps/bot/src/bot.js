@@ -723,9 +723,8 @@ if (token) {
     if (!list.length) return advancePostWizard(ctx);
 
     // Кнопки: label + цена (чтобы совпадение было точное — кнопка = label + цена)
-    const buttonText = (it) => `${it.label} — ${formatRub(it.price)}₽`;
+    const buttons = list.map((it) => it.label);
 
-    const buttons = list.map(buttonText);
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
 
@@ -934,8 +933,8 @@ if (token) {
       let list = items.filter((x) => x.group === wiz.step);
       if (wiz.step === 'GRAFIKA') list = list.slice(0, 4);
 
-      const buttonText = (it) => `${it.label} — ${formatRub(it.price)}₽`;
-      const it = list.find((x) => buttonText(x) === text);
+      const buttons = list.map((it) => it.label);
+
       if (!it) return;
 
       const arr = Array.isArray(wiz.selected[wiz.step]) ? wiz.selected[wiz.step] : [];
@@ -960,8 +959,8 @@ if (token) {
       let list = items.filter((x) => x.group === wiz.step);
       if (wiz.step === 'WORK') list = list.slice(0, 4);
 
-      const buttonText = (it) => `${it.label} — ${formatRub(it.price)}₽`;
-      const it = list.find((x) => buttonText(x) === text);
+      const buttons = list.map((it) => it.label);
+
       if (!it) return;
 
       wiz.selected[wiz.step] = it.sku;
