@@ -530,6 +530,14 @@ if (token) {
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
+  bot.hears('🧾 Обновить по пересланному посту', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
+
+    ctx.session.postWizard.step = 'update_wait_forward';
+    await ctx.reply('Перешлите сюда сообщение из канала (тот самый пост).', kbPostCancelOnly());
+  });
+
   bot.hears('🔁 Обновить все', async (ctx) => {
     if (!isAdmin(ctx)) return;
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
@@ -542,9 +550,7 @@ if (token) {
     let errors = 0;
 
     const keys = await getAllCatalogPostKeys();
-    if (!keys.length) {
-      return ctx.reply('Нет сохраненных данных о постах для обновления.');
-    }
+    if (!keys.length) return ctx.reply('Нет сохраненных данных о постах для обновления.');
 
     const catalog = await loadCatalogFromXlsx();
 
@@ -582,14 +588,6 @@ if (token) {
     ctx.session.postWizard.step = 'menu';
   });
 
-  bot.hears('🧾 Обновить по пересланному посту', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
-
-    ctx.session.postWizard.step = 'update_wait_forward';
-    await ctx.reply('Перешлите сюда сообщение из канала (тот самый пост).', kbPostCancelOnly());
-  });
-
   bot.hears('▶️ Новая публикация', async (ctx) => {
     if (!isAdmin(ctx)) return;
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
@@ -618,19 +616,36 @@ if (token) {
     return [...rez, ...frez];
   }
 
-  async function askPostWizardStep(ctx, group) {
-    const wiz = ctx.session.postWizard;
-    if (!wiz) return;
-
+  // ВАЖНО: теперь для одиночных шагов мы создаём map "текст кнопки -> sku",
+  // чтобы не зависеть от совпадений текста и избежать "застреваний" на тумбе и т.п.
+  async function buildButtonMapForGroup(group) {
     const { items } = await loadCatalogFromXlsx();
     let list = items.filter((it) => it.group === group);
 
     if (group === 'WORK') list = trimWorkTo8(list);
     if (group === 'GRAFIKA') list = list.slice(0, 4);
 
-    if (!list.length) return advancePostWizard(ctx);
+    const map = new Map(); // buttonText -> sku
+    for (const it of list) {
+      const t = btnTextFor(it);
+      // если вдруг повторяются тексты — добавим sku, чтобы не было коллизий
+      const key = map.has(t) ? `${t} [${it.sku}]` : t;
+      map.set(key, it.sku);
+    }
+    return map;
+  }
 
-    const buttons = list.map((it) => btnTextFor(it));
+  async function askPostWizardStep(ctx, group) {
+    const wiz = ctx.session.postWizard;
+    if (!wiz) return;
+
+    const map = await buildButtonMapForGroup(group);
+    const buttons = Array.from(map.keys());
+
+    // сохраним маппинг для текущего шага (чтобы на следующем сообщении найти sku)
+    wiz.stepButtonMap = Object.fromEntries(map.entries());
+
+    if (!buttons.length) return advancePostWizard(ctx);
 
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
@@ -668,6 +683,7 @@ if (token) {
     const idx = order.indexOf(wiz.step);
     const next = order[idx + 1] || 'PREVIEW';
     wiz.step = next;
+    wiz.stepButtonMap = null;
 
     if (next === 'PREVIEW') return showPostWizardPreview(ctx);
     return askPostWizardStep(ctx, next);
@@ -695,22 +711,18 @@ if (token) {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
 
-    // ВАЖНО: /post мастер работает только с текстом, все остальное пропускаем
-    if (!('text' in ctx.message) || !ctx.message.text) return next();
-
-    const text = ctx.message.text.trim();
-
-    if (text === 'Отменить') {
+    // отмена — работает и в меню и на шагах
+    if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;
       await ctx.reply('Отменено.', Markup.removeKeyboard());
       return;
     }
 
-    if (wiz.step === 'update_wait_forward') {
-      // сюда мы не попадем, т.к. forward не text — значит нужно обрабатывать отдельно:
-      // поэтому оставляем fallback ниже (см. отдельный handler forwards)
-      return next();
-    }
+    // forwards для update_wait_forward
+    if (wiz.step === 'update_wait_forward') return next();
+
+    if (!('text' in ctx.message) || !ctx.message.text) return next();
+    const text = ctx.message.text.trim();
 
     if (text === '⬅️ Назад') {
       ctx.session.postWizard.step = 'menu';
@@ -768,17 +780,19 @@ if (token) {
       }
     }
 
+    // multi steps
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
       if (text === 'Далее') return advancePostWizard(ctx);
       if (text === 'Сбросить') {
         wiz.selected[wiz.step] = [];
         return askPostWizardStep(ctx, wiz.step);
       }
-      // toggle
+
       const { items } = await loadCatalogFromXlsx();
       let list = items.filter((x) => x.group === wiz.step);
       if (wiz.step === 'GRAFIKA') list = list.slice(0, 4);
 
+      // тут кнопки "label (цена)" — ищем по btnTextFor
       const it = list.find((x) => btnTextFor(x) === text);
       if (!it) return;
 
@@ -790,6 +804,7 @@ if (token) {
       return;
     }
 
+    // single steps
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
       if (text === '— Нет —') {
@@ -797,14 +812,13 @@ if (token) {
         return advancePostWizard(ctx);
       }
 
-      const { items } = await loadCatalogFromXlsx();
-      let list = items.filter((x) => x.group === wiz.step);
-      if (wiz.step === 'WORK') list = trimWorkTo8(list);
+      // берём sku из сохраненного map текущего шага
+      const map = wiz.stepButtonMap || {};
+      const sku = map[text];
 
-      const it = list.find((x) => btnTextFor(x) === text);
-      if (!it) return;
+      if (!sku) return; // не наша кнопка/не нашли — игнор
 
-      wiz.selected[wiz.step] = it.sku;
+      wiz.selected[wiz.step] = sku;
       return advancePostWizard(ctx);
     }
 
@@ -870,7 +884,6 @@ if (token) {
   });
 
   bot.on('message', async (ctx) => {
-    // ВАЖНО: если активен мастер /post — анкета не обрабатывает сообщения
     if (ctx.session?.postWizard) return;
 
     const st = ctx.session?.order?.step;
