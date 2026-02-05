@@ -83,7 +83,7 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 20000,
+        zIndex: 2147483647,
         background: "rgba(0,0,0,0.45)",
         display: "flex",
         alignItems: "center",
@@ -1244,10 +1244,10 @@ const blob = await generateOrderPdf({
       {/* Кнопки */}
       {(!sentOk || isDirtyAfterSend) && (
         <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", padding: 10 }}>
-          <button type="button" onPointerUp={onBack} onClick={onBack} style={glassButtonStyle("sm")}>
+          <button type="button" onClick={onBack} style={glassButtonStyle("sm")}>
             Назад
           </button>
-          <button type="button" onPointerUp={() => setConfirmOpen(true)} onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>
+          <button type="button" onClick={() => setConfirmOpen(true)} style={glassButtonStyle("sm")}>
             Отправить менеджеру
           </button>
         </div>
@@ -1482,8 +1482,7 @@ const blob = await generateOrderPdf({
           }}
         >
           <div
-            onPointerUp={e => e.stopPropagation()}
-            onClick={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
             style={{
               background: "#181922",
               color: "#fff",
@@ -1503,7 +1502,6 @@ const blob = await generateOrderPdf({
           >
             <div style={{ position: "absolute", top: 10, right: 12 }}>
               <button
-                onPointerUp={() => setConfirmOpen(false)}
                 onClick={() => setConfirmOpen(false)}
                 title="Закрыть"
                 style={{ ...glassButtonStyle("sm"), width: 36, height: 36, fontWeight: 600, fontSize: 24, padding: 0, lineHeight: 1 }}
@@ -1515,7 +1513,6 @@ const blob = await generateOrderPdf({
             </div>
             <button
               style={glassButtonStyle("sm")}
-              onPointerUp={handleSend}
               onClick={handleSend}
               disabled={isSending || uploading}
             >
