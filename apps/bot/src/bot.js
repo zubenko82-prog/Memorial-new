@@ -184,12 +184,8 @@ function buildUserSummary(s, orderNo, postText, postLink) {
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
   ];
   if (comment) lines.push(`Комментарий/связь: ${comment}`);
-  if (postText) {
-    lines.push('', 'Текст поста:', postText);
-  }
-  if (postLink) {
-    lines.push(`Ссылка на пост: ${postLink}`);
-  }
+  if (postText) lines.push('', 'Текст поста:', postText);
+  if (postLink) lines.push(`Ссылка на пост: ${postLink}`);
   return lines.join('\n');
 }
 
@@ -226,7 +222,10 @@ async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
     }));
     await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
     if (photos.length > 10) {
-      await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`);
+      await ctx.telegram.sendMessage(
+        MANAGER_CHAT_ID,
+        `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`
+      );
     }
   } else {
     await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
@@ -281,10 +280,16 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
       return await ctx.telegram.sendMessage(chatId, payload.text, { ...common, disable_web_page_preview: true });
     }
     if (kind === 'photo') {
-      return await ctx.telegram.sendPhoto(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
+      return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
+        ...common,
+        caption: (payload.caption || '').slice(0, 1024),
+      });
     }
     if (kind === 'video') {
-      return await ctx.telegram.sendVideo(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
+      return await ctx.telegram.sendVideo(chatId, payload.fileId, {
+        ...common,
+        caption: (payload.caption || '').slice(0, 1024),
+      });
     }
     if (kind === 'document') {
       const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
@@ -486,9 +491,9 @@ if (token) {
           TUMBA: null,
           CVETNIK: null,
           PLITA: null,
-          WORK: null, // на этом шаге будут "Резная/Фрезерная (цена)"
-          OPTION: [], // портрет/метрика (мульти)
-          GRAFIKA: [], // графика (мульти), 4 варианта
+          WORK: null,
+          OPTION: [],
+          GRAFIKA: [],
         },
       };
 
@@ -593,11 +598,7 @@ if (token) {
     await askPostWizardStep(ctx, 'STELA');
   });
 
-  // ---------- ВАШЕ ТЗ ПО КНОПКАМ С ЦЕНОЙ ----------
-  // На кнопках показываем только:
-  // - для WORK: "Резная (цена)" / "Фрезерная (цена)" (по 4 каждой)
-  // - для GRAFIKA: "Графика (цена)" (4 шт)
-  // - для остальных: "<label> (цена)"
+  // ---------- кнопки с ценой ----------
   function btnTextFor(it) {
     const p = formatRub(it.price);
     if (it.group === 'WORK') {
@@ -611,23 +612,20 @@ if (token) {
     return `${it.label} (${p}₽)`;
   }
 
+  function trimWorkTo8(list) {
+    const rez = list.filter((x) => /резн/i.test(x.label)).slice(0, 4);
+    const frez = list.filter((x) => /фрез/i.test(x.label)).slice(0, 4);
+    return [...rez, ...frez];
+  }
+
   async function askPostWizardStep(ctx, group) {
     const wiz = ctx.session.postWizard;
     if (!wiz) return;
 
     const { items } = await loadCatalogFromXlsx();
-
     let list = items.filter((it) => it.group === group);
 
-    // WORK: по 4 резных и 4 фрезерных
-    if (group === 'WORK') {
-      const rez = list.filter((x) => /резн/i.test(x.label)).slice(0, 4);
-      const frez = list.filter((x) => /фрез/i.test(x.label)).slice(0, 4);
-      const other = list.filter((x) => !/резн/i.test(x.label) && !/фрез/i.test(x.label));
-      list = [...rez, ...frez, ...other].slice(0, 8); // строго 8 (4+4), остальные режем
-    }
-
-    // GRAFIKA: 4
+    if (group === 'WORK') list = trimWorkTo8(list);
     if (group === 'GRAFIKA') list = list.slice(0, 4);
 
     if (!list.length) return advancePostWizard(ctx);
@@ -697,64 +695,30 @@ if (token) {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
 
-    if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
+    // ВАЖНО: /post мастер работает только с текстом, все остальное пропускаем
+    if (!('text' in ctx.message) || !ctx.message.text) return next();
+
+    const text = ctx.message.text.trim();
+
+    if (text === 'Отменить') {
       ctx.session.postWizard = null;
       await ctx.reply('Отменено.', Markup.removeKeyboard());
       return;
     }
 
     if (wiz.step === 'update_wait_forward') {
-      const fwd = ctx.message?.forward_from_chat;
-      const messageId = ctx.message?.forward_from_message_id;
-
-      if (!fwd || !messageId) {
-        await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostCancelOnly());
-        return;
-      }
-
-      const channelId = getChannelId();
-      if (!channelId) {
-        await ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
-        ctx.session.postWizard.step = 'menu';
-        return;
-      }
-
-      if (String(fwd.id) !== String(channelId)) {
-        await ctx.reply('Пост переслан не из того канала.', kbPostCancelOnly());
-        return;
-      }
-
-      const meta = await getCatalogPostMeta(messageId);
-      if (!meta?.selected) {
-        await ctx.reply('Нет сохранённого состава для этого поста. Он должен быть опубликован через /post.', kbPostMenu());
-        ctx.session.postWizard.step = 'menu';
-        return;
-      }
-
-      const catalog = await loadCatalogFromXlsx();
-      const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
-      const baseText = (meta.baseTextNoHint || '').trim();
-      const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
-
-      await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
-      await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
-
-      await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
-      ctx.session.postWizard.step = 'menu';
-      return;
+      // сюда мы не попадем, т.к. forward не text — значит нужно обрабатывать отдельно:
+      // поэтому оставляем fallback ниже (см. отдельный handler forwards)
+      return next();
     }
 
-    if (!('text' in ctx.message) || !ctx.message.text) return next();
-    const text = ctx.message.text.trim();
-
     if (text === '⬅️ Назад') {
-      // простой "назад": в меню
       ctx.session.postWizard.step = 'menu';
       await ctx.reply('Меню /post:', kbPostMenu());
       return;
     }
 
-    if (wiz.step === 'menu') return;
+    if (wiz.step === 'menu') return next();
 
     if (wiz.step === 'CONFIRM') {
       if (text !== 'Опубликовать') return;
@@ -810,7 +774,7 @@ if (token) {
         wiz.selected[wiz.step] = [];
         return askPostWizardStep(ctx, wiz.step);
       }
-
+      // toggle
       const { items } = await loadCatalogFromXlsx();
       let list = items.filter((x) => x.group === wiz.step);
       if (wiz.step === 'GRAFIKA') list = list.slice(0, 4);
@@ -835,13 +799,7 @@ if (token) {
 
       const { items } = await loadCatalogFromXlsx();
       let list = items.filter((x) => x.group === wiz.step);
-
-      if (wiz.step === 'WORK') {
-        const rez = list.filter((x) => /резн/i.test(x.label)).slice(0, 4);
-        const frez = list.filter((x) => /фрез/i.test(x.label)).slice(0, 4);
-        const other = list.filter((x) => !/резн/i.test(x.label) && !/фрез/i.test(x.label));
-        list = [...rez, ...frez, ...other].slice(0, 8);
-      }
+      if (wiz.step === 'WORK') list = trimWorkTo8(list);
 
       const it = list.find((x) => btnTextFor(x) === text);
       if (!it) return;
@@ -851,6 +809,50 @@ if (token) {
     }
 
     return;
+  });
+
+  // Отдельный обработчик для forward при обновлении цены (т.к. forward не text)
+  bot.on('message', async (ctx, next) => {
+    const wiz = ctx.session?.postWizard;
+    if (!wiz || wiz.step !== 'update_wait_forward') return next();
+
+    const fwd = ctx.message?.forward_from_chat;
+    const messageId = ctx.message?.forward_from_message_id;
+
+    if (!fwd || !messageId) {
+      await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostCancelOnly());
+      return;
+    }
+
+    const channelId = getChannelId();
+    if (!channelId) {
+      await ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
+      ctx.session.postWizard.step = 'menu';
+      return;
+    }
+
+    if (String(fwd.id) !== String(channelId)) {
+      await ctx.reply('Пост переслан не из того канала.', kbPostCancelOnly());
+      return;
+    }
+
+    const meta = await getCatalogPostMeta(messageId);
+    if (!meta?.selected) {
+      await ctx.reply('Нет сохранённого состава для этого поста. Он должен быть опубликован через /post.', kbPostMenu());
+      ctx.session.postWizard.step = 'menu';
+      return;
+    }
+
+    const catalog = await loadCatalogFromXlsx();
+    const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
+    const baseText = (meta.baseTextNoHint || '').trim();
+    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+    await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
+    await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
+
+    await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
+    ctx.session.postWizard.step = 'menu';
   });
 
   // --------- Анкета: клавиши (reply‑клавиатура) ---------
@@ -868,9 +870,11 @@ if (token) {
   });
 
   bot.on('message', async (ctx) => {
-  if (ctx.session?.postWizard) return; // <-- ДОБАВИТЬ
-  const st = ctx.session?.order?.step;
-  if (!st) return;
+    // ВАЖНО: если активен мастер /post — анкета не обрабатывает сообщения
+    if (ctx.session?.postWizard) return;
+
+    const st = ctx.session?.order?.step;
+    if (!st) return;
 
     if ('text' in ctx.message && ctx.message.text) {
       const text = ctx.message.text.trim();
