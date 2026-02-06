@@ -201,7 +201,8 @@ function buildUserSummary(s, orderNo, postText, postLink) {
   return lines.join('\n');
 }
 
-// ИЗМЕНЕНО: менеджеру отдаём максимум данных Telegram-пользователя + ссылка на пост внизу
+// ИЗМЕНЕНО: менеджеру отдаём максимум данных Telegram-пользователя + телефон (из анкеты) в блоке Telegram,
+// НЕ пишем строку "Пост, с которого сделан заказ: —" — вместо этого отдельно прикрепляем/пересылаем пост.
 function buildManagerSummary(s, orderNo, user, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -221,10 +222,11 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
     `Username: ${username}`,
     `Язык: ${lang}`,
     `Premium: ${isPremium}`,
+    // "если возможно" — реальный телефон Telegram API не дает; поэтому кладем телефон из анкеты:
+    `Телефон: ${s.phone || '—'}`,
     '',
     'Данные анкеты:',
     `Заказчик: ${s.name || '—'}`,
-    `Телефон: ${s.phone || '—'}`,
     `ФИО усопшего: ${fio}`,
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
@@ -236,30 +238,67 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
     lines.push('', 'Текст поста:', postText);
   }
 
-  lines.push('', `Пост, с которого сделан заказ: ${postLink || '—'}`);
+  // Ссылку на пост добавляем, только если она есть (без "—")
+  if (postLink) {
+    lines.push('', `Ссылка на пост: ${postLink}`);
+  }
 
   return lines.join('\n');
 }
 
+// ИЗМЕНЕНО:
+// 1) Добавляем кнопку "Назад" (ответить) на сообщение с заявкой: ForceReply.
+// 2) Если есть postLink/messageId канала — пытаемся переслать сам пост в менеджерский чат (это и есть "прикрепить фото поста").
+//    Если пересылка запрещена — отправляем ссылку отдельным сообщением.
 async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
-  // ИЗМЕНЕНО: передаём ctx.from целиком, не только id
   const managerText = buildManagerSummary(state, orderNo, ctx.from, postText, postLink);
+
+  // 0) сначала (если возможно) пересылаем/копируем исходный пост, чтобы менеджер видел что заказывают
+  // - forwardMessage даст "переслано из..." (если разрешено)
+  // - если запрещено — попробуем copyMessage (часто работает даже когда forward запрещен)
+  // - если и это нельзя — просто ссылку
+  const src = state?.sourceToken ? await getPostMeta(state.sourceToken) : null;
+  const srcChatId = src?.absChatId ? -Number(src.absChatId) : null; // хранили abs, в TG chat.id отрицательный
+  const srcMsgId = src?.messageId ? Number(src.messageId) : null;
+
+  if (srcChatId && srcMsgId) {
+    try {
+      await ctx.telegram.forwardMessage(MANAGER_CHAT_ID, srcChatId, srcMsgId);
+    } catch (e1) {
+      try {
+        await ctx.telegram.copyMessage(MANAGER_CHAT_ID, srcChatId, srcMsgId);
+      } catch (e2) {
+        if (postLink) {
+          await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Ссылка на пост: ${postLink}`);
+        }
+      }
+    }
+  } else if (postLink) {
+    await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Ссылка на пост: ${postLink}`);
+  }
+
+  // 1) отправляем сам текст заявки (с кнопкой "Назад" = ответом)
+  const sent = await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText, {
+    reply_markup: Markup.forceReply({ selective: false }).reply_markup,
+  });
+
+  // 2) фото клиента (если есть) — отправляем альбомом, ответом на заявку
   const photos = Array.isArray(state.photos) ? state.photos : [];
   if (photos.length > 0) {
-    const media = photos.slice(0, 10).map((fileId, i) => ({
+    const media = photos.slice(0, 10).map((fileId) => ({
       type: 'photo',
       media: fileId,
-      ...(i === 0 ? { caption: managerText } : {}),
     }));
-    await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
+    await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media, {
+      reply_to_message_id: sent.message_id,
+    });
     if (photos.length > 10) {
       await ctx.telegram.sendMessage(
         MANAGER_CHAT_ID,
-        `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`
+        `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`,
+        { reply_to_message_id: sent.message_id }
       );
     }
-  } else {
-    await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
   }
 }
 
@@ -300,11 +339,9 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const isWebAppIssue = (desc) =>
     /BUTTON_TYPE_INVALID/i.test(desc) || /web_app/i.test(desc) || /domain/i.test(desc) || /not allowed/i.test(desc);
 
-  // helper: отправка поста (в канал) БЕЗ reply_markup
   const trySendNoKb = async ({ useHtml }) => {
     const common = {
       ...(useHtml ? { parse_mode: 'HTML' } : {}),
-      // reply_markup не добавляем
     };
 
     if (kind === 'text') {
@@ -335,7 +372,6 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     throw new Error('Unknown kind');
   };
 
-  // 1) отправляем без клавиатуры (чтобы появился "Прокомментировать")
   let msg = null;
   try {
     msg = await trySendNoKb({ useHtml: true });
@@ -348,7 +384,6 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     }
   }
 
-  // 2) добавляем кнопки (web_app -> fallback url)
   try {
     await ctx.telegram.editMessageReplyMarkup(chatId, msg.message_id, undefined, kbFull);
   } catch (e) {
@@ -360,7 +395,6 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     }
   }
 
-  // 3) Сохраняем мету поста (текст + ссылка на пост) по sourceToken
   const abs = Math.abs(Number(msg.chat.id));
   const meta = {
     text: baseTextNoHint || '',
@@ -965,6 +999,7 @@ if (token) {
         return askPostWizardStep(ctx, wiz.step);
       }
 
+      // toggle by label
       const { items } = await loadCatalogFromXlsx();
       const it = items.find((x) => x.group === wiz.step && x.label === text);
       if (!it) return;
