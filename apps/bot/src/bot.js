@@ -201,30 +201,49 @@ function buildUserSummary(s, orderNo, postText, postLink) {
   return lines.join('\n');
 }
 
-function buildManagerSummary(s, orderNo, userId, postText, postLink) {
+// ИЗМЕНЕНО: менеджеру отдаём максимум данных Telegram-пользователя + ссылка на пост внизу
+function buildManagerSummary(s, orderNo, user, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
+
+  const u = user || {};
+  const fullName = [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || '—';
+  const username = u.username ? `@${u.username}` : '—';
+  const lang = u.language_code || '—';
+  const isPremium = u.is_premium ? 'да' : 'нет';
+
   const lines = [
     `Новая заявка №${orderNo}`,
-    `ID клиента: ${userId}`,
     '',
+    'Данные Telegram:',
+    `ID: ${u.id ?? '—'}`,
+    `Имя: ${fullName}`,
+    `Username: ${username}`,
+    `Язык: ${lang}`,
+    `Premium: ${isPremium}`,
+    '',
+    'Данные анкеты:',
     `Заказчик: ${s.name || '—'}`,
     `Телефон: ${s.phone || '—'}`,
     `ФИО усопшего: ${fio}`,
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
   ];
+
   if (s.comment?.trim()) lines.push(`Комментарий/связь: ${s.comment.trim()}`);
-  if (postText || postLink) {
-    lines.push('');
-    if (postText) lines.push('Текст поста:', postText);
-    if (postLink) lines.push(`Ссылка на пост: ${postLink}`);
+
+  if (postText) {
+    lines.push('', 'Текст поста:', postText);
   }
+
+  lines.push('', `Пост, с которого сделан заказ: ${postLink || '—'}`);
+
   return lines.join('\n');
 }
 
 async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
-  const managerText = buildManagerSummary(state, orderNo, ctx.from?.id, postText, postLink);
+  // ИЗМЕНЕНО: передаём ctx.from целиком, не только id
+  const managerText = buildManagerSummary(state, orderNo, ctx.from, postText, postLink);
   const photos = Array.isArray(state.photos) ? state.photos : [];
   if (photos.length > 0) {
     const media = photos.slice(0, 10).map((fileId, i) => ({
@@ -265,7 +284,8 @@ function channelPostKbFallback(botUsername, sourceToken) {
   ]);
 }
 
-// Отправка поста в канал сразу с reply_markup; если web_app не принимается — fallback (URL)
+// ИЗМЕНЕНО: чтобы появлялось "Прокомментировать" — сначала отправляем без reply_markup,
+// затем добавляем кнопки через editMessageReplyMarkup
 async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
@@ -276,11 +296,15 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
   const kbFull = channelPostKbFull(botUsername, sourceToken).reply_markup;
   const kbFallback = channelPostKbFallback(botUsername, sourceToken).reply_markup;
 
-  // helper: отправка поста (в канал)
-  const trySend = async ({ useHtml, replyMarkup }) => {
+  const isHtmlIssue = (desc) => /parse entities|can't parse entities|entity|wrong entity/i.test(desc);
+  const isWebAppIssue = (desc) =>
+    /BUTTON_TYPE_INVALID/i.test(desc) || /web_app/i.test(desc) || /domain/i.test(desc) || /not allowed/i.test(desc);
+
+  // helper: отправка поста (в канал) БЕЗ reply_markup
+  const trySendNoKb = async ({ useHtml }) => {
     const common = {
       ...(useHtml ? { parse_mode: 'HTML' } : {}),
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      // reply_markup не добавляем
     };
 
     if (kind === 'text') {
@@ -311,49 +335,32 @@ async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     throw new Error('Unknown kind');
   };
 
-  const isHtmlIssue = (desc) => /parse entities|can't parse entities|entity|wrong entity/i.test(desc);
-  const isWebAppIssue = (desc) =>
-    /BUTTON_TYPE_INVALID/i.test(desc) || /web_app/i.test(desc) || /domain/i.test(desc) || /not allowed/i.test(desc);
-
-  // 1) Пытаемся отправить с web_app + HTML
+  // 1) отправляем без клавиатуры (чтобы появился "Прокомментировать")
   let msg = null;
   try {
-    msg = await trySend({ useHtml: true, replyMarkup: kbFull });
+    msg = await trySendNoKb({ useHtml: true });
   } catch (e) {
     const desc = e?.response?.description || e?.message || String(e);
-
-    // 1a) Если проблема в HTML — повторяем без HTML (всё ещё с web_app)
     if (isHtmlIssue(desc)) {
-      try {
-        msg = await trySend({ useHtml: false, replyMarkup: kbFull });
-      } catch (e2) {
-        const desc2 = e2?.response?.description || e2?.message || String(e2);
-
-        // 1b) Если web_app не принимается — отправляем fallback
-        if (isWebAppIssue(desc2)) {
-          msg = await trySend({ useHtml: false, replyMarkup: kbFallback });
-        } else {
-          throw e2;
-        }
-      }
-    } else if (isWebAppIssue(desc)) {
-      // 1c) web_app не принимается — отправляем fallback (попробуем с HTML, а если HTML сломается — уже без HTML)
-      try {
-        msg = await trySend({ useHtml: true, replyMarkup: kbFallback });
-      } catch (e3) {
-        const desc3 = e3?.response?.description || e3?.message || String(e3);
-        if (isHtmlIssue(desc3)) {
-          msg = await trySend({ useHtml: false, replyMarkup: kbFallback });
-        } else {
-          throw e3;
-        }
-      }
+      msg = await trySendNoKb({ useHtml: false });
     } else {
       throw e;
     }
   }
 
-  // 2) Сохраняем мету поста (текст + ссылка на пост) по sourceToken
+  // 2) добавляем кнопки (web_app -> fallback url)
+  try {
+    await ctx.telegram.editMessageReplyMarkup(chatId, msg.message_id, undefined, kbFull);
+  } catch (e) {
+    const desc = e?.response?.description || e?.message || String(e);
+    if (isWebAppIssue(desc)) {
+      await ctx.telegram.editMessageReplyMarkup(chatId, msg.message_id, undefined, kbFallback);
+    } else {
+      console.warn('[bot] cannot set reply_markup:', desc);
+    }
+  }
+
+  // 3) Сохраняем мету поста (текст + ссылка на пост) по sourceToken
   const abs = Math.abs(Number(msg.chat.id));
   const meta = {
     text: baseTextNoHint || '',
@@ -893,7 +900,7 @@ if (token) {
           const baseText = (wiz.baseTextNoHint || '').trim();
           const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
-          // публикуем в канал используя старую логику кнопок (заказать + webapp)
+          // публикуем в канал
           const payload = wiz.mediaPayload || { kind: 'text' };
           const kind = payload.kind;
 
@@ -958,7 +965,6 @@ if (token) {
         return askPostWizardStep(ctx, wiz.step);
       }
 
-      // toggle by label
       const { items } = await loadCatalogFromXlsx();
       const it = items.find((x) => x.group === wiz.step && x.label === text);
       if (!it) return;
@@ -968,7 +974,6 @@ if (token) {
       if (idx >= 0) arr.splice(idx, 1);
       else arr.push(it.sku);
       wiz.selected[wiz.step] = arr;
-      // без подтверждений, но остаемся на шаге
       return;
     }
 
@@ -985,8 +990,6 @@ if (token) {
       if (!it) return;
 
       wiz.selected[wiz.step] = it.sku;
-
-      // без подтверждения: сразу следующий шаг
       return advancePostWizard(ctx);
     }
 
