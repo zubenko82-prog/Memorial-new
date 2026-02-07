@@ -246,63 +246,66 @@ export function registerOrders(bot, deps) {
   });
 
   bot.on('message', async (ctx, next) => {
-    const st = ctx.session?.order?.step;
-    if (!st) return next();
+  const st = ctx.session?.order?.step;
+  if (!st) return next();
 
-    if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact?.phone_number) {
-      const num = ctx.message.contact.phone_number;
-      ctx.session.order.tg_phone = num;
-      ctx.session.order.phone = num;
+  if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact?.phone_number) {
+    const num = ctx.message.contact.phone_number;
+    ctx.session.order.tg_phone = num;
+    ctx.session.order.phone = num;
+    ctx.session.order.step = 'fio';
+    return renderStep(ctx);
+  }
+
+  if ('text' in ctx.message && ctx.message.text) {
+    const text = ctx.message.text.trim();
+
+    if (st === 'name') {
+      ctx.session.order.name = text;
+      ctx.session.order.step = 'phone';
+      return renderStep(ctx);
+    }
+    if (st === 'phone') {
+      if (!phoneOk(text)) {
+        return ctx.reply(
+          'Введите корректный номер телефона (минимум 6 цифр, можно с +) или нажмите «📱 Отправить мой контакт».',
+          kbPhone()
+        );
+      }
+      ctx.session.order.phone = text;
       ctx.session.order.step = 'fio';
       return renderStep(ctx);
     }
-
-    if ('text' in ctx.message && ctx.message.text) {
-      const text = ctx.message.text.trim();
-
-      if (st === 'name') {
-        ctx.session.order.name = text;
-        ctx.session.order.step = 'phone';
-        return renderStep(ctx);
-      }
-      if (st === 'phone') {
-        if (!phoneOk(text)) {
-          return ctx.reply(
-            'Введите корректный номер телефона (минимум 6 цифр, можно с +) или нажмите «📱 Отправить мой контакт».',
-            kbPhone()
-          );
-        }
-        ctx.session.order.phone = text;
-        ctx.session.order.step = 'fio';
-        return renderStep(ctx);
-      }
-      if (st === 'fio') {
-        ctx.session.order.fio = text;
-        ctx.session.order.step = 'dates';
-        return renderStep(ctx);
-      }
-      if (st === 'dates') {
-        ctx.session.order.dates = text;
-        ctx.session.order.step = 'photos';
-        return renderStep(ctx);
-      }
-      if (st === 'comment') {
-        if (text !== 'Продолжить' && text !== 'Отменить') {
-          ctx.session.order.comment = text;
-          return ctx.reply('Комментарий получен. Нажмите «Продолжить», чтобы перейти к сводке.', kbComment());
-        }
+    if (st === 'fio') {
+      ctx.session.order.fio = text;
+      ctx.session.order.step = 'dates';
+      return renderStep(ctx);
+    }
+    if (st === 'dates') {
+      ctx.session.order.dates = text;
+      ctx.session.order.step = 'photos';
+      return renderStep(ctx);
+    }
+    if (st === 'comment') {
+      if (text !== 'Продолжить' && text !== 'Отменить') {
+        ctx.session.order.comment = text;
+        return ctx.reply('Комментарий получен. Нажмите «Продолжить», чтобы перейти к сводке.', kbComment());
       }
     }
+  }
 
-    if ('photo' in ctx.message && ctx.message.photo?.length) {
-      if (st === 'photos') {
-        const fileId = ctx.message.photo.at(-1)?.file_id;
-        if (fileId) {
-          ctx.session.order.photos = ctx.session.order.photos || [];
-          ctx.session.order.photos.push(fileId);
-          return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
-        }
+  if ('photo' in ctx.message && ctx.message.photo?.length) {
+    if (st === 'photos') {
+      const fileId = ctx.message.photo.at(-1)?.file_id;
+      if (fileId) {
+        ctx.session.order.photos = ctx.session.order.photos || [];
+        ctx.session.order.photos.push(fileId);
+        return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
       }
     }
-  });
-}
+  }
+
+  // ВАЖНО: если сообщение не относится к анкете — отдать дальше (/post wizard)
+  return next();
+});
+
