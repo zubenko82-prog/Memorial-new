@@ -124,7 +124,10 @@ export function registerOrders(bot, deps) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
 
     const ref = parseSourceTokenToPostRef(s.sourceToken);
-    const postLink = ref?.absChatId && ref?.messageId ? makePostLink(ref.absChatId, ref.messageId) : '';
+    function makePostLink(_absChatId, messageId) {
+  return messageId ? `https://t.me/memorialDNR/${messageId}` : '';
+}
+
 
     const managerText = buildManagerSummary(s, orderNo, ctx.from, postLink);
 
@@ -149,40 +152,43 @@ export function registerOrders(bot, deps) {
   }
 
   async function submitOrder(ctx) {
-    const s = ctx.session.order || {};
-    if (!s.name || !s.phone || !phoneOk(s.phone)) {
-      return ctx.reply(
-        'Обязательные поля не заполнены: «Заказчик» и/или «Номер телефона». Вернитесь и исправьте.',
-        kbName()
-      );
-    }
-
-    const orderNo = s.orderNo || makeOrderNo();
-
-    const CHANNEL_URL = 'https://t.me/memorialDNR';
-    const WEBAPP_URL = process.env.WEBAPP_URL;
-
-    try {
-      await sendOrderToManager(ctx, s, orderNo);
-
-      // убрать reply-клавиатуру анкеты
-      await ctx.reply(' ', kbRemove());
-
-      await ctx.reply(
-        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
-          `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
-        Markup.inlineKeyboard([
-          Markup.button.url('Перейти в канал', CHANNEL_URL),
-          ...(WEBAPP_URL ? [Markup.button.webApp('Подобрать памятник', WEBAPP_URL)] : []),
-        ])
-      );
-    } catch (e) {
-      console.error('submitOrder error', e);
-      await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
-    } finally {
-      ctx.session.order = null;
-    }
+  const s = ctx.session.order || {};
+  if (!s.name || !s.phone || !phoneOk(s.phone)) {
+    return ctx.reply(
+      'Обязательные поля не заполнены: «Заказчик» и/или «Номер телефона». Вернитесь и исправьте.',
+      kbName()
+    );
   }
+
+  const orderNo = s.orderNo || makeOrderNo();
+
+  const CHANNEL_URL = 'https://t.me/memorialDNR';
+  const WEBAPP_URL = process.env.WEBAPP_URL;
+
+  try {
+    await sendOrderToManager(ctx, s, orderNo);
+
+    const buttonsRow = [Markup.button.url('Перейти в канал', CHANNEL_URL)];
+    if (WEBAPP_URL) buttonsRow.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
+
+    await ctx.reply(
+      `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
+        `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
+      {
+        reply_markup: {
+          ...Markup.inlineKeyboard([buttonsRow]).reply_markup,
+          ...Markup.removeKeyboard().reply_markup, // убираем reply-клавиатуру анкеты
+        },
+      }
+    );
+  } catch (e) {
+    console.error('submitOrder error', e?.response?.description || e);
+    await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
+  } finally {
+    ctx.session.order = null;
+  }
+}
+
 
   async function cancelOrder(ctx, msg = 'Отменено.') {
     ctx.session.order = null;
