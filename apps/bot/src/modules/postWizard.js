@@ -423,19 +423,20 @@ export function registerPostWizard(bot, deps) {
     );
   }
 
-  bot.on('message', async (ctx, next) => {
-    console.log('[postWizard] on message, step=', ctx.session?.postWizard?.step);
+   bot.on('message', async (ctx, next) => {
+    // Диагностика: что лежит в сессии и какой шаг мастера
+    try {
+      console.log(
+        '[postWizard] on message, whole session =',
+        JSON.stringify(ctx.session)
+      );
+    } catch (e) {
+      console.log('[postWizard] on message, cannot stringify session:', e?.message || e);
+    }
+    console.log('[postWizard] on message, step =', ctx.session?.postWizard?.step);
+
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
-
-    bot.on('message', async (ctx, next) => {
-  console.log('[postWizard] on message, whole session =', JSON.stringify(ctx.session));
-  console.log('[postWizard] on message, step=', ctx.session?.postWizard?.step);
-  const wiz = ctx.session?.postWizard;
-  if (!wiz) return next();
-  ...
-});
-
 
     if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;
@@ -443,10 +444,57 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
+    // update-by-forward (оставляю как было)
+    if (wiz.step === 'update_wait_forward') {
+      const fwd = ctx.message?.forward_from_chat;
+      const messageId = ctx.message?.forward_from_message_id;
+
+      if (!fwd || !messageId) {
+        await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostCancelOnly());
+        return;
+      }
+
+      const channelId = getChannelId();
+      if (!channelId) {
+        await ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
+        ctx.session.postWizard.step = 'menu';
+        return;
+      }
+
+      if (String(fwd.id) !== String(channelId)) {
+        await ctx.reply('Пост переслан не из того канала.', kbPostCancelOnly());
+        return;
+      }
+
+      const meta = await getCatalogPostMeta(messageId);
+      if (!meta?.selected) {
+        await ctx.reply(
+          'У меня нет сохранённого состава для этого поста (он должен быть опубликован через /post).',
+          kbPostMenu()
+        );
+        ctx.session.postWizard.step = 'menu';
+        return;
+      }
+
+      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+      const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
+      const baseText = normStr(meta.baseTextNoHint);
+      const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
+        0,
+        1024
+      );
+
+      await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
+      await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
+
+      await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
+      ctx.session.postWizard.step = 'menu';
+      return;
+    }
+
     if (!('text' in ctx.message) || !ctx.message.text) return;
     const text = ctx.message.text.trim();
 
-    // CONFIRM
     if (wiz.step === 'CONFIRM') {
       if (text !== 'Опубликовать') return;
 
@@ -454,7 +502,10 @@ export function registerPostWizard(bot, deps) {
       const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
 
       const baseText = normStr(wiz.baseTextNoHint);
-      const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+      const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
+        0,
+        1024
+      );
 
       const payload = wiz.mediaPayload || { kind: 'text' };
       const kind = payload.kind;
@@ -482,7 +533,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // OPTION / GRAFIKA
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
       console.log('[postWizard] OPTION/GRAFIKA step=', wiz.step, 'text=', JSON.stringify(text));
 
@@ -515,7 +565,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // single groups
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
       console.log('[postWizard] single step', wiz.step, 'text=', JSON.stringify(text));
@@ -539,4 +588,3 @@ export function registerPostWizard(bot, deps) {
 
     return next();
   });
-}
