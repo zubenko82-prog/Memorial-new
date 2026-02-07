@@ -7,5 +7,9 @@
     "@vercel/blob": "0.24.0",
     "exceljs": "^4.4.0",
     "formidable": "^2.1.5"
+  },
+  "devDependencies": {
+    "@vercel/node": "^5.5.33",
+    "typescript": "^5.9.3"
   }
 }
