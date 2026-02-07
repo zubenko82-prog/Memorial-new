@@ -27,7 +27,9 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .filter(Boolean);
 
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
-const DEEPLINK_PREFIX = 'order'; // /start order_<token>
+const DEEPLINK_PREFIX = process.env.DEEPLINK_PREFIX || 'order'; // /start order_<token>
+
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || 'memorialDNR'; // публичный канал @memorialDNR
 
 const HINT_TEXT =
   'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
@@ -46,6 +48,7 @@ function getChannelId() {
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
 const mem = new Map(); // sessions fallback
 const memCatalogPosts = new Map(); // fallback storage for catalogpost:<messageId> -> meta
+const memPostMeta = new Map(); // fallback storage for postmeta:<sourceToken> -> meta
 
 async function getRedis() {
   if (redisInstance !== undefined) return redisInstance;
@@ -81,6 +84,23 @@ async function saveSession(userId, data) {
   } else {
     mem.set(userId, data);
   }
+}
+
+// ---------- post meta (sourceToken -> {text, messageId}) ----------
+async function setPostMeta(sourceToken, meta) {
+  const key = `postmeta:${sourceToken}`;
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 14 }); // 14 дней
+  } else {
+    memPostMeta.set(key, meta);
+  }
+}
+async function getPostMeta(sourceToken) {
+  const key = `postmeta:${sourceToken}`;
+  const r = await getRedis();
+  if (r) return (await r.get(key)) || null;
+  return memPostMeta.get(key) || null;
 }
 
 // ---------- catalog post meta (for price update) ----------
@@ -143,10 +163,10 @@ function makeOrderNo(d = new Date()) {
   return `${DD}.${MM}.${YYYY}-${HH}.${mm}.${ss}`;
 }
 
-function makePostLink(absChatId, messageId) {
-  const s = String(absChatId);
-  const internal = s.startsWith('100') ? s.slice(3) : s;
-  return `https://t.me/c/${internal}/${messageId}`;
+// Публичный канал: ссылка вида https://t.me/<username>/<message_id>
+function makePostLink(_absChatId, messageId) {
+  if (!messageId) return '';
+  return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
 }
 
 function isAdmin(ctx) {
@@ -178,6 +198,9 @@ if (token) {
     makeOrderNo,
     makePostLink,
     MANAGER_CHAT_ID,
+    CHANNEL_USERNAME,
+    WEBAPP_URL,
+    getPostMeta,
   });
 
   registerPostWizard(bot, {
@@ -187,6 +210,12 @@ if (token) {
     CATALOG_XLSX_PATH,
     getChannelId,
     isAdmin,
+
+    // meta for deep-link -> post url/text
+    setPostMeta,
+    CHANNEL_USERNAME,
+
+    // storage for update prices:
     setCatalogPostMeta,
     getCatalogPostMeta,
     getAllCatalogPostKeys,

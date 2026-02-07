@@ -1,12 +1,6 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-function parseSourceTokenToPostRef(sourceToken) {
-  const m = /^p_(\d+)_(\d+)_/.exec(String(sourceToken || ''));
-  if (!m) return null;
-  return { absChatId: Number(m[1]), messageId: Number(m[2]) };
-}
-
 function buildManagerSummary(s, orderNo, user, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -45,7 +39,19 @@ function buildManagerSummary(s, orderNo, user, postLink) {
 }
 
 export function registerOrders(bot, deps) {
-  const { HINT_TEXT, DEEPLINK_PREFIX, phoneOk, makeOrderNo, makePostLink, MANAGER_CHAT_ID } = deps;
+  const {
+    HINT_TEXT,
+    DEEPLINK_PREFIX,
+    phoneOk,
+    makeOrderNo,
+    makePostLink,
+    MANAGER_CHAT_ID,
+
+    // NEW:
+    CHANNEL_USERNAME,
+    WEBAPP_URL,
+    getPostMeta,
+  } = deps;
 
   // ---- клавиатуры анкеты
   const kbName = () => Markup.keyboard([['Отменить']]).resize();
@@ -63,7 +69,7 @@ export function registerOrders(bot, deps) {
     const st = ctx.session?.order?.step;
 
     if (st === 'name') return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbName());
-    if (st === 'phone') return ctx.reply('Шаг 2/6. Введите номер телефона или нажмите «📱 Отправить мой контакт» (номер указаный в телеграмм):', kbPhone());
+    if (st === 'phone') return ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
     if (st === 'fio') return ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbBackCancel());
     if (st === 'dates')
       return ctx.reply(
@@ -93,17 +99,25 @@ export function registerOrders(bot, deps) {
     return renderStep(ctx);
   }
 
+  async function getPostLinkFromToken(sourceToken) {
+    if (!sourceToken) return '';
+    try {
+      const meta = await getPostMeta(sourceToken);
+      const mid = meta?.messageId;
+      if (!mid) return '';
+      // makePostLink uses CHANNEL_USERNAME in bot.js; absChatId not required for public channel
+      return makePostLink(meta?.absChatId, mid);
+    } catch {
+      return '';
+    }
+  }
+
   async function stepReview(ctx) {
     ctx.session.order.step = 'review';
     const s = ctx.session.order;
     if (!s.orderNo) s.orderNo = makeOrderNo();
 
-    // Ссылка на пост: всегда из sourceToken (без Redis)
-    let postLink = '';
-    const ref = parseSourceTokenToPostRef(s.sourceToken);
-    if (ref?.absChatId && ref?.messageId) {
-      postLink = makePostLink(ref.absChatId, ref.messageId);
-    }
+    const postLink = await getPostLinkFromToken(s.sourceToken);
 
     const lines = [
       `Заявка №${s.orderNo}:`,
@@ -123,12 +137,7 @@ export function registerOrders(bot, deps) {
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
 
-    const ref = parseSourceTokenToPostRef(s.sourceToken);
-    function makePostLink(_absChatId, messageId) {
-  return messageId ? `https://t.me/memorialDNR/${messageId}` : '';
-}
-
-
+    const postLink = await getPostLinkFromToken(s.sourceToken);
     const managerText = buildManagerSummary(s, orderNo, ctx.from, postLink);
 
     const photos = Array.isArray(s.photos) ? s.photos : [];
@@ -152,43 +161,42 @@ export function registerOrders(bot, deps) {
   }
 
   async function submitOrder(ctx) {
-  const s = ctx.session.order || {};
-  if (!s.name || !s.phone || !phoneOk(s.phone)) {
-    return ctx.reply(
-      'Обязательные поля не заполнены: «Заказчик» и/или «Номер телефона». Вернитесь и исправьте.',
-      kbName()
-    );
+    const s = ctx.session.order || {};
+    if (!s.name || !s.phone || !phoneOk(s.phone)) {
+      return ctx.reply(
+        'Обязательные поля не заполнены: «Заказчик» и/или «Номер телефона». Вернитесь и исправьте.',
+        kbName()
+      );
+    }
+
+    const orderNo = s.orderNo || makeOrderNo();
+
+    try {
+      await sendOrderToManager(ctx, s, orderNo);
+
+      const channelUrl = `https://t.me/${CHANNEL_USERNAME}`;
+      const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
+
+      const row = [Markup.button.url('Перейти в канал', channelUrl)];
+      if (webAppUrl) row.push(Markup.button.webApp('Подобрать памятник', webAppUrl));
+
+      await ctx.reply(
+        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
+          `Вы можете перейти в канал: t.me/${CHANNEL_USERNAME} или подобрать памятник:`,
+        {
+          reply_markup: {
+            ...Markup.inlineKeyboard([row]).reply_markup,
+            ...kbRemove().reply_markup, // убрать reply-клавиатуру анкеты
+          },
+        }
+      );
+    } catch (e) {
+      console.error('submitOrder error', e?.response?.description || e);
+      await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
+    } finally {
+      ctx.session.order = null;
+    }
   }
-
-  const orderNo = s.orderNo || makeOrderNo();
-
-  const CHANNEL_URL = 'https://t.me/memorialDNR';
-  const WEBAPP_URL = process.env.WEBAPP_URL;
-
-  try {
-    await sendOrderToManager(ctx, s, orderNo);
-
-    const buttonsRow = [Markup.button.url('Перейти в канал', CHANNEL_URL)];
-    if (WEBAPP_URL) buttonsRow.push(Markup.button.webApp('Подобрать памятник', WEBAPP_URL));
-
-    await ctx.reply(
-      `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
-        `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
-      {
-        reply_markup: {
-          ...Markup.inlineKeyboard([buttonsRow]).reply_markup,
-          ...Markup.removeKeyboard().reply_markup, // убираем reply-клавиатуру анкеты
-        },
-      }
-    );
-  } catch (e) {
-    console.error('submitOrder error', e?.response?.description || e);
-    await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
-  } finally {
-    ctx.session.order = null;
-  }
-}
-
 
   async function cancelOrder(ctx, msg = 'Отменено.') {
     ctx.session.order = null;
@@ -203,7 +211,7 @@ export function registerOrders(bot, deps) {
     let sourceToken = null;
     const prefix = `${DEEPLINK_PREFIX}_`;
     if (arg.startsWith(prefix)) {
-      sourceToken = arg.slice(prefix.length); // всё, что после prefix_
+      sourceToken = arg.slice(prefix.length);
     }
 
     await ctx.reply(HINT_TEXT);

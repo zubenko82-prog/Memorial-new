@@ -160,6 +160,11 @@ export function registerPostWizard(bot, deps) {
     CATALOG_XLSX_PATH,
     getChannelId,
     isAdmin,
+
+    // NEW:
+    setPostMeta,
+    CHANNEL_USERNAME,
+
     // storage for update prices:
     setCatalogPostMeta,
     getCatalogPostMeta,
@@ -199,9 +204,7 @@ export function registerPostWizard(bot, deps) {
       /BUTTON_TYPE_INVALID/i.test(desc) || /web_app/i.test(desc) || /domain/i.test(desc) || /not allowed/i.test(desc);
 
     const trySendNoKb = async ({ useHtml }) => {
-      const common = {
-        ...(useHtml ? { parse_mode: 'HTML' } : {}),
-      };
+      const common = { ...(useHtml ? { parse_mode: 'HTML' } : {}) };
 
       if (kind === 'text') {
         return await ctx.telegram.sendMessage(chatId, payload.text, { ...common, disable_web_page_preview: true });
@@ -219,6 +222,7 @@ export function registerPostWizard(bot, deps) {
       throw new Error('Unknown kind');
     };
 
+    // 1) send content (no kb)
     let msg;
     try {
       msg = await trySendNoKb({ useHtml: true });
@@ -228,12 +232,14 @@ export function registerPostWizard(bot, deps) {
       else throw e;
     }
 
+    // 2) token includes message_id (as before)
     const absChatId = Math.abs(Number(msg.chat.id));
     const sourceToken = makeSourceTokenForPost(absChatId, msg.message_id);
 
     const kbFull2 = channelPostKbFull(botUsername, sourceToken).reply_markup;
     const kbFallback2 = channelPostKbFallback(botUsername, sourceToken).reply_markup;
 
+    // 3) set kb via edit
     try {
       await ctx.telegram.editMessageReplyMarkup(chatId, msg.message_id, undefined, kbFull2);
     } catch (e) {
@@ -244,6 +250,16 @@ export function registerPostWizard(bot, deps) {
         console.warn('[bot] cannot set reply_markup:', desc);
       }
     }
+
+    // 4) NEW: save meta by sourceToken (for orders link/text)
+    // Для публичного канала ссылка строится по CHANNEL_USERNAME и message_id, absChatId не обязателен.
+    await setPostMeta(sourceToken, {
+      text: (baseTextNoHint || '').trim(),
+      channelUsername: CHANNEL_USERNAME,
+      messageId: msg.message_id,
+      // оставим на будущее:
+      absChatId,
+    });
 
     return { primary: msg, sourceToken };
   }
