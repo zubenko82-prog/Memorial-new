@@ -248,6 +248,9 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
   return lines.join('\n');
 }
 
+console.log('[order] sourceToken=', s.sourceToken, 'postMeta=', await getPostMeta(s.sourceToken));
+
+
 async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   const managerText = buildManagerSummary(state, orderNo, ctx.from, postText, postLink);
   const photos = Array.isArray(state.photos) ? state.photos : [];
@@ -977,10 +980,10 @@ if (token) {
   bot.hears('Отменить', async (ctx) => {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
   });
-  bot.hears('⬅️ Назад', async (ctx) => {
-    // НОВОЕ: назад по анкете (редактирование)
+    bot.hears('⬅️ Назад', async (ctx) => {
     if (ctx.session?.order) return stepBack(ctx);
   });
+
   bot.hears('Далее', async (ctx) => {
     if (ctx.session?.order?.step === 'photos') return stepComment(ctx);
   });
@@ -1056,67 +1059,118 @@ if (token) {
 }
 
 // ---------------- Анкета: шаги и клавиатуры ----------------
-function kbInput() {
-  return Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize();
+function kbName() {
+  return Markup.keyboard([['Отменить']]).resize(); // назад на первом шаге не нужен
 }
+
 function kbPhone() {
   return Markup.keyboard([[Markup.button.contactRequest('📱 Отправить мой контакт')], ['⬅️ Назад'], ['Отменить']]).resize();
 }
+
+function kbDefaultWithBack() {
+  return Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize();
+}
+
 function kbPhotos() {
   return Markup.keyboard([['Далее'], ['⬅️ Назад'], ['Отменить']]).resize();
 }
+
 function kbComment() {
   return Markup.keyboard([['Продолжить'], ['⬅️ Назад'], ['Отменить']]).resize();
 }
+
 function kbReview() {
   return Markup.keyboard([['Отправить'], ['⬅️ Назад'], ['Отменить']]).resize();
 }
+
 function kbRemove() {
   return Markup.removeKeyboard();
 }
 
-async function startOrder(ctx, sourceToken) {
-  ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
-  await ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbInput());
-}
-async function stepPhone(ctx) {
-  ctx.session.order.step = 'phone';
-  await ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
-}
-async function stepFio(ctx) {
-  ctx.session.order.step = 'fio';
-  await ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbInput());
-}
-async function stepDates(ctx) {
-  ctx.session.order.step = 'dates';
-  await ctx.reply(
-    'Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020',
-    kbInput()
-  );
-}
-async function stepPhotos(ctx) {
-  ctx.session.order.step = 'photos';
-  await ctx.reply('Шаг 5/6. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
-}
-async function stepComment(ctx) {
-  ctx.session.order.step = 'comment';
-  await ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbComment());
+function getOrderStepOrder() {
+  return ['name', 'phone', 'fio', 'dates', 'photos', 'comment', 'review'];
 }
 
-// НОВОЕ: шаг назад (редактирование)
-async function stepBack(ctx) {
-  const s = ctx.session.order;
-  if (!s?.step) return;
+async function renderOrderStep(ctx) {
+  const st = ctx.session?.order?.step;
 
-  const order = ['name', 'phone', 'fio', 'dates', 'photos', 'comment', 'review'];
-  const idx = order.indexOf(s.step);
-  const prev = order[Math.max(0, idx - 1)] || 'name';
-
-  if (s.step === 'review') {
-    // из review назад -> comment (логичнее)
-    s.step = 'comment';
+  if (st === 'name') {
+    return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbName());
+  }
+  if (st === 'phone') {
+    return ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
+  }
+  if (st === 'fio') {
+    return ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbDefaultWithBack());
+  }
+  if (st === 'dates') {
+    return ctx.reply(
+      'Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020',
+      kbDefaultWithBack()
+    );
+  }
+  if (st === 'photos') {
+    return ctx.reply('Шаг 5/6. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
+  }
+  if (st === 'comment') {
     return ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbComment());
   }
+  if (st === 'review') {
+    // review рендерится отдельной функцией stepReview()
+    return stepReview(ctx);
+  }
+
+  // fallback
+  ctx.session.order.step = 'name';
+  return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbName());
+}
+
+async function stepBack(ctx) {
+  const s = ctx.session?.order;
+  if (!s?.step) return;
+
+  const order = getOrderStepOrder();
+  const idx = order.indexOf(s.step);
+  if (idx <= 0) {
+    s.step = 'name';
+    return renderOrderStep(ctx);
+  }
+
+  s.step = order[idx - 1];
+  return renderOrderStep(ctx);
+}
+
+
+async function startOrder(ctx, sourceToken) {
+  ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
+  return renderOrderStep(ctx);
+}
+
+async function stepPhone(ctx) {
+  ctx.session.order.step = 'phone';
+  return renderOrderStep(ctx);
+}
+
+async function stepFio(ctx) {
+  ctx.session.order.step = 'fio';
+  return renderOrderStep(ctx);
+}
+
+async function stepDates(ctx) {
+  ctx.session.order.step = 'dates';
+  return renderOrderStep(ctx);
+}
+
+async function stepPhotos(ctx) {
+  ctx.session.order.step = 'photos';
+  return renderOrderStep(ctx);
+}
+
+async function stepComment(ctx) {
+  ctx.session.order.step = 'comment';
+  return renderOrderStep(ctx);
+}
+
 
   s.step = prev;
 
