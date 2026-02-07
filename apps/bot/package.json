@@ -13,11 +13,9 @@
     "exceljs": "^4.4.0",
     "telegraf": "^4.16.3",
     "xlsx": "^0.18.5"
-  }
-}
-{
+  },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@vercel/node": "^3.0.0"
+    "@vercel/node": "^3.0.0",
+    "typescript": "^5.4.0"
   }
 }
