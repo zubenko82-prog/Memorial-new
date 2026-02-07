@@ -88,25 +88,20 @@ function calcCaptionAndTags({ items, bands }, selected) {
   return { total, tags: uniq, caption };
 }
 
-// --- classification helpers (НЕ завязаны жёстко на group) ---
-function normStr(v) {
-  return String(v || '').trim();
-}
-function up(v) {
-  return normStr(v).toUpperCase();
-}
+// --- helpers ---
+const normStr = (v) => String(v || '').trim();
+const up = (v) => normStr(v).toUpperCase();
 
 function isOptionItem(it) {
   const g = up(it.group);
   const sku = up(it.sku);
-  // поддержка любых вариантов: group=OPTION/OPT/ОПЦИИ или group=OPT_PORTRAIT, а также sku=OPT_...
-  return g === 'OPTION' || g === 'OPTIONS' || g === 'OPT' || g === 'ОПЦИИ' || g === 'ОПЦИЯ' || g.startsWith('OPT_') || sku.startsWith('OPT_');
+  return g === 'OPTION' || sku.startsWith('OPT_');
 }
 
 function isGrafikaItem(it) {
   const g = up(it.group);
   const sku = up(it.sku);
-  return g === 'GRAFIKA' || g === 'GRAPHICS' || g === 'ГРАФИКА' || g === 'ГРАФ' || g.startsWith('GRAF_') || sku.startsWith('GRAF_');
+  return g === 'GRAFIKA' || sku.startsWith('GRAF_');
 }
 
 async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
@@ -141,8 +136,8 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
     const isActive = String(active).trim() === '1' || active === 1 || active === true;
     if (!isActive) return;
 
-    const group = normStr(row.getCell(idxGroup).value); // как есть (будем определять по sku/group)
-    const label = normStr(row.getCell(idxLabel).value) || sku; // если label пуст — используем sku
+    const group = normStr(row.getCell(idxGroup).value).toUpperCase();
+    const label = normStr(row.getCell(idxLabel).value) || sku;
     const price = Number(row.getCell(idxPrice).value || 0);
     const tag_ru = normStr(row.getCell(idxTag)?.value);
 
@@ -189,6 +184,8 @@ export function registerPostWizard(bot, deps) {
     getCatalogPostMetaByKey,
     setCatalogPostMetaByKey,
   } = deps;
+
+  const stepsOrder = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'OPTION', 'GRAFIKA', 'PREVIEW'];
 
   function channelPostKbFull(botUsername, sourceToken) {
     const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
@@ -275,18 +272,18 @@ export function registerPostWizard(bot, deps) {
     return { primary: msg, sourceToken };
   }
 
-  function kbPostMenu() {
-    return Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
-  }
-  function kbPostCancelOnly() {
-    return Markup.keyboard([['Отменить']]).resize();
-  }
+  const kbPostMenu = () =>
+    Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
+  const kbPostCancelOnly = () => Markup.keyboard([['Отменить']]).resize();
 
+  // /post старт
   bot.command('post', async (ctx) => {
     const channelId = getChannelId();
     if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
     if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
-    if (ctx.session?.order) return ctx.reply('Сейчас активна анкета. Завершите/отмените /cancel, затем используйте /post.');
+    if (ctx.session?.order) {
+      return ctx.reply('Сейчас активна анкета. Завершите/отмените /cancel, затем используйте /post.');
+    }
 
     const raw = ctx.message?.text || '';
     const baseTextNoHint = raw.replace(/^\/post(@\S+)?\s*/i, '').trim();
@@ -324,6 +321,15 @@ export function registerPostWizard(bot, deps) {
     return ctx.reply('Меню /post:', kbPostMenu());
   });
 
+  bot.hears('▶️ Новая публикация', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
+
+    ctx.session.postWizard.step = 'STELA';
+    console.log('[postWizard] start wizard, step STELA');
+    return askStep(ctx, 'STELA');
+  });
+
   bot.hears('♻️ Обновить цены', async (ctx) => {
     if (!isAdmin(ctx)) return;
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
@@ -335,70 +341,6 @@ export function registerPostWizard(bot, deps) {
     );
   });
 
-  bot.hears('🧾 Обновить по пересланному посту', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
-
-    ctx.session.postWizard.step = 'update_wait_forward';
-    await ctx.reply('Перешлите сюда пост из канала.', kbPostCancelOnly());
-  });
-
-  bot.hears('🔁 Обновить все', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices') return;
-
-    const channelId = getChannelId();
-    if (!channelId) return ctx.reply('CHANNEL_ID не задан.');
-
-    const keys = await getAllCatalogPostKeys();
-    if (!keys.length) {
-      await ctx.reply('Нет сохранённых данных о постах для обновления.', kbPostMenu());
-      ctx.session.postWizard.step = 'menu';
-      return;
-    }
-
-    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-
-    let updated = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    for (const key of keys) {
-      try {
-        const meta = await getCatalogPostMetaByKey(key);
-        if (!meta?.selected) {
-          skipped++;
-          continue;
-        }
-
-        const messageId = Number(String(key).split(':').at(-1));
-        if (!messageId) {
-          skipped++;
-          continue;
-        }
-
-        const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
-        const baseText = normStr(meta.baseTextNoHint);
-        const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
-
-        if (Number(meta.last_total_price) === Number(total)) {
-          skipped++;
-          continue;
-        }
-
-        await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
-        await setCatalogPostMetaByKey(key, { ...meta, last_total_price: total, updatedAt: Date.now() });
-
-        updated++;
-      } catch {
-        errors++;
-      }
-    }
-
-    await ctx.reply(`Готово.\nОбновлено: ${updated}\nБез изменений: ${skipped}\nОшибок: ${errors}`, kbPostMenu());
-    ctx.session.postWizard.step = 'menu';
-  });
-
   bot.hears('⬅️ Назад', async (ctx, next) => {
     if (ctx.session?.order) return next();
     if (!isAdmin(ctx)) return;
@@ -408,12 +350,10 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  bot.hears('▶️ Новая публикация', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
-
-    ctx.session.postWizard.step = 'STELA';
-    return askStep(ctx, 'STELA');
+  bot.hears('Отменить', async (ctx) => {
+    if (!ctx.session?.postWizard) return;
+    ctx.session.postWizard = null;
+    await ctx.reply('Отменено.', Markup.removeKeyboard());
   });
 
   async function askStep(ctx, step) {
@@ -425,7 +365,7 @@ export function registerPostWizard(bot, deps) {
     let list = [];
     if (step === 'OPTION') list = items.filter(isOptionItem);
     else if (step === 'GRAFIKA') list = items.filter(isGrafikaItem);
-    else list = items.filter((it) => up(it.group) === step);
+    else list = items.filter((it) => it.group === step);
 
     if (!list.length) return advance(ctx);
 
@@ -450,6 +390,7 @@ export function registerPostWizard(bot, deps) {
 
     if (step === 'OPTION' || step === 'GRAFIKA') rows.unshift(['Далее', 'Сбросить']);
 
+    console.log('[postWizard] askStep', step, 'buttons=', buttons);
     await ctx.reply(titleMap[step] || `Выберите ${step}:`, Markup.keyboard(rows).resize());
   }
 
@@ -457,9 +398,9 @@ export function registerPostWizard(bot, deps) {
     const wiz = ctx.session.postWizard;
     if (!wiz) return;
 
-    const order = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'OPTION', 'GRAFIKA', 'PREVIEW'];
-    const idx = order.indexOf(wiz.step);
-    wiz.step = order[idx + 1] || 'PREVIEW';
+    const idx = stepsOrder.indexOf(wiz.step);
+    wiz.step = stepsOrder[idx + 1] || 'PREVIEW';
+    console.log('[postWizard] advance to', wiz.step);
 
     if (wiz.step === 'PREVIEW') return preview(ctx);
     return askStep(ctx, wiz.step);
@@ -483,6 +424,7 @@ export function registerPostWizard(bot, deps) {
   }
 
   bot.on('message', async (ctx, next) => {
+    console.log('[postWizard] on message, step=', ctx.session?.postWizard?.step);
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
 
@@ -492,51 +434,10 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // update-by-forward
-    if (wiz.step === 'update_wait_forward') {
-      const fwd = ctx.message?.forward_from_chat;
-      const messageId = ctx.message?.forward_from_message_id;
-
-      if (!fwd || !messageId) {
-        await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostCancelOnly());
-        return;
-      }
-
-      const channelId = getChannelId();
-      if (!channelId) {
-        await ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
-        ctx.session.postWizard.step = 'menu';
-        return;
-      }
-
-      if (String(fwd.id) !== String(channelId)) {
-        await ctx.reply('Пост переслан не из того канала.', kbPostCancelOnly());
-        return;
-      }
-
-      const meta = await getCatalogPostMeta(messageId);
-      if (!meta?.selected) {
-        await ctx.reply('У меня нет сохранённого состава для этого поста (он должен быть опубликован через /post).', kbPostMenu());
-        ctx.session.postWizard.step = 'menu';
-        return;
-      }
-
-      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-      const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
-      const baseText = normStr(meta.baseTextNoHint);
-      const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
-
-      await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
-      await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
-
-      await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
-      ctx.session.postWizard.step = 'menu';
-      return;
-    }
-
     if (!('text' in ctx.message) || !ctx.message.text) return;
     const text = ctx.message.text.trim();
 
+    // CONFIRM
     if (wiz.step === 'CONFIRM') {
       if (text !== 'Опубликовать') return;
 
@@ -572,7 +473,10 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
+    // OPTION / GRAFIKA
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
+      console.log('[postWizard] OPTION/GRAFIKA step=', wiz.step, 'text=', JSON.stringify(text));
+
       if (text === 'Далее') return advance(ctx);
       if (text === 'Сбросить') {
         wiz.selected[wiz.step] = [];
@@ -580,16 +484,17 @@ export function registerPostWizard(bot, deps) {
       }
 
       const { items } = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-
       const pool = wiz.step === 'OPTION' ? items.filter(isOptionItem) : items.filter(isGrafikaItem);
 
-      // Ищем по label ИЛИ по sku (если кнопки — это sku)
       const it =
         pool.find((x) => normStr(x.label) === text) ||
         pool.find((x) => normStr(x.sku) === text) ||
         pool.find((x) => up(x.sku) === up(text));
 
-      if (!it) return;
+      if (!it) {
+        console.log('[postWizard] item not found for text', text);
+        return;
+      }
 
       const arr = Array.isArray(wiz.selected[wiz.step]) ? wiz.selected[wiz.step] : [];
       const idx = arr.indexOf(it.sku);
@@ -597,23 +502,32 @@ export function registerPostWizard(bot, deps) {
       else arr.push(it.sku);
       wiz.selected[wiz.step] = arr;
 
+      console.log('[postWizard] selected', wiz.step, wiz.selected[wiz.step]);
       return;
     }
 
+    // single groups
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
+      console.log('[postWizard] single step', wiz.step, 'text=', JSON.stringify(text));
+
       if (text === '— Нет —') {
         wiz.selected[wiz.step] = null;
         return advance(ctx);
       }
 
       const { items } = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-      const it = items.find((x) => up(x.group) === wiz.step && normStr(x.label) === text);
-      if (!it) return;
+      const it = items.find((x) => x.group === wiz.step && normStr(x.label) === text);
+      if (!it) {
+        console.log('[postWizard] single item not found for', wiz.step, text);
+        return;
+      }
 
       wiz.selected[wiz.step] = it.sku;
+      console.log('[postWizard] chosen', wiz.step, it.sku);
       return advance(ctx);
     }
-  });
 
+    return next();
+  });
 }
