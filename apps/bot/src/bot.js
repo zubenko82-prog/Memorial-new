@@ -201,8 +201,8 @@ function buildUserSummary(s, orderNo, postText, postLink) {
   return lines.join('\n');
 }
 
-// ИЗМЕНЕНО: менеджеру отдаём максимум данных Telegram-пользователя + телефон (из анкеты) в блоке Telegram,
-// НЕ пишем строку "Пост, с которого сделан заказ: —" — вместо этого отдельно прикрепляем/пересылаем пост.
+// Менеджеру: максимум telegram-данных + телефон ИЗ КОНТАКТА (если пользователь поделился),
+// плюс ссылка на пост внизу (без "—")
 function buildManagerSummary(s, orderNo, user, postText, postLink) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -213,6 +213,9 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
   const lang = u.language_code || '—';
   const isPremium = u.is_premium ? 'да' : 'нет';
 
+  // Telegram phone: только если человек прислал contact (request_contact)
+  const tgPhone = s.tg_phone ? s.tg_phone : null;
+
   const lines = [
     `Новая заявка №${orderNo}`,
     '',
@@ -222,11 +225,11 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
     `Username: ${username}`,
     `Язык: ${lang}`,
     `Premium: ${isPremium}`,
-    // "если возможно" — реальный телефон Telegram API не дает; поэтому кладем телефон из анкеты:
-    `Телефон: ${s.phone || '—'}`,
+    ...(tgPhone ? [`Телефон профиля (контакт): ${tgPhone}`] : []),
     '',
     'Данные анкеты:',
     `Заказчик: ${s.name || '—'}`,
+    `Телефон (в анкете): ${s.phone || '—'}`,
     `ФИО усопшего: ${fio}`,
     `Даты: ${dates}`,
     s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
@@ -238,7 +241,6 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
     lines.push('', 'Текст поста:', postText);
   }
 
-  // Ссылку на пост добавляем, только если она есть (без "—")
   if (postLink) {
     lines.push('', `Ссылка на пост: ${postLink}`);
   }
@@ -246,59 +248,24 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
   return lines.join('\n');
 }
 
-// ИЗМЕНЕНО:
-// 1) Добавляем кнопку "Назад" (ответить) на сообщение с заявкой: ForceReply.
-// 2) Если есть postLink/messageId канала — пытаемся переслать сам пост в менеджерский чат (это и есть "прикрепить фото поста").
-//    Если пересылка запрещена — отправляем ссылку отдельным сообщением.
 async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   const managerText = buildManagerSummary(state, orderNo, ctx.from, postText, postLink);
-
-  // 0) сначала (если возможно) пересылаем/копируем исходный пост, чтобы менеджер видел что заказывают
-  // - forwardMessage даст "переслано из..." (если разрешено)
-  // - если запрещено — попробуем copyMessage (часто работает даже когда forward запрещен)
-  // - если и это нельзя — просто ссылку
-  const src = state?.sourceToken ? await getPostMeta(state.sourceToken) : null;
-  const srcChatId = src?.absChatId ? -Number(src.absChatId) : null; // хранили abs, в TG chat.id отрицательный
-  const srcMsgId = src?.messageId ? Number(src.messageId) : null;
-
-  if (srcChatId && srcMsgId) {
-    try {
-      await ctx.telegram.forwardMessage(MANAGER_CHAT_ID, srcChatId, srcMsgId);
-    } catch (e1) {
-      try {
-        await ctx.telegram.copyMessage(MANAGER_CHAT_ID, srcChatId, srcMsgId);
-      } catch (e2) {
-        if (postLink) {
-          await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Ссылка на пост: ${postLink}`);
-        }
-      }
-    }
-  } else if (postLink) {
-    await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Ссылка на пост: ${postLink}`);
-  }
-
-  // 1) отправляем сам текст заявки (с кнопкой "Назад" = ответом)
-  const sent = await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText, {
-    reply_markup: Markup.forceReply({ selective: false }).reply_markup,
-  });
-
-  // 2) фото клиента (если есть) — отправляем альбомом, ответом на заявку
   const photos = Array.isArray(state.photos) ? state.photos : [];
   if (photos.length > 0) {
-    const media = photos.slice(0, 10).map((fileId) => ({
+    const media = photos.slice(0, 10).map((fileId, i) => ({
       type: 'photo',
       media: fileId,
+      ...(i === 0 ? { caption: managerText } : {}),
     }));
-    await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media, {
-      reply_to_message_id: sent.message_id,
-    });
+    await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
     if (photos.length > 10) {
       await ctx.telegram.sendMessage(
         MANAGER_CHAT_ID,
-        `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`,
-        { reply_to_message_id: sent.message_id }
+        `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`
       );
     }
+  } else {
+    await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
   }
 }
 
@@ -957,7 +924,12 @@ if (token) {
             });
             await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
           } else if (kind === 'document') {
-            const { primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText);
+            const { primary } = await postToChannelWithKb(
+              ctx,
+              'document',
+              { fileId: payload.fileId, caption: finalCaption },
+              baseText
+            );
             await setCatalogPostMeta(primary.message_id, {
               selected: wiz.selected,
               baseTextNoHint: baseText,
@@ -1050,6 +1022,18 @@ if (token) {
     const st = ctx.session?.order?.step;
     if (!st) return;
 
+    // контакт (телефон профиля), только на шаге phone
+    if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact) {
+      const c = ctx.message.contact;
+      // Telegram даёт номер только если пользователь согласился
+      if (c.phone_number) {
+        ctx.session.order.tg_phone = c.phone_number;
+        // Если пользователь отправил контакт, считаем это телефоном анкеты тоже
+        ctx.session.order.phone = c.phone_number;
+        return stepFio(ctx);
+      }
+    }
+
     if ('text' in ctx.message && ctx.message.text) {
       const text = ctx.message.text.trim();
       if (st === 'name') {
@@ -1058,7 +1042,7 @@ if (token) {
       }
       if (st === 'phone') {
         if (!phoneOk(text)) {
-          return ctx.reply('Введите корректный номер телефона (минимум 6 цифр, можно с +).', kbInput());
+          return ctx.reply('Введите корректный номер телефона (минимум 6 цифр, можно с +) или нажмите «📱 Отправить мой контакт».', kbPhone());
         }
         ctx.session.order.phone = text;
         return stepFio(ctx);
@@ -1099,6 +1083,12 @@ if (token) {
 function kbInput() {
   return Markup.keyboard([['Отменить']]).resize();
 }
+
+// НОВОЕ: клавиатура шага телефона с request_contact
+function kbPhone() {
+  return Markup.keyboard([[Markup.button.contactRequest('📱 Отправить мой контакт')], ['Отменить']]).resize();
+}
+
 function kbPhotos() {
   return Markup.keyboard([['Далее'], ['Отменить']]).resize();
 }
@@ -1118,7 +1108,7 @@ async function startOrder(ctx, sourceToken) {
 }
 async function stepPhone(ctx) {
   ctx.session.order.step = 'phone';
-  await ctx.reply('Шаг 2/6. Номер телефона:', kbInput());
+  await ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
 }
 async function stepFio(ctx) {
   ctx.session.order.step = 'fio';
