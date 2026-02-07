@@ -2,6 +2,7 @@
 import ExcelJS from 'exceljs';
 import { Markup } from 'telegraf';
 
+// ---------- helpers ----------
 function makeSourceToken() {
   return `p_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -50,7 +51,6 @@ function calcCaptionAndTags({ items, bands }, selected) {
   for (const sku of skuList) {
     const it = bySku.get(sku);
     if (!it) continue;
-
     total += Number(it.price || 0);
 
     if (it.group === 'STELA' && it.tag_ru) stelaTag = it.tag_ru;
@@ -86,29 +86,26 @@ function calcCaptionAndTags({ items, bands }, selected) {
   }
 
   const caption = `Цена: ${formatRub(total)} ₽\n${uniq.join(' ')}`.trim();
-  return { total, tags: uniq, caption };
+  return { total, caption, tags: uniq };
 }
 
 // ---------- load XLSX ----------
-function getColIndex(headerValues, name) {
-  return headerValues.findIndex((v) => String(v || '').trim() === name);
-}
-
 async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(CATALOG_XLSX_PATH);
 
-  // --- items ---
   const wsCat = wb.getWorksheet('Каталог');
   if (!wsCat) throw new Error('В catalog.xlsx отсутствует лист "Каталог".');
 
-  const h = wsCat.getRow(1).values;
-  const idxSku = getColIndex(h, 'sku');
-  const idxGroup = getColIndex(h, 'group');
-  const idxLabel = getColIndex(h, 'label');
-  const idxPrice = getColIndex(h, 'price');
-  const idxActive = getColIndex(h, 'active');
-  const idxTag = getColIndex(h, 'tag_ru');
+  const header = wsCat.getRow(1).values;
+  const colIndex = (name) => header.findIndex((v) => String(v || '').trim() === name);
+
+  const idxSku = colIndex('sku');
+  const idxGroup colIndex('group');
+  const idxLabel = colIndex('label');
+  const idx = colIndex('price');
+  const idxActive = colIndex('active');
+  const idxTag = colIndex('tag_ru');
 
   if ([idxSku, idxGroup, idxLabel, idxPrice, idxActive].some((i) => i < 1)) {
     throw new Error('Лист "Каталог" должен содержать колонки: sku, group, label, price, active, tag_ru');
@@ -117,11 +114,10 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   const items = [];
   wsCat.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
-
     const sku = String(row.getCell(idxSku).value || '').trim();
     if (!sku) return;
 
-    const active = row.getCell(idxActive).value;
+    const active = rowCell(idxActive).value;
     const isActive = String(active).trim() === '1' || active === 1 || active === true;
     if (!isActive) return;
 
@@ -134,43 +130,13 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
     });
   });
 
-  // --- groups settings ---
-  const wsGroups = wb.getWorksheet('Groups') || wb.getWorksheet('groups') || wb.getWorksheet('GROUPS');
-  if (!wsGroups) throw new Error('В catalog.xlsx отсутствует лист "Groups" (group/required/mode/allow_none).');
-
-  const hg = wsGroups.getRow(1).values;
-  const gGroup = getColIndex(hg, 'group');
-  const gReq = getColIndex(hg, 'required');
-  const gMode = getColIndex(hg, 'mode');
-  const gAllowNone = getColIndex(hg, 'allow_none');
-
-  if ([gGroup, gReq, gMode, gAllowNone].some((i) => i < 1)) {
-    throw new Error('Лист "Groups" должен содержать колонки: group, required, mode, allow_none');
-  }
-
-  const groups = [];
-  wsGroups.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-
-    const group = String(row.getCell(gGroup).value || '').trim().toUpperCase();
-    if (!group) return;
-
-    const required = Number(row.getCell(gReq).value || 0) === 1;
-    const mode = String(row.getCell(gMode).value || '').trim().toLowerCase(); // single|multi
-    const allow_none = Number(row.getCell(gAllowNone).value || 0) === 1;
-
-    groups.push({ group, required, mode, allow_none });
-  });
-
-  // --- price bands ---
   const wsBands = wb.getWorksheet('PriceBands');
   if (!wsBands) throw new Error('В catalog.xlsx отсутствует лист "PriceBands".');
 
-  const hb = wsBands.getRow(1).values;
-  const bMin = getColIndex(hb, 'min');
-  const bMax = getColIndex(hb, 'max');
-  const bTag = getColIndex(hb, 'tag_ru');
-
+  const headerB = wsBands.getRow(1).values;
+  const bMin = headerB.findIndex((v) => String(v || '').trim() === '');
+  const bMax = headerB.findIndex((v) => String(v || '').trim() === 'max');
+  const bTag = headerB.findIndex((v) => String(v || '').trim() === 'tag_ru');
   if ([bMin, bMax, bTag].some((i) => i < 1)) {
     throw new Error('Лист "PriceBands" должен содержать колонки: min, max, tag_ru');
   }
@@ -185,10 +151,10 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
     bands.push({ min, max, tag });
   });
 
-  return { items, groups, bands };
+  return { items, bands };
 }
 
-// ---------- publishing with kb ----------
+// ---------- publish to channel with kb (как в рабочем коде) ----------
 function channelPostKbFull(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP_URL) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   const webAppUrl = new URL(WEBAPP_URL).toString();
@@ -211,7 +177,6 @@ function channelPostKbFallback(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP
 
 async function postToChannelWithKb(ctx, deps, kind, payload, baseTextNoHint) {
   const { getChannelId, WEBAPP_URL, DEEPLINK_PREFIX, setPostMeta } = deps;
-
   const chatId = getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
 
@@ -223,28 +188,16 @@ async function postToChannelWithKb(ctx, deps, kind, payload, baseTextNoHint) {
   const kbFallback = channelPostKbFallback(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP_URL).reply_markup;
 
   const trySend = async ({ useHtml, replyMarkup }) => {
-    const common = {
-      ...(useHtml ? { parse_mode: 'HTML' } : {}),
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    };
+    const common = { ...(useHtml ? { parse_mode: 'HTML' } : {}), ...(replyMarkup ? { reply_markup: replyMarkup } : {}) };
 
     if (kind === 'text') {
-      return await ctx.telegram.sendMessage(chatId, payload.text, {
-        ...common,
-        disable_web_page_preview: true,
-      });
+      return await ctx.telegram.sendMessage(chatId, payload.text, { ...common, disable_web_page_preview: true });
     }
     if (kind === 'photo') {
-      return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
-        ...common,
-        caption: (payload.caption || '').slice(0, 1024),
-      });
+      return await ctx.telegram.sendPhoto(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
     }
     if (kind === 'video') {
-      return await ctx.telegram.sendVideo(chatId, payload.fileId, {
-        ...common,
-        caption: (payload.caption || '').slice(0, 1024),
-      });
+      return await ctx.telegram.sendVideo(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
     }
     if (kind === 'document') {
       const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
@@ -285,16 +238,12 @@ async function postToChannelWithKb(ctx, deps, kind, payload, baseTextNoHint) {
   }
 
   const abs = Math.abs(Number(msg.chat.id));
-  await setPostMeta(sourceToken, {
-    text: baseTextNoHint || '',
-    absChatId: abs,
-    messageId: msg.message_id,
-  });
+  await setPostMeta(sourceToken, { text: baseTextNoHint || '', absChatId: abs, messageId: msg.message_id });
 
   return { primary: msg, sourceToken };
 }
 
-// ---------- module ----------
+// ---------- wizard ----------
 export function registerPostWizard(bot, deps) {
   const {
     HINT_TEXT,
@@ -303,288 +252,242 @@ export function registerPostWizard(bot, deps) {
     CATALOG_XLSX_PATH,
     getChannelId,
     isAdmin,
-
-    setPostMeta, // sourceToken -> meta
+    setPostMeta,
     setCatalogPostMeta,
-    getCatalogPostMeta,
-    getAllCatalogPostKeys,
-    getCatalogPostMetaByKey,
-    setCatalogPostMetaByKey,
   } = deps;
 
-  // guards
   if (typeof setPostMeta !== 'function') throw new Error('registerPostWizard: setPostMeta is required');
 
+  const STEPS = [
+    { group: 'STELA', mode: 'single', allowNone: false },
+    { group: 'TUMBA', mode: 'single', allowNone: false },
+    { group: 'CVETNIK', mode: 'single', allowNone: true },
+    { group: 'PLITA', mode: 'single', allowNone: true },
+    { group: 'WORK', mode: 'single', allowNone: true },
+    { group: 'OPTION', mode: 'multi', allowNone: false },
+    { group: 'GRAFIKA', mode: 'multi', allowNone: false },
+  ];
+
   function kbMenu() {
-    return Markup.keyboard([['▶️ Новая публикация'], ['♻️ Обновить цены'], ['Отменить']]).resize();
+    return Markup.keyboard([['▶️ Новая публикация'], ['Отменить']]).resize();
   }
+
   function kbCancelOnly() {
     return Markup.keyboard([['Отменить']]).resize();
   }
 
-  // 1) старт меню
-  bot.command('post', async (ctx) => {
-    if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
-    ctx.session.postWizard = { step: 'menu', draft: null };
-    return ctx.reply('Меню /post:', kbMenu());
-  });
-
-  // 2) новая публикация: собираем базовый текст/медиа из сообщения /post (как раньше — через reply)
-  bot.hears('▶️ Новая публикация', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
-
-    ctx.session.postWizard.step = 'await_source';
-    return ctx.reply(
-      'Отправьте текст (сообщением) ИЛИ ответьте на фото/видео/документ сообщением с любым текстом.\n\nЗатем я начну мастер выбора комплектации.',
-      kbCancelOnly()
-    );
-  });
-
-  // 3) обновление цен оставляем вашим текущим кодом (если нужно) — тут кратко: меню входа
-  bot.hears('♻️ Обновить цены', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
-
-    ctx.session.postWizard.step = 'update_prices';
-    await ctx.reply(
-      'Обновление цен постов:\n\n1) «🧾 По пересланному посту» — перешлите пост из канала.\n2) «🔁 Обновить все» — обновлю все, для которых есть мета.',
-      Markup.keyboard([['🧾 По пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
-    );
-  });
-
-  bot.hears('⬅️ Назад', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard) return;
-    ctx.session.postWizard.step = 'menu';
-    return ctx.reply('Меню /post:', kbMenu());
-  });
-
-  bot.hears('Отменить', async (ctx) => {
-    if (ctx.session?.postWizard) ctx.session.postWizard = null;
-    return ctx.reply('Отменено.', Markup.removeKeyboard());
-  });
-
-  // 4) основной message handler мастера
-  bot.on('message', async (ctx, next) => {
-    const wiz = ctx.session?.postWizard;
-    if (!wiz) return next();
-    if (!isAdmin(ctx)) return; // пост-мастер только админам
-
-    // ---- шаг: ожидание исходника (текст или reply на медиа) ----
-    if (wiz.step === 'await_source') {
-      const rawText = 'text' in ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
-      const r = ctx.message?.reply_to_message;
-
-      let baseTextNoHint = rawText.replace(/^\/post(@\S+)?\s*/i, '').trim();
-      let mediaPayload = { kind: 'text' };
-
-      if (r?.photo?.length) {
-        mediaPayload = { kind: 'photo', fileId: r.photo.at(-1).file_id };
-      } else if (r?.video) {
-        mediaPayload = { kind: 'video', fileId: r.video.file_id };
-      } else if (r?.document) {
-        mediaPayload = { kind: 'document', fileId: r.document.file_id };
-      } else {
-        mediaPayload = { kind: 'text' };
-      }
-
-      // если это не reply на медиа и нет текста — просим снова
-      if (mediaPayload.kind === 'text' && !baseTextNoHint) {
-        await ctx.reply('Пришлите текст поста (сообщением), либо ответьте на медиа сообщением.', kbCancelOnly());
-        return;
-      }
-
-      // загружаем каталог и группы
-      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-
-      // init selected по группам (single=null, multi=[])
-      const selected = {};
-      for (const g of catalog.groups) {
-        selected[g.group] = g.mode === 'multi' ? [] : null;
-      }
-
-      wiz.draft = {
-        baseTextNoHint,
-        mediaPayload,
-        selected,
-        groupIndex: 0,
-      };
-
-      wiz.step = 'pick';
-      return askCurrentGroup(ctx, catalog, wiz);
-    }
-
-    // ---- шаг: выбор значений по группам ----
-    if (wiz.step === 'pick') {
-      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-      const g = currentGroup(catalog, wiz);
-      if (!g) {
-        wiz.step = 'preview';
-        return showPreview(ctx, catalog, wiz, HINT_TEXT);
-      }
-
-      // отмена
-      if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
-        ctx.session.postWizard = null;
-        await ctx.reply('Отменено.', Markup.removeKeyboard());
-        return;
-      }
-
-      if (!('text' in ctx.message) || !ctx.message.text) return;
-      const text = ctx.message.text.trim();
-
-      // multi controls
-      if (g.mode === 'multi') {
-        if (text === 'Далее') {
-          wiz.draft.groupIndex += 1;
-          return askCurrentGroup(ctx, catalog, wiz);
-        }
-        if (text === 'Сбросить') {
-          wiz.draft.selected[g.group] = [];
-          return askCurrentGroup(ctx, catalog, wiz);
-        }
-      }
-
-      // allow_none
-      if (g.allow_none && text === '— Нет —') {
-        wiz.draft.selected[g.group] = g.mode === 'multi' ? [] : null;
-        wiz.draft.groupIndex += 1;
-        return askCurrentGroup(ctx, catalog, wiz);
-      }
-
-      // выбор item по label
-      const list = catalog.items.filter((it) => it.group === g.group);
-      const it = list.find((x) => x.label === text);
-      if (!it) {
-        await ctx.reply('Не понял выбор. Нажмите кнопку на клавиатуре.', buildKeyboardForGroup(g, list));
-        return;
-      }
-
-      if (g.mode === 'single') {
-        wiz.draft.selected[g.group] = it.sku;
-        wiz.draft.groupIndex += 1;
-        return askCurrentGroup(ctx, catalog, wiz);
-      } else {
-        const arr = Array.isArray(wiz.draft.selected[g.group]) ? wiz.draft.selected[g.group] : [];
-        const idx = arr.indexOf(it.sku);
-        if (idx >= 0) arr.splice(idx, 1);
-        else arr.push(it.sku);
-        wiz.draft.selected[g.group] = arr;
-        // остаёмся на той же группе, чтобы можно было выбрать несколько
-        return;
-      }
-    }
-
-    // ---- шаг: предпросмотр ----
-    if (wiz.step === 'preview') {
-      if (!('text' in ctx.message) || !ctx.message.text) return;
-      const text = ctx.message.text.trim();
-
-      if (text === 'Опубликовать') {
-        const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-        const { caption, total } = calcCaptionAndTags(catalog, wiz.draft.selected);
-
-        const base = (wiz.draft.baseTextNoHint || '').trim();
-        const finalText = base ? `${base}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
-
-        const payload = wiz.draft.mediaPayload;
-        const kind = payload.kind;
-
-        let primary;
-        if (kind === 'photo') {
-          ({ primary } = await postToChannelWithKb(ctx, deps, 'photo', { fileId: payload.fileId, caption: finalText }, base));
-        } else if (kind === 'video') {
-          ({ primary } = await postToChannelWithKb(ctx, deps, 'video', { fileId: payload.fileId, caption: finalText }, base));
-        } else if (kind === 'document') {
-          ({ primary } = await postToChannelWithKb(ctx, deps, 'document', { fileId: payload.fileId, caption: finalText }, base));
-        } else {
-          ({ primary } = await postToChannelWithKb(ctx, deps, 'text', { text: finalText }, base));
-        }
-
-        // мета для обновления цен
-        await setCatalogPostMeta(primary.message_id, {
-          selected: wiz.draft.selected,
-          baseTextNoHint: base,
-          last_total_price: total,
-          createdAt: Date.now(),
-          status: 'ok',
-        });
-
-        ctx.session.postWizard = null;
-        await ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
-        return;
-      }
-
-      if (text === '⬅️ Назад') {
-        wiz.step = 'pick';
-        wiz.draft.groupIndex = Math.max(0, wiz.draft.groupIndex - 1);
-        const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-        return askCurrentGroup(ctx, catalog, wiz);
-      }
-    }
-
-    // ---- update prices (оставлено совместимо с вашими функциями) ----
-    if (wiz.step === 'update_prices') {
-      // Здесь можно оставить вашу текущую реализацию обновления (у вас уже есть в другом варианте).
-      await ctx.reply('Обновление цен сейчас не подключено в этом файле. Если нужно — скажите, добавлю.', kbMenu());
-      wiz.step = 'menu';
-      return;
-    }
-
-    return next();
-  });
-
-  // ----- helpers -----
-  function currentGroup(catalog, wiz) {
-    const idx = Number(wiz?.draft?.groupIndex || 0);
-    return catalog.groups[idx] || null;
-  }
-
-  function buildKeyboardForGroup(g, list) {
+  function kbForStep(step, list) {
     const buttons = list.map((it) => it.label);
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
 
-    if (g.allow_none) rows.push(['— Нет —']);
-
-    if (g.mode === 'multi') rows.unshift(['Далее', 'Сбросить']);
+    if (step.allowNone) rows.push(['— Нет —']);
+    if (step.mode === 'multi') rows.unshift(['Далее', 'Сбросить']);
 
     rows.push(['Отменить']);
     return Markup.keyboard(rows).resize();
   }
 
-  async function askCurrentGroup(ctx, catalog, wiz) {
-    const g = currentGroup(catalog, wiz);
-    if (!g) {
-      wiz.step = 'preview';
-      return showPreview(ctx, catalog, wiz, HINT_TEXT);
-    }
-
-    const list = catalog.items.filter((it) => it.group === g.group);
-    if (!list.length) {
-      // если в каталоге нет элементов для группы — просто пропускаем
-      wiz.draft.groupIndex += 1;
-      return askCurrentGroup(ctx, catalog, wiz);
-    }
-
-    const title = `${g.group}: ${g.mode === 'multi' ? 'можно несколько' : 'выберите один'}${
-      g.allow_none ? ' (можно — Нет —)' : ''
-    }`;
-
-    return ctx.reply(title, buildKeyboardForGroup(g, list));
+  function initSelected() {
+    const selected = {};
+    for (const s of STEPS) selected[s.group] = s.mode === 'multi' ? [] : null;
+    return selected;
   }
 
-  async function showPreview(ctx, catalog, wiz, hintText) {
-    const { caption } = calcCaptionAndTags(catalog, wiz.draft.selected);
+  async function askStep(ctx) {
+    const wiz = ctx.session.postWizard;
+    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
 
-    const base = (wiz.draft.baseTextNoHint || '').trim();
-    const full = base ? `${base}\n\n${caption}\n\n${hintText}` : `${caption}\n\n${hintText}`;
+    const step = STEPS[wiz.stepIndex];
+    if (!step) {
+      wiz.step = 'preview';
+      return preview(ctx, catalog);
+    }
 
-    wiz.step = 'preview';
-    await ctx.reply(
-      `Предпросмотр:\n\n${full}\n\nНажмите «Опубликовать» или «⬅️ Назад».`,
-      Markup.keyboard([['Опубликовать'], ['⬅️ Назад'], ['Отменить']]).resize()
+    const list = catalog.items.filter((it) => it.group === step.group);
+    if (!list.length) {
+      wiz.stepIndex += 1;
+      return askStep(ctx);
+    }
+
+    const title =
+      step.mode === 'multi'
+        ? `${step.group}: можно несколько (нажимайте кнопки, потом «Далее»)`
+        : `${step.group}: выберите один вариант`;
+
+    return ctx.reply(title, kbForStep(step, list));
+  }
+
+  async function preview(ctx, catalog) {
+    const wiz = ctx.session.postWizard;
+    const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
+
+    const base = (wiz.baseTextNoHint || '').trim();
+    const full = base ? `${base}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
+
+    wiz._previewTotal = total;
+
+    return ctx.reply(
+      `Предпросмотр:\n\n${full}\n\nНажмите «Опубликовать» или «Назад».`,
+      Markup.keyboard([['Опубликовать'], ['Назад'], ['Отменить']]).resize()
     );
   }
+
+  bot.command('post', async (ctx) => {
+    const channelId = getChannelId();
+    if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
+    if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
+
+    ctx.session.postWizard = { step: 'menu' };
+    return ctx.reply('Меню /post:', kbMenu());
+  });
+
+  bot.hears('▶️ Новая публикация', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
+
+    ctx.session.postWizard.step = 'await_base';
+    return ctx.reply(
+      'Пришлите текст поста (сообщением) ИЛИ ответьте на фото/видео/документ сообщением (текстом можно пусто).',
+      kbCancelOnly()
+    );
+  });
+
+  bot.hears('Отменить', async (ctx) => {
+    if (!ctx.session?.postWizard) return;
+    ctx.session.postWizard = null;
+    return ctx.reply('Отменено.', Markup.removeKeyboard());
+  });
+
+  bot.on('message', async (ctx, next) => {
+    const wiz = ctx.session?.postWizard;
+    if (!wiz) return next();
+    if (!isAdmin(ctx)) return;
+
+    // 1) ждём исходник (текст/медиа)
+    if (wiz.step === 'await_base') {
+      const text = 'text' in ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
+      const r = ctx.message?.reply_to_message;
+
+      // текст поста берём из текущего сообщения (как раньше /post ...)
+      wiz.baseTextNoHint = text;
+
+      if (r?.photo?.length) wiz.media = { kind: 'photo', fileId: r.photo.at(-1).file_id };
+      else if (r?.video) wiz.media = { kind: 'video', fileId: r.video.file_id };
+      else if (r?.document) wiz.media = { kind: 'document', fileId: r.document.file_id };
+      else wiz.media = { kind: 'text' };
+
+      if (wiz.media.kind === 'text' && !wiz.baseTextNoHint) {
+        return ctx.reply('Нужен текст поста, либо ответьте на медиа сообщением.', kbCancelOnly());
+      }
+
+      wiz.selected = initSelected();
+      wiz.stepIndex = 0;
+      wiz.step = 'pick';
+      return askStep(ctx);
+    }
+
+    // 2) выбор
+    if (wiz.step === 'pick') {
+      if (!('text' in ctx.message) || !ctx.message.text) return;
+      const input = ctx.message.text.trim();
+
+      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+      const step = STEPS[wiz.stepIndex];
+      if (!step) {
+        wiz.step = 'preview';
+        return preview(ctx, catalog);
+      }
+
+      if (input === 'Отменить') {
+        ctx.session.postWizard = null;
+        return ctx.reply('Отменено.', Markup.removeKeyboard());
+      }
+
+      if (step.mode === 'multi') {
+        if (input === 'Далее') {
+          wiz.stepIndex += 1;
+          return askStep(ctx);
+        }
+        if (input === 'Сбросить') {
+          wiz.selected[step.group] = [];
+          return askStep(ctx);
+        }
+      }
+
+      if (step.allowNone && input === '— Нет —') {
+        wiz.selected[step.group] = step.mode === 'multi' ? [] : null;
+        wiz.stepIndex += 1;
+        return askStep(ctx);
+      }
+
+      const list = catalog.items.filter((it) => it.group === step.group);
+      const it = list.find((x) => x.label === input);
+      if (!it) {
+        return ctx.reply('Нажмите кнопку на клавиатуре.', kbForStep(step, list));
+      }
+
+      if (step.mode === 'single') {
+        wiz.selected[step.group] = it.sku;
+        wiz.stepIndex += 1;
+        return askStep(ctx);
+      } else {
+        const arr = Array.isArray(wiz.selected[step.group]) ? wiz.selected[step.group] : [];
+        const idx = arr.indexOf(it.sku);
+        if (idx >= 0) arr.splice(idx, 1);
+        else arr.push(it.sku);
+        wiz.selected[step.group] = arr;
+        return; // остаёмся на шаге
+      }
+    }
+
+    // 3) предпросмотр
+    if (wiz.step === 'preview') {
+      if (!('text' in ctx.message) || !ctx.message.text) return;
+      const input = ctx.message.text.trim();
+
+      if (input === 'Назад') {
+        wiz.step = 'pick';
+        wiz.stepIndex = Math.max(0, (wiz.stepIndex || 0) - 1);
+        return askStep(ctx);
+      }
+
+      if (input !== 'Опубликовать') return;
+
+      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+      const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
+
+      const base = (wiz.baseTextNoHint || '').trim();
+      const final = base ? `${base}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
+
+      const kind = wiz.media.kind;
+
+      let primary;
+      if (kind === 'photo') {
+        ({ primary } = await postToChannelWithKb(ctx, deps, 'photo', { fileId: wiz.media.fileId, caption: final }, base));
+      } else if (kind === 'video') {
+        ({ primary } = await postToChannelWithKb(ctx, deps, 'video', { fileId: wiz.media.fileId, caption: final }, base));
+      } else if (kind === 'document') {
+        ({ primary } = await postToChannelWithKb(ctx, deps, 'document', { fileId: wiz.media.fileId, caption: final }, base));
+      } else {
+        ({ primary } = await postToChannelWithKb(ctx, deps, 'text', { text: final }, base));
+      }
+
+      if (typeof setCatalogPostMeta === 'function') {
+        await setCatalogPostMeta(primary.message_id, {
+          channel_id: String(getChannelId()),
+          message_id_caption: primary.message_id,
+          date: Date.now(),
+          items: wiz.selected,
+          last_total_price: total,
+          status: 'ok',
+        });
+      }
+
+      ctx.session.postWizard = null;
+      return ctx.reply(`Опубликовано.\nmessage_id: ${primary.message_id}`, Markup.removeKeyboard());
+    }
+
+    return next();
+  });
 }
