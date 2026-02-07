@@ -47,7 +47,7 @@ export function registerOrders(bot, deps) {
     makePostLink,
     MANAGER_CHAT_ID,
 
-    // NEW:
+    // optional (для кнопок и ссылки на пост):
     CHANNEL_USERNAME,
     WEBAPP_URL,
     getPostMeta,
@@ -71,14 +71,16 @@ export function registerOrders(bot, deps) {
     if (st === 'name') return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbName());
     if (st === 'phone') return ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
     if (st === 'fio') return ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbBackCancel());
-    if (st === 'dates')
+    if (st === 'dates') {
       return ctx.reply(
         'Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020',
         kbBackCancel()
       );
+    }
     if (st === 'photos') return ctx.reply('Шаг 5/6. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
-    if (st === 'comment')
+    if (st === 'comment') {
       return ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbComment());
+    }
     if (st === 'review') return stepReview(ctx);
 
     ctx.session.order.step = 'name';
@@ -100,12 +102,11 @@ export function registerOrders(bot, deps) {
   }
 
   async function getPostLinkFromToken(sourceToken) {
-    if (!sourceToken) return '';
+    if (!sourceToken || typeof getPostMeta !== 'function') return '';
     try {
       const meta = await getPostMeta(sourceToken);
       const mid = meta?.messageId;
       if (!mid) return '';
-      // makePostLink uses CHANNEL_USERNAME in bot.js; absChatId not required for public channel
       return makePostLink(meta?.absChatId, mid);
     } catch {
       return '';
@@ -174,21 +175,26 @@ export function registerOrders(bot, deps) {
     try {
       await sendOrderToManager(ctx, s, orderNo);
 
-      const channelUrl = `https://t.me/${CHANNEL_USERNAME}`;
+      const channelUrl = CHANNEL_USERNAME ? `https://t.me/${CHANNEL_USERNAME}` : null;
       const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
 
-      const row = [Markup.button.url('Перейти в канал', channelUrl)];
+      const row = [];
+      if (channelUrl) row.push(Markup.button.url('Перейти в канал', channelUrl));
       if (webAppUrl) row.push(Markup.button.webApp('Подобрать памятник', webAppUrl));
 
+      const replyMarkup =
+        row.length > 0
+          ? {
+              reply_markup: {
+                ...Markup.inlineKeyboard([row]).reply_markup,
+                ...kbRemove().reply_markup,
+              },
+            }
+          : kbRemove();
+
       await ctx.reply(
-        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
-          `Вы можете перейти в канал: t.me/${CHANNEL_USERNAME} или подобрать памятник:`,
-        {
-          reply_markup: {
-            ...Markup.inlineKeyboard([row]).reply_markup,
-            ...kbRemove().reply_markup, // убрать reply-клавиатуру анкеты
-          },
-        }
+        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.`,
+        replyMarkup
       );
     } catch (e) {
       console.error('submitOrder error', e?.response?.description || e);
@@ -220,7 +226,6 @@ export function registerOrders(bot, deps) {
 
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
 
-  // ЕДИНСТВЕННЫЙ "Назад" для анкеты
   bot.hears('⬅️ Назад', async (ctx, next) => {
     if (!ctx.session?.order) return next();
     return stepBack(ctx);
@@ -246,66 +251,66 @@ export function registerOrders(bot, deps) {
   });
 
   bot.on('message', async (ctx, next) => {
-  const st = ctx.session?.order?.step;
-  if (!st) return next();
+    const st = ctx.session?.order?.step;
+    if (!st) return next();
 
-  if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact?.phone_number) {
-    const num = ctx.message.contact.phone_number;
-    ctx.session.order.tg_phone = num;
-    ctx.session.order.phone = num;
-    ctx.session.order.step = 'fio';
-    return renderStep(ctx);
-  }
-
-  if ('text' in ctx.message && ctx.message.text) {
-    const text = ctx.message.text.trim();
-
-    if (st === 'name') {
-      ctx.session.order.name = text;
-      ctx.session.order.step = 'phone';
-      return renderStep(ctx);
-    }
-    if (st === 'phone') {
-      if (!phoneOk(text)) {
-        return ctx.reply(
-          'Введите корректный номер телефона (минимум 6 цифр, можно с +) или нажмите «📱 Отправить мой контакт».',
-          kbPhone()
-        );
-      }
-      ctx.session.order.phone = text;
+    if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact?.phone_number) {
+      const num = ctx.message.contact.phone_number;
+      ctx.session.order.tg_phone = num;
+      ctx.session.order.phone = num;
       ctx.session.order.step = 'fio';
       return renderStep(ctx);
     }
-    if (st === 'fio') {
-      ctx.session.order.fio = text;
-      ctx.session.order.step = 'dates';
-      return renderStep(ctx);
-    }
-    if (st === 'dates') {
-      ctx.session.order.dates = text;
-      ctx.session.order.step = 'photos';
-      return renderStep(ctx);
-    }
-    if (st === 'comment') {
-      if (text !== 'Продолжить' && text !== 'Отменить') {
-        ctx.session.order.comment = text;
-        return ctx.reply('Комментарий получен. Нажмите «Продолжить», чтобы перейти к сводке.', kbComment());
+
+    if ('text' in ctx.message && ctx.message.text) {
+      const text = ctx.message.text.trim();
+
+      if (st === 'name') {
+        ctx.session.order.name = text;
+        ctx.session.order.step = 'phone';
+        return renderStep(ctx);
+      }
+      if (st === 'phone') {
+        if (!phoneOk(text)) {
+          return ctx.reply(
+            'Введите корректный номер телефона (минимум 6 цифр, можно с +) или нажмите «📱 Отправить мой контакт».',
+            kbPhone()
+          );
+        }
+        ctx.session.order.phone = text;
+        ctx.session.order.step = 'fio';
+        return renderStep(ctx);
+      }
+      if (st === 'fio') {
+        ctx.session.order.fio = text;
+        ctx.session.order.step = 'dates';
+        return renderStep(ctx);
+      }
+      if (st === 'dates') {
+        ctx.session.order.dates = text;
+        ctx.session.order.step = 'photos';
+        return renderStep(ctx);
+      }
+      if (st === 'comment') {
+        if (text !== 'Продолжить' && text !== 'Отменить') {
+          ctx.session.order.comment = text;
+          return ctx.reply('Комментарий получен. Нажмите «Продолжить», чтобы перейти к сводке.', kbComment());
+        }
       }
     }
-  }
 
-  if ('photo' in ctx.message && ctx.message.photo?.length) {
-    if (st === 'photos') {
-      const fileId = ctx.message.photo.at(-1)?.file_id;
-      if (fileId) {
-        ctx.session.order.photos = ctx.session.order.photos || [];
-        ctx.session.order.photos.push(fileId);
-        return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
+    if ('photo' in ctx.message && ctx.message.photo?.length) {
+      if (st === 'photos') {
+        const fileId = ctx.message.photo.at(-1)?.file_id;
+        if (fileId) {
+          ctx.session.order.photos = ctx.session.order.photos || [];
+          ctx.session.order.photos.push(fileId);
+          return ctx.reply('Фото добавлено. Отправьте ещё или нажмите «Далее».', kbPhotos());
+        }
       }
     }
-  }
 
-  // ВАЖНО: если сообщение не относится к анкете — отдать дальше (/post wizard)
-  return next();
-});
-
+    // Важно: если не обработали в анкете — отдаём дальше (/post wizard)
+    return next();
+  });
+}
