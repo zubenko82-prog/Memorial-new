@@ -193,7 +193,7 @@ export function registerOrders(bot, deps) {
           : kbRemove();
 
       await ctx.reply(
-        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.`,
+        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру. Вы можете перейти в канал t.me/memorialDNR или подобрать памятник`,
         replyMarkup
       );
     } catch (e) {
