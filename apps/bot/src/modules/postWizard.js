@@ -588,3 +588,4 @@ export function registerPostWizard(bot, deps) {
 
     return next();
   });
+}
