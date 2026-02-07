@@ -15,3 +15,9 @@
     "xlsx": "^0.18.5"
   }
 }
+{
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@vercel/node": "^3.0.0"
+  }
+}
