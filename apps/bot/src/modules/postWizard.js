@@ -616,11 +616,4 @@ export function registerPostWizard(bot, deps) {
     }
   });
 
-  // старт публикации
-  bot.hears('▶️ Новая публикация', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
-    ctx.session.postWizard.step = 'STELA';
-    await askStep(ctx, 'STELA');
-  });
 }
