@@ -88,6 +88,32 @@ function calcCaptionAndTags({ items, bands }, selected) {
   return { total, tags: uniq, caption };
 }
 
+function normalizeGroupFromXlsx(rawGroup) {
+  const g = String(rawGroup || '').trim().toUpperCase();
+
+  // Приводим разные варианты групп из Excel к тем, что ожидает мастер
+  const groupMap = {
+    // опции:
+    OPTION: 'OPTION',
+    OPTIONS: 'OPTION',
+    'ОПЦИЯ': 'OPTION',
+    'ОПЦИИ': 'OPTION',
+    OPT: 'OPTION',
+    OPTS: 'OPTION',
+    // часто встречается префикс в sku, но в group могут тоже так писать:
+    OPT_PORTRAIT: 'OPTION',
+    OPT_METRICA: 'OPTION',
+
+    // графика:
+    GRAFIKA: 'GRAFIKA',
+    GRAPHICS: 'GRAFIKA',
+    'ГРАФ': 'GRAFIKA',
+    'ГРАФИКА': 'GRAFIKA',
+  };
+
+  return groupMap[g] || g;
+}
+
 async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(CATALOG_XLSX_PATH);
@@ -119,9 +145,12 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
     const isActive = String(active).trim() === '1' || active === 1 || active === true;
     if (!isActive) return;
 
+    const rawGroup = row.getCell(idxGroup).value;
+    const group = normalizeGroupFromXlsx(rawGroup);
+
     items.push({
       sku,
-      group: String(row.getCell(idxGroup).value || '').trim().toUpperCase(),
+      group,
       label: String(row.getCell(idxLabel).value || '').trim(),
       price: Number(row.getCell(idxPrice).value || 0),
       tag_ru: String(row.getCell(idxTag)?.value || '').trim(),
@@ -161,11 +190,9 @@ export function registerPostWizard(bot, deps) {
     getChannelId,
     isAdmin,
 
-    // NEW:
     setPostMeta,
     CHANNEL_USERNAME,
 
-    // storage for update prices:
     setCatalogPostMeta,
     getCatalogPostMeta,
     getAllCatalogPostKeys,
@@ -210,10 +237,16 @@ export function registerPostWizard(bot, deps) {
         return await ctx.telegram.sendMessage(chatId, payload.text, { ...common, disable_web_page_preview: true });
       }
       if (kind === 'photo') {
-        return await ctx.telegram.sendPhoto(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
+        return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
+          ...common,
+          caption: (payload.caption || '').slice(0, 1024),
+        });
       }
       if (kind === 'video') {
-        return await ctx.telegram.sendVideo(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
+        return await ctx.telegram.sendVideo(chatId, payload.fileId, {
+          ...common,
+          caption: (payload.caption || '').slice(0, 1024),
+        });
       }
       if (kind === 'document') {
         const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
@@ -222,7 +255,6 @@ export function registerPostWizard(bot, deps) {
       throw new Error('Unknown kind');
     };
 
-    // 1) send content (no kb)
     let msg;
     try {
       msg = await trySendNoKb({ useHtml: true });
@@ -232,14 +264,12 @@ export function registerPostWizard(bot, deps) {
       else throw e;
     }
 
-    // 2) token includes message_id (as before)
     const absChatId = Math.abs(Number(msg.chat.id));
     const sourceToken = makeSourceTokenForPost(absChatId, msg.message_id);
 
     const kbFull2 = channelPostKbFull(botUsername, sourceToken).reply_markup;
     const kbFallback2 = channelPostKbFallback(botUsername, sourceToken).reply_markup;
 
-    // 3) set kb via edit
     try {
       await ctx.telegram.editMessageReplyMarkup(chatId, msg.message_id, undefined, kbFull2);
     } catch (e) {
@@ -251,13 +281,10 @@ export function registerPostWizard(bot, deps) {
       }
     }
 
-    // 4) NEW: save meta by sourceToken (for orders link/text)
-    // Для публичного канала ссылка строится по CHANNEL_USERNAME и message_id, absChatId не обязателен.
     await setPostMeta(sourceToken, {
       text: (baseTextNoHint || '').trim(),
       channelUsername: CHANNEL_USERNAME,
       messageId: msg.message_id,
-      // оставим на будущее:
       absChatId,
     });
 
@@ -403,7 +430,6 @@ export function registerPostWizard(bot, deps) {
     ctx.session.postWizard.step = 'menu';
   });
 
-  // "Назад" только для /post (анкета перехватит раньше своим hears с next())
   bot.hears('⬅️ Назад', async (ctx, next) => {
     if (ctx.session?.order) return next();
     if (!isAdmin(ctx)) return;
@@ -497,7 +523,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // update-by-forward flow
     if (wiz.step === 'update_wait_forward') {
       const fwd = ctx.message?.forward_from_chat;
       const messageId = ctx.message?.forward_from_message_id;
@@ -567,7 +592,6 @@ export function registerPostWizard(bot, deps) {
           ({ primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
         }
 
-        // сохраняем мету поста для пересчёта цены
         await setCatalogPostMeta(primary.message_id, {
           selected: wiz.selected,
           baseTextNoHint: baseText,
