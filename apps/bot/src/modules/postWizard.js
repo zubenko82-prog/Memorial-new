@@ -1,6 +1,8 @@
 // apps/bot/src/modules/postWizard.js
 import ExcelJS from 'exceljs';
 import { Markup } from 'telegraf';
+console.log('[bot] bot.js loaded');
+
 
 // ---------- helpers ----------
 function makeSourceToken() {
