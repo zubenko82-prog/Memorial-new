@@ -1,9 +1,6 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-function makeSourceTokenForPost(absChatId, messageId) {
-  return `p_${absChatId}_${messageId}_x`;
-}
 function parseSourceTokenToPostRef(sourceToken) {
   const m = /^p_(\d+)_(\d+)_/.exec(String(sourceToken || ''));
   if (!m) return null;
@@ -66,7 +63,7 @@ export function registerOrders(bot, deps) {
     const st = ctx.session?.order?.step;
 
     if (st === 'name') return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbName());
-    if (st === 'phone') return ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
+    if (st === 'phone') return ctx.reply('Шаг 2/6. Введите номер телефона или нажмите «📱 Отправить мой контакт» (номер указаный в телеграмм):', kbPhone());
     if (st === 'fio') return ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbBackCancel());
     if (st === 'dates')
       return ctx.reply(
@@ -124,6 +121,8 @@ export function registerOrders(bot, deps) {
   }
 
   async function sendOrderToManager(ctx, s, orderNo) {
+    if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
+
     const ref = parseSourceTokenToPostRef(s.sourceToken);
     const postLink = ref?.absChatId && ref?.messageId ? makePostLink(ref.absChatId, ref.messageId) : '';
 
@@ -149,43 +148,41 @@ export function registerOrders(bot, deps) {
     }
   }
 
- async function submitOrder(ctx) {
-  const s = ctx.session.order || {};
-  if (!s.name || !s.phone || !phoneOk(s.phone)) {
-    return ctx.reply(
-      'Обязательные поля не заполнены: «Заказчик» и/или «Номер телефона». Вернитесь и исправьте.',
-      kbName()
-    );
+  async function submitOrder(ctx) {
+    const s = ctx.session.order || {};
+    if (!s.name || !s.phone || !phoneOk(s.phone)) {
+      return ctx.reply(
+        'Обязательные поля не заполнены: «Заказчик» и/или «Номер телефона». Вернитесь и исправьте.',
+        kbName()
+      );
+    }
+
+    const orderNo = s.orderNo || makeOrderNo();
+
+    const CHANNEL_URL = 'https://t.me/memorialDNR';
+    const WEBAPP_URL = process.env.WEBAPP_URL;
+
+    try {
+      await sendOrderToManager(ctx, s, orderNo);
+
+      // убрать reply-клавиатуру анкеты
+      await ctx.reply(' ', kbRemove());
+
+      await ctx.reply(
+        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
+          `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
+        Markup.inlineKeyboard([
+          Markup.button.url('Перейти в канал', CHANNEL_URL),
+          ...(WEBAPP_URL ? [Markup.button.webApp('Подобрать памятник', WEBAPP_URL)] : []),
+        ])
+      );
+    } catch (e) {
+      console.error('submitOrder error', e);
+      await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
+    } finally {
+      ctx.session.order = null;
+    }
   }
-
-  const orderNo = s.orderNo || makeOrderNo();
-
-  const CHANNEL_URL = 'https://t.me/memorialDNR';
-  const WEBAPP_URL = process.env.WEBAPP_URL;
-
-  try {
-    await sendOrderToManager(ctx, s, orderNo);
-
-    // убрать reply-клавиатуру анкеты
-    await ctx.reply(' ', kbRemove());
-
-    await ctx.reply(
-      `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
-        `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
-      Markup.inlineKeyboard([
-        Markup.button.url('Перейти в канал', CHANNEL_URL),
-        ...(WEBAPP_URL ? [Markup.button.webApp('Подобрать памятник', WEBAPP_URL)] : []),
-      ])
-    );
-  } catch (e) {
-    console.error('submitOrder error', e);
-    await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
-  } finally {
-    ctx.session.order = null;
-  }
-}
-
-
 
   async function cancelOrder(ctx, msg = 'Отменено.') {
     ctx.session.order = null;
@@ -195,18 +192,17 @@ export function registerOrders(bot, deps) {
   // -------- handlers --------
 
   bot.start(async (ctx) => {
-  const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
+    const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
 
-  let sourceToken = null;
-  const prefix = `${DEEPLINK_PREFIX}_`;
-  if (arg.startsWith(prefix)) {
-    sourceToken = arg.slice(prefix.length); // всё, что после prefix_
-  }
+    let sourceToken = null;
+    const prefix = `${DEEPLINK_PREFIX}_`;
+    if (arg.startsWith(prefix)) {
+      sourceToken = arg.slice(prefix.length); // всё, что после prefix_
+    }
 
-  await ctx.reply(HINT_TEXT);
-  await startOrder(ctx, sourceToken || undefined);
-});
-
+    await ctx.reply(HINT_TEXT);
+    await startOrder(ctx, sourceToken || undefined);
+  });
 
   bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена.'));
 
