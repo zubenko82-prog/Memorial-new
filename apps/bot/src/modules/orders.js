@@ -107,7 +107,8 @@ export function registerOrders(bot, deps) {
       const meta = await getPostMeta(sourceToken);
       const mid = meta?.messageId;
       if (!mid) return '';
-      return makePostLink(meta?.absChatId, mid);
+      const absChatId = meta?.absChatId;
+      return makePostLink(absChatId, mid);
     } catch {
       return '';
     }
@@ -193,7 +194,7 @@ export function registerOrders(bot, deps) {
           : kbRemove();
 
       await ctx.reply(
-        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру. Вы можете перейти в канал t.me/memorialDNR или подобрать памятник`,
+        `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру. Вы можете перейти в канал t.me/${CHANNEL_USERNAME} или подобрать памятник`,
         replyMarkup
       );
     } catch (e) {
@@ -231,23 +232,27 @@ export function registerOrders(bot, deps) {
     return stepBack(ctx);
   });
 
-  bot.hears('Отменить', async (ctx) => {
+  bot.hears('Отменить', async (ctx, next) => {
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
+    return next();
   });
 
-  bot.hears('Далее', async (ctx) => {
+  bot.hears('Далее', async (ctx, next) => {
     if (ctx.session?.order?.step === 'photos') {
       ctx.session.order.step = 'comment';
       return renderStep(ctx);
     }
+    return next();
   });
 
-  bot.hears('Продолжить', async (ctx) => {
+  bot.hears('Продолжить', async (ctx, next) => {
     if (ctx.session?.order?.step === 'comment') return stepReview(ctx);
+    return next();
   });
 
-  bot.hears('Отправить', async (ctx) => {
+  bot.hears('Отправить', async (ctx, next) => {
     if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
+    return next();
   });
 
   bot.on('message', async (ctx, next) => {

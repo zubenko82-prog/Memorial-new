@@ -321,18 +321,18 @@ export function registerPostWizard(bot, deps) {
     return ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  bot.hears('▶️ Новая публикация', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
+  bot.hears('▶️ Новая публикация', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
 
     ctx.session.postWizard.step = 'STELA';
     console.log('[postWizard] start wizard, step STELA');
     return askStep(ctx, 'STELA');
   });
 
-  bot.hears('♻️ Обновить цены', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
+  bot.hears('♻️ Обновить цены', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
 
     ctx.session.postWizard.step = 'update_prices';
     await ctx.reply(
@@ -343,15 +343,15 @@ export function registerPostWizard(bot, deps) {
 
   bot.hears('⬅️ Назад', async (ctx, next) => {
     if (ctx.session?.order) return next();
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard) return;
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard) return next();
 
     ctx.session.postWizard.step = 'menu';
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  bot.hears('Отменить', async (ctx) => {
-    if (!ctx.session?.postWizard) return;
+  bot.hears('Отменить', async (ctx, next) => {
+    if (!ctx.session?.postWizard) return next();
     ctx.session.postWizard = null;
     await ctx.reply('Отменено.', Markup.removeKeyboard());
   });
@@ -423,18 +423,8 @@ export function registerPostWizard(bot, deps) {
     );
   }
 
-   bot.on('message', async (ctx, next) => {
-    // Диагностика: что лежит в сессии и какой шаг мастера
-    try {
-      console.log(
-        '[postWizard] on message, whole session =',
-        JSON.stringify(ctx.session)
-      );
-    } catch (e) {
-      console.log('[postWizard] on message, cannot stringify session:', e?.message || e);
-    }
+  bot.on('message', async (ctx, next) => {
     console.log('[postWizard] on message, step =', ctx.session?.postWizard?.step);
-
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
 
@@ -444,59 +434,11 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // update-by-forward (оставляю как было)
-    if (wiz.step === 'update_wait_forward') {
-      const fwd = ctx.message?.forward_from_chat;
-      const messageId = ctx.message?.forward_from_message_id;
-
-      if (!fwd || !messageId) {
-        await ctx.reply('Это не пересланный пост из канала. Перешлите именно сообщение из канала.', kbPostCancelOnly());
-        return;
-      }
-
-      const channelId = getChannelId();
-      if (!channelId) {
-        await ctx.reply('CHANNEL_ID не задан.', kbPostMenu());
-        ctx.session.postWizard.step = 'menu';
-        return;
-      }
-
-      if (String(fwd.id) !== String(channelId)) {
-        await ctx.reply('Пост переслан не из того канала.', kbPostCancelOnly());
-        return;
-      }
-
-      const meta = await getCatalogPostMeta(messageId);
-      if (!meta?.selected) {
-        await ctx.reply(
-          'У меня нет сохранённого состава для этого поста (он должен быть опубликован через /post).',
-          kbPostMenu()
-        );
-        ctx.session.postWizard.step = 'menu';
-        return;
-      }
-
-      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-      const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
-      const baseText = normStr(meta.baseTextNoHint);
-      const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
-        0,
-        1024
-      );
-
-      await ctx.telegram.editMessageCaption(channelId, messageId, undefined, newCaption);
-      await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
-
-      await ctx.reply(`Обновлено.\nmessage_id: ${messageId}`, kbPostMenu());
-      ctx.session.postWizard.step = 'menu';
-      return;
-    }
-
-    if (!('text' in ctx.message) || !ctx.message.text) return;
+    if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
     if (wiz.step === 'CONFIRM') {
-      if (text !== 'Опубликовать') return;
+      if (text !== 'Опубликовать') return next();
 
       const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
       const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);

@@ -19,7 +19,7 @@ if (!process.env.VERCEL) {
 
 // ---------------- ENV ----------------
 const token = process.env.TGBOT_TOKEN ?? '';
-const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : -1003021100938;
+const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : 0;
 const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
 const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
@@ -86,7 +86,7 @@ async function saveSession(userId, data) {
   }
 }
 
-// ---------- post meta (sourceToken -> {text, messageId}) ----------
+// ---------- post meta (sourceToken -> {text, messageId, absChatId}) ----------
 async function setPostMeta(sourceToken, meta) {
   const key = `postmeta:${sourceToken}`;
   const r = await getRedis();
@@ -164,9 +164,15 @@ function makeOrderNo(d = new Date()) {
 }
 
 // Публичный канал: ссылка вида https://t.me/<username>/<message_id>
-function makePostLink(_absChatId, messageId) {
+function makePostLink(absChatId, messageId) {
   if (!messageId) return '';
-  return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
+  if (CHANNEL_USERNAME) {
+    return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
+  }
+  if (absChatId) {
+    return `https://t.me/c/${absChatId}/${messageId}`;
+  }
+  return '';
 }
 
 function isAdmin(ctx) {
@@ -180,7 +186,7 @@ let bot = null;
 if (token) {
   bot = new Telegraf(token);
 
-  // Глобальный лог всех текстовых сообщений
+  // Глобальный лог всех текстовых сообщений (для отладки)
   bot.on('message', (ctx, next) => {
     if ('text' in ctx.message && ctx.message.text) {
       console.log('[GLOBAL] message text =', JSON.stringify(ctx.message.text));
@@ -238,9 +244,12 @@ if (token) {
     const chat = ctx.chat || {};
     const from = ctx.from || {};
     const me = ctx.botInfo || (await ctx.telegram.getMe());
-    const info = [`chat_id = ${chat.id}`, `chat_type = ${chat.type}`, `user_id = ${from.id}`, `username = ${me.username}`].join(
-      '\n'
-    );
+    const info = [
+      `chat_id = ${chat.id}`,
+      `chat_type = ${chat.type}`,
+      `user_id = ${from.id}`,
+      `username = ${me.username}`,
+    ].join('\n');
     return ctx.reply('DEBUG:\n' + info);
   });
 
