@@ -5,25 +5,7 @@ import * as dotenv from 'dotenv';
 import { Telegraf } from 'telegraf';
 
 import { registerOrders } from './modules/orders.js';
-// apps/bot/src/bot.js (фрагмент: как регистрировать модуль с обновлением цен)
-// ...
 import { registerPostWizard } from './modules/postWizard.js';
-// ...
-
-registerPostWizard(bot, {
-  HINT_TEXT,
-  WEBAPP_URL,
-  DEEPLINK_PREFIX,
-  CATALOG_XLSX_PATH,
-  getChannelId,
-  isAdmin,
-  setCatalogPostMeta,
-  getCatalogPostMeta,
-  getAllCatalogPostKeys,
-  getCatalogPostMetaByKey,
-  setCatalogPostMetaByKey,
-});
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = pathDirname(__filename);
@@ -62,7 +44,8 @@ function getChannelId() {
 
 // ---------------- Optional Redis (Upstash) ----------------
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
-const mem = new Map(); // фолбэк для сессий
+const mem = new Map(); // sessions fallback
+const memCatalogPosts = new Map(); // fallback storage for catalogpost:<messageId> -> meta
 
 async function getRedis() {
   if (redisInstance !== undefined) return redisInstance;
@@ -82,6 +65,7 @@ async function getRedis() {
   return redisInstance;
 }
 
+// ---------- sessions ----------
 async function loadSession(userId) {
   const r = await getRedis();
   if (r) {
@@ -96,6 +80,48 @@ async function saveSession(userId, data) {
     await r.set(`sess:${userId}`, data, { ex: 60 * 60 * 24 }); // TTL 1 день
   } else {
     mem.set(userId, data);
+  }
+}
+
+// ---------- catalog post meta (for price update) ----------
+async function setCatalogPostMeta(messageId, meta) {
+  const key = `catalogpost:${messageId}`;
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  } else {
+    memCatalogPosts.set(key, meta);
+  }
+}
+async function getCatalogPostMeta(messageId) {
+  const key = `catalogpost:${messageId}`;
+  const r = await getRedis();
+  if (r) return (await r.get(key)) || null;
+  return memCatalogPosts.get(key) || null;
+}
+async function getAllCatalogPostKeys() {
+  const r = await getRedis();
+  if (r) {
+    try {
+      const keys = await r.keys('catalogpost:*');
+      return Array.isArray(keys) ? keys : [];
+    } catch {
+      return [];
+    }
+  }
+  return Array.from(memCatalogPosts.keys());
+}
+async function getCatalogPostMetaByKey(key) {
+  const r = await getRedis();
+  if (r) return (await r.get(key)) || null;
+  return memCatalogPosts.get(key) || null;
+}
+async function setCatalogPostMetaByKey(key, meta) {
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  } else {
+    memCatalogPosts.set(key, meta);
   }
 }
 
@@ -134,7 +160,6 @@ let bot = null;
 if (token) {
   bot = new Telegraf(token);
 
-  // Сессии
   bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (!uid) return next();
@@ -146,7 +171,6 @@ if (token) {
     }
   });
 
-  // Модули
   registerOrders(bot, {
     HINT_TEXT,
     DEEPLINK_PREFIX,
@@ -163,6 +187,11 @@ if (token) {
     CATALOG_XLSX_PATH,
     getChannelId,
     isAdmin,
+    setCatalogPostMeta,
+    getCatalogPostMeta,
+    getAllCatalogPostKeys,
+    getCatalogPostMetaByKey,
+    setCatalogPostMetaByKey,
   });
 
   bot.command('dump', async (ctx) => {
