@@ -180,6 +180,15 @@ let bot = null;
 if (token) {
   bot = new Telegraf(token);
 
+  // Глобальный лог всех текстовых сообщений
+  bot.on('message', (ctx, next) => {
+    if ('text' in ctx.message && ctx.message.text) {
+      console.log('[GLOBAL] message text =', JSON.stringify(ctx.message.text));
+    }
+    return next();
+  });
+
+  // Middleware сессий
   bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (!uid) return next();
@@ -191,6 +200,7 @@ if (token) {
     }
   });
 
+  // Модуль анкеты заказов
   registerOrders(bot, {
     HINT_TEXT,
     DEEPLINK_PREFIX,
@@ -203,6 +213,7 @@ if (token) {
     getPostMeta,
   });
 
+  // Модуль мастера /post
   registerPostWizard(bot, {
     HINT_TEXT,
     WEBAPP_URL,
