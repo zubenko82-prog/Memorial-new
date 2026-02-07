@@ -51,6 +51,7 @@ function calcCaptionAndTags({ items, bands }, selected) {
   for (const sku of skuList) {
     const it = bySku.get(sku);
     if (!it) continue;
+
     total += Number(it.price || 0);
 
     if (it.group === 'STELA' && it.tag_ru) stelaTag = it.tag_ru;
@@ -101,9 +102,9 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   const colIndex = (name) => header.findIndex((v) => String(v || '').trim() === name);
 
   const idxSku = colIndex('sku');
-  const idxGroup colIndex('group');
+  const idxGroup = colIndex('group');
   const idxLabel = colIndex('label');
-  const idx = colIndex('price');
+  const idxPrice = colIndex('price');
   const idxActive = colIndex('active');
   const idxTag = colIndex('tag_ru');
 
@@ -114,10 +115,11 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   const items = [];
   wsCat.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
+
     const sku = String(row.getCell(idxSku).value || '').trim();
     if (!sku) return;
 
-    const active = rowCell(idxActive).value;
+    const active = row.getCell(idxActive).value;
     const isActive = String(active).trim() === '1' || active === 1 || active === true;
     if (!isActive) return;
 
@@ -134,9 +136,10 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   if (!wsBands) throw new Error('В catalog.xlsx отсутствует лист "PriceBands".');
 
   const headerB = wsBands.getRow(1).values;
-  const bMin = headerB.findIndex((v) => String(v || '').trim() === '');
+  const bMin = headerB.findIndex((v) => String(v || '').trim() === 'min');
   const bMax = headerB.findIndex((v) => String(v || '').trim() === 'max');
   const bTag = headerB.findIndex((v) => String(v || '').trim() === 'tag_ru');
+
   if ([bMin, bMax, bTag].some((i) => i < 1)) {
     throw new Error('Лист "PriceBands" должен содержать колонки: min, max, tag_ru');
   }
@@ -154,7 +157,7 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   return { items, bands };
 }
 
-// ---------- publish to channel with kb (как в рабочем коде) ----------
+// ---------- publish to channel with kb ----------
 function channelPostKbFull(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP_URL) {
   const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
   const webAppUrl = new URL(WEBAPP_URL).toString();
@@ -176,16 +179,15 @@ function channelPostKbFallback(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP
 }
 
 async function postToChannelWithKb(ctx, deps, kind, payload, baseTextNoHint) {
-  const { getChannelId, WEBAPP_URL, DEEPLINK_PREFIX, setPostMeta } = deps;
-  const chatId = getChannelId();
+  const chatId = deps.getChannelId();
   if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
 
   const me = ctx.botInfo || (await ctx.telegram.getMe());
   const botUsername = me.username;
 
   const sourceToken = makeSourceToken();
-  const kbFull = channelPostKbFull(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP_URL).reply_markup;
-  const kbFallback = channelPostKbFallback(botUsername, sourceToken, DEEPLINK_PREFIX, WEBAPP_URL).reply_markup;
+  const kbFull = channelPostKbFull(botUsername, sourceToken, deps.DEEPLINK_PREFIX, deps.WEBAPP_URL).reply_markup;
+  const kbFallback = channelPostKbFallback(botUsername, sourceToken, deps.DEEPLINK_PREFIX, deps.WEBAPP_URL).reply_markup;
 
   const trySend = async ({ useHtml, replyMarkup }) => {
     const common = { ...(useHtml ? { parse_mode: 'HTML' } : {}), ...(replyMarkup ? { reply_markup: replyMarkup } : {}) };
@@ -238,25 +240,16 @@ async function postToChannelWithKb(ctx, deps, kind, payload, baseTextNoHint) {
   }
 
   const abs = Math.abs(Number(msg.chat.id));
-  await setPostMeta(sourceToken, { text: baseTextNoHint || '', absChatId: abs, messageId: msg.message_id });
+  await deps.setPostMeta(sourceToken, { text: baseTextNoHint || '', absChatId: abs, messageId: msg.message_id });
 
   return { primary: msg, sourceToken };
 }
 
-// ---------- wizard ----------
+// ---------- module ----------
 export function registerPostWizard(bot, deps) {
-  const {
-    HINT_TEXT,
-    WEBAPP_URL,
-    DEEPLINK_PREFIX,
-    CATALOG_XLSX_PATH,
-    getChannelId,
-    isAdmin,
-    setPostMeta,
-    setCatalogPostMeta,
-  } = deps;
-
-  if (typeof setPostMeta !== 'function') throw new Error('registerPostWizard: setPostMeta is required');
+  if (typeof deps.setPostMeta !== 'function') {
+    throw new Error('registerPostWizard: setPostMeta is required');
+  }
 
   const STEPS = [
     { group: 'STELA', mode: 'single', allowNone: false },
@@ -268,35 +261,28 @@ export function registerPostWizard(bot, deps) {
     { group: 'GRAFIKA', mode: 'multi', allowNone: false },
   ];
 
-  function kbMenu() {
-    return Markup.keyboard([['▶️ Новая публикация'], ['Отменить']]).resize();
-  }
+  const kbMenu = () => Markup.keyboard([['▶️ Новая публикация'], ['Отменить']]).resize();
+  const kbCancelOnly = () => Markup.keyboard([['Отменить']]).resize();
 
-  function kbCancelOnly() {
-    return Markup.keyboard([['Отменить']]).resize();
-  }
-
-  function kbForStep(step, list) {
-    const buttons = list.map((it) => it.label);
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-
-    if (step.allowNone) rows.push(['— Нет —']);
-    if (step.mode === 'multi') rows.unshift(['Далее', 'Сбросить']);
-
-    rows.push(['Отменить']);
-    return Markup.keyboard(rows).resize();
-  }
-
-  function initSelected() {
+  const initSelected = () => {
     const selected = {};
     for (const s of STEPS) selected[s.group] = s.mode === 'multi' ? [] : null;
     return selected;
-  }
+  };
+
+  const kbForStep = (step, list) => {
+    const buttons = list.map((it) => it.label);
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+    if (step.allowNone) rows.push(['— Нет —']);
+    if (step.mode === 'multi') rows.unshift(['Далее', 'Сбросить']);
+    rows.push(['Отменить']);
+    return Markup.keyboard(rows).resize();
+  };
 
   async function askStep(ctx) {
     const wiz = ctx.session.postWizard;
-    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+    const catalog = await loadCatalogFromXlsx(deps.CATALOG_XLSX_PATH);
 
     const step = STEPS[wiz.stepIndex];
     if (!step) {
@@ -320,12 +306,12 @@ export function registerPostWizard(bot, deps) {
 
   async function preview(ctx, catalog) {
     const wiz = ctx.session.postWizard;
+
     const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
+    wiz._previewTotal = total;
 
     const base = (wiz.baseTextNoHint || '').trim();
-    const full = base ? `${base}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
-
-    wiz._previewTotal = total;
+    const full = base ? `${base}\n\n${caption}\n\n${deps.HINT_TEXT}` : `${caption}\n\n${deps.HINT_TEXT}`;
 
     return ctx.reply(
       `Предпросмотр:\n\n${full}\n\nНажмите «Опубликовать» или «Назад».`,
@@ -334,16 +320,16 @@ export function registerPostWizard(bot, deps) {
   }
 
   bot.command('post', async (ctx) => {
-    const channelId = getChannelId();
+    const channelId = deps.getChannelId();
     if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
-    if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
+    if (!deps.isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
 
     ctx.session.postWizard = { step: 'menu' };
     return ctx.reply('Меню /post:', kbMenu());
   });
 
   bot.hears('▶️ Новая публикация', async (ctx) => {
-    if (!isAdmin(ctx)) return;
+    if (!deps.isAdmin(ctx)) return;
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return;
 
     ctx.session.postWizard.step = 'await_base';
@@ -362,14 +348,13 @@ export function registerPostWizard(bot, deps) {
   bot.on('message', async (ctx, next) => {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
-    if (!isAdmin(ctx)) return;
+    if (!deps.isAdmin(ctx)) return;
 
-    // 1) ждём исходник (текст/медиа)
+    // 1) ждём исходник
     if (wiz.step === 'await_base') {
       const text = 'text' in ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
       const r = ctx.message?.reply_to_message;
 
-      // текст поста берём из текущего сообщения (как раньше /post ...)
       wiz.baseTextNoHint = text;
 
       if (r?.photo?.length) wiz.media = { kind: 'photo', fileId: r.photo.at(-1).file_id };
@@ -392,8 +377,9 @@ export function registerPostWizard(bot, deps) {
       if (!('text' in ctx.message) || !ctx.message.text) return;
       const input = ctx.message.text.trim();
 
-      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+      const catalog = await loadCatalogFromXlsx(deps.CATALOG_XLSX_PATH);
       const step = STEPS[wiz.stepIndex];
+
       if (!step) {
         wiz.step = 'preview';
         return preview(ctx, catalog);
@@ -423,9 +409,7 @@ export function registerPostWizard(bot, deps) {
 
       const list = catalog.items.filter((it) => it.group === step.group);
       const it = list.find((x) => x.label === input);
-      if (!it) {
-        return ctx.reply('Нажмите кнопку на клавиатуре.', kbForStep(step, list));
-      }
+      if (!it) return ctx.reply('Нажмите кнопку на клавиатуре.', kbForStep(step, list));
 
       if (step.mode === 'single') {
         wiz.selected[step.group] = it.sku;
@@ -437,7 +421,7 @@ export function registerPostWizard(bot, deps) {
         if (idx >= 0) arr.splice(idx, 1);
         else arr.push(it.sku);
         wiz.selected[step.group] = arr;
-        return; // остаёмся на шаге
+        return;
       }
     }
 
@@ -454,11 +438,11 @@ export function registerPostWizard(bot, deps) {
 
       if (input !== 'Опубликовать') return;
 
-      const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+      const catalog = await loadCatalogFromXlsx(deps.CATALOG_XLSX_PATH);
       const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
 
       const base = (wiz.baseTextNoHint || '').trim();
-      const final = base ? `${base}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
+      const final = base ? `${base}\n\n${caption}\n\n${deps.HINT_TEXT}` : `${caption}\n\n${deps.HINT_TEXT}`;
 
       const kind = wiz.media.kind;
 
@@ -473,9 +457,9 @@ export function registerPostWizard(bot, deps) {
         ({ primary } = await postToChannelWithKb(ctx, deps, 'text', { text: final }, base));
       }
 
-      if (typeof setCatalogPostMeta === 'function') {
-        await setCatalogPostMeta(primary.message_id, {
-          channel_id: String(getChannelId()),
+      if (typeof deps.setCatalogPostMeta === 'function') {
+        await deps.setCatalogPostMeta(primary.message_id, {
+          channel_id: String(deps.getChannelId()),
           message_id_caption: primary.message_id,
           date: Date.now(),
           items: wiz.selected,
