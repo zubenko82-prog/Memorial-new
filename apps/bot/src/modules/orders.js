@@ -149,7 +149,7 @@ export function registerOrders(bot, deps) {
     }
   }
 
-  async function submitOrder(ctx) {
+ async function submitOrder(ctx) {
   const s = ctx.session.order || {};
   if (!s.name || !s.phone || !phoneOk(s.phone)) {
     return ctx.reply(
@@ -161,19 +161,22 @@ export function registerOrders(bot, deps) {
   const orderNo = s.orderNo || makeOrderNo();
 
   const CHANNEL_URL = 'https://t.me/memorialDNR';
-const WEBAPP_URL = process.env.WEBAPP_URL;
+  const WEBAPP_URL = process.env.WEBAPP_URL;
 
-await ctx.reply(' ', kbRemove());
+  try {
+    await sendOrderToManager(ctx, s, orderNo);
 
-await ctx.reply(
-  `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
-    `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
-  Markup.inlineKeyboard([
-    Markup.button.url('Перейти в канал', CHANNEL_URL),
-    ...(WEBAPP_URL ? [Markup.button.webApp('Подобрать памятник', WEBAPP_URL)] : []),
-  ])
-);
+    // убрать reply-клавиатуру анкеты
+    await ctx.reply(' ', kbRemove());
 
+    await ctx.reply(
+      `Заявка №${orderNo} отправлена. Спасибо, ${s.name}! Наш менеджер свяжется с вами по указанному номеру.\n\n` +
+        `Вы можете перейти в канал: t.me/memorialDNR или подобрать памятник:`,
+      Markup.inlineKeyboard([
+        Markup.button.url('Перейти в канал', CHANNEL_URL),
+        ...(WEBAPP_URL ? [Markup.button.webApp('Подобрать памятник', WEBAPP_URL)] : []),
+      ])
+    );
   } catch (e) {
     console.error('submitOrder error', e);
     await ctx.reply('Не удалось отправить заявку. Попробуйте позже.', kbRemove());
@@ -181,6 +184,7 @@ await ctx.reply(
     ctx.session.order = null;
   }
 }
+
 
 
   async function cancelOrder(ctx, msg = 'Отменено.') {
