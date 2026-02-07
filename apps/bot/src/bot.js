@@ -248,9 +248,6 @@ function buildManagerSummary(s, orderNo, user, postText, postLink) {
   return lines.join('\n');
 }
 
-console.log('[order] sourceToken=', s.sourceToken, 'postMeta=', await getPostMeta(s.sourceToken));
-
-
 async function sendOrderToManager(ctx, state, orderNo, postText, postLink) {
   const managerText = buildManagerSummary(state, orderNo, ctx.from, postText, postLink);
   const photos = Array.isArray(state.photos) ? state.photos : [];
@@ -650,12 +647,17 @@ if (token) {
     );
   });
 
-  bot.hears('⬅️ Назад', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    if (!ctx.session?.postWizard) return;
-    ctx.session.postWizard.step = 'menu';
-    await ctx.reply('Меню /post:', kbPostMenu());
-  });
+ bot.hears('⬅️ Назад', async (ctx) => {
+  // если активна анкета — "назад" должна работать для анкеты, не для /post
+  if (ctx.session?.order) return;
+
+  if (!isAdmin(ctx)) return;
+  if (!ctx.session?.postWizard) return;
+
+  ctx.session.postWizard.step = 'menu';
+  await ctx.reply('Меню /post:', kbPostMenu());
+});
+
 
   bot.hears('🔁 Обновить все', async (ctx) => {
     if (!isAdmin(ctx)) return;
@@ -1169,21 +1171,6 @@ async function stepPhotos(ctx) {
 async function stepComment(ctx) {
   ctx.session.order.step = 'comment';
   return renderOrderStep(ctx);
-}
-
-
-  s.step = prev;
-
-  if (prev === 'name') return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbInput());
-  if (prev === 'phone') return ctx.reply('Шаг 2/6. Номер телефона (или нажмите «📱 Отправить мой контакт»):', kbPhone());
-  if (prev === 'fio') return ctx.reply('Шаг 3/6. Фамилия/Имя/Отчество усопшего:', kbInput());
-  if (prev === 'dates')
-    return ctx.reply(
-      'Шаг 4/6. Дата рождения — Дата смерти (в формате DD.MM.YYYY - DD.MM.YYYY). Например: 12.03.1950 - 05.11.2020',
-      kbInput()
-    );
-  if (prev === 'photos') return ctx.reply('Шаг 5/6. Прикрепите фото. Когда закончите — нажмите «Далее».', kbPhotos());
-  if (prev === 'comment') return ctx.reply('Шаг 6/6. Комментарий или дополнительный способ связи (по желанию):', kbComment());
 }
 
 async function stepReview(ctx) {
