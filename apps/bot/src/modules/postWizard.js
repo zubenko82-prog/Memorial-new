@@ -428,6 +428,15 @@ export function registerPostWizard(bot, deps) {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
 
+    bot.on('message', async (ctx, next) => {
+  console.log('[postWizard] on message, whole session =', JSON.stringify(ctx.session));
+  console.log('[postWizard] on message, step=', ctx.session?.postWizard?.step);
+  const wiz = ctx.session?.postWizard;
+  if (!wiz) return next();
+  ...
+});
+
+
     if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;
       await ctx.reply('Отменено.', Markup.removeKeyboard());
