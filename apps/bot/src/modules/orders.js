@@ -241,23 +241,27 @@ export function registerOrders(bot, deps) {
     if (!s.orderNo) s.orderNo = makeOrderNo();
 
     const lines = [
-      `📄 Предпросмотр заявки №${s.orderNo}`,
-      '',
-      'Проверьте, пожалуйста, данные:',
-      '',
-      `👤 Заказчик: ${s.name || '—'}`,
-      `📞 Телефон: ${s.phone || '—'}`,
-      `🕊 ФИО усопшего: ${s.fio?.trim() || '-'}`,
-      `📅 Даты: ${s.dates?.trim() || '-'}`,
-      s.photos?.length ? `🖼 Фото: ${s.photos.length} шт.` : '🖼 Фото: не прикреплены',
-      s.comment?.trim() ? `💬 Комментарий/связь: ${s.comment.trim()}` : null,
-      '',
-      'Если всё верно — нажмите «📨 Отправить».\nЕсли хотите что-то изменить — используйте «⬅️ Назад».',
-    ].filter(Boolean);
+  `📄 Предпросмотр заявки №${s.orderNo}`,
+  '',
+  '',
+  'Проверьте, пожалуйста, данные:',
+  '',
+  `👤 Заказчик: ${s.name || '—'}`,
+  `📞 Телефон: ${s.phone || '—'}`,
+  '',
+  `🕊 ФИО усопшего: ${s.fio?.trim() || '-'}`,
+  '',
+  `📅 Даты: ${s.dates?.trim() || '-'}`,
+  s.photos?.length ? `🖼 Фото: ${s.photos.length} шт.` : '🖼 Фото: не прикреплены',
+  '', // ← пустая строка сразу после "Фото"
+  s.comment?.trim() ? `💬 Комментарий/связь: ${s.comment.trim()}` : null,
+  '', // ← пустая строка перед блоком "Если всё верно"
+  'Если всё верно — нажмите «📨 Отправить».',
+  'Если хотите что-то изменить — используйте «⬅️ Назад».',
+].filter(Boolean);
 
-    console.log('[orders] stepReview, orderNo =', s.orderNo);
-    await ctx.reply(lines.join('\n'), kbReview());
-  }
+await ctx.reply(lines.join('\n'), kbReview());
+
 
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
