@@ -163,14 +163,6 @@ function LoudAccordion({
   const ref = useRef<HTMLDivElement | null>(null);
   const [h, setH] = useState(0);
 
- useEffect(() => {
-  try {
-    localStorage.setItem("memorial.visited.BackEditorStep", "1");
-  } catch {}
-}, []);
-
-
-
   useEffect(() => {
     const m = () => setH(ref.current?.scrollHeight || 0);
     m();
