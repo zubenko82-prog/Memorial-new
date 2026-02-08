@@ -25,84 +25,91 @@ function normalizeSelectedToSkuList(selected) {
 
 // собираем состав заказа и цену по данным поста
 async function buildOrderCompositionText(sourceToken, makePostLink, getPostMeta, loadCatalogFromXlsx) {
-  if (!sourceToken || typeof getPostMeta !== 'function' || typeof loadCatalogFromXlsx !== 'function') {
-    return { compositionText: 'Состав заказа: —', priceLine: 'Итого по посту: —', postLink: '' };
+  // по умолчанию: пустой состав, пустая цена, но ссылка может быть
+  let compositionText = 'Состав заказа: —';
+  let priceLine = 'Итого по посту: —';
+  let postLink = '';
+
+  if (!sourceToken || typeof getPostMeta !== 'function') {
+    return { compositionText, priceLine, postLink };
   }
 
   const postMeta = await getPostMeta(sourceToken).catch(() => null);
 
-  let postLink = '';
+  // ссылка на пост: используем то, что уже сохраняется в setPostMeta
   if (postMeta?.messageId) {
     const absChatId = postMeta.absChatId;
     postLink = makePostLink(absChatId, postMeta.messageId);
   }
 
-  const selected = postMeta?.selected || null;
+  // если нет функции каталога или нет selected — просто возвращаем состав/цену "—", но со ссылкой
+  if (!postMeta?.selected || typeof loadCatalogFromXlsx !== 'function') {
+    return { compositionText, priceLine, postLink };
+  }
+
+  const selected = postMeta.selected;
   const lastTotal = Number(postMeta?.last_total_price || 0);
 
   let total = lastTotal;
-  let compositionLines = [];
+  const compositionLines = [];
 
   try {
     const catalog = await loadCatalogFromXlsx();
     const items = catalog.items || [];
 
-    if (selected) {
-      const bySku = new Map(items.map((it) => [it.sku, it]));
-      const skuList = normalizeSelectedToSkuList(selected);
+    const bySku = new Map(items.map((it) => [it.sku, it]));
+    const skuList = normalizeSelectedToSkuList(selected);
 
-      total = 0;
-      const groupLines = {
-        STELA: [],
-        TUMBA: [],
-        CVETNIK: [],
-        PLITA: [],
-        WORK: [],
-        OPTION: [],
-        GRAFIKA: [],
-      };
+    total = 0;
+    const groupLines = {
+      STELA: [],
+      TUMBA: [],
+      CVETNIK: [],
+      PLITA: [],
+      WORK: [],
+      OPTION: [],
+      GRAFIKA: [],
+    };
 
-      for (const sku of skuList) {
-        const it = bySku.get(sku);
-        if (!it) continue;
-        total += Number(it.price || 0);
+    for (const sku of skuList) {
+      const it = bySku.get(sku);
+      if (!it) continue;
+      total += Number(it.price || 0);
 
-        const line = `${it.label || it.sku} — ${Number(it.price || 0).toLocaleString('ru-RU')} ₽`;
-        const g = up(it.group);
-        if (groupLines[g]) groupLines[g].push(line);
-      }
-
-      const pushGroupBlock = (title, arr) => {
-        if (!arr || !arr.length) return;
-        compositionLines.push(title);
-        for (const l of arr) compositionLines.push(`• ${l}`);
-        compositionLines.push('');
-      };
-
-      pushGroupBlock('Стела:', groupLines.STELA);
-      pushGroupBlock('Тумба:', groupLines.TUMBA);
-      pushGroupBlock('Цветник:', groupLines.CVETNIK);
-      pushGroupBlock('Плита:', groupLines.PLITA);
-      pushGroupBlock('Работа:', groupLines.WORK);
-      pushGroupBlock('Опции:', groupLines.OPTION);
-      pushGroupBlock('Графика:', groupLines.GRAFIKA);
+      const line = `${it.label || it.sku} — ${Number(it.price || 0).toLocaleString('ru-RU')} ₽`;
+      const g = up(it.group);
+      if (groupLines[g]) groupLines[g].push(line);
     }
+
+    const pushGroupBlock = (title, arr) => {
+      if (!arr || !arr.length) return;
+      compositionLines.push(title);
+      for (const l of arr) compositionLines.push(`• ${l}`);
+      compositionLines.push('');
+    };
+
+    pushGroupBlock('Стела:', groupLines.STELA);
+    pushGroupBlock('Тумба:', groupLines.TUMBA);
+    pushGroupBlock('Цветник:', groupLines.CVETNIK);
+    pushGroupBlock('Плита:', groupLines.PLITA);
+    pushGroupBlock('Работа:', groupLines.WORK);
+    pushGroupBlock('Опции:', groupLines.OPTION);
+    pushGroupBlock('Графика:', groupLines.GRAFIKA);
   } catch (e) {
     console.error('[orders] buildOrderCompositionText error', e?.message || e);
   }
 
-  if (!compositionLines.length) {
-    compositionLines = ['Состав заказа: —'];
-  } else {
+  if (compositionLines.length) {
     compositionLines.unshift('Состав заказа:');
+    compositionText = compositionLines.join('\n').trim();
   }
 
-  const compositionText = compositionLines.join('\n').trim();
-  const priceLine =
+  priceLine =
     total > 0 ? `Итого по посту: ${Number(total).toLocaleString('ru-RU')} ₽` : 'Итого по посту: —';
 
   return { compositionText, priceLine, postLink };
 }
+
 
 async function buildManagerSummary(
   s,
@@ -148,12 +155,16 @@ async function buildManagerSummary(
   if (s.comment?.trim()) lines.push(`Комментарий/связь: ${s.comment.trim()}`);
 
   try {
-    const { compositionText, priceLine, postLink } = await buildOrderCompositionText(
-      sourceToken,
-      makePostLink,
-      getPostMeta,
-      loadCatalogFromXlsx
-    );
+    const { compositionText, priceLine, postLink } = await buildOrderCompositionText(...);
+
+lines.push('');
+lines.push(compositionText);
+lines.push(priceLine);
+if (postLink) {
+  lines.push('');
+  lines.push(`Ссылка на пост: ${postLink}`);
+}
+
 
     lines.push('');
     lines.push(compositionText);
