@@ -1557,15 +1557,7 @@ return (
 
 
 
-export default function BackEditorStep({
-  useEffect(() => {
-    try {
-      localStorage.setItem("memorial.visited.BackEditorStep", "1");
-    } catch {
-      // ignore
-    }
-  }, []);
- onBack, onContinue }: Props) {
+export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [outro, setOutro] = useState(false);
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
   
@@ -2908,7 +2900,6 @@ const plateCtx: PlateCtx = {
     </div>
   );
 }
-
 
 
 
