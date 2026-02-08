@@ -5,7 +5,7 @@ import * as dotenv from 'dotenv';
 import { Telegraf } from 'telegraf';
 
 import { registerOrders } from './modules/orders.js';
-import { registerPostWizard } from './modules/postWizard.js';
+import { registerPostWizard, loadCatalogFromXlsx } from './modules/postWizard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = pathDirname(__filename);
@@ -220,17 +220,19 @@ if (token) {
   });
 
   // Модуль анкеты заказов
-  registerOrders(bot, {
-    HINT_TEXT,
-    DEEPLINK_PREFIX,
-    phoneOk,
-    makeOrderNo,
-    makePostLink,
-    MANAGER_CHAT_ID,
-    CHANNEL_USERNAME,
-    WEBAPP_URL,
-    getPostMeta,
-  });
+registerOrders(bot, {
+  HINT_TEXT,
+  DEEPLINK_PREFIX,
+  phoneOk,
+  makeOrderNo,
+  makePostLink,
+  MANAGER_CHAT_ID,
+  CHANNEL_USERNAME,
+  WEBAPP_URL,
+  getPostMeta,
+  loadCatalogFromXlsx, // <‑‑ добавлено
+});
+
 
   // Модуль мастера /post
   registerPostWizard(bot, {

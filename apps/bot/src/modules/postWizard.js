@@ -168,6 +168,9 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   return { items, bands };
 }
 
+// Делаем loadCatalogFromXlsx доступным снаружи (для orders.js через bot.js)
+export { loadCatalogFromXlsx };
+
 export function registerPostWizard(bot, deps) {
   const {
     HINT_TEXT,

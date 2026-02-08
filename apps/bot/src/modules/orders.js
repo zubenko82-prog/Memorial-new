@@ -1,7 +1,120 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-function buildManagerSummary(s, orderNo, user, postLink) {
+// ---- утилиты для разбора состава заказа по catalog.xlsx ----
+const normStr = (v) => String(v || '').trim();
+const up = (v) => normStr(v).toUpperCase();
+
+function normalizeSelectedToSkuList(selected) {
+  const res = [];
+  for (const v of Object.values(selected || {})) {
+    if (!v) continue;
+    if (Array.isArray(v)) res.push(...v);
+    else res.push(v);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const sku of res) {
+    if (!seen.has(sku)) {
+      seen.add(sku);
+      out.push(sku);
+    }
+  }
+  return out;
+}
+
+// собираем состав заказа и цену по данным поста
+async function buildOrderCompositionText(sourceToken, makePostLink, getPostMeta, loadCatalogFromXlsx) {
+  if (!sourceToken || typeof getPostMeta !== 'function' || typeof loadCatalogFromXlsx !== 'function') {
+    return { compositionText: 'Состав заказа: —', priceLine: 'Итого по посту: —', postLink: '' };
+  }
+
+  const postMeta = await getPostMeta(sourceToken).catch(() => null);
+
+  let postLink = '';
+  if (postMeta?.messageId) {
+    const absChatId = postMeta.absChatId;
+    postLink = makePostLink(absChatId, postMeta.messageId);
+  }
+
+  const selected = postMeta?.selected || null;
+  const lastTotal = Number(postMeta?.last_total_price || 0);
+
+  let total = lastTotal;
+  let compositionLines = [];
+
+  try {
+    const catalog = await loadCatalogFromXlsx();
+    const items = catalog.items || [];
+
+    if (selected) {
+      const bySku = new Map(items.map((it) => [it.sku, it]));
+      const skuList = normalizeSelectedToSkuList(selected);
+
+      total = 0;
+      const groupLines = {
+        STELA: [],
+        TUMBA: [],
+        CVETNIK: [],
+        PLITA: [],
+        WORK: [],
+        OPTION: [],
+        GRAFIKA: [],
+      };
+
+      for (const sku of skuList) {
+        const it = bySku.get(sku);
+        if (!it) continue;
+        total += Number(it.price || 0);
+
+        const line = `${it.label || it.sku} — ${Number(it.price || 0).toLocaleString('ru-RU')} ₽`;
+        const g = up(it.group);
+        if (groupLines[g]) groupLines[g].push(line);
+      }
+
+      const pushGroupBlock = (title, arr) => {
+        if (!arr || !arr.length) return;
+        compositionLines.push(title);
+        for (const l of arr) compositionLines.push(`• ${l}`);
+        compositionLines.push('');
+      };
+
+      pushGroupBlock('Стела:', groupLines.STELA);
+      pushGroupBlock('Тумба:', groupLines.TUMBA);
+      pushGroupBlock('Цветник:', groupLines.CVETNIK);
+      pushGroupBlock('Плита:', groupLines.PLITA);
+      pushGroupBlock('Работа:', groupLines.WORK);
+      pushGroupBlock('Опции:', groupLines.OPTION);
+      pushGroupBlock('Графика:', groupLines.GRAFIKA);
+    }
+  } catch (e) {
+    console.error('[orders] buildOrderCompositionText error', e?.message || e);
+  }
+
+  if (!compositionLines.length) {
+    compositionLines = ['Состав заказа: —'];
+  } else {
+    compositionLines.unshift('Состав заказа:');
+  }
+
+  const compositionText = compositionLines.join('\n').trim();
+  const priceLine =
+    total > 0 ? `Итого по посту: ${Number(total).toLocaleString('ru-RU')} ₽` : 'Итого по посту: —';
+
+  return { compositionText, priceLine, postLink };
+}
+
+async function buildManagerSummary(
+  s,
+  orderNo,
+  user,
+  {
+    sourceToken,
+    makePostLink,
+    getPostMeta,
+    loadCatalogFromXlsx,
+  }
+) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
 
@@ -33,7 +146,25 @@ function buildManagerSummary(s, orderNo, user, postLink) {
   ];
 
   if (s.comment?.trim()) lines.push(`Комментарий/связь: ${s.comment.trim()}`);
-  if (postLink) lines.push('', `Ссылка на пост: ${postLink}`);
+
+  try {
+    const { compositionText, priceLine, postLink } = await buildOrderCompositionText(
+      sourceToken,
+      makePostLink,
+      getPostMeta,
+      loadCatalogFromXlsx
+    );
+
+    lines.push('');
+    lines.push(compositionText);
+    lines.push(priceLine);
+    if (postLink) {
+      lines.push('');
+      lines.push(`Ссылка на пост: ${postLink}`);
+    }
+  } catch (e) {
+    console.error('[orders] buildManagerSummary composition error', e?.message || e);
+  }
 
   return lines.join('\n');
 }
@@ -49,13 +180,12 @@ export function registerOrders(bot, deps) {
     makePostLink,
     MANAGER_CHAT_ID,
 
-    // optional (для кнопок и ссылки на пост):
     CHANNEL_USERNAME,
     WEBAPP_URL,
     getPostMeta,
+    loadCatalogFromXlsx, // ПОЛУЧАЕМ ИЗ bot.js
   } = deps;
 
-  // ---- клавиатуры анкеты
   const kbName = () => Markup.keyboard([['Отменить']]).resize();
   const kbPhone = () =>
     Markup.keyboard([[Markup.button.contactRequest('📱 Отправить мой контакт')], ['⬅️ Назад'], ['Отменить']]).resize();
@@ -66,8 +196,6 @@ export function registerOrders(bot, deps) {
   const kbRemove = () => Markup.removeKeyboard();
 
   const stepOrder = ['name', 'phone', 'fio', 'dates', 'photos', 'comment', 'review'];
-
-  // -------- служебные функции --------
 
   function getOrder(ctx) {
     if (!ctx.session) ctx.session = {};
@@ -106,7 +234,6 @@ export function registerOrders(bot, deps) {
       return stepReview(ctx);
     }
 
-    // fallback
     s.step = 'name';
     return ctx.reply('Шаг 1/6. Заказчик (ФИО/имя):', kbName());
   }
@@ -131,26 +258,10 @@ export function registerOrders(bot, deps) {
     return renderStep(ctx);
   }
 
-  async function getPostLinkFromToken(sourceToken) {
-    if (!sourceToken || typeof getPostMeta !== 'function') return '';
-    try {
-      const meta = await getPostMeta(sourceToken);
-      const mid = meta?.messageId;
-      if (!mid) return '';
-      const absChatId = meta?.absChatId;
-      return makePostLink(absChatId, mid);
-    } catch (e) {
-      console.error('[orders] getPostLinkFromToken error', e?.message || e);
-      return '';
-    }
-  }
-
   async function stepReview(ctx) {
     const s = getOrder(ctx);
     s.step = 'review';
     if (!s.orderNo) s.orderNo = makeOrderNo();
-
-    const postLink = await getPostLinkFromToken(s.sourceToken);
 
     const lines = [
       `Заявка №${s.orderNo}:`,
@@ -161,7 +272,6 @@ export function registerOrders(bot, deps) {
       `Даты: ${s.dates?.trim() || '-'}`,
       s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
       s.comment?.trim() ? `Комментарий/связь: ${s.comment.trim()}` : null,
-      postLink ? `Ссылка на пост: ${postLink}` : null,
     ].filter(Boolean);
 
     console.log('[orders] stepReview, orderNo =', s.orderNo);
@@ -171,10 +281,19 @@ export function registerOrders(bot, deps) {
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
 
-    const postLink = await getPostLinkFromToken(s.sourceToken);
-    const managerText = buildManagerSummary(s, orderNo, ctx.from, postLink);
+    const managerText = await buildManagerSummary(s, orderNo, ctx.from, {
+      sourceToken: s.sourceToken,
+      makePostLink,
+      getPostMeta,
+      loadCatalogFromXlsx,
+    });
 
-    console.log('[orders] sendOrderToManager, MANAGER_CHAT_ID =', MANAGER_CHAT_ID, 'photos =', s.photos?.length || 0);
+    console.log(
+      '[orders] sendOrderToManager, MANAGER_CHAT_ID =',
+      MANAGER_CHAT_ID,
+      'photos =',
+      s.photos?.length || 0
+    );
 
     const photos = Array.isArray(s.photos) ? s.photos : [];
     if (photos.length > 0) {
@@ -362,7 +481,6 @@ export function registerOrders(bot, deps) {
       }
     }
 
-    // не обработали в анкете — отдаём дальше (/post wizard)
     return next();
   });
 }
