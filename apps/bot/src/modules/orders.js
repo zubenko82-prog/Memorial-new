@@ -12,10 +12,41 @@ function extractPriceLineFromPostText(text) {
   return line || '';
 }
 
+// из текста поста достаём состав и итоговую цену
+function extractCompositionAndTotalFromPostText(text) {
+  if (!text) return { compositionLines: [], totalLine: '' };
+
+  const lines = String(text)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let totalLine = '';
+  let priceLineIdx = -1;
+
+  // ищем строки "Итого: ..." и "Цена: ..."
+  lines.forEach((l, idx) => {
+    if (!totalLine && /^Итого\s*:/i.test(l)) totalLine = l;
+    if (priceLineIdx === -1 && /^Цена\s*:/i.test(l)) priceLineIdx = idx;
+  });
+
+  // состав — всё между "Цена:" и "Итого:", если есть
+  let compositionLines = [];
+  if (priceLineIdx !== -1) {
+    const untilIdx = totalLine
+      ? lines.findIndex((l, i) => i > priceLineIdx && /^Итого\s*:/i.test(l))
+      : -1;
+    const end = untilIdx === -1 ? lines.length : untilIdx;
+    compositionLines = lines.slice(priceLineIdx + 1, end).filter((l) => l && !/^Итого\s*:/i.test(l));
+  }
+
+  return { compositionLines, totalLine };
+}
+
 // достаём ссылку на пост и цену по sourceToken
 async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   if (!sourceToken || typeof getPostMeta !== 'function') {
-    return { priceLine: '', postUrl: '' };
+    return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
   }
 
   const meta = await getPostMeta(sourceToken).catch((e) => {
@@ -25,9 +56,11 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
 
   console.log('[orders] getPostInfo meta =', meta);
 
-  if (!meta) return { priceLine: '', postUrl: '' };
+  if (!meta) return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
 
-  const priceLine = meta.text ? extractPriceLineFromPostText(meta.text) : '';
+  const text = meta.text || '';
+  const priceLine = extractPriceLineFromPostText(text);
+  const { compositionLines, totalLine } = extractCompositionAndTotalFromPostText(text);
 
   let postUrl = '';
   try {
@@ -40,7 +73,7 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
     console.error('[orders] getPostInfo makePostLink error', e?.message || e);
   }
 
-  return { priceLine, postUrl };
+  return { priceLine, postUrl, compositionLines, totalLine };
 }
 
 // текст для менеджера (без фото поста)
@@ -82,15 +115,31 @@ async function buildManagerSummary(
 
   if (s.comment?.trim()) lines.push(`Комментарий/способ связи: ${s.comment.trim()}`);
 
-  // цена и ссылка на пост
+  // цена, состав и ссылка на пост
   try {
-    const { priceLine, postUrl } = await getPostInfo(s.sourceToken, getPostMeta, makePostLink);
-    if (priceLine || postUrl) {
+    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(
+      s.sourceToken,
+      getPostMeta,
+      makePostLink
+    );
+
+    if (compositionLines.length || totalLine || priceLine || postUrl) {
       lines.push('');
-      if (priceLine) {
+
+      if (compositionLines.length) {
+        lines.push('🧩 Состав заказа (из поста):');
+        lines.push(...compositionLines);
+      }
+
+      if (totalLine) {
+        lines.push('');
+        lines.push(`💰 ${totalLine}`); // строка вида "Итого: 12 345 ₽"
+      } else if (priceLine) {
+        lines.push('');
         lines.push('💵 Цена в посте:');
         lines.push(priceLine);
       }
+
       if (postUrl) {
         lines.push('');
         lines.push('🔗 Пост в канале:');
