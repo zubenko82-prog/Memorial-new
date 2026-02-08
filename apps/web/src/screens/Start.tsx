@@ -574,25 +574,22 @@ export default function Start({
     window.setTimeout(() => onConfirm(it, meta), 220);
   };
 
-  return (
+    return (
     <div
       style={{
         color: "#fff",
-        fontFamily:
-          "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
-        padding: 12,
-        opacity: outro ? 0 : 1,
-        transition: "opacity 220ms ease",
-        maxWidth: 600,
-        margin: "0 auto"
+        ...
       }}
     >
-      {/* TopBar НЕ липкий — прокручивается вместе со страницей */}
-      <TopBarWithIntro title="Стела" />
+      {/* Просто заголовок, без TopBar */}
+      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
+        Стела
+      </div>
 
       <div style={{ marginBottom: 6, opacity: 0.9 }}>
         Сначала выберите резную работу — размер вы сможете указать на следующем шаге.
       </div>
+
 
       {/* Липкая панель навигации по категориям (sticky как раньше) */}
       {cats && cats.length > 0 && (
