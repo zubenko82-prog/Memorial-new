@@ -443,6 +443,19 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
   const compact = useCompact(420);
 
+  // 👇 ДОБАВЬ ЭТО
+  const [extrasVisible, setExtrasVisible] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem("memorial.visited.BackEditorStep") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const [introData, setIntroData] = useState(() => loadIntroState());
+
+
   // Интро и номер
   const [introData, setIntroData] = useState(() => loadIntroState());
   const intro = introData.intro;
@@ -555,6 +568,28 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       clearInterval(t);
     };
   }, [open]);
+
+
+  useEffect(() => {
+    const check = () => {
+      try {
+        const v = localStorage.getItem("memorial.visited.BackEditorStep") === "1";
+        setExtrasVisible(v);
+      } catch {
+        // ignore
+      }
+    };
+
+    check();
+
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || e.key === "memorial.visited.BackEditorStep") {
+        check();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // Контактная линия
   const phoneLine = useMemo(() => {
@@ -1406,7 +1441,7 @@ async function handleClearAll() {
                 )}
               </section>
             )}
-{/* Дополнительно — показываем только после посещения BackEditorStep */}
+{/* Дополнительно — только после BackEditorStep */}
 {extrasVisible && (
   <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
     <span style={{ opacity: 0.9 }}>Дополнительно: </span>
@@ -1417,6 +1452,7 @@ async function handleClearAll() {
     <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>Ваза: {extrasParts.vase ? "да" : "нет"}</span>
   </div>
 )}
+
 
 
             {/* Очистить всё */}
