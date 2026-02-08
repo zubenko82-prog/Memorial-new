@@ -452,10 +452,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       return false;
     }
   });
-
-  const [introData, setIntroData] = useState(() => loadIntroState());
-
-
+  
   // Интро и номер
   const [introData, setIntroData] = useState(() => loadIntroState());
   const intro = introData.intro;
