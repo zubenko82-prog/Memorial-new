@@ -329,7 +329,7 @@ export function registerOrders(bot, deps) {
       const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
 
       const row = [];
-      if (webAppUrl) row.push(Markup.button.webApp('📐 Подобрать памятник', webAppUrl));
+      if (webAppUrl) row.push(Markup.button.webApp('🪦 Подобрать памятник', webAppUrl));
 
       const replyMarkup =
         row.length > 0
