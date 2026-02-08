@@ -1,201 +1,286 @@
 // apps/bot/src/bot.js
-import { Telegraf, session } from 'telegraf';
-import { kv } from '@vercel/kv';
+import { resolve, dirname as pathDirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as dotenv from 'dotenv';
+import { Telegraf } from 'telegraf';
 
 import { registerOrders } from './modules/orders.js';
 import { registerPostWizard, loadCatalogFromXlsx } from './modules/postWizard.js';
 
-// --------- ENV ---------
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID_RAW = process.env.CHANNEL_ID;
-const MANAGER_CHAT_ID_RAW = process.env.MANAGER_CHAT_ID;
-const WEBAPP_URL = process.env.WEBAPP_URL;
-const DEEPLINK_PREFIX = process.env.DEEPLINK_PREFIX || 'src';
-const CATALOG_XLSX_PATH = process.env.CATALOG_XLSX_PATH || './catalog.xlsx';
-const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || '';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = pathDirname(__filename);
 
-// логируем MANAGER_CHAT_ID
-console.log('[env] MANAGER_CHAT_ID raw =', MANAGER_CHAT_ID_RAW);
-const MANAGER_CHAT_ID = MANAGER_CHAT_ID_RAW ? Number(MANAGER_CHAT_ID_RAW) : null;
-console.log('[env] MANAGER_CHAT_ID parsed =', MANAGER_CHAT_ID);
-
-// канал
-const getChannelId = () => {
-  if (!CHANNEL_ID_RAW) return null;
-  const n = Number(CHANNEL_ID_RAW);
-  return Number.isFinite(n) ? n : CHANNEL_ID_RAW;
-};
-
-// простая проверка админа
-function isAdmin(ctx) {
-  const adminIdRaw = process.env.ADMIN_TG_ID;
-  if (!adminIdRaw) return false;
-  const adminId = Number(adminIdRaw);
-  return ctx.from && Number(ctx.from.id) === adminId;
+// .env локально; на Vercel переменные задаются в Settings
+if (!process.env.VERCEL) {
+  try {
+    dotenv.config({ path: resolve(__dirname, '../../../.env') });
+  } catch {}
 }
 
-// ---------- KV helper-ы (на базе @vercel/kv) ----------
-// Важно: больше НЕ импортируем @upstash/redis, всё через kv.*
+// ---------------- ENV ----------------
+console.log('[env] MANAGER_CHAT_ID raw =', process.env.MANAGER_CHAT_ID);
 
-const memPostMeta = new Map();
-const memCatalogPosts = new Map();
+const token = process.env.TGBOT_TOKEN ?? '';
+const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : 0;
+const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
+const BOT_ADMINS = (process.env.BOT_ADMINS || '')
+  .split(',')
+  .map((s) => Number(String(s).trim()))
+  .filter(Boolean);
 
-// postmeta:<sourceToken>
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
+const DEEPLINK_PREFIX = process.env.DEEPLINK_PREFIX || 'order'; // /start order_<token>
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || 'memorialDNR'; // публичный канал @memorialDNR
+
+console.log('[env] MANAGER_CHAT_ID parsed =', MANAGER_CHAT_ID);
+
+const HINT_TEXT =
+  'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
+
+const CATALOG_XLSX_PATH = resolve(__dirname, '../catalog.xlsx');
+
+// CHANNEL_ID может быть -100… (число) или @username (строка)
+function getChannelId() {
+  if (!CHANNEL_ID_RAW) return null;
+  if (CHANNEL_ID_RAW.startsWith('@')) return CHANNEL_ID_RAW;
+  const n = Number(CHANNEL_ID_RAW);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ---------------- Optional Redis (Upstash) ----------------
+// используем Upstash Redis, если заданы переменные UPSTASH_REDIS_REST_URL/TOKEN
+let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
+const mem = new Map(); // sessions fallback
+const memCatalogPosts = new Map(); // fallback storage for catalogpost:<messageId> -> meta
+const memPostMeta = new Map(); // fallback storage for postmeta:<sourceToken> -> meta
+
+async function getRedis() {
+  if (redisInstance !== undefined) return redisInstance;
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    console.warn('[bot] UPSTASH_REDIS_* not set, using in-memory storage');
+    redisInstance = null;
+    return redisInstance;
+  }
+  try {
+    const mod = await import('@upstash/redis');
+    redisInstance = new mod.Redis({ url, token });
+    console.log('[bot] Upstash Redis connected');
+  } catch (e) {
+    console.warn('[bot] Upstash Redis недоступен, используется in-memory:', e?.message || e);
+    redisInstance = null;
+  }
+  return redisInstance;
+}
+
+// ---------- sessions ----------
+async function loadSession(userId) {
+  const r = await getRedis();
+  if (r) {
+    const data = await r.get(`sess:${userId}`);
+    return data || {};
+  }
+  return mem.get(userId) || {};
+}
+async function saveSession(userId, data) {
+  const r = await getRedis();
+  if (r) {
+    await r.set(`sess:${userId}`, data, { ex: 60 * 60 * 24 }); // TTL 1 день
+  } else {
+    mem.set(userId, data);
+  }
+}
+
+// ---------- post meta (sourceToken -> {text, messageId, absChatId, mediaType, fileId}) ----------
 async function setPostMeta(sourceToken, meta) {
   const key = `postmeta:${sourceToken}`;
-  try {
-    await kv.set(key, meta);
-  } catch (e) {
-    console.warn('[bot] setPostMeta kv error, fallback to memory:', e?.message || e);
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 }); // 365 дней
+  } else {
     memPostMeta.set(key, meta);
   }
 }
-
 async function getPostMeta(sourceToken) {
   const key = `postmeta:${sourceToken}`;
-  try {
-    const v = await kv.get(key);
-    if (v) return v;
-  } catch (e) {
-    console.warn('[bot] getPostMeta kv error, fallback to memory:', e?.message || e);
-  }
+  const r = await getRedis();
+  if (r) return (await r.get(key)) || null;
   return memPostMeta.get(key) || null;
 }
 
-// catalogpost:<messageId>
+// ---------- catalog post meta (для обновления цен по постам) ----------
 async function setCatalogPostMeta(messageId, meta) {
   const key = `catalogpost:${messageId}`;
-  try {
-    await kv.set(key, meta);
-  } catch (e) {
-    console.warn('[bot] setCatalogPostMeta kv error, fallback to memory:', e?.message || e);
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  } else {
     memCatalogPosts.set(key, meta);
   }
 }
-
 async function getCatalogPostMeta(messageId) {
   const key = `catalogpost:${messageId}`;
-  try {
-    const v = await kv.get(key);
-    if (v) return v;
-  } catch (e) {
-    console.warn('[bot] getCatalogPostMeta kv error, fallback to memory:', e?.message || e);
-  }
+  const r = await getRedis();
+  if (r) return (await r.get(key)) || null;
   return memCatalogPosts.get(key) || null;
 }
-
+async function getAllCatalogPostKeys() {
+  const r = await getRedis();
+  if (r) {
+    try {
+      const keys = await r.keys('catalogpost:*');
+      return Array.isArray(keys) ? keys : [];
+    } catch {
+      return [];
+    }
+  }
+  return Array.from(memCatalogPosts.keys());
+}
+async function getCatalogPostMetaByKey(key) {
+  const r = await getRedis();
+  if (r) return (await r.get(key)) || null;
+  return memCatalogPosts.get(key) || null;
+}
 async function setCatalogPostMetaByKey(key, meta) {
-  try {
-    await kv.set(key, meta);
-  } catch (e) {
-    console.warn('[bot] setCatalogPostMetaByKey kv error, fallback to memory:', e?.message || e);
+  const r = await getRedis();
+  if (r) {
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  } else {
     memCatalogPosts.set(key, meta);
   }
 }
 
-async function getCatalogPostMetaByKey(key) {
-  try {
-    const v = await kv.get(key);
-    if (v) return v;
-  } catch (e) {
-    console.warn('[bot] getCatalogPostMetaByKey kv error, fallback to memory:', e?.message || e);
-  }
-  return memCatalogPosts.get(key) || null;
-}
+// ---------------- Helpers ----------------
+const phoneOk = (s) => {
+  if (!s) return false;
+  const only = String(s).replace(/[^\d+]/g, '');
+  return only.length >= 6 && /^[+]?[\d\s\-()]{6,}$/.test(String(s));
+};
 
-async function getAllCatalogPostKeys() {
-  try {
-    // Vercel KV (Upstash Redis) поддерживает KEYS, но лучше использовать scan
-    const keys = await kv.keys('catalogpost:*');
-    return Array.isArray(keys) ? keys : [];
-  } catch (e) {
-    console.warn('[bot] getAllCatalogPostKeys kv error, fallback to memory:', e?.message || e);
-    return Array.from(memCatalogPosts.keys());
-  }
-}
-
-// ---------- прочие утилиты ----------
-
-const HINT_TEXT =
-  'Для заказа нажмите кнопку «Заказать» под постом или напишите нам в личные сообщения.';
-
-function phoneOk(v) {
-  const s = String(v || '').replace(/[^\d+]/g, '');
-  const digits = s.replace(/[^\d]/g, '');
-  return digits.length >= 6;
-}
-
-function makeOrderNo() {
-  const d = new Date();
+function makeOrderNo(d = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
-  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
-  const time = `${pad(d.getHours())}${pad(d.getMinutes())}`;
-  const rnd = Math.floor(Math.random() * 90 + 10);
-  return `${date}-${time}-${rnd}`;
+  const DD = pad(d.getDate());
+  const MM = pad(d.getMonth() + 1);
+  const YYYY = d.getFullYear();
+  const HH = pad(d.getHours());
+  const mm = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${DD}.${MM}.${YYYY}-${HH}.${mm}.${ss}`;
 }
 
-// absChatId (положительный) и messageId → permalink
+// Публичный канал: ссылка вида https://t.me/<username>/<message_id>
 function makePostLink(absChatId, messageId) {
-  if (!CHANNEL_USERNAME || !messageId) return '';
-  return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
-}
-
-// ---------- запуск бота ----------
-
-if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN не задан');
-  throw new Error('BOT_TOKEN not set');
-}
-
-const bot = new Telegraf(BOT_TOKEN);
-bot.use(session());
-
-registerOrders(bot, {
-  HINT_TEXT,
-  DEEPLINK_PREFIX,
-  phoneOk,
-  makeOrderNo,
-  MANAGER_CHAT_ID,
-  CHANNEL_USERNAME,
-  WEBAPP_URL,
-  getPostMeta,
-  makePostLink,
-});
-
-registerPostWizard(bot, {
-  HINT_TEXT,
-  WEBAPP_URL,
-  DEEPLINK_PREFIX,
-  CATALOG_XLSX_PATH,
-  getChannelId,
-  isAdmin,
-  setPostMeta,
-  CHANNEL_USERNAME,
-  setCatalogPostMeta,
-  getCatalogPostKeys: getAllCatalogPostKeys, // если где-то нужно именно под этим именем
-  getAllCatalogPostKeys,
-  getCatalogPostMeta,
-  getCatalogPostMetaByKey,
-  setCatalogPostMetaByKey,
-});
-
-// глобальный лог обновлений (для отладки)
-bot.on('message', (ctx, next) => {
-  const msg = ctx.message || {};
-  const fromId = msg.from?.id;
-  const chatId = msg.chat?.id;
-  const text = 'text' in msg ? msg.text : undefined;
-  const hasPhoto = !!msg.photo?.length;
-  console.log('[GLOBAL] update:', JSON.stringify({ text, hasPhoto, fromId, chatId }));
-  return next();
-});
-
-export default async function handler(req, res) {
-  try {
-    await bot.handleUpdate(req.body);
-    res.status(200).json({ ok: true });
-  } catch (e) {
-    console.error('[bot] handler error', e?.message || e);
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  if (!messageId) return '';
+  if (CHANNEL_USERNAME) {
+    return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
   }
+  if (absChatId) {
+    return `https://t.me/c/${absChatId}/${messageId}`;
+  }
+  return '';
 }
+
+function isAdmin(ctx) {
+  const uid = ctx.from?.id;
+  return uid && BOT_ADMINS.includes(uid);
+}
+
+// ---------------- BOT ----------------
+let bot = null;
+
+if (token) {
+  bot = new Telegraf(token);
+
+  // Глобальный лог всех сообщений
+  bot.on('message', (ctx, next) => {
+    try {
+      console.log(
+        '[GLOBAL] update:',
+        JSON.stringify({
+          text: 'text' in ctx.message ? ctx.message.text : null,
+          hasPhoto: !!ctx.message.photo,
+          fromId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        })
+      );
+    } catch (e) {
+      console.log('[GLOBAL] cannot stringify message', e?.message || e);
+    }
+    return next();
+  });
+
+  // Middleware сессий
+  bot.use(async (ctx, next) => {
+    const uid = ctx.from?.id;
+    if (!uid) return next();
+    ctx.session = await loadSession(uid);
+    try {
+      await next();
+    } finally {
+      await saveSession(uid, ctx.session || {});
+    }
+  });
+
+  // Модуль анкеты заказов
+  registerOrders(bot, {
+    HINT_TEXT,
+    DEEPLINK_PREFIX,
+    phoneOk,
+    makeOrderNo,
+    makePostLink,
+    MANAGER_CHAT_ID,
+    CHANNEL_USERNAME,
+    WEBAPP_URL,
+    getPostMeta,
+    loadCatalogFromXlsx,
+  });
+
+  // Модуль мастера /post
+  registerPostWizard(bot, {
+    HINT_TEXT,
+    WEBAPP_URL,
+    DEEPLINK_PREFIX,
+    CATALOG_XLSX_PATH,
+    getChannelId,
+    isAdmin,
+
+    // meta для deeplink -> пост
+    setPostMeta,
+    CHANNEL_USERNAME,
+
+    // хранилище для обновления цен
+    setCatalogPostMeta,
+    getCatalogPostMeta,
+    getAllCatalogPostKeys,
+    getCatalogPostMetaByKey,
+    setCatalogPostMetaByKey,
+  });
+
+  bot.command('dump', async (ctx) => {
+    const chat = ctx.chat || {};
+    const from = ctx.from || {};
+    const me = ctx.botInfo || (await ctx.telegram.getMe());
+    const info = [
+      `chat_id = ${chat.id}`,
+      `chat_type = ${chat.type}`,
+      `user_id = ${from.id}`,
+      `username = ${me.username}`,
+    ].join('\n');
+    return ctx.reply('DEBUG:\n' + info);
+  });
+
+  bot.command('id', async (ctx) => {
+    const fwd = ctx.message?.forward_from_chat;
+    if (fwd) {
+      return ctx.reply(`CHANNEL_ID: ${fwd.id}\nusername: ${fwd.username || '—'}\ntitle: ${fwd.title || '—'}`);
+    }
+    return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
+  });
+
+  bot.catch((err) => console.error('[bot] error:', err));
+} else {
+  console.error('[bot] Missing TGBOT_TOKEN in environment');
+}
+
+export default bot;
