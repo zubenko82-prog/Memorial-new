@@ -8,27 +8,49 @@ const normStr = (v) => String(v || '').trim();
 function extractPriceLineFromPostText(text) {
   if (!text) return '';
   const lines = String(text).split('\n').map((l) => l.trim());
-  // ищем первую строку, которая начинается с "Цена:"
-  const line = lines.find((l) => /^Цена\s*:/i.test(l));
+  const line = lines.find((l) => /^Цена\s*:/i.test(l)); // начинается с "Цена:"
   return line || '';
 }
 
-// собираем только ссылку на пост и строку с ценой из текста поста
-async function buildPostInfo(sourceToken, makePostLink, getPostMeta) {
+// собираем ссылку на пост и строку с ценой из текста поста
+async function buildPostInfo(sourceToken, makePostLink, getPostMeta, CHANNEL_USERNAME, DEEPLINK_PREFIX) {
   let postLink = '';
   let priceLine = '';
 
   if (!sourceToken || typeof getPostMeta !== 'function') {
+    console.log('[orders] buildPostInfo: no sourceToken or getPostMeta');
     return { postLink, priceLine };
   }
 
-  const postMeta = await getPostMeta(sourceToken).catch(() => null);
-  if (!postMeta) return { postLink, priceLine };
+  const postMeta = await getPostMeta(sourceToken).catch((e) => {
+    console.error('[orders] buildPostInfo getPostMeta error', e?.message || e);
+    return null;
+  });
 
-  // ссылка на пост
-  if (postMeta.messageId) {
+  console.log('[orders] buildPostInfo meta =', postMeta);
+
+  if (!postMeta) {
+    // мета не найдена — fallback: хотя бы старт‑ссылка на бота с токеном
+    postLink = `https://t.me/${CHANNEL_USERNAME || 'unknown'}`;
+    return { postLink, priceLine };
+  }
+
+  // 1) ссылка на пост, если знаем absChatId и messageId
+  if (postMeta.messageId && (postMeta.absChatId || CHANNEL_USERNAME)) {
     const absChatId = postMeta.absChatId;
     postLink = makePostLink(absChatId, postMeta.messageId);
+  }
+
+  // 2) если не удалось построить ссылку (нет absChatId / messageId) — fallback
+  if (!postLink) {
+    // минимум — ссылка на канал
+    if (CHANNEL_USERNAME) {
+      postLink = `https://t.me/${CHANNEL_USERNAME}`;
+    } else {
+      // крайний fallback: deeplink к боту, который создаёт эту же анкету
+      const startParam = `${DEEPLINK_PREFIX || 'order'}_${sourceToken}`;
+      postLink = `https://t.me/${postMeta.channelUsername || 'unknown'}?start=${startParam}`;
+    }
   }
 
   // цена — просто извлекаем строку "Цена: ..." из текста поста
@@ -48,6 +70,8 @@ async function buildManagerSummary(
     sourceToken,
     makePostLink,
     getPostMeta,
+    CHANNEL_USERNAME,
+    DEEPLINK_PREFIX,
   }
 ) {
   const fio = s.fio?.trim() || '-';
@@ -84,13 +108,25 @@ async function buildManagerSummary(
 
   // информация о посте: ссылка + цена строкой из поста
   try {
-    const { postLink, priceLine } = await buildPostInfo(sourceToken, makePostLink, getPostMeta);
+    const { postLink, priceLine } = await buildPostInfo(
+      sourceToken,
+      makePostLink,
+      getPostMeta,
+      CHANNEL_USERNAME,
+      DEEPLINK_PREFIX
+    );
+
+    console.log('[orders] buildManagerSummary postLink =', postLink, 'priceLine =', priceLine);
 
     if (postLink || priceLine) {
       lines.push('');
       lines.push('🪦 Пост, с которого пришла заявка:');
       if (priceLine) lines.push(priceLine);
       if (postLink) lines.push(`Ссылка: ${postLink}`);
+    } else {
+      // даже если ничего не нашли — явно пишем, что источник не определён
+      lines.push('');
+      lines.push('🪦 Пост, с которого пришла заявка: (не удалось определить)');
     }
   } catch (e) {
     console.error('[orders] buildManagerSummary post-info error', e?.message || e);
@@ -269,6 +305,8 @@ export function registerOrders(bot, deps) {
       sourceToken: s.sourceToken,
       makePostLink,
       getPostMeta,
+      CHANNEL_USERNAME,
+      DEEPLINK_PREFIX,
     });
 
     console.log(
@@ -300,7 +338,7 @@ export function registerOrders(bot, deps) {
 
   async function submitOrder(ctx) {
     const s = getOrder(ctx);
-    console.log('[orders] submitOrder called, step =', s.step);
+    console.log('[orders] submitOrder called, step =', s.step, 'sourceToken =', s.sourceToken);
 
     if (!s.name || !s.phone || !phoneOk(s.phone)) {
       console.log('[orders] submitOrder validation failed', { name: s.name, phone: s.phone });
@@ -318,7 +356,6 @@ export function registerOrders(bot, deps) {
       const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
 
       const row = [];
-      // КНОПКУ ПЕРЕЙТИ В КАНАЛ УБИРАЕМ, оставляем только подбор памятника
       if (webAppUrl) row.push(Markup.button.webApp('📐 Подобрать памятник', webAppUrl));
 
       const replyMarkup =
@@ -370,6 +407,8 @@ export function registerOrders(bot, deps) {
     if (arg.startsWith(prefix)) {
       sourceToken = arg.slice(prefix.length);
     }
+
+    console.log('[orders] bot.start sourceToken =', sourceToken);
 
     await ctx.reply(HINT_TEXT);
     await startOrder(ctx, sourceToken || undefined);
