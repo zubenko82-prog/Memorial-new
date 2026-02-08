@@ -18,6 +18,8 @@ if (!process.env.VERCEL) {
 }
 
 // ---------------- ENV ----------------
+console.log('[env] MANAGER_CHAT_ID raw =', process.env.MANAGER_CHAT_ID);
+
 const token = process.env.TGBOT_TOKEN ?? '';
 const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : 0;
 const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
@@ -28,8 +30,9 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
 
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 const DEEPLINK_PREFIX = process.env.DEEPLINK_PREFIX || 'order'; // /start order_<token>
-
 const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || 'memorialDNR'; // публичный канал @memorialDNR
+
+console.log('[env] MANAGER_CHAT_ID parsed =', MANAGER_CHAT_ID);
 
 const HINT_TEXT =
   'Заполните необходимые поля и приложите фото — так мы быстрее согласуем детали и начнём изготовление.';
@@ -184,7 +187,7 @@ function isAdmin(ctx) {
 let bot = null;
 
 if (token) {
-    bot = new Telegraf(token);
+  bot = new Telegraf(token);
 
   // Глобальный лог всех сообщений
   bot.on('message', (ctx, next) => {
@@ -203,7 +206,6 @@ if (token) {
     }
     return next();
   });
-
 
   // Middleware сессий
   bot.use(async (ctx, next) => {
