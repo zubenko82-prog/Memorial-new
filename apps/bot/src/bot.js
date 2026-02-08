@@ -184,15 +184,26 @@ function isAdmin(ctx) {
 let bot = null;
 
 if (token) {
-  bot = new Telegraf(token);
+    bot = new Telegraf(token);
 
-  // Глобальный лог всех текстовых сообщений (для отладки)
+  // Глобальный лог всех сообщений
   bot.on('message', (ctx, next) => {
-    if ('text' in ctx.message && ctx.message.text) {
-      console.log('[GLOBAL] message text =', JSON.stringify(ctx.message.text));
+    try {
+      console.log(
+        '[GLOBAL] update:',
+        JSON.stringify({
+          text: 'text' in ctx.message ? ctx.message.text : null,
+          hasPhoto: !!ctx.message.photo,
+          fromId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        })
+      );
+    } catch (e) {
+      console.log('[GLOBAL] cannot stringify message', e?.message || e);
     }
     return next();
   });
+
 
   // Middleware сессий
   bot.use(async (ctx, next) => {
