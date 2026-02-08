@@ -48,6 +48,7 @@ function getChannelId() {
 }
 
 // ---------------- Optional Redis (Upstash) ----------------
+// используем Upstash Redis, если заданы переменные UPSTASH_REDIS_REST_URL/TOKEN
 let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
 const mem = new Map(); // sessions fallback
 const memCatalogPosts = new Map(); // fallback storage for catalogpost:<messageId> -> meta
@@ -58,12 +59,14 @@ async function getRedis() {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) {
+    console.warn('[bot] UPSTASH_REDIS_* not set, using in-memory storage');
     redisInstance = null;
     return redisInstance;
   }
   try {
     const mod = await import('@upstash/redis');
     redisInstance = new mod.Redis({ url, token });
+    console.log('[bot] Upstash Redis connected');
   } catch (e) {
     console.warn('[bot] Upstash Redis недоступен, используется in-memory:', e?.message || e);
     redisInstance = null;
@@ -89,12 +92,12 @@ async function saveSession(userId, data) {
   }
 }
 
-// ---------- post meta (sourceToken -> {text, messageId, absChatId}) ----------
+// ---------- post meta (sourceToken -> {text, messageId, absChatId, mediaType, fileId}) ----------
 async function setPostMeta(sourceToken, meta) {
   const key = `postmeta:${sourceToken}`;
   const r = await getRedis();
   if (r) {
-    await r.set(key, meta, { ex: 60 * 60 * 24 * 14 }); // 14 дней
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 }); // 365 дней
   } else {
     memPostMeta.set(key, meta);
   }
@@ -106,7 +109,7 @@ async function getPostMeta(sourceToken) {
   return memPostMeta.get(key) || null;
 }
 
-// ---------- catalog post meta (for price update) ----------
+// ---------- catalog post meta (для обновления цен по постам) ----------
 async function setCatalogPostMeta(messageId, meta) {
   const key = `catalogpost:${messageId}`;
   const r = await getRedis();
@@ -220,19 +223,18 @@ if (token) {
   });
 
   // Модуль анкеты заказов
-registerOrders(bot, {
-  HINT_TEXT,
-  DEEPLINK_PREFIX,
-  phoneOk,
-  makeOrderNo,
-  makePostLink,
-  MANAGER_CHAT_ID,
-  CHANNEL_USERNAME,
-  WEBAPP_URL,
-  getPostMeta,
-  loadCatalogFromXlsx, // <‑‑ добавлено
-});
-
+  registerOrders(bot, {
+    HINT_TEXT,
+    DEEPLINK_PREFIX,
+    phoneOk,
+    makeOrderNo,
+    makePostLink,
+    MANAGER_CHAT_ID,
+    CHANNEL_USERNAME,
+    WEBAPP_URL,
+    getPostMeta,
+    loadCatalogFromXlsx,
+  });
 
   // Модуль мастера /post
   registerPostWizard(bot, {
@@ -243,11 +245,11 @@ registerOrders(bot, {
     getChannelId,
     isAdmin,
 
-    // meta for deep-link -> post url/text
+    // meta для deeplink -> пост
     setPostMeta,
     CHANNEL_USERNAME,
 
-    // storage for update prices:
+    // хранилище для обновления цен
     setCatalogPostMeta,
     getCatalogPostMeta,
     getAllCatalogPostKeys,

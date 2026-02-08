@@ -168,7 +168,7 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   return { items, bands };
 }
 
-// Делаем loadCatalogFromXlsx доступным снаружи (для orders.js через bot.js)
+// делаем доступным снаружи
 export { loadCatalogFromXlsx };
 
 export function registerPostWizard(bot, deps) {
@@ -271,7 +271,7 @@ export function registerPostWizard(bot, deps) {
       }
     }
 
-    // сохраняем не только текст и messageId, но и mediaType/fileId
+    // сохраняем текст, ids и медиа поста
     const mediaInfo = {};
     if (kind === 'photo' && payload.fileId) {
       mediaInfo.mediaType = 'photo';
@@ -447,7 +447,7 @@ export function registerPostWizard(bot, deps) {
 
   // ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST
   bot.on('message', async (ctx, next) => {
-    // Если сейчас идёт анкета заказа — мастер /post не трогает сообщение
+    // если идёт анкета заказа — мастер /post не трогаем
     if (ctx.session?.order) {
       return next();
     }
@@ -539,7 +539,7 @@ export function registerPostWizard(bot, deps) {
 
       if (!it) {
         console.log('[postWizard] item not found for text', text);
-        return next(); // не распознали — даём шанс другим обработчикам
+        return next();
       }
 
       const arr = Array.isArray(wiz.selected[wiz.step]) ? wiz.selected[wiz.step] : [];
@@ -574,7 +574,6 @@ export function registerPostWizard(bot, deps) {
       return advance(ctx);
     }
 
-    // во всех прочих случаях мастер ничего не делает
     return next();
   });
 }

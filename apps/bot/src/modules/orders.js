@@ -4,6 +4,7 @@ import { Markup } from 'telegraf';
 // ---- утилиты ----
 const normStr = (v) => String(v || '').trim();
 
+// из текста поста достаём строку "Цена: ..."
 function extractPriceLineFromPostText(text) {
   if (!text) return '';
   const lines = String(text).split('\n').map((l) => l.trim());
@@ -33,13 +34,12 @@ async function getPostMediaAndPrice(sourceToken, getPostMeta) {
   return { mediaType, fileId, priceLine };
 }
 
+// текст для менеджера (без фото поста)
 async function buildManagerSummary(
   s,
   orderNo,
   user,
-  {
-    getPostMeta,
-  }
+  { getPostMeta }
 ) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -73,7 +73,7 @@ async function buildManagerSummary(
 
   if (s.comment?.trim()) lines.push(`Комментарий/способ связи: ${s.comment.trim()}`);
 
-  // цена из поста (просто строка "Цена: ...")
+  // цена из поста (строка "Цена: ...")
   try {
     const { priceLine } = await getPostMediaAndPrice(s.sourceToken, getPostMeta);
     if (priceLine) {
@@ -103,6 +103,7 @@ export function registerOrders(bot, deps) {
     getPostMeta,
   } = deps;
 
+  // --- клавиатуры ---
   const kbName = () =>
     Markup.keyboard([['❌ Отменить']]).resize();
 
@@ -143,6 +144,7 @@ export function registerOrders(bot, deps) {
     return ctx.session.order;
   }
 
+  // ---------- шаги анкеты ----------
   async function renderStep(ctx) {
     const s = getOrder(ctx);
     const st = s.step;
@@ -195,6 +197,7 @@ export function registerOrders(bot, deps) {
       return stepReview(ctx);
     }
 
+    // fallback
     s.step = 'name';
     return ctx.reply(
       '👋 Добро пожаловать!\n\nШаг 1 из 6.\n\n✍️ Пожалуйста, укажите, как к вам обращаться (ФИО или имя):',
@@ -249,10 +252,10 @@ export function registerOrders(bot, deps) {
     await ctx.reply(lines.join('\n'), kbReview());
   }
 
+  // ---------- отправка менеджеру ----------
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
 
-    // достаём медиа поста и цену
     const { mediaType, fileId, priceLine } = await getPostMediaAndPrice(s.sourceToken, getPostMeta);
     const managerText = await buildManagerSummary(s, orderNo, ctx.from, { getPostMeta });
 
@@ -267,7 +270,7 @@ export function registerOrders(bot, deps) {
       fileId
     );
 
-    // сначала отправляем фото из поста (если есть)
+    // 1) фото/видео/файл из поста (если есть)
     if (fileId && mediaType === 'photo') {
       const captionLines = ['🪦 Фото из поста'];
       if (priceLine) captionLines.push(priceLine);
@@ -288,7 +291,7 @@ export function registerOrders(bot, deps) {
       });
     }
 
-    // потом отправляем саму заявку (с данными клиента и ценой строкой)
+    // 2) сама заявка + фото клиента
     const photos = Array.isArray(s.photos) ? s.photos : [];
     if (photos.length > 0) {
       const media = photos.slice(0, 10).map((pFileId, i) => ({
@@ -356,7 +359,10 @@ export function registerOrders(bot, deps) {
     } catch (e) {
       const desc = e?.response?.description || e?.message || String(e);
       console.error('[orders] submitOrder error', desc);
-      await ctx.reply('😔 Не удалось отправить заявку. Попробуйте позже или свяжитесь с нами другим способом.', kbRemove());
+      await ctx.reply(
+        '😔 Не удалось отправить заявку. Попробуйте позже или свяжитесь с нами другим способом.',
+        kbRemove()
+      );
     } finally {
       ctx.session.order = null;
     }
