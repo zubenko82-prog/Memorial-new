@@ -224,10 +224,16 @@ export function registerPostWizard(bot, deps) {
         return await ctx.telegram.sendMessage(chatId, payload.text, { ...common, disable_web_page_preview: true });
       }
       if (kind === 'photo') {
-        return await ctx.telegram.sendPhoto(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
+        return await ctx.telegram.sendPhoto(chatId, payload.fileId, {
+          ...common,
+          caption: (payload.caption || '').slice(0, 1024),
+        });
       }
       if (kind === 'video') {
-        return await ctx.telegram.sendVideo(chatId, payload.fileId, { ...common, caption: (payload.caption || '').slice(0, 1024) });
+        return await ctx.telegram.sendVideo(chatId, payload.fileId, {
+          ...common,
+          caption: (payload.caption || '').slice(0, 1024),
+        });
       }
       if (kind === 'document') {
         const canCaption = (payload.caption || '').length <= 1024 ? payload.caption : undefined;
@@ -274,7 +280,6 @@ export function registerPostWizard(bot, deps) {
 
   const kbPostMenu = () =>
     Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
-  const kbPostCancelOnly = () => Markup.keyboard([['Отменить']]).resize();
 
   // /post старт
   bot.command('post', async (ctx) => {
@@ -423,9 +428,15 @@ export function registerPostWizard(bot, deps) {
     );
   }
 
+  // ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST
   bot.on('message', async (ctx, next) => {
-    console.log('[postWizard] on message, step =', ctx.session?.postWizard?.step);
+    // Если сейчас идёт анкета заказа — мастер /post не трогает сообщение
+    if (ctx.session?.order) {
+      return next();
+    }
+
     const wiz = ctx.session?.postWizard;
+    console.log('[postWizard] on message, step =', wiz?.step);
     if (!wiz) return next();
 
     if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
@@ -437,6 +448,7 @@ export function registerPostWizard(bot, deps) {
     if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
+    // CONFIRM
     if (wiz.step === 'CONFIRM') {
       if (text !== 'Опубликовать') return next();
 
@@ -454,11 +466,26 @@ export function registerPostWizard(bot, deps) {
 
       let primary;
       if (kind === 'photo') {
-        ({ primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText));
+        ({ primary } = await postToChannelWithKb(
+          ctx,
+          'photo',
+          { fileId: payload.fileId, caption: finalCaption },
+          baseText
+        ));
       } else if (kind === 'video') {
-        ({ primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText));
+        ({ primary } = await postToChannelWithKb(
+          ctx,
+          'video',
+          { fileId: payload.fileId, caption: finalCaption },
+          baseText
+        ));
       } else if (kind === 'document') {
-        ({ primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText));
+        ({ primary } = await postToChannelWithKb(
+          ctx,
+          'document',
+          { fileId: payload.fileId, caption: finalCaption },
+          baseText
+        ));
       } else {
         ({ primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
       }
@@ -475,6 +502,7 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
+    // OPTION / GRAFIKA (мультивыбор)
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
       console.log('[postWizard] OPTION/GRAFIKA step=', wiz.step, 'text=', JSON.stringify(text));
 
@@ -494,7 +522,7 @@ export function registerPostWizard(bot, deps) {
 
       if (!it) {
         console.log('[postWizard] item not found for text', text);
-        return;
+        return next(); // не распознали — даём шанс другим обработчикам
       }
 
       const arr = Array.isArray(wiz.selected[wiz.step]) ? wiz.selected[wiz.step] : [];
@@ -507,6 +535,7 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
+    // одиночные группы STELA/TUMBA/...
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
       console.log('[postWizard] single step', wiz.step, 'text=', JSON.stringify(text));
@@ -520,7 +549,7 @@ export function registerPostWizard(bot, deps) {
       const it = items.find((x) => x.group === wiz.step && normStr(x.label) === text);
       if (!it) {
         console.log('[postWizard] single item not found for', wiz.step, text);
-        return;
+        return next();
       }
 
       wiz.selected[wiz.step] = it.sku;
@@ -528,6 +557,7 @@ export function registerPostWizard(bot, deps) {
       return advance(ctx);
     }
 
+    // во всех прочих случаях мастер ничего не делает
     return next();
   });
 }
