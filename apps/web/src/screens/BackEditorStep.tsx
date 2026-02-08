@@ -164,6 +164,13 @@ function LoudAccordion({
   const [h, setH] = useState(0);
 
   useEffect(() => {
+  try {
+    localStorage.setItem("memorial.visited.BackEditorStep", "1");
+  } catch {}
+}, []);
+
+
+  useEffect(() => {
     const m = () => setH(ref.current?.scrollHeight || 0);
     m();
     const RO = (window as any).ResizeObserver;
@@ -1557,15 +1564,7 @@ return (
 
 
 
-export default function BackEditorStep({
-  useEffect(() => {
-    try {
-      localStorage.setItem("memorial.visited.BackEditorStep", "1");
-    } catch {
-      // ignore
-    }
-  }, []);
- onBack, onContinue }: Props) {
+export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [outro, setOutro] = useState(false);
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
   
@@ -2908,7 +2907,6 @@ const plateCtx: PlateCtx = {
     </div>
   );
 }
-
 
 
 
