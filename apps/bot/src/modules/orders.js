@@ -110,7 +110,6 @@ async function buildOrderCompositionText(sourceToken, makePostLink, getPostMeta,
   return { compositionText, priceLine, postLink };
 }
 
-
 async function buildManagerSummary(
   s,
   orderNo,
@@ -155,16 +154,12 @@ async function buildManagerSummary(
   if (s.comment?.trim()) lines.push(`Комментарий/связь: ${s.comment.trim()}`);
 
   try {
-    const { compositionText, priceLine, postLink } = await buildOrderCompositionText(...);
-
-lines.push('');
-lines.push(compositionText);
-lines.push(priceLine);
-if (postLink) {
-  lines.push('');
-  lines.push(`Ссылка на пост: ${postLink}`);
-}
-
+    const { compositionText, priceLine, postLink } = await buildOrderCompositionText(
+      sourceToken,
+      makePostLink,
+      getPostMeta,
+      loadCatalogFromXlsx
+    );
 
     lines.push('');
     lines.push(compositionText);
