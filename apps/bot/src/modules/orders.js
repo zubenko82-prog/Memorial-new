@@ -4,62 +4,33 @@ import { Markup } from 'telegraf';
 // ---- утилиты ----
 const normStr = (v) => String(v || '').trim();
 
-// достаём из текста поста строку с ценой "Цена: ..."
 function extractPriceLineFromPostText(text) {
   if (!text) return '';
   const lines = String(text).split('\n').map((l) => l.trim());
-  const line = lines.find((l) => /^Цена\s*:/i.test(l)); // начинается с "Цена:"
+  const line = lines.find((l) => /^Цена\s*:/i.test(l));
   return line || '';
 }
 
-// собираем ссылку на пост и строку с ценой из текста поста
-async function buildPostInfo(sourceToken, makePostLink, getPostMeta, CHANNEL_USERNAME, DEEPLINK_PREFIX) {
-  let postLink = '';
-  let priceLine = '';
-
+// достаём медиа и цену поста по sourceToken
+async function getPostMediaAndPrice(sourceToken, getPostMeta) {
   if (!sourceToken || typeof getPostMeta !== 'function') {
-    console.log('[orders] buildPostInfo: no sourceToken or getPostMeta');
-    return { postLink, priceLine };
+    return { mediaType: null, fileId: null, priceLine: '' };
   }
 
-  const postMeta = await getPostMeta(sourceToken).catch((e) => {
-    console.error('[orders] buildPostInfo getPostMeta error', e?.message || e);
+  const meta = await getPostMeta(sourceToken).catch((e) => {
+    console.error('[orders] getPostMediaAndPrice getPostMeta error', e?.message || e);
     return null;
   });
 
-  console.log('[orders] buildPostInfo meta =', postMeta);
+  console.log('[orders] getPostMediaAndPrice meta =', meta);
 
-  if (!postMeta) {
-    // мета не найдена — fallback: хотя бы старт‑ссылка на бота с токеном
-    postLink = `https://t.me/${CHANNEL_USERNAME || 'unknown'}`;
-    return { postLink, priceLine };
-  }
+  if (!meta) return { mediaType: null, fileId: null, priceLine: '' };
 
-  // 1) ссылка на пост, если знаем absChatId и messageId
-  if (postMeta.messageId && (postMeta.absChatId || CHANNEL_USERNAME)) {
-    const absChatId = postMeta.absChatId;
-    postLink = makePostLink(absChatId, postMeta.messageId);
-  }
+  const priceLine = meta.text ? extractPriceLineFromPostText(meta.text) : '';
+  const mediaType = meta.mediaType || null;
+  const fileId = meta.fileId || null;
 
-  // 2) если не удалось построить ссылку (нет absChatId / messageId) — fallback
-  if (!postLink) {
-    // минимум — ссылка на канал
-    if (CHANNEL_USERNAME) {
-      postLink = `https://t.me/${CHANNEL_USERNAME}`;
-    } else {
-      // крайний fallback: deeplink к боту, который создаёт эту же анкету
-      const startParam = `${DEEPLINK_PREFIX || 'order'}_${sourceToken}`;
-      postLink = `https://t.me/${postMeta.channelUsername || 'unknown'}?start=${startParam}`;
-    }
-  }
-
-  // цена — просто извлекаем строку "Цена: ..." из текста поста
-  if (postMeta.text) {
-    const price = extractPriceLineFromPostText(postMeta.text);
-    if (price) priceLine = price;
-  }
-
-  return { postLink, priceLine };
+  return { mediaType, fileId, priceLine };
 }
 
 async function buildManagerSummary(
@@ -67,11 +38,7 @@ async function buildManagerSummary(
   orderNo,
   user,
   {
-    sourceToken,
-    makePostLink,
     getPostMeta,
-    CHANNEL_USERNAME,
-    DEEPLINK_PREFIX,
   }
 ) {
   const fio = s.fio?.trim() || '-';
@@ -101,35 +68,21 @@ async function buildManagerSummary(
     `Телефон (в анкете): ${s.phone || '—'}`,
     `ФИО усопшего: ${fio}`,
     `Даты: ${dates}`,
-    s.photos?.length ? `Фото: ${s.photos.length} шт.` : 'Фото: —',
+    s.photos?.length ? `Фото клиента: ${s.photos.length} шт.` : 'Фото клиента: —',
   ];
 
   if (s.comment?.trim()) lines.push(`Комментарий/способ связи: ${s.comment.trim()}`);
 
-  // информация о посте: ссылка + цена строкой из поста
+  // цена из поста (просто строка "Цена: ...")
   try {
-    const { postLink, priceLine } = await buildPostInfo(
-      sourceToken,
-      makePostLink,
-      getPostMeta,
-      CHANNEL_USERNAME,
-      DEEPLINK_PREFIX
-    );
-
-    console.log('[orders] buildManagerSummary postLink =', postLink, 'priceLine =', priceLine);
-
-    if (postLink || priceLine) {
+    const { priceLine } = await getPostMediaAndPrice(s.sourceToken, getPostMeta);
+    if (priceLine) {
       lines.push('');
-      lines.push('🪦 Пост, с которого пришла заявка:');
-      if (priceLine) lines.push(priceLine);
-      if (postLink) lines.push(`Ссылка: ${postLink}`);
-    } else {
-      // даже если ничего не нашли — явно пишем, что источник не определён
-      lines.push('');
-      lines.push('🪦 Пост, с которого пришла заявка: (не удалось определить)');
+      lines.push('💵 Цена в посте:');
+      lines.push(priceLine);
     }
   } catch (e) {
-    console.error('[orders] buildManagerSummary post-info error', e?.message || e);
+    console.error('[orders] buildManagerSummary price error', e?.message || e);
   }
 
   return lines.join('\n');
@@ -143,7 +96,6 @@ export function registerOrders(bot, deps) {
     DEEPLINK_PREFIX,
     phoneOk,
     makeOrderNo,
-    makePostLink,
     MANAGER_CHAT_ID,
 
     CHANNEL_USERNAME,
@@ -151,7 +103,6 @@ export function registerOrders(bot, deps) {
     getPostMeta,
   } = deps;
 
-  // более "живые" клавиатуры
   const kbName = () =>
     Markup.keyboard([['❌ Отменить']]).resize();
 
@@ -301,26 +252,48 @@ export function registerOrders(bot, deps) {
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
 
-    const managerText = await buildManagerSummary(s, orderNo, ctx.from, {
-      sourceToken: s.sourceToken,
-      makePostLink,
-      getPostMeta,
-      CHANNEL_USERNAME,
-      DEEPLINK_PREFIX,
-    });
+    // достаём медиа поста и цену
+    const { mediaType, fileId, priceLine } = await getPostMediaAndPrice(s.sourceToken, getPostMeta);
+    const managerText = await buildManagerSummary(s, orderNo, ctx.from, { getPostMeta });
 
     console.log(
       '[orders] sendOrderToManager, MANAGER_CHAT_ID =',
       MANAGER_CHAT_ID,
       'photos =',
-      s.photos?.length || 0
+      s.photos?.length || 0,
+      'postMediaType =',
+      mediaType,
+      'postFileId =',
+      fileId
     );
 
+    // сначала отправляем фото из поста (если есть)
+    if (fileId && mediaType === 'photo') {
+      const captionLines = ['🪦 Фото из поста'];
+      if (priceLine) captionLines.push(priceLine);
+      await ctx.telegram.sendPhoto(MANAGER_CHAT_ID, fileId, {
+        caption: captionLines.join('\n'),
+      });
+    } else if (fileId && mediaType === 'video') {
+      const captionLines = ['🪦 Видео из поста'];
+      if (priceLine) captionLines.push(priceLine);
+      await ctx.telegram.sendVideo(MANAGER_CHAT_ID, fileId, {
+        caption: captionLines.join('\n'),
+      });
+    } else if (fileId && mediaType === 'document') {
+      const captionLines = ['🪦 Файл из поста'];
+      if (priceLine) captionLines.push(priceLine);
+      await ctx.telegram.sendDocument(MANAGER_CHAT_ID, fileId, {
+        caption: captionLines.join('\n'),
+      });
+    }
+
+    // потом отправляем саму заявку (с данными клиента и ценой строкой)
     const photos = Array.isArray(s.photos) ? s.photos : [];
     if (photos.length > 0) {
-      const media = photos.slice(0, 10).map((fileId, i) => ({
+      const media = photos.slice(0, 10).map((pFileId, i) => ({
         type: 'photo',
-        media: fileId,
+        media: pFileId,
         ...(i === 0 ? { caption: managerText } : {}),
       }));
       await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);

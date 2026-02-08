@@ -271,11 +271,25 @@ export function registerPostWizard(bot, deps) {
       }
     }
 
+    // сохраняем не только текст и messageId, но и mediaType/fileId
+    const mediaInfo = {};
+    if (kind === 'photo' && payload.fileId) {
+      mediaInfo.mediaType = 'photo';
+      mediaInfo.fileId = payload.fileId;
+    } else if (kind === 'video' && payload.fileId) {
+      mediaInfo.mediaType = 'video';
+      mediaInfo.fileId = payload.fileId;
+    } else if (kind === 'document' && payload.fileId) {
+      mediaInfo.mediaType = 'document';
+      mediaInfo.fileId = payload.fileId;
+    }
+
     await setPostMeta(sourceToken, {
       text: (baseTextNoHint || '').trim(),
       channelUsername: CHANNEL_USERNAME,
       messageId: msg.message_id,
       absChatId,
+      ...mediaInfo,
     });
 
     return { primary: msg, sourceToken };
