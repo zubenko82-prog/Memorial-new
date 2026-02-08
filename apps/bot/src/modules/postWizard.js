@@ -168,7 +168,6 @@ async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
   return { items, bands };
 }
 
-// делаем доступным снаружи
 export { loadCatalogFromXlsx };
 
 export function registerPostWizard(bot, deps) {
@@ -271,7 +270,6 @@ export function registerPostWizard(bot, deps) {
       }
     }
 
-    // сохраняем текст, ids и медиа поста
     const mediaInfo = {};
     if (kind === 'photo' && payload.fileId) {
       mediaInfo.mediaType = 'photo';
@@ -298,7 +296,7 @@ export function registerPostWizard(bot, deps) {
   const kbPostMenu = () =>
     Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
 
-  // /post старт
+  // ---------- /post старт ----------
   bot.command('post', async (ctx) => {
     const channelId = getChannelId();
     if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
@@ -343,6 +341,7 @@ export function registerPostWizard(bot, deps) {
     return ctx.reply('Меню /post:', kbPostMenu());
   });
 
+  // ---------- Меню мастера ----------
   bot.hears('▶️ Новая публикация', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
@@ -356,9 +355,9 @@ export function registerPostWizard(bot, deps) {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
 
-    ctx.session.postWizard.step = 'update_prices';
+    ctx.session.postWizard.step = 'update_prices_menu';
     await ctx.reply(
-      'Обновление цен постов:\n\n1) Нажмите «🧾 Обновить по пересланному посту» и перешлите сюда пост из канала.\n\n2) Или нажмите «🔁 Обновить все».',
+      'Обновление цен постов:\n\n1) «🧾 Обновить по пересланному посту» — перешлите сюда пост из канала, и цена в нём будет пересчитана по текущему catalog.xlsx.\n\n2) «🔁 Обновить все» — пересчитать цены во всех постах, созданных через /post.',
       Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
     );
   });
@@ -378,6 +377,7 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Отменено.', Markup.removeKeyboard());
   });
 
+  // ---------- Локальные функции мастера ----------
   async function askStep(ctx, step) {
     const wiz = ctx.session.postWizard;
     if (!wiz) return;
@@ -445,9 +445,112 @@ export function registerPostWizard(bot, deps) {
     );
   }
 
-  // ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST
+  // --------- обновление цен ---------
+
+  // пересчитать цену и обновить подпись для одного поста
+  async function recalcPriceForMessage(ctx, chatId, messageId, catalog, metaFromStore) {
+    const meta = metaFromStore || (await getCatalogPostMeta(messageId));
+    if (!meta) {
+      throw new Error(`Нет метаданных для поста message_id=${messageId}`);
+    }
+
+    const { selected, baseTextNoHint } = meta;
+
+    const { caption, total } = calcCaptionAndTags(catalog, selected);
+    const baseText = normStr(baseTextNoHint);
+    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
+      0,
+      1024
+    );
+
+    console.log('[postWizard] recalcPriceForMessage', { chatId, messageId, total });
+
+    // пробуем как caption; если это чисто текстовый пост — используем editMessageText
+    try {
+      await ctx.telegram.editMessageCaption(chatId, messageId, undefined, newCaption);
+    } catch (e) {
+      const desc = e?.response?.description || e?.message || String(e);
+      console.warn('[postWizard] editMessageCaption failed, trying editMessageText:', desc);
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, newCaption, {
+        disable_web_page_preview: true,
+      });
+    }
+
+    await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
+
+    return total;
+  }
+
+  // обработчик "🧾 Обновить по пересланному посту"
+  bot.hears('🧾 Обновить по пересланному посту', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (ctx.session?.order) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
+
+    await ctx.reply(
+      'Перешлите сюда пост из канала, который нужно обновить.\n\nВажно: пересылать нужно ОРИГИНАЛЬНЫЙ пост с ценой, опубликованный через /post.',
+      Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize()
+    );
+
+    ctx.session.postWizard.step = 'update_prices_wait_post';
+  });
+
+  // обработчик "🔁 Обновить все"
+  bot.hears('🔁 Обновить все', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (ctx.session?.order) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
+
+    const channelId = getChannelId();
+    if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
+
+    await ctx.reply('Начинаю обновление цен во всех постах...\nЭто может занять некоторое время.');
+
+    const keys = await getAllCatalogPostKeys();
+    console.log('[postWizard] update-all keys count =', keys.length);
+
+    if (!keys.length) {
+      await ctx.reply('Нет сохранённых постов для обновления.');
+      return;
+    }
+
+    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+
+    let ok = 0;
+    let fail = 0;
+
+    for (const key of keys) {
+      try {
+        const meta = await getCatalogPostMetaByKey(key);
+        if (!meta) {
+          fail++;
+          continue;
+        }
+
+        const messageIdStr = String(key).replace(/^catalogpost:/, '');
+        const messageId = Number(messageIdStr);
+        if (!Number.isFinite(messageId)) {
+          fail++;
+          continue;
+        }
+
+        await recalcPriceForMessage(ctx, channelId, messageId, catalog, meta);
+        ok++;
+      } catch (e) {
+        const desc = e?.response?.description || e?.message || String(e);
+        console.error('[postWizard] update-all error for key', key, desc);
+        fail++;
+      }
+    }
+
+    await ctx.reply(`Обновление завершено.\n\nУспешно: ${ok}\nОшибок: ${fail}`);
+    ctx.session.postWizard.step = 'menu';
+    await ctx.reply('Меню /post:', kbPostMenu());
+  });
+
+  // ---------- ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST ----------
   bot.on('message', async (ctx, next) => {
-    // если идёт анкета заказа — мастер /post не трогаем
+    // если сейчас идёт анкета заказа — мастер /post не трогаем
     if (ctx.session?.order) {
       return next();
     }
@@ -455,6 +558,50 @@ export function registerPostWizard(bot, deps) {
     const wiz = ctx.session?.postWizard;
     console.log('[postWizard] on message, step =', wiz?.step);
     if (!wiz) return next();
+
+    // режим "ждём пересланный пост для обновления"
+    if (wiz.step === 'update_prices_wait_post') {
+      const fwd = ctx.message?.forward_from_message_id
+        ? ctx.message
+        : null;
+
+      if (!fwd || !fwd.forward_from_chat || !fwd.forward_from_message_id) {
+        await ctx.reply(
+          'Это сообщение не похоже на пересланный пост из канала.\nПожалуйста, перешлите ОРИГИНАЛЬНЫЙ пост из канала (через кнопку «Переслать»).'
+        );
+        return;
+      }
+
+      const channelId = fwd.forward_from_chat.id;
+      const messageId = fwd.forward_from_message_id;
+
+      const expectedChannelId = getChannelId();
+      if (expectedChannelId && Number(expectedChannelId) !== Number(channelId)) {
+        await ctx.reply('Похоже, этот пост из другого канала. Перешлите пост из нужного канала.');
+        return;
+      }
+
+      await ctx.reply('Считаю новую цену по текущему catalog.xlsx, обновляю пост...');
+
+      try {
+        const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+        const total = await recalcPriceForMessage(ctx, channelId, messageId, catalog, null);
+        await ctx.reply(`Готово. Новая цена в посте: ${formatRub(total)} ₽.`);
+      } catch (e) {
+        const desc = e?.response?.description || e?.message || String(e);
+        console.error('[postWizard] update-by-forward error', desc);
+        await ctx.reply('Не удалось обновить цену в этом посте. Проверьте, что он был создан через /post.');
+      }
+
+      wiz.step = 'update_prices_menu';
+      await ctx.reply(
+        'Выберите следующее действие:',
+        Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
+      );
+      return;
+    }
+
+    // общий обработчик для мастера
 
     if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;

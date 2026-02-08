@@ -12,26 +12,35 @@ function extractPriceLineFromPostText(text) {
   return line || '';
 }
 
-// достаём медиа и цену поста по sourceToken
-async function getPostMediaAndPrice(sourceToken, getPostMeta) {
+// достаём ссылку на пост и цену по sourceToken
+async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   if (!sourceToken || typeof getPostMeta !== 'function') {
-    return { mediaType: null, fileId: null, priceLine: '' };
+    return { priceLine: '', postUrl: '' };
   }
 
   const meta = await getPostMeta(sourceToken).catch((e) => {
-    console.error('[orders] getPostMediaAndPrice getPostMeta error', e?.message || e);
+    console.error('[orders] getPostInfo getPostMeta error', e?.message || e);
     return null;
   });
 
-  console.log('[orders] getPostMediaAndPrice meta =', meta);
+  console.log('[orders] getPostInfo meta =', meta);
 
-  if (!meta) return { mediaType: null, fileId: null, priceLine: '' };
+  if (!meta) return { priceLine: '', postUrl: '' };
 
   const priceLine = meta.text ? extractPriceLineFromPostText(meta.text) : '';
-  const mediaType = meta.mediaType || null;
-  const fileId = meta.fileId || null;
 
-  return { mediaType, fileId, priceLine };
+  let postUrl = '';
+  try {
+    if (typeof makePostLink === 'function') {
+      const absChatId = meta.absChatId || null;
+      const messageId = meta.messageId || null;
+      postUrl = makePostLink(absChatId, messageId) || '';
+    }
+  } catch (e) {
+    console.error('[orders] getPostInfo makePostLink error', e?.message || e);
+  }
+
+  return { priceLine, postUrl };
 }
 
 // текст для менеджера (без фото поста)
@@ -39,7 +48,7 @@ async function buildManagerSummary(
   s,
   orderNo,
   user,
-  { getPostMeta }
+  { getPostMeta, makePostLink }
 ) {
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
@@ -73,16 +82,23 @@ async function buildManagerSummary(
 
   if (s.comment?.trim()) lines.push(`Комментарий/способ связи: ${s.comment.trim()}`);
 
-  // цена из поста (строка "Цена: ...")
+  // цена и ссылка на пост
   try {
-    const { priceLine } = await getPostMediaAndPrice(s.sourceToken, getPostMeta);
-    if (priceLine) {
+    const { priceLine, postUrl } = await getPostInfo(s.sourceToken, getPostMeta, makePostLink);
+    if (priceLine || postUrl) {
       lines.push('');
-      lines.push('💵 Цена в посте:');
-      lines.push(priceLine);
+      if (priceLine) {
+        lines.push('💵 Цена в посте:');
+        lines.push(priceLine);
+      }
+      if (postUrl) {
+        lines.push('');
+        lines.push('🔗 Пост в канале:');
+        lines.push(postUrl);
+      }
     }
   } catch (e) {
-    console.error('[orders] buildManagerSummary price error', e?.message || e);
+    console.error('[orders] buildManagerSummary post info error', e?.message || e);
   }
 
   return lines.join('\n');
@@ -101,6 +117,7 @@ export function registerOrders(bot, deps) {
     CHANNEL_USERNAME,
     WEBAPP_URL,
     getPostMeta,
+    makePostLink,
   } = deps;
 
   // --- клавиатуры ---
@@ -256,43 +273,17 @@ export function registerOrders(bot, deps) {
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
 
-    const { mediaType, fileId, priceLine } = await getPostMediaAndPrice(s.sourceToken, getPostMeta);
-    const managerText = await buildManagerSummary(s, orderNo, ctx.from, { getPostMeta });
+    // только текст заявки; фото поста не отправляем
+    const managerText = await buildManagerSummary(s, orderNo, ctx.from, { getPostMeta, makePostLink });
 
+    const photos = Array.isArray(s.photos) ? s.photos : [];
     console.log(
       '[orders] sendOrderToManager, MANAGER_CHAT_ID =',
       MANAGER_CHAT_ID,
       'photos =',
-      s.photos?.length || 0,
-      'postMediaType =',
-      mediaType,
-      'postFileId =',
-      fileId
+      photos.length || 0
     );
 
-    // 1) фото/видео/файл из поста (если есть)
-    if (fileId && mediaType === 'photo') {
-      const captionLines = ['🪦 Фото из поста'];
-      if (priceLine) captionLines.push(priceLine);
-      await ctx.telegram.sendPhoto(MANAGER_CHAT_ID, fileId, {
-        caption: captionLines.join('\n'),
-      });
-    } else if (fileId && mediaType === 'video') {
-      const captionLines = ['🪦 Видео из поста'];
-      if (priceLine) captionLines.push(priceLine);
-      await ctx.telegram.sendVideo(MANAGER_CHAT_ID, fileId, {
-        caption: captionLines.join('\n'),
-      });
-    } else if (fileId && mediaType === 'document') {
-      const captionLines = ['🪦 Файл из поста'];
-      if (priceLine) captionLines.push(priceLine);
-      await ctx.telegram.sendDocument(MANAGER_CHAT_ID, fileId, {
-        caption: captionLines.join('\n'),
-      });
-    }
-
-    // 2) сама заявка + фото клиента
-    const photos = Array.isArray(s.photos) ? s.photos : [];
     if (photos.length > 0) {
       const media = photos.slice(0, 10).map((pFileId, i) => ({
         type: 'photo',
