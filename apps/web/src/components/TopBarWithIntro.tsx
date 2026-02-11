@@ -28,6 +28,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { loadIntroState, saveIntro, type Intro, clearIntroAll } from "../lib/intro";
 import { loadOrderDraft, saveOrderDraft, clearOrderDraft, type OrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
+import { hardResetAll } from "../lib/hardReset";
 
 /* ===== Темизация ===== */
 type ThemeMode = "dark" | "light";
