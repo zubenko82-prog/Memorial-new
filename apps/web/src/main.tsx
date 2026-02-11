@@ -4,6 +4,10 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/fonts.css";
 import { tgSafeInit } from "./lib/tg";
+import { installMobileErrorOverlay } from "./lib/mobileErrorOverlay";
+
+installMobileErrorOverlay();
+
 
 tgSafeInit();
 

@@ -1,3 +1,4 @@
+// apps/web/src/lib/hardReset.ts
 import { clearIntroAll } from "./intro";
 import { clearOrderDraft, DRAFT_UPDATED_EVENT } from "./order";
 
