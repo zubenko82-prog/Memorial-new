@@ -234,39 +234,24 @@ function PreviewBottomSheet({
 
   // Сабмит «знакомства»: фиксируем один раз (назначаем номер) и продолжаем
   const submitIntro = (e: React.FormEvent) => {
-  e.preventDefault();
-  setTouched({ name: true, phone: true });
-  if (!formValid) return;
+    e.preventDefault();
+    setTouched({ name: true, phone: true });
+    if (!formValid) return;
 
-  // 1) фиксируем интро
-  saveIntro(
-    {
-      customerName: customerName.trim(),
-      customerPhone: customerPhone.trim(),
-      customerNotes: customerNotes.trim() || undefined
-    },
-    { lock: true }
-  );
+    const lockedState = saveIntro(
+      {
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        customerNotes: customerNotes.trim() || undefined
+      },
+      { lock: true }
+    );
+    setOrderNumber(lockedState.orderNumber || null);
 
-  // 2) перечитываем из хранилища (важно после wipe/reset)
-  const fresh = loadIntroState();
-  setOrderNumber(fresh.orderNumber || null);
-
-  // 3) если номер уже есть — продолжаем
-  if (fresh.intro && fresh.orderNumber) {
-    return closeWithFade(() => onConfirm({ intro: fresh.intro!, orderNumber: fresh.orderNumber! }));
-  }
-
-  // 4) fallback: иногда в webview запись/чтение может “догнать” чуть позже
-  setTimeout(() => {
-    const again = loadIntroState();
-    setOrderNumber(again.orderNumber || null);
-    if (again.intro && again.orderNumber) {
-      closeWithFade(() => onConfirm({ intro: again.intro!, orderNumber: again.orderNumber! }));
+    if (lockedState.intro && lockedState.orderNumber) {
+      return closeWithFade(() => onConfirm({ intro: lockedState.intro!, orderNumber: lockedState.orderNumber! }));
     }
-  }, 50);
-};
-
+  };
 
   // Общая вставка под нижние панели (Telegram/Safe Area)
   const bottomInset = "calc(12px + env(safe-area-inset-bottom, 0px) + var(--tg-viewport-inset-bottom, 0px))";

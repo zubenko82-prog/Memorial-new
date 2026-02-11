@@ -19,6 +19,8 @@ import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/orde
 import { loadIntroState, saveIntro } from "../lib/intro";
 import { generateOrderPdf, downloadBlob } from "../lib/pdf/generateOrderPdf";
 import { compressImageFileToMaxBytes } from "../lib/media/resize";
+import { hardResetAll } from "../lib/hardReset";
+
 
 /* ========= Styles and helpers ========= */
 function safeRoot(): React.CSSProperties {
@@ -1452,14 +1454,21 @@ const blob = await generateOrderPdf({
               }}
             >Скачать PDF</button>
             <button
-              style={glassButtonStyle("sm")}
-              onClick={() => {
-                setShowWipeWarn(null);
-                if (showWipeWarn === "wipeAll") onNewOrderWipeAll?.();
-                if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
-                if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
-              }}
-            >Продолжить с потерей данных</button>
+  style={glassButtonStyle("sm")}
+  onClick={() => {
+    setShowWipeWarn(null);
+
+    if (showWipeWarn === "wipeAll") {
+      void hardResetAll({ preserveThemeKey: false });
+      return;
+    }
+    if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
+    if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
+  }}
+>
+  Продолжить с потерей данных
+</button>
+
             <button
               style={glassButtonStyle("sm")}
               onClick={() => setShowWipeWarn(null)}

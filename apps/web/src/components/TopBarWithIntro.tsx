@@ -778,81 +778,12 @@ async function handleClearAll() {
 
   setIsClearing(true);
   try {
-    // 1) Очищаем основные хранилища заявки
-    await clearOrderDraft();
-    clearIntroAll();
-
-    // 2) Очищаем флаги/состояния навигации + возможные служебные ключи
-    try {
-      // Точечные ключи (оставил ваши + типичные)
-      const keysToRemove = [
-        "memorial.navEnabled",
-        "memorial.navEnabled.reviewOnly",
-        "memorial.stepnav.enabled",
-        "memorial.stepnav",
-        "memorial.step",
-        "memorial.lastStep",
-        "memorial.reviewOnly"
-      ];
-      keysToRemove.forEach((k) => localStorage.removeItem(k));
-
-      // ✅ Самый надежный вариант: чистим ВСЁ под префиксом memorial.
-      // Это гарантирует, что StepNav и любые "залипшие" состояния исчезнут.
-      // Если вам нужно сохранить тему (memorial.ui.theme.v1) — добавьте исключение.
-      const preserveThemeKey = false; // поставьте true, если хотите сохранять тему
-      const themeKey = "memorial.ui.theme.v1";
-
-      const all = Object.keys(localStorage);
-      for (const k of all) {
-        if (!k.startsWith("memorial.")) continue;
-        if (preserveThemeKey && k === themeKey) continue;
-        localStorage.removeItem(k);
-      }
-    } catch {}
-
-    // 3) Закрываем панель/режим редактирования (на всякий)
-    setEditing(false);
-    setOpen(false);
-
-    // 4) Шлём событие "жёсткий сброс" (если кто-то слушает)
-    try {
-      window.dispatchEvent(new Event("memorial:hardReset"));
-    } catch {}
-
-    // 5) Шлём стандартные события обновления (для совместимости со слушателями)
-    try {
-      window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
-      window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-    } catch {}
-
-    // 6) Локально сбрасываем состояние TopBar (до перезагрузки)
-    const blank = makeEmptyDraft();
-    setOrder(blank);
-    setIntroData({ intro: {}, orderNumber: undefined } as any);
-
-    setName("");
-    setPhone("");
-    setContactNotes("");
-    setSizeNotes("");
-    setEpitaphsText("");
-    setOrderNotes("");
-    setFrontWishes("");
-    setBackWishes("");
-
-    // 7) Самое надежное: перезагрузка страницы (сбросит state всех шагов)
-    setTimeout(() => {
-      try {
-        window.location.reload();
-      } catch {
-        // fallback
-        window.location.href = window.location.href;
-      }
-    }, 80);
+    await hardResetAll({ preserveThemeKey: false });
   } finally {
-    // если reload случится — этот finally не важен, но оставляем
     setIsClearing(false);
   }
 }
+
 
 
   const coll = useCollapse(open, 280);
