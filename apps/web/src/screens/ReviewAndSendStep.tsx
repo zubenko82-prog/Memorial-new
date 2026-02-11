@@ -1377,6 +1377,8 @@ const blob = await generateOrderPdf({
               fontSize: 17,
               display: "flex",
               flexDirection: "column",
+              gap: 12,
+              alignItems: "stretch"
             }}
             onClick={e => e.stopPropagation()}
           >
@@ -1384,21 +1386,41 @@ const blob = await generateOrderPdf({
               Начать новую заявку?
             </div>
             <button
-              style={glassButtonStyle("sm")}
-              onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
-            >Стереть все (очистить полностью)</button>
+  style={{
+    ...glassButtonStyle("sm"),
+    width: "100%",
+    maxWidth: "100%",
+    whiteSpace: "normal",
+  }}
+  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
+>Стереть все (очистить полностью)</button>
             <button
-              style={glassButtonStyle("sm")}
-              onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeKeepCustomer"); }}
-            >Стереть все, оставить заказчика</button>
+  style={{
+    ...glassButtonStyle("sm"),
+    width: "100%",
+    maxWidth: "100%",
+    whiteSpace: "normal",
+  }}
+  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
+>Стереть все, оставить заказчика</button>
             <button
-              style={glassButtonStyle("sm")}
-              onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeKeepAll"); }}
-            >Оставить все поля, новый номер заказа</button>
+  style={{
+    ...glassButtonStyle("sm"),
+    width: "100%",
+    maxWidth: "100%",
+    whiteSpace: "normal",
+  }}
+  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
+>Оставить все поля, новый номер заказа</button>
             <button
-              style={glassButtonStyle("sm")}
-              onClick={() => setNewOrderOpen(false)}
-            >Отмена</button>
+  style={{
+    ...glassButtonStyle("sm"),
+    width: "100%",
+    maxWidth: "100%",
+    whiteSpace: "normal",
+  }}
+  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
+>Отмена</button>
           </div>
         </div>
       )}
