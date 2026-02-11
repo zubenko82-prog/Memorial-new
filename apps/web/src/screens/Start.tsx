@@ -280,32 +280,36 @@ function PreviewBottomSheet({
       />
       {/* Фиксированный нижний лист */}
       <div
-        role="dialog"
-        aria-modal="false"
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 2147483601,
-          width: "100%",
-          height: "clamp(560px, 98svh, 1000px)",
-          padding: 12,
-          paddingBottom: bottomInset,
-          borderTopLeftRadius: 12,
-          borderTopRightRadius: 12,
-          ...glassPanelStyle(),
-          boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
-          display: "grid",
-          gridTemplateRows: "auto 1fr auto",
-          gap: 10,
-          opacity: visible ? 1 : 0,
-          transition: "opacity 220ms ease",
-          boxSizing: "border-box",
-          overflow: "hidden"
-        }}
-      >
-        {/* Заголовок (имя файла) */}
+  role="dialog"
+  aria-modal="false"
+  style={{
+    position: "fixed",
+    left: "50%",
+    transform: "translateX(-50%)",
+    bottom: 0,
+    zIndex: 2147483601,
+
+    width: "100%",
+    maxWidth: 600,
+
+    height: "clamp(560px, 98svh, 1000px)",
+    padding: 12,
+    paddingBottom: bottomInset,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    ...glassPanelStyle(),
+    boxShadow: "0 -12px 30px rgba(0,0,0,0.45)",
+    display: "grid",
+    gridTemplateRows: "auto 1fr auto",
+    gap: 10,
+    opacity: visible ? 1 : 0,
+    transition: "opacity 220ms ease",
+    boxSizing: "border-box",
+    overflow: "hidden"
+  }}
+>
+
+    {/* Заголовок (имя файла) */}
         <div
           style={{
             textAlign: "center",
