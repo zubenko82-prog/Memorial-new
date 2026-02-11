@@ -11,7 +11,7 @@ export async function hardResetAll(opts?: { preserveThemeKey?: boolean }) {
 
   // 2) Чистим навигацию и прочие memorial.*
   try {
-        const keysToRemove = [
+    const keysToRemove = [
       "memorial.navEnabled",
       "memorial.navEnabled.reviewOnly",
       "memorial.stepnav.enabled",
@@ -19,10 +19,9 @@ export async function hardResetAll(opts?: { preserveThemeKey?: boolean }) {
       "memorial.step",
       "memorial.lastStep",
       "memorial.reviewOnly",
-
-      // ✅ флаг показа "Дополнительно"
       "memorial.visited.BackEditorStep"
     ];
+
     keysToRemove.forEach((k) => {
       localStorage.removeItem(k);
       try {
@@ -30,6 +29,23 @@ export async function hardResetAll(opts?: { preserveThemeKey?: boolean }) {
       } catch {}
     });
 
+    const all = Object.keys(localStorage);
+    for (const k of all) {
+      if (!k.startsWith("memorial.")) continue;
+      if (preserveThemeKey && k === themeKey) continue;
+      localStorage.removeItem(k);
+    }
+
+    try {
+      const allS = Object.keys(sessionStorage);
+      for (const k of allS) {
+        if (!k.startsWith("memorial.")) continue;
+        sessionStorage.removeItem(k);
+      }
+    } catch {}
+  } catch {
+    // ignore
+  }
 
   // 3) События обновления
   try {
@@ -40,8 +56,14 @@ export async function hardResetAll(opts?: { preserveThemeKey?: boolean }) {
     // ignore
   }
 
-  // 4) Перезагрузка — гарантированно сбрасывает зависшие state/refs/порталы
+  // 4) Перезагрузка + сброс hash, чтобы StepNav не "залипал" на старом шаге
   setTimeout(() => {
+    try {
+      if (window.location.hash) window.location.hash = "";
+      // или жестко на старт:
+      // window.location.hash = "#/wizard/start";
+    } catch {}
+
     try {
       window.location.reload();
     } catch {
