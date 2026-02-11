@@ -5,102 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <title>Memorial</title>
-
     <style>
-      :root {
-        --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", "Helvetica Neue", sans-serif;
-      }
-      html,
-      body {
-        color: #fff;
-      }
-      body,
-      button,
-      input,
-      select,
-      textarea {
-        font-family: var(--font-ui);
-      }
+      :root { --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", "Helvetica Neue", sans-serif; }
+      html, body { color: #fff; }
+      body, button, input, select, textarea { font-family: var(--font-ui); }
     </style>
-
-    <script>
-      // Лог ошибок прямо на экран (полезно в Telegram WebView).
-      (function () {
-        function show(kind, payload) {
-          try {
-            var id = "mobile-error-overlay";
-            var box = document.getElementById(id);
-            if (!box) {
-              box = document.createElement("pre");
-              box.id = id;
-              box.style.cssText =
-                "position:fixed;left:8px;right:8px;bottom:8px;max-height:50vh;overflow:auto;background:rgba(0,0,0,0.85);color:#ffb4b4;padding:10px;margin:0;z-index:2147483647;font:12px/1.4 monospace;border:1px solid rgba(255,255,255,0.22);border-radius:10px;white-space:pre-wrap;";
-              document.addEventListener(
-                "DOMContentLoaded",
-                function () {
-                  try {
-                    document.body.appendChild(box);
-                  } catch {}
-                },
-                { once: true }
-              );
-            }
-            box.textContent =
-              kind +
-              " " +
-              new Date().toISOString() +
-              "\n\n" +
-              (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
-          } catch {}
-        }
-
-        window.addEventListener("error", function (e) {
-          show("[window.error]", {
-            message: e && e.message,
-            filename: e && e.filename,
-            lineno: e && e.lineno,
-            colno: e && e.colno,
-            stack: e && e.error && e.error.stack ? e.error.stack : null,
-          });
-        });
-
-        window.addEventListener("unhandledrejection", function (e) {
-          var r = e && e.reason;
-          show("[unhandledrejection]", {
-            reason: (r && (r.message || r.stack)) || String(r),
-          });
-        });
-      })();
-    </script>
   </head>
-
   <body>
     <div id="root"></div>
 
     <!-- Telegram SDK: грузим только внутри Telegram WebView -->
     <script>
       (function () {
-        try {
-          var ua = navigator.userAgent || "";
-          var isTg = ua.indexOf("Telegram") !== -1;
+        var ua = navigator.userAgent || "";
+        var isTg = ua.indexOf("Telegram") !== -1;
+        if (!isTg) return;
 
-          if (!isTg) return;
-
-          var s = document.createElement("script");
-          s.src = "https://telegram.org/js/telegram-web-app.js";
-          s.async = true;
-          s.crossOrigin = "anonymous";
-          s.onerror = function () {
-            try {
-              console.log("TG SDK load error");
-            } catch {}
-          };
-          document.head.appendChild(s);
-        } catch (e) {
-          try {
-            console.log("TG SDK inject error", e);
-          } catch {}
-        }
+        var s = document.createElement("script");
+        s.src = "https://telegram.org/js/telegram-web-app.js";
+        s.async = true;
+        s.crossOrigin = "anonymous";
+        document.head.appendChild(s);
       })();
     </script>
 
