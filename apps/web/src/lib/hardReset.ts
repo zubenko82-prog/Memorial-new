@@ -11,26 +11,25 @@ export async function hardResetAll(opts?: { preserveThemeKey?: boolean }) {
 
   // 2) Чистим навигацию и прочие memorial.*
   try {
-    const keysToRemove = [
+        const keysToRemove = [
       "memorial.navEnabled",
       "memorial.navEnabled.reviewOnly",
       "memorial.stepnav.enabled",
       "memorial.stepnav",
       "memorial.step",
       "memorial.lastStep",
-      "memorial.reviewOnly"
-    ];
-    keysToRemove.forEach((k) => localStorage.removeItem(k));
+      "memorial.reviewOnly",
 
-    const all = Object.keys(localStorage);
-    for (const k of all) {
-      if (!k.startsWith("memorial.")) continue;
-      if (preserveThemeKey && k === themeKey) continue;
+      // ✅ флаг показа "Дополнительно"
+      "memorial.visited.BackEditorStep"
+    ];
+    keysToRemove.forEach((k) => {
       localStorage.removeItem(k);
-    }
-  } catch {
-    // ignore
-  }
+      try {
+        sessionStorage.removeItem(k);
+      } catch {}
+    });
+
 
   // 3) События обновления
   try {
