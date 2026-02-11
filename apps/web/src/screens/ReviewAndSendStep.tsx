@@ -1365,6 +1365,7 @@ const blob = await generateOrderPdf({
               borderTopLeftRadius: 16,
               borderTopRightRadius: 16,
               boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
+              boxSizing: "border-box",
               padding: 24,
               maxWidth: 420,
               margin: "0 auto",
@@ -1386,39 +1387,19 @@ const blob = await generateOrderPdf({
               Начать новую заявку?
             </div>
             <button
-  style={{
-    ...glassButtonStyle("sm"),
-    width: "100%",
-    maxWidth: "100%",
-    whiteSpace: "normal",
-  }}
+  style={glassButtonStyle("sm")}
   onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
 >Стереть все (очистить полностью)</button>
             <button
-  style={{
-    ...glassButtonStyle("sm"),
-    width: "100%",
-    maxWidth: "100%",
-    whiteSpace: "normal",
-  }}
+  style={glassButtonStyle("sm")}
   onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
 >Стереть все, оставить заказчика</button>
-            <button
-  style={{
-    ...glassButtonStyle("sm"),
-    width: "100%",
-    maxWidth: "100%",
-    whiteSpace: "normal",
-  }}
+           <button
+  style={glassButtonStyle("sm")}
   onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
 >Оставить все поля, новый номер заказа</button>
             <button
-  style={{
-    ...glassButtonStyle("sm"),
-    width: "100%",
-    maxWidth: "100%",
-    whiteSpace: "normal",
-  }}
+  style={glassButtonStyle("sm")}
   onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
 >Отмена</button>
           </div>
