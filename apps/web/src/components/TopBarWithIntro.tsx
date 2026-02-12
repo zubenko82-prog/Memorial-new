@@ -1415,18 +1415,14 @@ useEffect(() => {
     <span style={{ opacity: 0.9 }}>Дополнительно: </span>
 
     {extrasParts.tumba && <span style={{ fontWeight: 700 }}>Тумба: да</span>}
-
     {extrasParts.tumba && (extrasParts.flowerbed || extrasParts.vase) && <span style={{ opacity: 0.7 }}> · </span>}
     {extrasParts.flowerbed && <span style={{ fontWeight: 700 }}>Цветник: да</span>}
-
     {extrasParts.flowerbed && extrasParts.vase && <span style={{ opacity: 0.7 }}> · </span>}
     {extrasParts.vase && <span style={{ fontWeight: 700 }}>Ваза: да</span>}
   </div>
 )}
 
-
-
-            {/* Очистить всё (только если уже зафиксирован номер заказа) */}
+{/* Очистить всё (только если уже зафиксирован номер заказа) */}
 {introData.orderNumber && (
   <div
     style={{
@@ -1451,7 +1447,9 @@ useEffect(() => {
     </button>
   </div>
 )}
-
-
-
-
+          </section>
+        </PanelAutoScale>
+      </div>
+    </div>
+  );
+}
