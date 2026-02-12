@@ -208,12 +208,18 @@ function Row({
   // но игнорируем его в разметке.
   void compact;
 
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: `160px 1fr`, gap: 10, alignItems: "center" }}>
-      <div style={{ color: palette(theme).text }}>{label}</div>
-      <div>{children}</div>
-    </div>
-  );
+  return compact ? (
+  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
+    <div style={{ color: palette(theme).text }}>{label}</div>
+    <div>{children}</div>
+  </div>
+) : (
+  <div style={{ display: "grid", gridTemplateColumns: `160px 1fr`, gap: 10, alignItems: "center" }}>
+    <div style={{ color: palette(theme).text }}>{label}</div>
+    <div>{children}</div>
+  </div>
+);
+
 }
 
 function fileNameFromUrl(url?: string): string {
@@ -734,6 +740,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       customerPhone: (phone || "").trim(),
       customerNotes: (contactNotes || "").trim() || undefined
     };
+    const cancelEdit = () => {
+  // откатываем поля к сохранённым значениям из localStorage
+  refreshAll({ force: true });
+  setEditing(false);
+};
+
     const lock = !introData.orderNumber;
     saveIntro(introNext, { lock });
 
@@ -898,8 +910,8 @@ useEffect(() => {
         ref={coll.ref}
         style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
       >
-        {/* SCALE ONLY PANEL CONTENT */}
-        <PanelAutoScale enabled={open} paddingPx={0}>
+        {/* SCALE ONLY PANEL CONTENT (в редактировании не уменьшаем, чтобы поля были нормального размера) */}
+<PanelAutoScale enabled={open && !editing} paddingPx={0}>
           <section
             style={{
               background: p.panelBg,
@@ -914,31 +926,45 @@ useEffect(() => {
           >
             {/* Действия */}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: compact ? 10 : 14, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const next: ThemeMode = theme === "dark" ? "light" : "dark";
-                  setTheme(next);
-                  saveTheme(next);
-                }}
-                style={linkButtonStyle(theme)}
-              >
-                {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
-              </button>
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      const next: ThemeMode = theme === "dark" ? "light" : "dark";
+      setTheme(next);
+      saveTheme(next);
+    }}
+    style={linkButtonStyle(theme)}
+  >
+    {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
+  </button>
 
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (editing) saveAll();
-                  setEditing((v) => !v);
-                }}
-                style={linkButtonStyle(theme)}
-              >
-                {editing ? "Сохранить" : "Редактировать"}
-              </button>
-            </div>
+  {editing && (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        cancelEdit();
+      }}
+      style={linkButtonStyle(theme)}
+    >
+      Отменить
+    </button>
+  )}
+
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      if (editing) saveAll();
+      setEditing((v) => !v);
+    }}
+    style={linkButtonStyle(theme)}
+  >
+    {editing ? "Сохранить" : "Редактировать"}
+  </button>
+</div>
+
 
             {/* Номер заказа / подсказка */}
 {introData.orderNumber ? (
@@ -950,19 +976,19 @@ useEffect(() => {
 )}
 
             {/* Контакты */}
-            {(editing || contactNotes.trim() || compact) && (
+            {(editing || contactNotes.trim()) && (
               <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Контакты</div>
                 {editing ? (
                   // ✅ ФИКС: всегда одна и та же "полная" форма (без compact ветки)
                   <div style={{ display: "grid", gap: 8 }}>
-                    <Row label="Имя" theme={theme} compact={false}>
+                    <Row label="Имя" theme={theme} compact={compact}>
                       <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(theme)} placeholder="Иванов Иван Иванович" />
                     </Row>
-                    <Row label="Телефон" theme={theme} compact={false}>
+                    <Row label="Телефон" theme={theme} compact={compact}>
                       <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle(theme)} placeholder="+7 (___) ___-__-__" inputMode="tel" />
                     </Row>
-                    <Row label="Примечание" theme={theme} compact={false}>
+                    <Row label="Примечание" theme={theme} compact={compact}>
                       <input value={contactNotes} onChange={(e) => setContactNotes(e.target.value)} style={inputStyle(theme)} placeholder="Удобное время, мессенджер…" />
                     </Row>
                   </div>
