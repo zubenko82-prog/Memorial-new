@@ -706,11 +706,12 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
   }, [plate3.plateEpitaph, plate3.plateEpitaphs]);
 // Дополнительно (строка)
   const extrasParts = useMemo(() => {
-    const tumba = (extras.tumba ?? true) ? true : false;
-    const flowerbed = !!extras.flowerbed;
-    const vase = !!extras.vase;
-    return { tumba, flowerbed, vase };
-  }, [extras.tumba, extras.flowerbed, extras.vase]);
+  const tumba = extras.tumba === true;
+  const flowerbed = extras.flowerbed === true;
+  const vase = extras.vase === true;
+  return { tumba, flowerbed, vase };
+}, [extras.tumba, extras.flowerbed, extras.vase]);
+
 
     const hasItem = !!order.item?.url;
 
@@ -720,7 +721,8 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     typeof order.size?.thickness === "number" ||
     !!order.size?.notes?.trim();
 
-  const hasExtras = !!extrasParts.flowerbed || !!extrasParts.vase;
+  const hasExtras = extrasParts.tumba || extrasParts.flowerbed || extrasParts.vase;
+
   // tumba по умолчанию true — НЕ считаем это "выбором", показываем только если включено что-то кроме неё
 
   // Сохранение
@@ -1368,18 +1370,20 @@ async function handleClearAll() {
               </section>
             )}
 {/* Дополнительно */}
-            {hasExtras && (
+{hasExtras && (
   <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
     <span style={{ opacity: 0.9 }}>Дополнительно: </span>
-    {extrasParts.flowerbed && (
-      <>
-        <span style={{ fontWeight: 700 }}>Цветник: да</span>
-        <span style={{ opacity: 0.7 }}> · </span>
-      </>
-    )}
+
+    {extrasParts.tumba && <span style={{ fontWeight: 700 }}>Тумба: да</span>}
+
+    {extrasParts.tumba && (extrasParts.flowerbed || extrasParts.vase) && <span style={{ opacity: 0.7 }}> · </span>}
+    {extrasParts.flowerbed && <span style={{ fontWeight: 700 }}>Цветник: да</span>}
+
+    {extrasParts.flowerbed && extrasParts.vase && <span style={{ opacity: 0.7 }}> · </span>}
     {extrasParts.vase && <span style={{ fontWeight: 700 }}>Ваза: да</span>}
   </div>
 )}
+
 
 
             {/* Очистить всё */}
