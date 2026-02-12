@@ -940,19 +940,6 @@ useEffect(() => {
     {theme === "dark" ? "Светлый стиль" : "Тёмный стиль"}
   </button>
 
-  {editing && (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        cancelEdit();
-      }}
-      style={linkButtonStyle(theme)}
-    >
-      Отменить
-    </button>
-  )}
-
   <button
     type="button"
     onClick={(e) => {
@@ -962,7 +949,7 @@ useEffect(() => {
     }}
     style={linkButtonStyle(theme)}
   >
-    {editing ? "Сохранить" : "Редактировать"}
+    {editing ? "Готово" : "Редактировать"}
   </button>
 </div>
 
