@@ -526,7 +526,7 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
 
   useEffect(() => {
     if (open) refreshAll({ force: true });
-  }, [open, refreshAll]);
+  }, [editing, open, refreshAll]);
 
   // Сообщаем наружу, что панель раскрылась
   useEffect(() => {
@@ -741,10 +741,11 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
       customerNotes: (contactNotes || "").trim() || undefined
     };
     const cancelEdit = () => {
-  // откатываем поля к сохранённым значениям из localStorage
-  refreshAll({ force: true });
   setEditing(false);
+  // после выхода из editing гарантированно перезаполняем инпуты сохранёнными значениями
+  window.setTimeout(() => refreshAll({ force: true }), 0);
 };
+
 
     const lock = !introData.orderNumber;
     saveIntro(introNext, { lock });
