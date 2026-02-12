@@ -911,7 +911,7 @@ async function handleClearAll() {
   <div style={{ fontSize: 13, opacity: 0.9 }}>№ {introData.orderNumber}</div>
 ) : (
   <div style={{ fontSize: 13, opacity: 0.9 }}>
-    В процессе заполнения заказа здесь будет формироваться список выбранного.
+    Здесь будет собираться ваш заказ: выбранные элементы появятся автоматически.
   </div>
 )}
 
