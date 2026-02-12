@@ -906,8 +906,14 @@ async function handleClearAll() {
               </button>
             </div>
 
-            {/* Номер заказа */}
-            <div style={{ fontSize: 13, opacity: 0.9 }}>№ {orderNumber}</div>
+            {/* Номер заказа / подсказка */}
+{introData.orderNumber ? (
+  <div style={{ fontSize: 13, opacity: 0.9 }}>№ {introData.orderNumber}</div>
+) : (
+  <div style={{ fontSize: 13, opacity: 0.9 }}>
+    В процессе заполнения заказа здесь будет формироваться список выбранного.
+  </div>
+)}
 
             {/* Контакты */}
             {(editing || contactNotes.trim() || compact) && (
