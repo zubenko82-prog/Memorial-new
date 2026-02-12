@@ -801,6 +801,40 @@ async function handleClearAll() {
 
 
   const coll = useCollapse(open, 280);
+  // ✅ когда панель открыта, пересчитываем maxHeight при изменении контента
+useEffect(() => {
+  if (!open) return;
+
+  const el = coll.ref.current;
+  if (!el) return;
+
+  const measure = () => {
+    try {
+      // ставим maxHeight по актуальному scrollHeight
+      el.style.maxHeight = `${el.scrollHeight}px`;
+    } catch {}
+  };
+
+  measure();
+
+  // пересчёт на следующих тиках — когда React уже дорисовал
+  const t1 = window.setTimeout(measure, 0);
+  const t2 = window.setTimeout(measure, 60);
+  const t3 = window.setTimeout(measure, 180);
+
+  // и при любых изменениях размеров внутри
+  const RO = (window as any).ResizeObserver as any;
+  const ro = RO ? new RO(measure) : null;
+  if (ro) ro.observe(el);
+
+  return () => {
+    clearTimeout(t1);
+    clearTimeout(t2);
+    clearTimeout(t3);
+    ro?.disconnect?.();
+  };
+}, [open, editing, theme, coll.ref]);
+
   const panelId = "order-panel";
   const p = palette(theme);
 
@@ -1392,27 +1426,32 @@ async function handleClearAll() {
 
 
 
-            {/* Очистить всё */}
-            <div style={{ marginTop: 2, paddingTop: 10, borderTop: palette(theme).divider, display: "flex", justifyContent: "center" }}>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleClearAll();
-                }}
-                style={linkButtonStyle(theme, "danger", isClearing)}
-                title="Очистить все данные (с подтверждением)"
-                disabled={isClearing}
-              >
-                {isClearing ? "Очищаем…" : "Очистить всё"}
-              </button>
-            </div>
-          </section>
-        </PanelAutoScale>
-      </div>
-    </div>
-  );
-}
+            {/* Очистить всё (только если уже зафиксирован номер заказа) */}
+{introData.orderNumber && (
+  <div
+    style={{
+      marginTop: 2,
+      paddingTop: 10,
+      borderTop: palette(theme).divider,
+      display: "flex",
+      justifyContent: "center"
+    }}
+  >
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void handleClearAll();
+      }}
+      style={linkButtonStyle(theme, "danger", isClearing)}
+      title="Очистить все данные (с подтверждением)"
+      disabled={isClearing}
+    >
+      {isClearing ? "Очищаем…" : "Очистить всё"}
+    </button>
+  </div>
+)}
+
 
 
 
