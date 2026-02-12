@@ -712,6 +712,17 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
     return { tumba, flowerbed, vase };
   }, [extras.tumba, extras.flowerbed, extras.vase]);
 
+    const hasItem = !!order.item?.url;
+
+  const hasAnySize =
+    typeof order.size?.width === "number" ||
+    typeof order.size?.height === "number" ||
+    typeof order.size?.thickness === "number" ||
+    !!order.size?.notes?.trim();
+
+  const hasExtras = !!extrasParts.flowerbed || !!extrasParts.vase;
+  // tumba по умолчанию true — НЕ считаем это "выбором", показываем только если включено что-то кроме неё
+
   // Сохранение
   const saveAll = () => {
     const epLines = (epitaphsText || "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -920,46 +931,64 @@ async function handleClearAll() {
             )}
 
             {/* Резная работа */}
-            <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Резная работа</div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr", // ✅ ФИКС: всегда 2 колонки, без compact ветки
-                  gap: 10,
-                  alignItems: "stretch"
-                }}
-              >
-                <div style={{ display: "grid", gap: 8 }}>
-                  <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
-                    {order.item?.url ? (
-                      <img src={order.item.url} alt={order.item.name || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
-                    ) : (
-                      <div style={{ color: palette(theme).subText, fontSize: 12 }}>нет</div>
-                    )}
-                  </div>
-                  <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {order.item?.name || fileNameFromUrl(order.item?.url) || "—"}
-                  </div>
-                </div>
+            {hasItem && (
+  <section style={{ ...glassPanelStyle(theme), padding: compact ? 8 : 10 }}>
+    <div style={{ fontWeight: 600, marginBottom: 6 }}>Резная работа</div>
 
-                <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
-                  <div style={{ fontWeight: 600 }}>Характеристики</div>
-                  <div style={{ opacity: 0.95 }}>
-                    {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
-                  </div>
-                  {(editing || sizeNotes.trim()) && (
-                    <div>
-                      {editing ? (
-                        <textarea value={sizeNotes} onChange={(e) => setSizeNotes(e.target.value)} rows={3} placeholder="Примечание по размерам…" style={{ ...inputStyle(theme), resize: "vertical" }} />
-                      ) : (
-                        sizeNotes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{sizeNotes.trim()}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: hasAnySize ? "1fr 1fr" : "1fr",
+        gap: 10,
+        alignItems: "stretch"
+      }}
+    >
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={{ ...galleryThumbBoxStyle(), width: "100%", aspectRatio: "1 / 1" }}>
+          <img
+            src={order.item!.url!}
+            alt={order.item?.name || ""}
+            style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
+          />
+        </div>
+        <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {order.item?.name || fileNameFromUrl(order.item?.url)}
+        </div>
+      </div>
+
+      {hasAnySize && (
+        <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
+          <div style={{ fontWeight: 600 }}>Характеристики</div>
+
+          {(typeof order.size?.width === "number" ||
+            typeof order.size?.height === "number" ||
+            typeof order.size?.thickness === "number") && (
+            <div style={{ opacity: 0.95 }}>
+              {cmValue(mmToCm(order.size?.width))}×{cmValue(mmToCm(order.size?.height))}×{cmValue(mmToCm(order.size?.thickness))} см
+            </div>
+          )}
+
+          {(editing || sizeNotes.trim()) && (
+            <div>
+              {editing ? (
+                <textarea
+                  value={sizeNotes}
+                  onChange={(e) => setSizeNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Примечание по размерам…"
+                  style={{ ...inputStyle(theme), resize: "vertical" }}
+                />
+              ) : (
+                sizeNotes.trim() && <div style={{ whiteSpace: "pre-wrap" }}>{sizeNotes.trim()}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  </section>
+)}
+
 
             {/* Люди */}
             {(order.engraving?.persons?.length || 0) > 0 && (
@@ -1339,14 +1368,19 @@ async function handleClearAll() {
               </section>
             )}
 {/* Дополнительно */}
-            <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
-              <span style={{ opacity: 0.9 }}>Дополнительно: </span>
-              <span style={{ fontWeight: extrasParts.tumba ? 700 : 400 }}>Тумба: {extrasParts.tumba ? "да" : "нет"}</span>
-              <span style={{ opacity: 0.7 }}> · </span>
-              <span style={{ fontWeight: extrasParts.flowerbed ? 700 : 400 }}>Цветник: {extrasParts.flowerbed ? "да" : "нет"}</span>
-              <span style={{ opacity: 0.7 }}> · </span>
-              <span style={{ fontWeight: extrasParts.vase ? 700 : 400 }}>Ваза: {extrasParts.vase ? "да" : "нет"}</span>
-            </div>
+            {hasExtras && (
+  <div style={{ marginTop: 8, opacity: 0.92, fontSize: 13 }}>
+    <span style={{ opacity: 0.9 }}>Дополнительно: </span>
+    {extrasParts.flowerbed && (
+      <>
+        <span style={{ fontWeight: 700 }}>Цветник: да</span>
+        <span style={{ opacity: 0.7 }}> · </span>
+      </>
+    )}
+    {extrasParts.vase && <span style={{ fontWeight: 700 }}>Ваза: да</span>}
+  </div>
+)}
+
 
             {/* Очистить всё */}
             <div style={{ marginTop: 2, paddingTop: 10, borderTop: palette(theme).divider, display: "flex", justifyContent: "center" }}>
