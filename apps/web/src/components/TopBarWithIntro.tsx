@@ -898,8 +898,8 @@ useEffect(() => {
         ref={coll.ref}
         style={{ ...coll.style, willChange: "max-height, opacity, transform", marginTop: open ? (compact ? 6 : 8) : 0 }}
       >
-        {/* SCALE ONLY PANEL CONTENT */}
-        <PanelAutoScale enabled={open} paddingPx={0}>
+        {/* SCALE ONLY PANEL CONTENT (в редактировании не уменьшаем, чтобы поля были нормального размера) */}
+<PanelAutoScale enabled={open && !editing} paddingPx={0}>
           <section
             style={{
               background: p.panelBg,
