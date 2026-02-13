@@ -133,7 +133,11 @@ export default function SizeStep(props: SizeStepProps) {
 
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
-  const [sizeMode, setSizeMode] = useState<SizeMode>(() => (draftPreset ? "preset" : "preset"));
+  const [sizeMode, setSizeMode] = useState<SizeMode>(() => {
+  if (draftWcm && draftHcm) return draftPreset ? "preset" : "custom";
+  return "preset";
+});
+
 const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "100×50");
 
   const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "50"));
@@ -390,81 +394,155 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
         {/* Размер */}
-        <div style={{ ...glassPanelStyle(), padding: 12 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
-          <div style={{ display: "grid", gap: 12 }}>
-            <div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="radio" name="sizeMode" checked={sizeMode === "preset"} onChange={() => setSizeMode("preset")} />
-                <span>Стандартный</span>
-              </label>
-              {sizeMode === "preset" && (
-                <div style={{ marginTop: 6, ...optionGrid2Style }}>
-                  {PRESET_SIZES.map((s) => (
-                    <label key={s} style={optionLabelStyle}>
-                      <input type="radio" name="sizePreset" checked={sizePreset === s} onChange={() => setSizePreset(s)} />
-                      <span>{s} см</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
+<div style={{ ...glassPanelStyle(), padding: 12 }}>
+  <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
 
-            <div>
-  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-    <input
-      type="radio"
-      name="sizeMode"
-      checked={sizeMode === "custom"}
-      onChange={() => setSizeMode("custom")}
-    />
-    <span>Свой вариант</span>
-  </label>
+  <div style={{ display: "grid", gap: 12 }}>
+    <div>
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <input
+          type="radio"
+          name="sizeMode"
+          checked={sizeMode === "preset"}
+          onChange={() => setSizeMode("preset")}
+        />
+        <span>Стандартный</span>
+      </label>
 
-  {sizeMode === "custom" && (
-    <div
-      style={{
-        marginTop: 10,
-        padding: 10,
-        borderRadius: 10,
-        border: "1px dashed rgba(255,255,255,0.22)",
-        background: "rgba(255,255,255,0.05)"
-      }}
-    >
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span>Ширина, см</span>
-          <input
-            type="number"
-            min={1}
-            max={300}
-            value={w}
-            onChange={(e) => setW(e.target.value)}
-            style={{ width: 90 }}
-          />
-        </label>
-
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span>Высота, см</span>
-          <input
-            type="number"
-            min={1}
-            max={300}
-            value={h}
-            onChange={(e) => setH(e.target.value)}
-            style={{ width: 90 }}
-          />
-        </label>
-
-        {!sizeValid && (
-          <div style={{ color: "salmon", fontSize: 12 }}>
-            Укажите положительные значения до 300 см.
-          </div>
-        )}
-      </div>
+      {sizeMode === "preset" && (
+        <div style={{ marginTop: 6, ...optionGrid2Style }}>
+          {PRESET_SIZES.map((s) => (
+            <label key={s} style={optionLabelStyle}>
+              <input
+                type="radio"
+                name="sizePreset"
+                checked={sizePreset === s}
+                onChange={() => setSizePreset(s)}
+              />
+              <span>{s} см</span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
-  )}
+
+    <div>
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <input
+          type="radio"
+          name="sizeMode"
+          checked={sizeMode === "custom"}
+          onChange={() => setSizeMode("custom")}
+        />
+        <span>Свой вариант</span>
+      </label>
+
+      {sizeMode === "custom" && (
+        <div style={innerBoxStyle()}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span>Ширина, см</span>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                value={w}
+                onChange={(e) => setW(e.target.value)}
+                style={{ width: 90 }}
+              />
+            </label>
+
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span>Высота, см</span>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                value={h}
+                onChange={(e) => setH(e.target.value)}
+                style={{ width: 90 }}
+              />
+            </label>
+
+            {!sizeValid && (
+              <div style={{ color: "salmon", fontSize: 12 }}>
+                Укажите положительные значения до 300 см.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
 </div>
+
+{/* Толщина */}
+<div style={{ ...glassPanelStyle(), padding: 12 }}>
+  <div style={{ fontWeight: 600, marginBottom: 8 }}>Толщина</div>
+
+  <div style={{ display: "grid", gap: 8 }}>
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <input
+        type="radio"
+        name="thickMode"
+        checked={thickMode === "preset"}
+        onChange={() => setThickMode("preset")}
+      />
+      <span>Стандартная</span>
+    </label>
+
+    {thickMode === "preset" && (
+      <div style={optionWrapStyle}>
+        {PRESET_THICKNESS.map((t) => (
+          <label key={t} style={optionLabelStyle}>
+            <input
+              type="radio"
+              name="thickPreset"
+              checked={thickPreset === t}
+              onChange={() => setThickPreset(t)}
+            />
+            <span>{t} см</span>
+          </label>
+        ))}
+      </div>
+    )}
+
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <input
+        type="radio"
+        name="thickMode"
+        checked={thickMode === "custom"}
+        onChange={() => setThickMode("custom")}
+      />
+      <span>Свой вариант</span>
+    </label>
+
+    {thickMode === "custom" && (
+      <div style={innerBoxStyle()}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span>Толщина, см</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={thickCustom}
+              onChange={(e) => setThickCustom(e.target.value)}
+              style={{ width: 90 }}
+            />
+          </label>
+
+          {!thickValid && (
+            <div style={{ color: "salmon", fontSize: 12 }}>
+              Укажите положительное значение до 50 см.
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+  </div>
+</div>
+
 
 
         {/* Толщина */}
