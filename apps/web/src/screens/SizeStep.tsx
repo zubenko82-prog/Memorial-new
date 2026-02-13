@@ -11,7 +11,7 @@ import type { CatalogItem } from "../api";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 
-const PRESET_SIZES = ["60×40", "80×40", "100×50", "100×60", "120×60", "120×50"] as const; // см (Ш×В)
+const PRESET_SIZES = ["60×40", "80×40", "100×50", "100×60", "120×50", "120×60"] as const; // см (Ш×В)
 
 const PRESET_THICKNESS = ["5", "8", "10"] as const; // см
 
@@ -67,6 +67,12 @@ function glassPanelStyle(): React.CSSProperties {
 
 const optionWrapStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 10 };
 const optionLabelStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", marginRight: 4 };
+const optionGrid2Style: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, max-content)",
+  gap: "10px 14px",
+  alignItems: "center"
+};
 
 function parsePresetWHcm(s: string): [number, number] {
   const parts = String(s).split(/[×xX]/);
@@ -382,7 +388,7 @@ export default function SizeStep(props: SizeStepProps) {
                 <span>Стандартный</span>
               </label>
               {sizeMode === "preset" && (
-                <div style={{ marginTop: 6, ...optionWrapStyle }}>
+                <div style={{ marginTop: 6, ...optionGrid2Style }}>
                   {PRESET_SIZES.map((s) => (
                     <label key={s} style={optionLabelStyle}>
                       <input type="radio" name="sizePreset" checked={sizePreset === s} onChange={() => setSizePreset(s)} />
