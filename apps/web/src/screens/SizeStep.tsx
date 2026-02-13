@@ -11,7 +11,7 @@ import type { CatalogItem } from "../api";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 
-const PRESET_SIZES = ["40×60", "40×80", "50×100", "60×120"] as const; // см (Ш×В)
+const PRESET_SIZES = ["60×40", "80×40", "100×50", "100×60", "120×60" "120×50"] as const; // см (Ш×В)
 const PRESET_THICKNESS = ["5", "8", "10"] as const; // см
 
 type SizeMode = "preset" | "custom";
