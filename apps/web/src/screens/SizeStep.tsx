@@ -402,7 +402,7 @@ export default function SizeStep(props: SizeStepProps) {
             <div>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <input type="radio" name="sizeMode" checked={sizeMode === "custom"} onChange={() => setSizeMode("custom")} />
-                <span>Свой вариант</span>
+                <br /><span>Свой вариант</span>
               </label>
 
               {sizeMode === "custom" && (
@@ -442,7 +442,7 @@ export default function SizeStep(props: SizeStepProps) {
             )}
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
-              <span>Свой вариант</span>
+              <br /><span>Свой вариант</span>
             </label>
             {thickMode === "custom" && (
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
