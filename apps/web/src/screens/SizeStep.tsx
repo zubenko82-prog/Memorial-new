@@ -12,7 +12,6 @@ import TopBarWithIntro from "../components/TopBarWithIntro";
 import { loadOrderDraft, saveOrderDraft } from "../lib/order";
 
 const PRESET_SIZES = ["60×40", "80×40", "100×50", "100×60", "120×50", "120×60"] as const; // см (Ш×В)
-
 const PRESET_THICKNESS = ["5", "8", "10"] as const; // см
 
 type SizeMode = "preset" | "custom";
@@ -55,6 +54,7 @@ function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProp
     willChange: "transform"
   };
 }
+
 function innerBoxStyle(): React.CSSProperties {
   return {
     marginTop: 10,
@@ -76,7 +76,13 @@ function glassPanelStyle(): React.CSSProperties {
 }
 
 const optionWrapStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 10 };
-const optionLabelStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", marginRight: 4 };
+const optionLabelStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  whiteSpace: "nowrap",
+  marginRight: 4
+};
 const optionGrid2Style: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(2, max-content)",
@@ -104,7 +110,14 @@ function findPresetFor(widthCm?: number, heightCm?: number): (typeof PRESET_SIZE
   return (PRESET_SIZES as readonly string[]).includes(cand as any) ? (cand as any) : undefined;
 }
 function orientFromSize(widthCm?: number, heightCm?: number): Orientation {
-  if (typeof widthCm === "number" && typeof heightCm === "number" && isFinite(widthCm) && isFinite(heightCm) && widthCm > 0 && heightCm > 0) {
+  if (
+    typeof widthCm === "number" &&
+    typeof heightCm === "number" &&
+    isFinite(widthCm) &&
+    isFinite(heightCm) &&
+    widthCm > 0 &&
+    heightCm > 0
+  ) {
     return widthCm > heightCm ? "horizontal" : "vertical";
   }
   return "vertical";
@@ -127,21 +140,18 @@ export default function SizeStep(props: SizeStepProps) {
   const draftHcm = mmToCm(draft.size?.height);
   const draftTcm = mmToCm(draft.size?.thickness);
 
-  const draftOrientation = (draft.size?.orientation as Orientation | undefined)
-    || (draft.orientation as Orientation | undefined)
-    || "vertical";
-
+  const draftOrientation = (draft.size?.orientation as Orientation | undefined) || (draft.orientation as Orientation | undefined) || "vertical";
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
+  // По умолчанию: Стандартный + 100×50, но если в драфте были "свои" размеры — открываем custom
   const [sizeMode, setSizeMode] = useState<SizeMode>(() => {
-  if (draftWcm && draftHcm) return draftPreset ? "preset" : "custom";
-  return "preset";
-});
+    if (draftWcm && draftHcm) return draftPreset ? "preset" : "custom";
+    return "preset";
+  });
+  const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "100×50");
 
-const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "100×50");
-
-  const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "50"));
-  const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "100"));
+  const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "100"));
+  const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "50"));
 
   const [thickMode, setThickMode] = useState<ThickMode>(() => {
     if (typeof draftTcm === "number") {
@@ -175,10 +185,7 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
     }
     const wcm = Number(w);
     const hcm = Number(h);
-    return [
-      Number.isFinite(wcm) && wcm > 0 ? wcm : undefined,
-      Number.isFinite(hcm) && hcm > 0 ? hcm : undefined
-    ];
+    return [Number.isFinite(wcm) && wcm > 0 ? wcm : undefined, Number.isFinite(hcm) && hcm > 0 ? hcm : undefined];
   }, [sizeMode, sizePreset, w, h]);
 
   function persistDraft(currentOrientation: Orientation) {
@@ -188,7 +195,8 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
 
     if (sizeMode === "preset") {
       const [wcm, hcm] = parsePresetWHcm(sizePreset);
-      widthCm = wcm; heightCm = hcm;
+      widthCm = wcm;
+      heightCm = hcm;
     } else {
       const wcm = Number(w);
       const hcm = Number(h);
@@ -205,9 +213,10 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
       if (Number.isFinite(t) && t > 0) thickCm = t;
     }
 
-    const toMm = (cm?: number) => (typeof cm === "number" ? Math.round(cm * 10) : undefined);
     const sizePatch: any = { orientation: currentOrientation };
-    const wmm = toMm(widthCm), hmm = toMm(heightCm), tmm = toMm(thickCm);
+    const wmm = cmToMm(widthCm),
+      hmm = cmToMm(heightCm),
+      tmm = cmToMm(thickCm);
     if (typeof wmm === "number") sizePatch.width = wmm;
     if (typeof hmm === "number") sizePatch.height = hmm;
     if (typeof tmm === "number") sizePatch.thickness = tmm;
@@ -293,9 +302,8 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
       detectingRef.current = false;
       if (timer) window.clearTimeout(timer);
     };
-    // ВАЖНО: завязываемся на id и url — любое изменение работы перезапускает детект
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.id, item?.url]); // при смене выбранной работы переопределяем ориентацию
+  }, [item?.id, item?.url]);
 
   // Если источник ориентации = "size" — поддерживаем актуальность при изменении размеров
   useEffect(() => {
@@ -317,11 +325,13 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
     const hn = Number(h);
     return Number.isFinite(wn) && Number.isFinite(hn) && wn > 0 && hn > 0 && wn <= 300 && hn <= 300;
   }, [sizeMode, w, h]);
+
   const thickValid = useMemo(() => {
     if (thickMode === "preset") return true;
     const tn = Number(thickCustom);
     return Number.isFinite(tn) && tn > 0 && tn <= 50;
   }, [thickMode, thickCustom]);
+
   const canContinue = sizeValid && thickValid;
 
   const finalSize = sizeMode === "preset" ? sizePreset : `${Number(w)}×${Number(h)}`;
@@ -337,7 +347,8 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
 
     if (sizeMode === "preset") {
       const [wcm, hcm] = parsePresetWHcm(sizePreset);
-      widthCm = wcm; heightCm = hcm;
+      widthCm = wcm;
+      heightCm = hcm;
     } else {
       const wcm = Number(w);
       const hcm = Number(h);
@@ -355,7 +366,9 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
     }
 
     const sizePatch: any = { orientation };
-    const wmm = cmToMm(widthCm), hmm = cmToMm(heightCm), tmm = cmToMm(thickCm);
+    const wmm = cmToMm(widthCm),
+      hmm = cmToMm(heightCm),
+      tmm = cmToMm(thickCm);
     if (typeof wmm === "number") sizePatch.width = wmm;
     if (typeof hmm === "number") sizePatch.height = hmm;
     if (typeof tmm === "number") sizePatch.thickness = tmm;
@@ -370,7 +383,7 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
       const next = orientFromSize(wcm, hcm);
       persistDraft(next);
     }
-    const fn = (typeof onDone === "function" ? onDone : typeof onConfirm === "function" ? onConfirm : undefined);
+    const fn = typeof onDone === "function" ? onDone : typeof onConfirm === "function" ? onConfirm : undefined;
     if (fn) fn(payload);
     else console.error("SizeStep: ни onDone, ни onConfirm не переданы в props");
   };
@@ -381,7 +394,8 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
         color: "#fff",
         maxWidth: 600,
         margin: "0 auto",
-        fontFamily: "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
+        fontFamily:
+          "var(--font-readable, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Noto Sans', 'Helvetica Neue', sans-serif)",
         animation: "fade-slide-in-slow 480ms ease both",
         padding: 16
       }}
@@ -389,199 +403,106 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
       <TopBarWithIntro title="Размер" />
 
       <h2 style={{ margin: "8px 0 8px 0", textAlign: "center" }}>Параметры стелы</h2>
-      <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>
-       Выберите размер и толщину памятника.</div>
+      <div style={{ marginBottom: 8, opacity: 0.9, textAlign: "center" }}>Выберите размер и толщину памятника.</div>
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
         {/* Размер */}
-<div style={{ ...glassPanelStyle(), padding: 12 }}>
-  <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
+        <div style={{ ...glassPanelStyle(), padding: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
 
-  <div style={{ display: "grid", gap: 12 }}>
-    <div>
-      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <input
-          type="radio"
-          name="sizeMode"
-          checked={sizeMode === "preset"}
-          onChange={() => setSizeMode("preset")}
-        />
-        <span>Стандартный</span>
-      </label>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input type="radio" name="sizeMode" checked={sizeMode === "preset"} onChange={() => setSizeMode("preset")} />
+                <span>Стандартный</span>
+              </label>
 
-      {sizeMode === "preset" && (
-        <div style={{ marginTop: 6, ...optionGrid2Style }}>
-          {PRESET_SIZES.map((s) => (
-            <label key={s} style={optionLabelStyle}>
-              <input
-                type="radio"
-                name="sizePreset"
-                checked={sizePreset === s}
-                onChange={() => setSizePreset(s)}
-              />
-              <span>{s} см</span>
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
+              {sizeMode === "preset" && (
+                <div style={{ marginTop: 6, ...optionGrid2Style }}>
+                  {PRESET_SIZES.map((s) => (
+                    <label key={s} style={optionLabelStyle}>
+                      <input type="radio" name="sizePreset" checked={sizePreset === s} onChange={() => setSizePreset(s)} />
+                      <span>{s} см</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
 
-    <div>
-      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <input
-          type="radio"
-          name="sizeMode"
-          checked={sizeMode === "custom"}
-          onChange={() => setSizeMode("custom")}
-        />
-        <span>Свой вариант</span>
-      </label>
+            {/* Свой вариант — рамка включает и радио, и поля */}
+            <div style={sizeMode === "custom" ? innerBoxStyle() : undefined}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input type="radio" name="sizeMode" checked={sizeMode === "custom"} onChange={() => setSizeMode("custom")} />
+                <span>Свой вариант</span>
+              </label>
 
-      {sizeMode === "custom" && (
-        <div style={innerBoxStyle()}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span>Ширина, см</span>
-              <input
-                type="number"
-                min={1}
-                max={300}
-                value={w}
-                onChange={(e) => setW(e.target.value)}
-                style={{ width: 90 }}
-              />
-            </label>
+              {sizeMode === "custom" && (
+                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span>Ширина, см</span>
+                    <input type="number" min={1} max={300} value={w} onChange={(e) => setW(e.target.value)} style={{ width: 90 }} />
+                  </label>
 
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span>Высота, см</span>
-              <input
-                type="number"
-                min={1}
-                max={300}
-                value={h}
-                onChange={(e) => setH(e.target.value)}
-                style={{ width: 90 }}
-              />
-            </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span>Высота, см</span>
+                    <input type="number" min={1} max={300} value={h} onChange={(e) => setH(e.target.value)} style={{ width: 90 }} />
+                  </label>
 
-            {!sizeValid && (
-              <div style={{ color: "salmon", fontSize: 12 }}>
-                Укажите положительные значения до 300 см.
-              </div>
-            )}
+                  {!sizeValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      )}
-    </div>
-  </div>
-</div>
-
-{/* Толщина */}
-<div style={{ ...glassPanelStyle(), padding: 12 }}>
-  <div style={{ fontWeight: 600, marginBottom: 8 }}>Толщина</div>
-
-  <div style={{ display: "grid", gap: 8 }}>
-    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <input
-        type="radio"
-        name="thickMode"
-        checked={thickMode === "preset"}
-        onChange={() => setThickMode("preset")}
-      />
-      <span>Стандартная</span>
-    </label>
-
-    {thickMode === "preset" && (
-      <div style={optionWrapStyle}>
-        {PRESET_THICKNESS.map((t) => (
-          <label key={t} style={optionLabelStyle}>
-            <input
-              type="radio"
-              name="thickPreset"
-              checked={thickPreset === t}
-              onChange={() => setThickPreset(t)}
-            />
-            <span>{t} см</span>
-          </label>
-        ))}
-      </div>
-    )}
-
-    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <input
-        type="radio"
-        name="thickMode"
-        checked={thickMode === "custom"}
-        onChange={() => setThickMode("custom")}
-      />
-      <span>Свой вариант</span>
-    </label>
-
-    {thickMode === "custom" && (
-      <div style={innerBoxStyle()}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span>Толщина, см</span>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={thickCustom}
-              onChange={(e) => setThickCustom(e.target.value)}
-              style={{ width: 90 }}
-            />
-          </label>
-
-          {!thickValid && (
-            <div style={{ color: "salmon", fontSize: 12 }}>
-              Укажите положительное значение до 50 см.
-            </div>
-          )}
-        </div>
-      </div>
-    )}
-  </div>
-</div>
-
-
 
         {/* Толщина */}
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Толщина</div>
+
           <div style={{ display: "grid", gap: 8 }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input type="radio" name="thickMode" checked={thickMode === "preset"} onChange={() => setThickMode("preset")} />
-              <span>Стандартная</span>
-            </label>
-            {thickMode === "preset" && (
-              <div style={optionWrapStyle}>
-                {PRESET_THICKNESS.map((t) => (
-                  <label key={t} style={optionLabelStyle}>
-                    <input type="radio" name="thickPreset" checked={thickPreset === t} onChange={() => setThickPreset(t)} />
-                    <span>{t} см</span>
+            <div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input type="radio" name="thickMode" checked={thickMode === "preset"} onChange={() => setThickMode("preset")} />
+                <span>Стандартная</span>
+              </label>
+
+              {thickMode === "preset" && (
+                <div style={{ marginTop: 6, ...optionWrapStyle }}>
+                  {PRESET_THICKNESS.map((t) => (
+                    <label key={t} style={optionLabelStyle}>
+                      <input type="radio" name="thickPreset" checked={thickPreset === t} onChange={() => setThickPreset(t)} />
+                      <span>{t} см</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Свой вариант — рамка включает и радио, и поле */}
+            <div style={thickMode === "custom" ? innerBoxStyle() : undefined}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
+                <span>Свой вариант</span>
+              </label>
+
+              {thickMode === "custom" && (
+                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span>Толщина, см</span>
+                    <input type="number" min={1} max={50} value={thickCustom} onChange={(e) => setThickCustom(e.target.value)} style={{ width: 90 }} />
                   </label>
-                ))}
-              </div>
-            )}
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
-              <span>Свой вариант</span>
-            </label>
-            {thickMode === "custom" && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <span>Толщина, см</span>
-                  <input type="number" min={1} max={50} value={thickCustom} onChange={(e) => setThickCustom(e.target.value)} style={{ width: 90 }} />
-                </label>
-                {!thickValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>}
-              </div>
-            )}
+
+                  {!thickValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Выбранная работа (превью) */}
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ marginBottom: 6, opacity: 0.9 }}>Выбранная резная работа</div>
+
           <div style={{ display: "grid", gap: 10 }}>
             <div
               style={{
@@ -599,9 +520,17 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
               <img
                 src={item.url}
                 alt={item.name}
-                style={{ width: "100%", maxWidth: 640, maxHeight: "55vh", objectFit: "contain", borderRadius: 8, display: "block" }}
+                style={{
+                  width: "100%",
+                  maxWidth: 640,
+                  maxHeight: "55vh",
+                  objectFit: "contain",
+                  borderRadius: 8,
+                  display: "block"
+                }}
               />
             </div>
+
             <div
               style={{
                 fontWeight: 600,
@@ -629,6 +558,7 @@ const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() =
           >
             Назад
           </button>
+
           <button
             disabled={!canContinue}
             onClick={handleContinue}
