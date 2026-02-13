@@ -55,6 +55,16 @@ function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProp
     willChange: "transform"
   };
 }
+function innerBoxStyle(): React.CSSProperties {
+  return {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 10,
+    border: "1px dashed rgba(255,255,255,0.22)",
+    background: "rgba(255,255,255,0.05)"
+  };
+}
+
 function glassPanelStyle(): React.CSSProperties {
   return {
     background: "rgba(20,20,24,0.55)",
@@ -123,8 +133,9 @@ export default function SizeStep(props: SizeStepProps) {
 
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
-  const [sizeMode, setSizeMode] = useState<SizeMode>(() => (draftWcm && draftHcm ? (draftPreset ? "preset" : "custom") : "preset"));
-  const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "50×100");
+  const [sizeMode, setSizeMode] = useState<SizeMode>(() => (draftPreset ? "preset" : "preset"));
+const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "100×50");
+
   const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "50"));
   const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "100"));
 
@@ -400,27 +411,61 @@ export default function SizeStep(props: SizeStepProps) {
             </div>
 
             <div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="radio" name="sizeMode" checked={sizeMode === "custom"} onChange={() => setSizeMode("custom")} />
-                <br /><span>Свой вариант</span>
-              </label>
+  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <input
+      type="radio"
+      name="sizeMode"
+      checked={sizeMode === "custom"}
+      onChange={() => setSizeMode("custom")}
+    />
+    <span>Свой вариант</span>
+  </label>
 
-              {sizeMode === "custom" && (
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span>Ширина, см</span>
-                    <input type="number" min={1} max={300} value={w} onChange={(e) => setW(e.target.value)} style={{ width: 90 }} />
-                  </label>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span>Высота, см</span>
-                    <input type="number" min={1} max={300} value={h} onChange={(e) => setH(e.target.value)} style={{ width: 90 }} />
-                  </label>
-                  {!sizeValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>}
-                </div>
-              )}
-            </div>
+  {sizeMode === "custom" && (
+    <div
+      style={{
+        marginTop: 10,
+        padding: 10,
+        borderRadius: 10,
+        border: "1px dashed rgba(255,255,255,0.22)",
+        background: "rgba(255,255,255,0.05)"
+      }}
+    >
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span>Ширина, см</span>
+          <input
+            type="number"
+            min={1}
+            max={300}
+            value={w}
+            onChange={(e) => setW(e.target.value)}
+            style={{ width: 90 }}
+          />
+        </label>
+
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span>Высота, см</span>
+          <input
+            type="number"
+            min={1}
+            max={300}
+            value={h}
+            onChange={(e) => setH(e.target.value)}
+            style={{ width: 90 }}
+          />
+        </label>
+
+        {!sizeValid && (
+          <div style={{ color: "salmon", fontSize: 12 }}>
+            Укажите положительные значения до 300 см.
           </div>
-        </div>
+        )}
+      </div>
+    </div>
+  )}
+</div>
+
 
         {/* Толщина */}
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
@@ -442,7 +487,7 @@ export default function SizeStep(props: SizeStepProps) {
             )}
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
-              <br /><span>Свой вариант</span>
+              <span>Свой вариант</span>
             </label>
             {thickMode === "custom" && (
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
