@@ -55,16 +55,6 @@ function glassButtonStyle(size: BtnSize = "sm", disabled = false): React.CSSProp
   };
 }
 
-function innerBoxStyle(): React.CSSProperties {
-  return {
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 10,
-    border: "1px dashed rgba(255,255,255,0.22)",
-    background: "rgba(255,255,255,0.05)"
-  };
-}
-
 function glassPanelStyle(): React.CSSProperties {
   return {
     background: "rgba(20,20,24,0.55)",
@@ -72,6 +62,17 @@ function glassPanelStyle(): React.CSSProperties {
     backdropFilter: "blur(12px) saturate(140%)",
     WebkitBackdropFilter: "blur(12px) saturate(140%)",
     borderRadius: 12
+  };
+}
+
+// Визуальное отделение радио-групп (и "Стандартный", и "Стандартная")
+function radioGroupBoxStyle(): React.CSSProperties {
+  return {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.16)",
+    background: "rgba(255,255,255,0.04)"
   };
 }
 
@@ -140,7 +141,9 @@ export default function SizeStep(props: SizeStepProps) {
   const draftHcm = mmToCm(draft.size?.height);
   const draftTcm = mmToCm(draft.size?.thickness);
 
-  const draftOrientation = (draft.size?.orientation as Orientation | undefined) || (draft.orientation as Orientation | undefined) || "vertical";
+  const draftOrientation =
+    (draft.size?.orientation as Orientation | undefined) || (draft.orientation as Orientation | undefined) || "vertical";
+
   const draftPreset = findPresetFor(draftWcm, draftHcm);
 
   // По умолчанию: Стандартный + 100×50, но если в драфте были "свои" размеры — открываем custom
@@ -150,8 +153,8 @@ export default function SizeStep(props: SizeStepProps) {
   });
   const [sizePreset, setSizePreset] = useState<(typeof PRESET_SIZES)[number]>(() => draftPreset || "100×50");
 
-  const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "100"));
-  const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "50"));
+  const [w, setW] = useState<string>(() => (draftWcm ? String(draftWcm) : "50"));
+  const [h, setH] = useState<string>(() => (draftHcm ? String(draftHcm) : "100"));
 
   const [thickMode, setThickMode] = useState<ThickMode>(() => {
     if (typeof draftTcm === "number") {
@@ -213,10 +216,11 @@ export default function SizeStep(props: SizeStepProps) {
       if (Number.isFinite(t) && t > 0) thickCm = t;
     }
 
+    const toMm = (cm?: number) => (typeof cm === "number" ? Math.round(cm * 10) : undefined);
     const sizePatch: any = { orientation: currentOrientation };
-    const wmm = cmToMm(widthCm),
-      hmm = cmToMm(heightCm),
-      tmm = cmToMm(thickCm);
+    const wmm = toMm(widthCm),
+      hmm = toMm(heightCm),
+      tmm = toMm(thickCm);
     if (typeof wmm === "number") sizePatch.width = wmm;
     if (typeof hmm === "number") sizePatch.height = hmm;
     if (typeof tmm === "number") sizePatch.thickness = tmm;
@@ -411,17 +415,28 @@ export default function SizeStep(props: SizeStepProps) {
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Размер</div>
 
           <div style={{ display: "grid", gap: 12 }}>
-            <div>
+            {/* Стандартный — визуально отделён */}
+            <div style={radioGroupBoxStyle()}>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="radio" name="sizeMode" checked={sizeMode === "preset"} onChange={() => setSizeMode("preset")} />
+                <input
+                  type="radio"
+                  name="sizeMode"
+                  checked={sizeMode === "preset"}
+                  onChange={() => setSizeMode("preset")}
+                />
                 <span>Стандартный</span>
               </label>
 
               {sizeMode === "preset" && (
-                <div style={{ marginTop: 6, ...optionGrid2Style }}>
+                <div style={{ marginTop: 8, ...optionGrid2Style }}>
                   {PRESET_SIZES.map((s) => (
                     <label key={s} style={optionLabelStyle}>
-                      <input type="radio" name="sizePreset" checked={sizePreset === s} onChange={() => setSizePreset(s)} />
+                      <input
+                        type="radio"
+                        name="sizePreset"
+                        checked={sizePreset === s}
+                        onChange={() => setSizePreset(s)}
+                      />
                       <span>{s} см</span>
                     </label>
                   ))}
@@ -429,26 +444,47 @@ export default function SizeStep(props: SizeStepProps) {
               )}
             </div>
 
-            {/* Свой вариант — рамка включает и радио, и поля */}
-            <div style={sizeMode === "custom" ? innerBoxStyle() : undefined}>
+            {/* Свой вариант — как было (без общей рамки вокруг радио) */}
+            <div>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="radio" name="sizeMode" checked={sizeMode === "custom"} onChange={() => setSizeMode("custom")} />
+                <input
+                  type="radio"
+                  name="sizeMode"
+                  checked={sizeMode === "custom"}
+                  onChange={() => setSizeMode("custom")}
+                />
                 <span>Свой вариант</span>
               </label>
 
               {sizeMode === "custom" && (
-                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span>Ширина, см</span>
-                    <input type="number" min={1} max={300} value={w} onChange={(e) => setW(e.target.value)} style={{ width: 90 }} />
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={w}
+                      onChange={(e) => setW(e.target.value)}
+                      style={{ width: 90 }}
+                    />
                   </label>
 
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span>Высота, см</span>
-                    <input type="number" min={1} max={300} value={h} onChange={(e) => setH(e.target.value)} style={{ width: 90 }} />
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={h}
+                      onChange={(e) => setH(e.target.value)}
+                      style={{ width: 90 }}
+                    />
                   </label>
 
-                  {!sizeValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>}
+                  {!sizeValid && (
+                    <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительные значения до 300 см.</div>
+                  )}
                 </div>
               )}
             </div>
@@ -459,18 +495,29 @@ export default function SizeStep(props: SizeStepProps) {
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Толщина</div>
 
-          <div style={{ display: "grid", gap: 8 }}>
-            <div>
+          <div style={{ display: "grid", gap: 12 }}>
+            {/* Стандартная — визуально отделена */}
+            <div style={radioGroupBoxStyle()}>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="radio" name="thickMode" checked={thickMode === "preset"} onChange={() => setThickMode("preset")} />
+                <input
+                  type="radio"
+                  name="thickMode"
+                  checked={thickMode === "preset"}
+                  onChange={() => setThickMode("preset")}
+                />
                 <span>Стандартная</span>
               </label>
 
               {thickMode === "preset" && (
-                <div style={{ marginTop: 6, ...optionWrapStyle }}>
+                <div style={{ marginTop: 8, ...optionWrapStyle }}>
                   {PRESET_THICKNESS.map((t) => (
                     <label key={t} style={optionLabelStyle}>
-                      <input type="radio" name="thickPreset" checked={thickPreset === t} onChange={() => setThickPreset(t)} />
+                      <input
+                        type="radio"
+                        name="thickPreset"
+                        checked={thickPreset === t}
+                        onChange={() => setThickPreset(t)}
+                      />
                       <span>{t} см</span>
                     </label>
                   ))}
@@ -478,21 +525,35 @@ export default function SizeStep(props: SizeStepProps) {
               )}
             </div>
 
-            {/* Свой вариант — рамка включает и радио, и поле */}
-            <div style={thickMode === "custom" ? innerBoxStyle() : undefined}>
+            {/* Свой вариант — как было */}
+            <div>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="radio" name="thickMode" checked={thickMode === "custom"} onChange={() => setThickMode("custom")} />
+                <input
+                  type="radio"
+                  name="thickMode"
+                  checked={thickMode === "custom"}
+                  onChange={() => setThickMode("custom")}
+                />
                 <span>Свой вариант</span>
               </label>
 
               {thickMode === "custom" && (
-                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span>Толщина, см</span>
-                    <input type="number" min={1} max={50} value={thickCustom} onChange={(e) => setThickCustom(e.target.value)} style={{ width: 90 }} />
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={thickCustom}
+                      onChange={(e) => setThickCustom(e.target.value)}
+                      style={{ width: 90 }}
+                    />
                   </label>
 
-                  {!thickValid && <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>}
+                  {!thickValid && (
+                    <div style={{ color: "salmon", fontSize: 12 }}>Укажите положительное значение до 50 см.</div>
+                  )}
                 </div>
               )}
             </div>
