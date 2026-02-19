@@ -805,13 +805,51 @@ async function handleClearAll() {
 
   setIsClearing(true);
   try {
+    // 1) Глобальный сброс (как у тебя)
     await hardResetAll({ preserveThemeKey: false });
+    try {
+  clearOrderDraft();
+  clearIntroAll();
+} catch {}
+
+    // 2) Добиваем stepNav/навигацию и любые хвосты memorial.*
+    try {
+      const keysToRemove: string[] = [];
+
+      // Явно известные (если у вас так называются — оставь)
+      keysToRemove.push(
+        "memorial.stepNav",
+        "memorial.stepNav.v1",
+        "memorial.nav",
+        "memorial.nav.v1",
+        "memorial.currentStep",
+        "memorial.currentStep.v1"
+      );
+
+      // Плюс всё, что начинается с memorial.step / memorial.stepNav
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (k.startsWith("memorial.step") || k.startsWith("memorial.stepNav")) keysToRemove.push(k);
+      }
+
+      // Удаляем уникально
+      Array.from(new Set(keysToRemove)).forEach((k) => localStorage.removeItem(k));
+    } catch {}
+
+    // 3) События, чтобы подписчики могли сбросить state (если есть)
+    try {
+      window.dispatchEvent(new Event("memorial:hardReset"));
+      window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
+      window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
+    } catch {}
+
+    // 4) Самый надёжный способ: перезагрузка, чтобы снести state на шагах
+    window.location.reload();
   } finally {
     setIsClearing(false);
   }
 }
-
-
 
   const coll = useCollapse(open, 280);
   // ✅ когда панель открыта, пересчитываем maxHeight при изменении контента
