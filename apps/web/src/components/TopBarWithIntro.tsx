@@ -737,15 +737,29 @@ export default function TopBarWithIntro({ title = "Memorial" }: { title?: string
         clearOrderDraft();
         clearIntroAll();
       } catch {}
-
-      // 2) Добиваем stepNav/навигацию и любые хвосты memorial.* (кроме темы)
       try {
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const k = localStorage.key(i);
-          if (!k) continue;
-          if (k.startsWith("memorial.") && k !== LS_THEME_KEY) localStorage.removeItem(k);
-        }
-      } catch {}
+  saveOrderDraft({
+    item: null as any,
+    size: {},
+    engraving: { persons: [], epitaphs: undefined, epitaphText: undefined } as any,
+    editor: {} as any,
+    editorBack: {} as any,
+    graphics: [],
+    notes: undefined,
+    extras: {},
+    updatedAt: Date.now()
+  } as any);
+} catch {}
+
+      // 2) Удаляем ВСЕ ключи memorial.* (кроме темы), чтобы не оставались люди/эпитафии/step state
+try {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k === LS_THEME_KEY) continue;
+    if (k.startsWith("memorial.")) localStorage.removeItem(k);
+  }
+} catch {}
 
       // 3) События
       try {
