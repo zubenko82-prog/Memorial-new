@@ -1,7 +1,50 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-// ---- Утилиты ----
+// === Стили кнопок ===
+const bigWebAppBtnText = '✨🪦  ПОДОБРАТЬ ПАМЯТНИК  🪦✨';
+const makeWebAppKeyboard = (url) =>
+  Markup.keyboard([[Markup.button.webApp(bigWebAppBtnText, url)]]).resize();
+const makeWebAppInline = (url) =>
+  Markup.inlineKeyboard([[Markup.button.webApp(bigWebAppBtnText, url)]]);
+
+const kbRemove = () => Markup.removeKeyboard();
+
+const kbReview = () =>
+  Markup.keyboard([
+    ['📨 Отправить'],
+    ['✏️ Изменить'],
+    ['⬅️ Назад', '❌ Отменить'],
+  ]).resize();
+
+const kbEditMenu = () =>
+  Markup.keyboard([
+    ['📝Имя', '📞Телефон'],
+    ['🕊ФИО', '📅Даты'],
+    ['🖼Фото', '💬Комментарий'],
+    ['⬅️ Назад'],
+  ]).resize();
+
+const kbName = () => Markup.keyboard([['❌ Отменить']]).resize();
+const kbPhone = () =>
+  Markup.keyboard([
+    [Markup.button.contactRequest('📱 Отправить мой контакт')],
+    ['⬅️ Назад', '❌ Отменить'],
+  ]).resize();
+const kbBackCancel = () =>
+  Markup.keyboard([['⬅️ Назад', '❌ Отменить']]).resize();
+const kbPhotos = () =>
+  Markup.keyboard([
+    ['➡️ Далее'],
+    ['⬅️ Назад', '❌ Отменить'],
+  ]).resize();
+const kbComment = () =>
+  Markup.keyboard([
+    ['✅ Продолжить'],
+    ['⬅️ Назад', '❌ Отменить'],
+  ]).resize();
+
+// ==== Утилиты ====
 const normStr = (v) => String(v || '').trim();
 
 function extractPriceLineFromPostText(text) {
@@ -34,7 +77,6 @@ function extractCompositionAndTotalFromPostText(text) {
     const end = untilIdx === -1 ? lines.length : untilIdx;
     compositionLines = lines.slice(priceLineIdx + 1, end).filter((l) => l && !/^Итого\s*:/i.test(l));
   }
-
   return { compositionLines, totalLine };
 }
 
@@ -42,14 +84,11 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   if (!sourceToken || typeof getPostMeta !== 'function') {
     return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
   }
-
   const meta = await getPostMeta(sourceToken).catch((e) => {
     console.error('[orders] getPostInfo getPostMeta error', e?.message || e);
     return null;
   });
-
   if (!meta) return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
-
   const text = meta.text || '';
   const priceLine = extractPriceLineFromPostText(text);
   const { compositionLines, totalLine } = extractCompositionAndTotalFromPostText(text);
@@ -58,10 +97,10 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   if (meta.absChatId && meta.messageId && typeof makePostLink === 'function') {
     postUrl = makePostLink(meta.absChatId, meta.messageId) || '';
   }
-
   return { priceLine, postUrl, compositionLines, totalLine };
 }
 
+// ==== Для менеджера ====
 async function buildManagerSummary(
   s,
   orderNo,
@@ -71,34 +110,21 @@ async function buildManagerSummary(
   const fio = s.fio?.trim() || '-';
   const dates = s.dates?.trim() || '-';
 
-  const u = user || {};
-  const fullName = [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || '—';
-  const username = u.username ? `@${u.username}` : '—';
-  const lang = u.language_code || '—';
-  const isPremium = u.is_premium ? 'да' : 'нет';
-
-  const tgPhone = s.tg_phone ? s.tg_phone : null;
-
+  // !!! Только пиктограммы, пустые строки, как для пользователя:
   const lines = [
-    `🆕 Новая заявка №${orderNo}`,
+    `📄 ${orderNo}`,
+    '', '',
+    `👤 ${s.name || '—'}`,
+    `📞 ${s.phone || '—'}`,
     '',
-    '👤 Данные Telegram:',
-    `ID: ${u.id ?? '—'}`,
-    `Имя: ${fullName}`,
-    `Username: ${username}`,
-    `Язык: ${lang}`,
-    `Premium: ${isPremium}`,
-    ...(tgPhone ? [`Телефон профиля (контакт): ${tgPhone}`] : []),
+    `🕊 ${fio}`,
+    `📅 ${dates}`,
     '',
-    '📋 Данные анкеты:',
-    `Заказчик: ${s.name || '—'}`,
-    `Телефон (в анкете): ${s.phone || '—'}`,
-    `ФИО усопшего: ${fio}`,
-    `Даты: ${dates}`,
-    s.photos?.length ? `Фото клиента: ${s.photos.length} шт.` : 'Фото клиента: —',
+    s.photos?.length ? `🖼 ${s.photos.length} фото` : '🖼 —',
+    '',
+    s.comment?.trim() ? `💬 ${s.comment.trim()}` : '💬 —',
+    '', ''
   ];
-
-  if (s.comment?.trim()) lines.push(`Комментарий/способ связи: ${s.comment.trim()}`);
 
   try {
     const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(
@@ -121,7 +147,6 @@ async function buildManagerSummary(
         lines.push(priceLine);
       }
     }
-    // Ссылка на пост (независимо от всего)
     if (postUrl) {
       lines.push('');
       lines.push('🔗 Пост в канале:');
@@ -130,7 +155,6 @@ async function buildManagerSummary(
   } catch (e) {
     console.error('[orders] buildManagerSummary post info error', e?.message || e);
   }
-
   return lines.join('\n');
 }
 
@@ -147,43 +171,6 @@ export function registerOrders(bot, deps) {
     makePostLink,
   } = deps;
 
-  const kbReview = () =>
-    Markup.keyboard([
-      ['📨 Отправить'],
-      ['✏️ Изменить'],
-      ['⬅️ Назад', '❌ Отменить'],
-    ]).resize();
-
-  const kbEditMenu = () =>
-    Markup.keyboard([
-      ['📝Имя', '📞Телефон'],
-      ['🕊ФИО', '📅Даты'],
-      ['🖼Фото', '💬Комментарий'],
-      ['⬅️ Назад'],
-    ]).resize();
-
-  const kbName = () => Markup.keyboard([['❌ Отменить']]).resize();
-  const kbPhone = () =>
-    Markup.keyboard([
-      [Markup.button.contactRequest('📱 Отправить мой контакт')],
-      ['⬅️ Назад', '❌ Отменить'],
-    ]).resize();
-  const kbBackCancel = () =>
-    Markup.keyboard([['⬅️ Назад', '❌ Отменить']]).resize();
-  const kbPhotos = () =>
-    Markup.keyboard([
-      ['➡️ Далее'],
-      ['⬅️ Назад', '❌ Отменить'],
-    ]).resize();
-  const kbComment = () =>
-    Markup.keyboard([
-      ['✅ Продолжить'],
-      ['⬅️ Назад', '❌ Отменить'],
-    ]).resize();
-  const kbWebApp = (link) =>
-    Markup.keyboard([[Markup.button.webApp('🪦 Подобрать памятник', link)]]).resize();
-  const kbRemove = () => Markup.removeKeyboard();
-
   const stepOrder = ['name', 'phone', 'fio', 'dates', 'photos', 'comment', 'review', 'edit_menu'];
 
   function getOrder(ctx) {
@@ -192,6 +179,7 @@ export function registerOrders(bot, deps) {
     return ctx.session.order;
   }
 
+  // ---- Шаги анкеты ----
   async function renderStep(ctx) {
     const s = getOrder(ctx);
     const st = s.step;
@@ -213,7 +201,7 @@ export function registerOrders(bot, deps) {
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»',
+          '🖼 Шаг 5 из 6. Фотографии.\n\nПри загрузке фотографии дождитесь сообщения, что фото загружено, только после этого нажмите «➡️ Далее».',
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
@@ -269,7 +257,7 @@ export function registerOrders(bot, deps) {
       s.comment?.trim() ? `💬 ${s.comment.trim()}` : '💬 —',
       '',
       '',
-      '«✏️ Изменить», исправить данные.',
+      '«✏️ Изменить», чтобы исправить данные.',
       '«📨 Отправить», когда всё верно.',
     ];
 
@@ -310,19 +298,23 @@ export function registerOrders(bot, deps) {
       await sendOrderToManager(ctx, s, orderNo);
 
       const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
-      // Меню только "Подобрать памятник"
       const replyMarkup = webAppUrl
-        ? Markup.keyboard([[Markup.button.webApp('🪦 Подобрать памятник', webAppUrl)]]).resize()
+        ? makeWebAppKeyboard(webAppUrl)
         : kbRemove();
+      const inlineMarkup = webAppUrl
+        ? makeWebAppInline(webAppUrl)
+        : undefined;
 
       await ctx.reply(
         [
           `✅ Заявка №${orderNo} отправлена.`,
-          ``,
-          `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
+          `${s.name || 'Спасибо'}! Наш менеджер свяжется с вами по указанному телефону.`,
           CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
         ].filter(Boolean).join('\n'),
-        replyMarkup
+        {
+          ...(replyMarkup ? { reply_markup: replyMarkup.reply_markup } : {}),
+          ...(inlineMarkup ? { reply_markup: inlineMarkup.reply_markup } : {}),
+        }
       );
     } catch (e) {
       await ctx.reply('😔 Не удалось отправить заявку. Попробуйте позже.', kbRemove());
@@ -344,28 +336,22 @@ export function registerOrders(bot, deps) {
   });
 
   bot.hears('📝Имя', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'name'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'name'; await renderStep(ctx);
   });
   bot.hears('📞Телефон', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'phone'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'phone'; await renderStep(ctx);
   });
   bot.hears('🕊ФИО', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'fio'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'fio'; await renderStep(ctx);
   });
   bot.hears('📅Даты', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'dates'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'dates'; await renderStep(ctx);
   });
   bot.hears('🖼Фото', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'photos'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'photos'; await renderStep(ctx);
   });
   bot.hears('💬Комментарий', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'comment'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'comment'; await renderStep(ctx);
   });
 
   bot.hears(['⬅️ Назад'], async (ctx, next) => {
@@ -396,8 +382,7 @@ export function registerOrders(bot, deps) {
   });
 
   bot.hears(['📨 Отправить', 'Отправить'], async (ctx, next) => {
-    if (ctx.session?.order?.step === 'review')
-      return submitOrder(ctx);
+    if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
     return next();
   });
 
@@ -418,7 +403,6 @@ export function registerOrders(bot, deps) {
     const st = s.step;
     if (!st) return next();
 
-    // Если после редактирования — возвращаем к предпросмотру
     const restoreToReview = () => {
       if (s.editReturnStep === 'review') {
         s.step = 'review';
