@@ -305,36 +305,44 @@ export function registerOrders(bot, deps) {
   }
 
   async function submitOrder(ctx) {
-    const s = getOrder(ctx);
-    if (!s.name || !s.phone || !phoneOk(s.phone)) {
-      return ctx.reply('❗️ Обязательные поля не заполнены.\nПроверьте: «Заказчик», «Номер телефона».', kbName());
-    }
-    const orderNo = s.orderNo || makeOrderNo();
-    try {
-      await sendOrderToManager(ctx, s, orderNo);
-
-      const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
-      await ctx.reply(
-        [
-          `✅ Заявка №${orderNo} отправлена.`,
-          ``,
-          `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
-          CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
-        ].filter(Boolean).join('\n'),
-        {
-          reply_markup: webAppUrl
-            ? Markup.inlineKeyboard([
-                [Markup.button.webApp('🪦 Подобрать памятник', webAppUrl)]
-              ]).reply_markup
-            : kbRemove().reply_markup,
-        }
-      );
-    } catch (e) {
-      await ctx.reply('😔 Не удалось отправить заявку. Попробуйте позже.', kbRemove());
-    } finally {
-      ctx.session.order = null;
-    }
+  const s = getOrder(ctx);
+  if (!s.name || !s.phone || !phoneOk(s.phone)) {
+    return ctx.reply('❗️ Обязательные поля не заполнены.\nПроверьте: «Заказчик», «Номер телефона».', kbName());
   }
+  const orderNo = s.orderNo || makeOrderNo();
+  try {
+    await sendOrderToManager(ctx, s, orderNo);
+
+    const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
+    await ctx.reply(
+      [
+        `✅ Заявка №${orderNo} отправлена.`,
+        ``,
+        `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
+        CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
+      ].filter(Boolean).join('\n'),
+      {
+        reply_markup: webAppUrl
+          ? Markup.keyboard([
+              [
+                Markup.button.webApp(
+                  '✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨',
+                  webAppUrl
+                ),
+              ],
+            ])
+              .resize()
+              .oneTime()
+              .reply_markup
+          : kbRemove().reply_markup,
+      }
+    );
+  } catch (e) {
+    await ctx.reply('😔 Не удалось отправить заявку. Попробуйте позже.', kbRemove());
+  } finally {
+    ctx.session.order = null;
+  }
+}
 
   async function cancelOrder(ctx, msg = 'Анкета отменена.') {
     ctx.session.order = null;
