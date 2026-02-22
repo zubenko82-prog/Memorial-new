@@ -1,7 +1,7 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-// ---- утилиты ----
+// ---- Утилиты ----
 const normStr = (v) => String(v || '').trim();
 
 function extractPriceLineFromPostText(text) {
@@ -112,15 +112,12 @@ async function buildManagerSummary(
       getPostMeta,
       makePostLink
     );
-
     if (compositionLines.length || totalLine || priceLine || postUrl) {
       lines.push('');
-
       if (compositionLines.length) {
         lines.push('🧩 Состав заказа (из поста):');
         lines.push(...compositionLines);
       }
-
       if (totalLine) {
         lines.push('');
         lines.push(`💰 ${totalLine}`);
@@ -129,7 +126,6 @@ async function buildManagerSummary(
         lines.push('💵 Цена в посте:');
         lines.push(priceLine);
       }
-
       if (postUrl) {
         lines.push('');
         lines.push('🔗 Пост в канале:');
@@ -247,7 +243,6 @@ export function registerOrders(bot, deps) {
     const s = ctx.session?.order;
     if (!s?.step) return;
 
-    // спец-обработка из меню редактирования
     if (s.step === 'edit_menu') {
       s.step = 'review';
       return stepReview(ctx);
@@ -259,6 +254,7 @@ export function registerOrders(bot, deps) {
   }
 
   async function startOrder(ctx, sourceToken) {
+    // ВСЕГДА чистим анкету
     ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
     return renderStep(ctx);
   }
@@ -285,7 +281,6 @@ export function registerOrders(bot, deps) {
     await ctx.reply(lines.join('\n'), kbReview());
   }
 
-  // ---------- отправка менеджеру ----------
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
     const managerText = await buildManagerSummary(s, orderNo, ctx.from, { getPostMeta, makePostLink });
@@ -416,6 +411,18 @@ export function registerOrders(bot, deps) {
       return submitOrder(ctx);
     return next();
   });
+
+  bot.start(async (ctx) => {
+    ctx.session.order = null; // <--- добавлено!
+    const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
+    let sourceToken = null;
+    const prefix = `${DEEPLINK_PREFIX}_`;
+    if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
+    await ctx.reply(HINT_TEXT);
+    await startOrder(ctx, sourceToken || undefined);
+  });
+
+  bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена по команде /cancel.'));
 
   bot.on('message', async (ctx, next) => {
     const s = getOrder(ctx);
