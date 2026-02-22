@@ -55,14 +55,8 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   const { compositionLines, totalLine } = extractCompositionAndTotalFromPostText(text);
 
   let postUrl = '';
-  try {
-    if (typeof makePostLink === 'function') {
-      const absChatId = meta.absChatId || null;
-      const messageId = meta.messageId || null;
-      postUrl = makePostLink(absChatId, messageId) || '';
-    }
-  } catch (e) {
-    console.error('[orders] getPostInfo makePostLink error', e?.message || e);
+  if (meta.absChatId && meta.messageId && typeof makePostLink === 'function') {
+    postUrl = makePostLink(meta.absChatId, meta.messageId) || '';
   }
 
   return { priceLine, postUrl, compositionLines, totalLine };
@@ -112,7 +106,7 @@ async function buildManagerSummary(
       getPostMeta,
       makePostLink
     );
-    if (compositionLines.length || totalLine || priceLine || postUrl) {
+    if (compositionLines.length || totalLine || priceLine) {
       lines.push('');
       if (compositionLines.length) {
         lines.push('🧩 Состав заказа (из поста):');
@@ -126,11 +120,12 @@ async function buildManagerSummary(
         lines.push('💵 Цена в посте:');
         lines.push(priceLine);
       }
-      if (postUrl) {
-        lines.push('');
-        lines.push('🔗 Пост в канале:');
-        lines.push(postUrl);
-      }
+    }
+    // Ссылка на пост (независимо от всего)
+    if (postUrl) {
+      lines.push('');
+      lines.push('🔗 Пост в канале:');
+      lines.push(postUrl);
     }
   } catch (e) {
     console.error('[orders] buildManagerSummary post info error', e?.message || e);
@@ -140,8 +135,6 @@ async function buildManagerSummary(
 }
 
 export function registerOrders(bot, deps) {
-  console.log('[orders] registerOrders called');
-
   const {
     HINT_TEXT,
     DEEPLINK_PREFIX,
@@ -154,7 +147,6 @@ export function registerOrders(bot, deps) {
     makePostLink,
   } = deps;
 
-  // --- главное меню предпросмотра
   const kbReview = () =>
     Markup.keyboard([
       ['📨 Отправить'],
@@ -162,7 +154,6 @@ export function registerOrders(bot, deps) {
       ['⬅️ Назад', '❌ Отменить'],
     ]).resize();
 
-  // --- меню редактирования (ДВА СТОЛБЦА, только пиктограммы)
   const kbEditMenu = () =>
     Markup.keyboard([
       ['📝Имя', '📞Телефон'],
@@ -189,6 +180,8 @@ export function registerOrders(bot, deps) {
       ['✅ Продолжить'],
       ['⬅️ Назад', '❌ Отменить'],
     ]).resize();
+  const kbWebApp = (link) =>
+    Markup.keyboard([[Markup.button.webApp('🪦 Подобрать памятник', link)]]).resize();
   const kbRemove = () => Markup.removeKeyboard();
 
   const stepOrder = ['name', 'phone', 'fio', 'dates', 'photos', 'comment', 'review', 'edit_menu'];
@@ -199,7 +192,6 @@ export function registerOrders(bot, deps) {
     return ctx.session.order;
   }
 
-  // ---------- шаги анкеты ----------
   async function renderStep(ctx) {
     const s = getOrder(ctx);
     const st = s.step;
@@ -221,7 +213,7 @@ export function registerOrders(bot, deps) {
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»',
+          '🖼 Шаг 5 из 6. Фотографии.\n\nПри загрузке фотографии дождитесь сообщения, что фото загружено, только после этого нажмите «➡️ Далее».',
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
@@ -254,36 +246,35 @@ export function registerOrders(bot, deps) {
   }
 
   async function startOrder(ctx, sourceToken) {
-    // ВСЕГДА чистим анкету
     ctx.session.order = { step: 'name', photos: [], ...(sourceToken ? { sourceToken } : {}) };
     return renderStep(ctx);
   }
 
   async function stepReview(ctx) {
-  const s = getOrder(ctx);
-  s.step = 'review';
-  if (!s.orderNo) s.orderNo = makeOrderNo();
+    const s = getOrder(ctx);
+    s.step = 'review';
+    if (!s.orderNo) s.orderNo = makeOrderNo();
 
-  const lines = [
-    `📄 ${s.orderNo}`,
-    '', '',
-    `👤 ${s.name || '—'}`,
-    `📞 ${s.phone || '—'}`,
-    '',
-    `🕊 ${s.fio?.trim() || '-'}`,
-    `📅 ${s.dates?.trim() || '-'}`,
-    '',
-    s.photos?.length ? `🖼 ${s.photos.length} фото` : '🖼 —',
-    '',
-    s.comment?.trim() ? `💬 ${s.comment.trim()}` : '💬 —',
-    '',
-    '',
-    '«✏️ Изменить», чтобы исправить данные.',
-    '«📨 Отправить», когда всё верно.',
-  ];
+    const lines = [
+      `📄 ${s.orderNo}`,
+      '', '',
+      `👤 ${s.name || '—'}`,
+      `📞 ${s.phone || '—'}`,
+      '',
+      `🕊 ${s.fio?.trim() || '-'}`,
+      `📅 ${s.dates?.trim() || '-'}`,
+      '',
+      s.photos?.length ? `🖼 ${s.photos.length} фото` : '🖼 —',
+      '',
+      s.comment?.trim() ? `💬 ${s.comment.trim()}` : '💬 —',
+      '',
+      '',
+      '«✏️ Изменить», чтобы исправить данные.',
+      '«📨 Отправить», когда всё верно.',
+    ];
 
-  await ctx.reply(lines.join('\n'), kbReview());
-}
+    await ctx.reply(lines.join('\n'), kbReview());
+  }
 
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
@@ -319,17 +310,10 @@ export function registerOrders(bot, deps) {
       await sendOrderToManager(ctx, s, orderNo);
 
       const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
-      const row = [];
-      if (webAppUrl) row.push(Markup.button.webApp('🪦 Подобрать памятник', webAppUrl));
-      const replyMarkup =
-        row.length > 0
-          ? {
-              reply_markup: {
-                ...Markup.inlineKeyboard([row]).reply_markup,
-                ...kbRemove().reply_markup,
-              },
-            }
-          : kbRemove();
+      // Меню только "Подобрать памятник"
+      const replyMarkup = webAppUrl
+        ? Markup.keyboard([[Markup.button.webApp('🪦 Подобрать памятник', webAppUrl)]]).resize()
+        : kbRemove();
 
       await ctx.reply(
         [
@@ -417,7 +401,7 @@ export function registerOrders(bot, deps) {
   });
 
   bot.start(async (ctx) => {
-    ctx.session.order = null; // <--- добавлено!
+    ctx.session.order = null;
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     let sourceToken = null;
     const prefix = `${DEEPLINK_PREFIX}_`;
