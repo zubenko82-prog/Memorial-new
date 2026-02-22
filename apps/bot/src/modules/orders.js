@@ -221,7 +221,7 @@ export function registerOrders(bot, deps) {
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n(Можно без фото — жмите «➡️ Далее»)\nПрикрепите фото для примера.\nКогда все нужные фото отправлены, нажмите «➡️ Далее».',
+          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nДождитесь сообщения, «✅ Фото загружено», только после этого нажмите продолжить.\nКогда все нужные фото отправлены, нажмите «➡️ Далее».',
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
@@ -260,26 +260,30 @@ export function registerOrders(bot, deps) {
   }
 
   async function stepReview(ctx) {
-    const s = getOrder(ctx);
-    s.step = 'review';
-    if (!s.orderNo) s.orderNo = makeOrderNo();
+  const s = getOrder(ctx);
+  s.step = 'review';
+  if (!s.orderNo) s.orderNo = makeOrderNo();
 
-    const lines = [
-      `📄 Предпросмотр заявки №${s.orderNo}`,
-      '',
-      `👤 Заказчик: ${s.name || '—'}`,
-      `📞 Телефон: ${s.phone || '—'}`,
-      `🕊 Усопшие: ${s.fio?.trim() || '-'}`,
-      `📅 Даты: ${s.dates?.trim() || '-'}`,
-      s.photos?.length ? `🖼 Фото: ${s.photos.length} шт.` : '🖼 Фото: не прикреплены',
-      s.comment?.trim() ? `💬 Комментарий/связь: ${s.comment.trim()}` : null,
-      '',
-      'Используйте кнопку "✏️ Изменить", чтобы исправить любой блок.',
-      'Если всё верно — нажмите «📨 Отправить».',
-    ].filter(Boolean);
+  const lines = [
+    `📄 ${s.orderNo}`,
+    '', '',
+    `👤 ${s.name || '—'}`,
+    `📞 ${s.phone || '—'}`,
+    '',
+    `🕊 ${s.fio?.trim() || '-'}`,
+    `📅 ${s.dates?.trim() || '-'}`,
+    '',
+    s.photos?.length ? `🖼 ${s.photos.length} фото` : '🖼 —',
+    '',
+    s.comment?.trim() ? `💬 ${s.comment.trim()}` : '💬 —',
+    '',
+    '',
+    'Используйте кнопку "✏️ Изменить", чтобы исправить любой блок.',
+    'Если всё верно — нажмите «📨 Отправить».',
+  ];
 
-    await ctx.reply(lines.join('\n'), kbReview());
-  }
+  await ctx.reply(lines.join('\n'), kbReview());
+}
 
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
