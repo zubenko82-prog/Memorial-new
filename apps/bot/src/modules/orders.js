@@ -213,7 +213,7 @@ export function registerOrders(bot, deps) {
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n\nПри загрузке фотографии дождитесь сообщения, что фото загружено, только после этого нажмите «➡️ Далее».',
+          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»',
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
@@ -269,7 +269,7 @@ export function registerOrders(bot, deps) {
       s.comment?.trim() ? `💬 ${s.comment.trim()}` : '💬 —',
       '',
       '',
-      '«✏️ Изменить», чтобы исправить данные.',
+      '«✏️ Изменить», исправить данные.',
       '«📨 Отправить», когда всё верно.',
     ];
 
@@ -318,7 +318,8 @@ export function registerOrders(bot, deps) {
       await ctx.reply(
         [
           `✅ Заявка №${orderNo} отправлена.`,
-          `${s.name || 'Спасибо'}! Наш менеджер свяжется с вами по указанному телефону.`,
+          ``,
+          `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
           CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
         ].filter(Boolean).join('\n'),
         replyMarkup
