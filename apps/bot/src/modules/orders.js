@@ -4,7 +4,6 @@ import { Markup } from 'telegraf';
 // ---- утилиты ----
 const normStr = (v) => String(v || '').trim();
 
-// из текста поста достаём строку "Цена: ..."
 function extractPriceLineFromPostText(text) {
   if (!text) return '';
   const lines = String(text).split('\n').map((l) => l.trim());
@@ -12,10 +11,8 @@ function extractPriceLineFromPostText(text) {
   return line || '';
 }
 
-// из текста поста достаём состав и итоговую цену
 function extractCompositionAndTotalFromPostText(text) {
   if (!text) return { compositionLines: [], totalLine: '' };
-
   const lines = String(text)
     .split('\n')
     .map((l) => l.trim())
@@ -29,7 +26,6 @@ function extractCompositionAndTotalFromPostText(text) {
     if (priceLineIdx === -1 && /^Цена\s*:/i.test(l)) priceLineIdx = idx;
   });
 
-  // состав — всё между "Цена:" и "Итого:", если есть
   let compositionLines = [];
   if (priceLineIdx !== -1) {
     const untilIdx = totalLine
@@ -42,7 +38,6 @@ function extractCompositionAndTotalFromPostText(text) {
   return { compositionLines, totalLine };
 }
 
-// достаём ссылку на пост и цену по sourceToken
 async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   if (!sourceToken || typeof getPostMeta !== 'function') {
     return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
@@ -73,7 +68,6 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   return { priceLine, postUrl, compositionLines, totalLine };
 }
 
-// текст для менеджера (без фото поста)
 async function buildManagerSummary(
   s,
   orderNo,
@@ -112,7 +106,6 @@ async function buildManagerSummary(
 
   if (s.comment?.trim()) lines.push(`Комментарий/способ связи: ${s.comment.trim()}`);
 
-  // цена, состав и ссылка на пост
   try {
     const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(
       s.sourceToken,
@@ -130,7 +123,7 @@ async function buildManagerSummary(
 
       if (totalLine) {
         lines.push('');
-        lines.push(`💰 ${totalLine}`); // строка вида "Итого: 12 345 ₽"
+        lines.push(`💰 ${totalLine}`);
       } else if (priceLine) {
         lines.push('');
         lines.push('💵 Цена в посте:');
@@ -165,7 +158,7 @@ export function registerOrders(bot, deps) {
     makePostLink,
   } = deps;
 
-  // --- клавиатуры ---
+  // --- главное меню предпросмотра
   const kbReview = () =>
     Markup.keyboard([
       ['📨 Отправить'],
@@ -173,40 +166,33 @@ export function registerOrders(bot, deps) {
       ['⬅️ Назад', '❌ Отменить'],
     ]).resize();
 
+  // --- меню редактирования (ДВА СТОЛБЦА, только пиктограммы)
   const kbEditMenu = () =>
     Markup.keyboard([
-      ['Изменить имя'],
-      ['Изменить телефон'],
-      ['Изменить ФИО усопшего'],
-      ['Изменить даты'],
-      ['Изменить фото'],
-      ['Изменить комментарий'],
+      ['📝Имя', '📞Телефон'],
+      ['🕊ФИО', '📅Даты'],
+      ['🖼Фото', '💬Комментарий'],
       ['⬅️ Назад'],
     ]).resize();
 
   const kbName = () => Markup.keyboard([['❌ Отменить']]).resize();
-
   const kbPhone = () =>
     Markup.keyboard([
       [Markup.button.contactRequest('📱 Отправить мой контакт')],
       ['⬅️ Назад', '❌ Отменить'],
     ]).resize();
-
   const kbBackCancel = () =>
     Markup.keyboard([['⬅️ Назад', '❌ Отменить']]).resize();
-
   const kbPhotos = () =>
     Markup.keyboard([
       ['➡️ Далее'],
       ['⬅️ Назад', '❌ Отменить'],
     ]).resize();
-
   const kbComment = () =>
     Markup.keyboard([
       ['✅ Продолжить'],
       ['⬅️ Назад', '❌ Отменить'],
     ]).resize();
-
   const kbRemove = () => Markup.removeKeyboard();
 
   const stepOrder = ['name', 'phone', 'fio', 'dates', 'photos', 'comment', 'review', 'edit_menu'];
@@ -366,55 +352,36 @@ export function registerOrders(bot, deps) {
     return ctx.reply(`❌ ${msg}`, kbRemove());
   }
 
-  // -------- handlers --------
-
-  bot.start(async (ctx) => {
-    const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
-    let sourceToken = null;
-    const prefix = `${DEEPLINK_PREFIX}_`;
-    if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
-    await ctx.reply(HINT_TEXT);
-    await startOrder(ctx, sourceToken || undefined);
-  });
-
-  bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена по команде /cancel.'));
-
   // ====== Меню редактирования ======
   bot.hears(['✏️ Изменить'], async (ctx) => {
     const s = getOrder(ctx);
     s.step = 'edit_menu';
-    await ctx.reply('Выберите, что изменить:', kbEditMenu());
+    await ctx.reply('Что хотите изменить?', kbEditMenu());
   });
 
-  bot.hears(['Изменить имя'], async (ctx) => {
+  bot.hears('📝Имя', async (ctx) => {
     const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'name';
-    await renderStep(ctx);
+    s.editReturnStep = 'review'; s.step = 'name'; await renderStep(ctx);
   });
-  bot.hears(['Изменить телефон'], async (ctx) => {
+  bot.hears('📞Телефон', async (ctx) => {
     const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'phone';
-    await renderStep(ctx);
+    s.editReturnStep = 'review'; s.step = 'phone'; await renderStep(ctx);
   });
-  bot.hears(['Изменить ФИО усопшего'], async (ctx) => {
+  bot.hears('🕊ФИО', async (ctx) => {
     const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'fio';
-    await renderStep(ctx);
+    s.editReturnStep = 'review'; s.step = 'fio'; await renderStep(ctx);
   });
-  bot.hears(['Изменить даты'], async (ctx) => {
+  bot.hears('📅Даты', async (ctx) => {
     const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'dates';
-    await renderStep(ctx);
+    s.editReturnStep = 'review'; s.step = 'dates'; await renderStep(ctx);
   });
-  bot.hears(['Изменить фото'], async (ctx) => {
+  bot.hears('🖼Фото', async (ctx) => {
     const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'photos';
-    await renderStep(ctx);
+    s.editReturnStep = 'review'; s.step = 'photos'; await renderStep(ctx);
   });
-  bot.hears(['Изменить комментарий'], async (ctx) => {
+  bot.hears('💬Комментарий', async (ctx) => {
     const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'comment';
-    await renderStep(ctx);
+    s.editReturnStep = 'review'; s.step = 'comment'; await renderStep(ctx);
   });
 
   bot.hears(['⬅️ Назад'], async (ctx, next) => {
