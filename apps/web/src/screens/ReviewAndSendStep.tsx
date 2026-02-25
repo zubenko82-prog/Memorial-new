@@ -11,17 +11,19 @@
 //   (у вас это достигается тем, что previewUrl/previewHiUrl записываются как null).
 //
 // ВАЖНО: этот файл компилируется; добавлено только чтение/показ эскиза плиты + отправка в Telegram.
+// ОБНОВЛЕНИЕ:
+// - Починка темы письма (UTF-8, без кракозябр)
+// - Отправка всех загруженных пользователем фото отдельными вложениями в email (multipart photos[])
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
 import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
-import { loadIntroState, saveIntro } from "../lib/intro";
+import { loadIntroState } from "../lib/intro";
 import { downloadBlob } from "../lib/pdf/generateOrderPdf";
 import { generateOrderPdfShots } from "../lib/pdf/generateOrderPdfShots";
 import { compressImageFileToMaxBytes } from "../lib/media/resize";
 import { hardResetAll } from "../lib/hardReset";
-
 
 /* ========= Styles and helpers ========= */
 function safeRoot(): React.CSSProperties {
@@ -123,18 +125,6 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
     </div>
   );
 }
-function coloredOutlineButtonStyle(color: string = "#4977ff"): React.CSSProperties {
-  return {
-    ...glassButtonStyle("md"),
-    border: `1px solid ${color}`,
-    color: "#f7f7fa",
-    fontWeight: 600,
-    background: "#15161a",
-    transition: "box-shadow 120ms, border-color 150ms, color 120ms",
-    boxShadow: "0 2px 18px 0px rgba(34,54,120,0.08)",
-    marginBottom: 12,
-  };
-}
 
 /* ========= Utils ========= */
 function personLines(p: any): string[] {
@@ -157,14 +147,11 @@ function dispatchDraftUpdated() {
   try {
     window.dispatchEvent(new Event(DRAFT_UPDATED_EVENT));
     window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
-  } catch {}}
-
-
+  } catch {}
+}
 function __setHashForStep(id: string) {
   window.location.hash = "#/wizard/" + encodeURIComponent(id);
 }
-
-
 
 /* ========= Top hint ========= */
 function TopHintNotice() {
@@ -239,22 +226,19 @@ export default function ReviewAndSendStep({
   onNewOrderWipeKeepCustomer,
   onNewOrderKeepAllNewNo
 }: {
-  onBack?: () => void,
-  onSend?: () => void,
-  onNewOrderWipeAll?: () => void,
-  onNewOrderWipeKeepCustomer?: () => void,
-  onNewOrderKeepAllNewNo?: () => void
+  onBack?: () => void;
+  onSend?: () => void;
+  onNewOrderWipeAll?: () => void;
+  onNewOrderWipeKeepCustomer?: () => void;
+  onNewOrderKeepAllNewNo?: () => void;
 }) {
-
-
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
-    const [newOrderOpen, setNewOrderOpen] = useState(false);
+  const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [newOrderConfirm, setNewOrderConfirm] =
     useState<null | "wipe_all" | "wipe_keep_customer" | "keep_all_new_no">(null);
   const [pdfSavedOnce, setPdfSavedOnce] = useState(false);
-
 
   const customerName = (introState.intro?.customerName || "").trim();
   const afterHintRef = useRef<HTMLDivElement | null>(null);
@@ -268,7 +252,8 @@ export default function ReviewAndSendStep({
         tg?.ready?.();
         tg?.expand?.();
         tg?.requestViewport?.();
-      } catch {}};
+      } catch {}
+    };
     const t1 = setTimeout(() => alive && run(), 0);
     const t2 = setTimeout(() => alive && run(), 120);
     const t3 = setTimeout(() => alive && run(), 400);
@@ -309,7 +294,8 @@ export default function ReviewAndSendStep({
     const openTopbar = () => {
       try {
         window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-      } catch {}};
+      } catch {}
+    };
 
     openTopbar();
     const timer = window.setInterval(() => {
@@ -368,86 +354,77 @@ export default function ReviewAndSendStep({
 
   const showBack = !!backCandidateUrl && backIsRenderable;
 
-// ===== Plate sketches (1..3): detect "empty" by actual image size =====
-type PlateSketch = { index: 0 | 1 | 2; url: string };
+  // ===== Plate sketches (1..3): detect "empty" by actual image size =====
+  type PlateSketch = { index: 0 | 1 | 2; url: string };
 
-function getPlateSketchUrls(d: any): PlateSketch[] {
-  const ex: any = (d as any)?.extras || {};
-  const plates = ensurePlates(ex);
+  function getPlateSketchUrls(d: any): PlateSketch[] {
+    const ex: any = (d as any)?.extras || {};
+    const plates = ensurePlates(ex);
 
-  const norm = (raw: any): string | null => {
-    const s = String(raw ?? "").trim();
-    if (!s || s === "#" || s.toLowerCase() === "about:blank") return null;
-    return s;
-  };
+    const norm = (raw: any): string | null => {
+      const s = String(raw ?? "").trim();
+      if (!s || s === "#" || s.toLowerCase() === "about:blank") return null;
+      return s;
+    };
 
-  const out: PlateSketch[] = [];
+    const out: PlateSketch[] = [];
 
-  // plate #1 (legacy)
-  const p1Enabled = !!ex.headstonePlate;
-  const p1Url = norm(ex?.platePreviewHiUrl || ex?.platePreviewUrl);
-  if (p1Enabled && p1Url) out.push({ index: 0, url: p1Url });
+    // plate #1 (legacy)
+    const p1Enabled = !!ex.headstonePlate;
+    const p1Url = norm(ex?.platePreviewHiUrl || ex?.platePreviewUrl);
+    if (p1Enabled && p1Url) out.push({ index: 0, url: p1Url });
 
-  // plate #2/#3 (new)
-  for (const i of [1, 2] as const) {
-    const p = plates[i] || {};
-    const enabled = !!p.enabled;
-    const url = norm(p?.platePreviewHiUrl || p?.platePreviewUrl);
-    if (enabled && url) out.push({ index: i, url });
+    // plate #2/#3 (new)
+    for (const i of [1, 2] as const) {
+      const p = plates[i] || {};
+      const enabled = !!p.enabled;
+      const url = norm(p?.platePreviewHiUrl || p?.platePreviewUrl);
+      if (enabled && url) out.push({ index: i, url });
+    }
+
+    return out;
   }
 
-  return out;
-}
+  const [plateCandidates, setPlateCandidates] = useState<PlateSketch[]>(() => getPlateSketchUrls(draft));
+  useEffect(() => setPlateCandidates(getPlateSketchUrls(draft)), [draft]);
 
-const [plateCandidates, setPlateCandidates] = useState<PlateSketch[]>(() => getPlateSketchUrls(draft));
-useEffect(() => setPlateCandidates(getPlateSketchUrls(draft)), [draft]);
+  const [plateRenderable, setPlateRenderable] = useState<Record<number, boolean>>({});
+  useEffect(() => {
+    let alive = true;
+    setPlateRenderable({});
 
-const [plateRenderable, setPlateRenderable] = useState<Record<number, boolean>>({});
-useEffect(() => {
-  let alive = true;
-  setPlateRenderable({});
+    const run = async () => {
+      const entries = await Promise.all(
+        plateCandidates.map(
+          (p) =>
+            new Promise<[number, boolean]>((res) => {
+              const img = new Image();
+              img.onload = () => {
+                const w = img.naturalWidth || 0;
+                const h = img.naturalHeight || 0;
+                res([p.index, w >= 50 && h >= 50]);
+              };
+              img.onerror = () => res([p.index, false]);
+              img.crossOrigin = "anonymous";
+              img.src = p.url;
+            })
+        )
+      );
 
-  const run = async () => {
-    const entries = await Promise.all(
-      plateCandidates.map(
-        (p) =>
-          new Promise<[number, boolean]>((res) => {
-            const img = new Image();
-            img.onload = () => {
-              const w = img.naturalWidth || 0;
-              const h = img.naturalHeight || 0;
-              res([p.index, w >= 50 && h >= 50]);
-            };
-            img.onerror = () => res([p.index, false]);
-            img.crossOrigin = "anonymous";
-            img.src = p.url;
-          })
-      )
-    );
+      if (!alive) return;
+      const m: Record<number, boolean> = {};
+      for (const [idx, ok] of entries) m[idx] = ok;
+      setPlateRenderable(m);
+    };
 
-    if (!alive) return;
-    const m: Record<number, boolean> = {};
-    for (const [idx, ok] of entries) m[idx] = ok;
-    setPlateRenderable(m);
-  };
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [plateCandidates]);
 
-  run();
-  return () => {
-    alive = false;
-  };
-}, [plateCandidates]);
-
-const plateToShow = useMemo(
-  () => plateCandidates.filter((p) => !!plateRenderable[p.index]),
-  [plateCandidates, plateRenderable]
-);
-
-const showPlate = plateToShow.length > 0;
-
-// пригодится для отправки по URL (fallback)
-const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToShow]);
-
-
+  const plateToShow = useMemo(() => plateCandidates.filter((p) => !!plateRenderable[p.index]), [plateCandidates, plateRenderable]);
+  const showPlate = plateToShow.length > 0;
 
   // Front
   const item = (draft as any)?.item || null;
@@ -520,9 +497,13 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       return { ok: !!(resp.ok && json?.ok), error: json?.error || json?.description || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
-    }}
+    }
+  }
 
-    async function sendPdfToEmailMultipart(pdfBlob: Blob, meta: { orderNo: string; subject: string; text: string }): Promise<{ ok: boolean; error?: string }> {
+  async function sendPdfToEmailMultipart(
+    pdfBlob: Blob,
+    meta: { orderNo: string; subject: string; text: string; photos?: File[] }
+  ): Promise<{ ok: boolean; error?: string }> {
     try {
       const fd = new FormData();
       fd.append("action", "send_pdf");
@@ -532,17 +513,24 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       fd.append("filename", `order-${meta.orderNo || Date.now()}.pdf`);
       fd.append("file", new File([pdfBlob], `order-${meta.orderNo || Date.now()}.pdf`, { type: "application/pdf" }));
 
+      for (const ph of (meta.photos || []).filter(Boolean)) {
+        fd.append("photos", ph);
+      }
+
       const resp = await fetch("/api/email", { method: "POST", body: fd });
       const raw = await resp.text().catch(() => "");
       let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch {}
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {}
       if (resp.ok && json?.ok) return { ok: true };
       return { ok: false, error: json?.error || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
     }
   }
-async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: string }> {
+
+  async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: string }> {
     try {
       fd.append("action", "manager_photo");
       const resp = await fetch("/api/tg", { method: "POST", body: fd });
@@ -555,7 +543,8 @@ async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: st
       return { ok: false, error: json?.error || json?.description || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
-    }}
+    }
+  }
 
   async function sendDmToUser(userId: number, text: string): Promise<void> {
     try {
@@ -566,7 +555,8 @@ async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: st
       });
     } catch {
       // ignore
-    }}
+    }
+  }
 
   function startMarkerText(no: string): string {
     const n = no || "—";
@@ -578,128 +568,67 @@ async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: st
   }
 
   function buildOrderText(): string {
-  const introState = loadIntroState();
-  const d: any = loadOrderDraft();
+    const intro = loadIntroState();
+    const d: any = loadOrderDraft();
 
-  const orderNo = String(introState?.orderNumber || "").trim();
+    const orderNo = String(intro?.orderNumber || "").trim();
 
-  const lines: string[] = [];
-  lines.push(orderNo ? `Заявка №${orderNo}` : "Заявка");
-  lines.push("");
-
-  // ===== Клиент =====
-  lines.push("Клиент:");
-  lines.push(`- Имя: ${(introState?.intro?.customerName || "").trim() || "—"}`);
-  lines.push(`- Телефон: ${(introState?.intro?.customerPhone || "").trim() || "—"}`);
-  const customerNotes = String(introState?.intro?.customerNotes || "").trim();
-  if (customerNotes) lines.push(`- Примечание: ${customerNotes}`);
-  lines.push("");
-
-  // ===== Изделие / размеры =====
-  const itemName = String(d?.item?.name || "").trim();
-  const itemUrl = String(d?.item?.url || "").trim();
-  if (itemName || itemUrl) {
-    lines.push("Изделие:");
-    if (itemName) lines.push(`- Модель: ${itemName}`);
-    if (!itemName && itemUrl) lines.push(`- Файл: ${itemUrl}`);
+    const lines: string[] = [];
+    lines.push(orderNo ? `Заявка №${orderNo}` : "Заявка");
     lines.push("");
-  }
 
-  const size = d?.size || {};
-  const w = size?.width;
-  const h = size?.height;
-  const t = size?.thickness;
-  const sizeNotes = String(size?.notes || "").trim();
-  if (w || h || t || sizeNotes) {
-    lines.push("Размеры:");
-    if (w || h || t) lines.push(`- (мм) Ш×В×Т: ${w || "—"} × ${h || "—"} × ${t || "—"}`);
-    if (sizeNotes) lines.push(`- Примечание: ${sizeNotes}`);
+    // ===== Клиент =====
+    lines.push("Клиент:");
+    lines.push(`- Имя: ${(intro?.intro?.customerName || "").trim() || "—"}`);
+    lines.push(`- Телефон: ${(intro?.intro?.customerPhone || "").trim() || "—"}`);
+    const customerNotes = String(intro?.intro?.customerNotes || "").trim();
+    if (customerNotes) lines.push(`- Примечание: ${customerNotes}`);
     lines.push("");
-  }
 
-  // ===== Дополнительно (extras) =====
-  const ex = (d?.extras || {}) as any;
-  const tumba = ex.tumba ?? true;
-  const flowerbed = !!ex.flowerbed;
-  const vase = !!ex.vase;
+    // ===== Изделие / размеры =====
+    const itemName = String(d?.item?.name || "").trim();
+    const itemUrl = String(d?.item?.url || "").trim();
+    if (itemName || itemUrl) {
+      lines.push("Изделие:");
+      if (itemName) lines.push(`- Модель: ${itemName}`);
+      if (!itemName && itemUrl) lines.push(`- Файл: ${itemUrl}`);
+      lines.push("");
+    }
 
-  lines.push("Дополнительно:");
-  lines.push(`- Тумба: ${tumba ? "да" : "нет"}`);
-  lines.push(`- Цветник: ${flowerbed ? "да" : "нет"}`);
-  lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
-  lines.push("");
+    const size = d?.size || {};
+    const w = size?.width;
+    const h = size?.height;
+    const t = size?.thickness;
+    const sizeNotes = String(size?.notes || "").trim();
+    if (w || h || t || sizeNotes) {
+      lines.push("Размеры:");
+      if (w || h || t) lines.push(`- (мм) Ш×В×Т: ${w || "—"} × ${h || "—"} × ${t || "—"}`);
+      if (sizeNotes) lines.push(`- Примечание: ${sizeNotes}`);
+      lines.push("");
+    }
 
-  // ===== Лицевая сторона =====
-  lines.push("Лицевая сторона:");
+    // ===== Дополнительно (extras) =====
+    const ex = (d?.extras || {}) as any;
+    const tumba = ex.tumba ?? true;
+    const flowerbed = !!ex.flowerbed;
+    const vase = !!ex.vase;
 
-  // Усопшие (front)
-  const personsFront = ((d?.engraving?.persons as any[]) || []).filter(Boolean);
-  if (personsFront.length === 0) {
-    lines.push("- Усопшие: —");
-  } else {
-    lines.push("- Усопшие:");
-    personsFront.forEach((p: any, idx: number) => {
-      const last = String(p?.lastName || "").trim();
-      const namePatr = [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
-      const dates = [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ");
-      const fio = [last, namePatr].filter(Boolean).join(" ").trim();
-      lines.push(`  ${idx + 1}) ${fio || "—"}`);
-      if (dates) lines.push(`     ${dates}`);
-    });
-  }
+    lines.push("Дополнительно:");
+    lines.push(`- Тумба: ${tumba ? "да" : "нет"}`);
+    lines.push(`- Цветник: ${flowerbed ? "да" : "нет"}`);
+    lines.push(`- Ваза: ${vase ? "да" : "нет"}`);
+    lines.push("");
 
-  // Эпитафии (front)
-  const engr: any = d?.engraving || {};
-  const frontEpitaphs = toParagraphs(engr.epitaphs ?? engr.epitaphText);
-  if (frontEpitaphs.length) {
-    lines.push("- Эпитафии:");
-    frontEpitaphs.forEach((t: string, i: number) => {
-      lines.push(`  ${i + 1}) ${t}`);
-    });
-  } else {
-    lines.push("- Эпитафии: —");
-  }
+    // ===== Лицевая сторона =====
+    lines.push("Лицевая сторона:");
 
-  // Графика (front) — из draft.graphics (как у вас в обзоре)
-  const frontGraphics: any[] = (d?.graphics || []).filter(Boolean);
-  if (frontGraphics.length) {
-    const counts: Record<string, number> = {};
-    const first: Record<string, any> = {};
-    frontGraphics.forEach((g: any) => {
-      const id = String(g?.id || g?.url || g?.name || "").trim() || "unknown";
-      counts[id] = (counts[id] || 0) + 1;
-      if (!first[id]) first[id] = g;
-    });
-    lines.push("- Графика:");
-    Object.keys(first).forEach((id, i) => {
-      const g = first[id];
-      const name = String(g?.name || g?.id || g?.url || id).trim();
-      const qty = counts[id] || 1;
-      lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
-    });
-  } else {
-    lines.push("- Графика: —");
-  }
-
-  const frontWishes = String(d?.editor?.wishes || "").trim();
-  if (frontWishes) {
-    lines.push("- Пожелания:");
-    lines.push(frontWishes);
-  }
-  lines.push("");
-
-  // ===== Тыльная сторона =====
-  const eb: any = d?.editorBack || {};
-  const rearEnabled = !!eb.enabled;
-  lines.push("Тыльная сторона:");
-  lines.push(`- Включено: ${rearEnabled ? "да" : "нет"}`);
-
-  if (rearEnabled) {
-    // Усопшие (rear)
-    const rearPeople = ((eb?.people as any[]) || []).filter(Boolean);
-    if (rearPeople.length) {
+    // Усопшие (front)
+    const personsFront = ((d?.engraving?.persons as any[]) || []).filter(Boolean);
+    if (personsFront.length === 0) {
+      lines.push("- Усопшие: —");
+    } else {
       lines.push("- Усопшие:");
-      rearPeople.forEach((p: any, idx: number) => {
+      personsFront.forEach((p: any, idx: number) => {
         const last = String(p?.lastName || "").trim();
         const namePatr = [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
         const dates = [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ");
@@ -707,145 +636,201 @@ async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: st
         lines.push(`  ${idx + 1}) ${fio || "—"}`);
         if (dates) lines.push(`     ${dates}`);
       });
-    } else {
-      lines.push("- Усопшие: —");
     }
 
-    // Эпитафии rear
-    const rearEpitaphs = ((eb?.epitaphTexts as string[]) || []).filter(Boolean);
-    if (rearEpitaphs.length) {
+    // Эпитафии (front)
+    const engr: any = d?.engraving || {};
+    const frontEpitaphs2 = toParagraphs(engr.epitaphs ?? engr.epitaphText);
+    if (frontEpitaphs2.length) {
       lines.push("- Эпитафии:");
-      rearEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+      frontEpitaphs2.forEach((t: string, i: number) => {
+        lines.push(`  ${i + 1}) ${t}`);
+      });
     } else {
       lines.push("- Эпитафии: —");
     }
 
-    // Графика rear: ids + meta
-    const rearIds: string[] = Array.isArray(eb?.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
-    const rearMeta: Record<string, any> = eb?.graphicsMeta || {};
-    if (rearIds.length) {
+    // Графика (front)
+    const frontGraphics: any[] = (d?.graphics || []).filter(Boolean);
+    if (frontGraphics.length) {
       const counts: Record<string, number> = {};
-      rearIds.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
-      const uniq = Array.from(new Set(rearIds));
+      const first: Record<string, any> = {};
+      frontGraphics.forEach((g: any) => {
+        const id = String(g?.id || g?.url || g?.name || "").trim() || "unknown";
+        counts[id] = (counts[id] || 0) + 1;
+        if (!first[id]) first[id] = g;
+      });
       lines.push("- Графика:");
-      uniq.forEach((gid, i) => {
-        const m = rearMeta[gid] || {};
-        const name = String(m?.name || gid).trim();
-        const qty = counts[gid] || 1;
+      Object.keys(first).forEach((id, i) => {
+        const g = first[id];
+        const name = String(g?.name || g?.id || g?.url || id).trim();
+        const qty = counts[id] || 1;
         lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
       });
     } else {
       lines.push("- Графика: —");
     }
 
-    const backWishes = String(eb?.wishes || "").trim();
-    if (backWishes) {
+    const frontWishes = String(d?.editor?.wishes || "").trim();
+    if (frontWishes) {
       lines.push("- Пожелания:");
-      lines.push(backWishes);
-    }}
-  lines.push("");
-
-    // ===== Надгробная плита =====
-  const plateEnabled = !!ex.headstonePlate;
-  lines.push("Надгробная плита:");
-  lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
-
-  const platesArr = ensurePlates(ex); // [0..2]
-
-  // --- Плита 1 (legacy) ---
-  const p1PreviewUrl = String(ex?.platePreviewHiUrl || ex?.platePreviewUrl || "").trim();
-if (plateEnabled && p1PreviewUrl) {
-    lines.push("Плита 1:");
-    if (ex.plateSize) lines.push(`- Размер: ${String(ex.plateSize).trim()}`);
-    if (ex.plateThickness) lines.push(`- Толщина: ${String(ex.plateThickness).trim()}`);
-    if (ex.plateOrientation) lines.push(`- Ориентация: ${String(ex.plateOrientation).trim()}`);
-
-    const plateEpitaphs = [...toParagraphs(ex.plateEpitaph), ...toParagraphs(ex.plateEpitaphs)].filter(Boolean);
-    if (plateEpitaphs.length) {
-      lines.push("- Эпитафии:");
-      plateEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
-    } else {
-      lines.push("- Эпитафии: —");
-    }
-
-    const plateIds: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
-    const plateMeta: Record<string, any> = ex.plateGraphicsMeta || {};
-    if (plateIds.length) {
-      const counts: Record<string, number> = {};
-      plateIds.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
-      const uniq = Array.from(new Set(plateIds));
-      lines.push("- Графика:");
-      uniq.forEach((gid, i) => {
-        const m = plateMeta[gid] || {};
-        const name = String(m?.name || gid).trim();
-        const qty = counts[gid] || 1;
-        lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
-      });
-    } else {
-      lines.push("- Графика: —");
-    }}
-
-  // --- Плита 2 и 3 (new extras.plates[1], extras.plates[2]) ---
-  for (const i of [1, 2] as const) {
-  const p: any = platesArr[i] || {};
-
-  const previewUrl = String(p?.platePreviewHiUrl || p?.platePreviewUrl || "").trim();
-  const enabled = !!p.enabled;
-
-  // Печатаем ТОЛЬКО если плита добавлена: включена и есть превью
-  if (!enabled || !previewUrl) continue;
-
-  lines.push(`Плита ${i + 1}:`);
-
-  if (p.plateSize) lines.push(`- Размер: ${String(p.plateSize).trim()}`);
-  if (p.plateThickness) lines.push(`- Толщина: ${String(p.plateThickness).trim()}`);
-  if (p.plateOrientation) lines.push(`- Ориентация: ${String(p.plateOrientation).trim()}`);
-
-  const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
-  if (ep.length) {
-    lines.push("- Эпитафии:");
-    ep.forEach((t: string, k: number) => lines.push(`  ${k + 1}) ${t}`));
-  } else {
-    lines.push("- Эпитафии: —");
-  }
-
-  const ids: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
-  const meta: Record<string, any> = p.plateGraphicsMeta || {};
-  if (ids.length) {
-    const counts: Record<string, number> = {};
-    ids.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
-    const uniq = Array.from(new Set(ids));
-    lines.push("- Графика:");
-    uniq.forEach((gid, k) => {
-      const m = meta[gid] || {};
-      const name = String(m?.name || gid).trim();
-      const qty = counts[gid] || 1;
-      lines.push(`  ${k + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
-    });
-  } else {
-    lines.push("- Графика: —");
-  }}
-
-
-  lines.push("");
-
-  // ===== Комментарии =====
-  const orderNotes = String(ex?.orderNotes || "").trim();
-  const genericNotes = String(d?.notes || "").trim(); // если где-то используется
-  if (orderNotes || genericNotes) {
-    lines.push("Комментарий к заказу:");
-    if (orderNotes) lines.push(orderNotes);
-    if (genericNotes && genericNotes !== orderNotes) {
-      lines.push("");
-      lines.push("Доп. заметки:");
-      lines.push(genericNotes);
+      lines.push(frontWishes);
     }
     lines.push("");
+
+    // ===== Тыльная сторона =====
+    const eb: any = d?.editorBack || {};
+    const rearEnabled = !!eb.enabled;
+    lines.push("Тыльная сторона:");
+    lines.push(`- Включено: ${rearEnabled ? "да" : "нет"}`);
+
+    if (rearEnabled) {
+      const rearPeople = ((eb?.people as any[]) || []).filter(Boolean);
+      if (rearPeople.length) {
+        lines.push("- Усопшие:");
+        rearPeople.forEach((p: any, idx: number) => {
+          const last = String(p?.lastName || "").trim();
+          const namePatr = [p?.firstName, p?.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+          const dates = [p?.birthDate, p?.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ");
+          const fio = [last, namePatr].filter(Boolean).join(" ").trim();
+          lines.push(`  ${idx + 1}) ${fio || "—"}`);
+          if (dates) lines.push(`     ${dates}`);
+        });
+      } else {
+        lines.push("- Усопшие: —");
+      }
+
+      const rearEpitaphs = ((eb?.epitaphTexts as string[]) || []).filter(Boolean);
+      if (rearEpitaphs.length) {
+        lines.push("- Эпитафии:");
+        rearEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+      } else {
+        lines.push("- Эпитафии: —");
+      }
+
+      const rearIds: string[] = Array.isArray(eb?.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+      const rearMeta: Record<string, any> = eb?.graphicsMeta || {};
+      if (rearIds.length) {
+        const counts: Record<string, number> = {};
+        rearIds.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+        const uniq = Array.from(new Set(rearIds));
+        lines.push("- Графика:");
+        uniq.forEach((gid, i) => {
+          const m = rearMeta[gid] || {};
+          const name = String(m?.name || gid).trim();
+          const qty = counts[gid] || 1;
+          lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+        });
+      } else {
+        lines.push("- Графика: —");
+      }
+
+      const backWishes = String(eb?.wishes || "").trim();
+      if (backWishes) {
+        lines.push("- Пожелания:");
+        lines.push(backWishes);
+      }
+    }
+    lines.push("");
+
+    // ===== Надгробная плита =====
+    const plateEnabled = !!ex.headstonePlate;
+    lines.push("Надгробная плита:");
+    lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
+
+    const platesArr = ensurePlates(ex); // [0..2]
+
+    // --- Плита 1 (legacy) ---
+    const p1PreviewUrl = String(ex?.platePreviewHiUrl || ex?.platePreviewUrl || "").trim();
+    if (plateEnabled && p1PreviewUrl) {
+      lines.push("Плита 1:");
+      if (ex.plateSize) lines.push(`- Размер: ${String(ex.plateSize).trim()}`);
+      if (ex.plateThickness) lines.push(`- Толщина: ${String(ex.plateThickness).trim()}`);
+      if (ex.plateOrientation) lines.push(`- Ориентация: ${String(ex.plateOrientation).trim()}`);
+
+      const plateEpitaphs = [...toParagraphs(ex.plateEpitaph), ...toParagraphs(ex.plateEpitaphs)].filter(Boolean);
+      if (plateEpitaphs.length) {
+        lines.push("- Эпитафии:");
+        plateEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+      } else {
+        lines.push("- Эпитафии: —");
+      }
+
+      const plateIds: string[] = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
+      const plateMeta: Record<string, any> = ex.plateGraphicsMeta || {};
+      if (plateIds.length) {
+        const counts: Record<string, number> = {};
+        plateIds.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+        const uniq = Array.from(new Set(plateIds));
+        lines.push("- Графика:");
+        uniq.forEach((gid, i) => {
+          const m = plateMeta[gid] || {};
+          const name = String(m?.name || gid).trim();
+          const qty = counts[gid] || 1;
+          lines.push(`  ${i + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+        });
+      } else {
+        lines.push("- Графика: —");
+      }
+    }
+
+    // --- Плита 2 и 3 ---
+    for (const i of [1, 2] as const) {
+      const p: any = platesArr[i] || {};
+      const previewUrl = String(p?.platePreviewHiUrl || p?.platePreviewUrl || "").trim();
+      const enabled = !!p.enabled;
+      if (!enabled || !previewUrl) continue;
+
+      lines.push(`Плита ${i + 1}:`);
+
+      if (p.plateSize) lines.push(`- Размер: ${String(p.plateSize).trim()}`);
+      if (p.plateThickness) lines.push(`- Толщина: ${String(p.plateThickness).trim()}`);
+      if (p.plateOrientation) lines.push(`- Ориентация: ${String(p.plateOrientation).trim()}`);
+
+      const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
+      if (ep.length) {
+        lines.push("- Эпитафии:");
+        ep.forEach((t: string, k: number) => lines.push(`  ${k + 1}) ${t}`));
+      } else {
+        lines.push("- Эпитафии: —");
+      }
+
+      const ids: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
+      const meta: Record<string, any> = p.plateGraphicsMeta || {};
+      if (ids.length) {
+        const counts: Record<string, number> = {};
+        ids.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+        const uniq = Array.from(new Set(ids));
+        lines.push("- Графика:");
+        uniq.forEach((gid, k) => {
+          const m = meta[gid] || {};
+          const name = String(m?.name || gid).trim();
+          const qty = counts[gid] || 1;
+          lines.push(`  ${k + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
+        });
+      } else {
+        lines.push("- Графика: —");
+      }
+    }
+
+    lines.push("");
+
+    // ===== Комментарии =====
+    const orderNotes = String(ex?.orderNotes || "").trim();
+    const genericNotes = String(d?.notes || "").trim();
+    if (orderNotes || genericNotes) {
+      lines.push("Комментарий к заказу:");
+      if (orderNotes) lines.push(orderNotes);
+      if (genericNotes && genericNotes !== orderNotes) {
+        lines.push("");
+        lines.push("Доп. заметки:");
+        lines.push(genericNotes);
+      }
+      lines.push("");
+    }
+
+    return lines.join("\n");
   }
-
-  return lines.join("\n");
-}
-
 
   async function sendLargeText(fullText: string): Promise<{ ok: boolean; errors: string[] }> {
     const parts: string[] = [];
@@ -863,7 +848,8 @@ if (plateEnabled && p1PreviewUrl) {
     const openTopbar = () => {
       try {
         window.dispatchEvent(new Event("memorial:openTopBarPanel"));
-      } catch {}};
+      } catch {}
+    };
     const isOpen = () => {
       const el = document.querySelector('[data-topbar-panel="1"]') as HTMLElement | null;
       return el?.getAttribute("data-topbar-open") === "1";
@@ -910,7 +896,8 @@ if (plateEnabled && p1PreviewUrl) {
       return await sendManagerPhoto(fd);
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
-    }}
+    }
+  }
 
   async function sendSketchFromNode(
     nodeId: string,
@@ -938,7 +925,8 @@ if (plateEnabled && p1PreviewUrl) {
 
           const r = await sendManagerPhoto(fd);
           if (r.ok) return { ok: true };
-        }}
+        }
+      }
     } catch {
       // ignore, try URL
     }
@@ -956,47 +944,53 @@ if (plateEnabled && p1PreviewUrl) {
   }
 
   function collectPersonPhotosWithCaptions(d: any): { file: File; caption: string; name: string }[] {
-  const out: { file: File; caption: string; name: string }[] = [];
+    const out: { file: File; caption: string; name: string }[] = [];
 
-  const pushFromList = (persons: any[], tag?: string) => {
-    for (const p of (persons || []).filter(Boolean)) {
-      const lastName = (p?.lastName || "").trim();
-      const first = (p?.firstName || "").trim();
-      const middle = (p?.middleName || "").trim();
-      const birth = (p?.birthDate || "").trim();
-      const death = (p?.deathDate || "").trim();
-      const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ").trim();
-      const dates = [birth, death].filter(Boolean).join(" — ").trim();
+    const pushFromList = (persons: any[], tag?: string) => {
+      for (const p of (persons || []).filter(Boolean)) {
+        const lastName = (p?.lastName || "").trim();
+        const first = (p?.firstName || "").trim();
+        const middle = (p?.middleName || "").trim();
+        const birth = (p?.birthDate || "").trim();
+        const death = (p?.deathDate || "").trim();
+        const fio = [lastName, [first, middle].filter(Boolean).join(" ")].filter(Boolean).join(" ").trim();
+        const dates = [birth, death].filter(Boolean).join(" — ").trim();
 
-      const baseCaption = [fio || "—", dates].filter(Boolean).join("\n");
-      const caption = tag ? `${baseCaption}\n(${tag})` : baseCaption;
+        const baseCaption = [fio || "—", dates].filter(Boolean).join("\n");
+        const caption = tag ? `${baseCaption}\n(${tag})` : baseCaption;
 
-      const dataUrl = String(p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
-      if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
+        const dataUrl = String(p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || "").trim();
+        if (!dataUrl || !/^data:image\/(png|jpe?g|webp);base64,/i.test(dataUrl)) continue;
 
-      const bin = atob(dataUrl.split(",")[1] || "");
-      const u8 = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const bin = atob(dataUrl.split(",")[1] || "");
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
 
-      const safeNameBase = (fio || "photo").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
-      const safeName = tag ? `${safeNameBase}__${tag}` : safeNameBase;
+        const safeNameBase = (fio || "photo").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+        const safeName = tag ? `${safeNameBase}__${tag}` : safeNameBase;
 
-      const file = new File([u8], `${safeName}.jpg`, { type: "image/jpeg" });
-      out.push({ file, caption, name: `${safeName}.jpg` });
-    }};
+        const file = new File([u8], `${safeName}.jpg`, { type: "image/jpeg" });
+        out.push({ file, caption, name: `${safeName}.jpg` });
+      }
+    };
 
-  // Лицевая
-  pushFromList((((d || {}).engraving || {}).persons || []) as any[], undefined);
+    // Лицевая
+    pushFromList((((d || {}).engraving || {}).persons || []) as any[], undefined);
 
-  // Тыльная (добавляем (ТЫЛ))
-  const rearEnabled = !!d?.editorBack?.enabled;
-  if (rearEnabled) {
-    pushFromList(((d?.editorBack?.people || []) as any[]), "ТЫЛ");
+    // Тыльная
+    const rearEnabled = !!d?.editorBack?.enabled;
+    if (rearEnabled) {
+      pushFromList(((d?.editorBack?.people || []) as any[]), "ТЫЛ");
+    }
+
+    return out;
   }
 
-  return out;
-}
-
+  function collectPersonPhotoFilesForEmail(d: any): File[] {
+    // ВАЖНО: эти File создаются из base64 dataUrl, поэтому они будут ровно “тем, что загрузил пользователь”
+    // (в пределах того, что вы храните в draft как photoPreview/photoDataUrl).
+    return collectPersonPhotosWithCaptions(d).map((x) => x.file);
+  }
 
   async function notifyUserAfterSend(orderNoCur: string) {
     const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
@@ -1059,26 +1053,20 @@ if (plateEnabled && p1PreviewUrl) {
       }
 
       if (showPlate && plateToShow.length > 0) {
-  // отправим каждую активную плиту отдельным фото
-  let allOk = true;
+        let allOk = true;
+        for (const p of plateToShow) {
+          const caption = `Эскиз (надгробная плита ${p.index + 1})`;
+          const res = await sendSketchFromNode(`pdf-plate-sketch-${p.index}`, caption, p.url);
+          allOk = allOk && res.ok;
+          if (!res.ok && res.error) warnings.push(`${caption} не отправлен: ${res.error}`);
+          await sleep(120);
+        }
+        setPlateSketchDelivered(allOk);
+      } else {
+        setPlateSketchDelivered(null);
+      }
 
-  for (const p of plateToShow) {
-    const caption = `Эскиз (надгробная плита ${p.index + 1})`;
-    const res = await sendSketchFromNode(`pdf-plate-sketch-${p.index}`, caption, p.url);
-
-    // у тебя plateSketchDelivered один флаг; сделаем true только если все ок
-    allOk = allOk && res.ok;
-
-    if (!res.ok && res.error) warnings.push(`${caption} не отправлен: ${res.error}`);
-    await sleep(120);
-  }
-
-  setPlateSketchDelivered(allOk);
-} else {
-  setPlateSketchDelivered(null);
-}
-
-
+      // Фото в Telegram (как было)
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
 
@@ -1111,8 +1099,7 @@ if (plateEnabled && p1PreviewUrl) {
 
       await sendManagerMessage(endMarkerText(orderNoCur));
 
-      // === EMAIL: РѕС‚РїСЂР°РІР»СЏРµРј PDF РЅР° РїРѕС‡С‚Сѓ РјРµРЅРµРґР¶РµСЂРѕРІ ===
-      // Р»С‘РіРєРёР№ PDF (Р±РµР· С„РѕС‚Рѕ), С‡С‚РѕР±С‹ РЅРµ СѓРїРёСЂР°С‚СЊСЃСЏ РІ Р»РёРјРёС‚С‹ Vercel
+      // === EMAIL: отправляем PDF + все фото отдельными вложениями ===
       try {
         const orderText = buildOrderText();
 
@@ -1135,18 +1122,20 @@ if (plateEnabled && p1PreviewUrl) {
           includeAttachedPhotos: false
         } as any);
 
+        const photoFilesForEmail = collectPersonPhotoFilesForEmail(loadOrderDraft());
+
         const mailRes = await sendPdfToEmailMultipart(pdfBlob, {
           orderNo: orderNoCur,
-          subject: `Р—Р°СЏРІРєР° в„–${orderNoCur || "вЂ”"} (PDF)`,
-          text: orderText
+          subject: `Заявка №${orderNoCur || "—"} (PDF)`,
+          text: orderText,
+          photos: photoFilesForEmail
         });
 
-        if (!mailRes.ok) warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${mailRes.error || "РѕС€РёР±РєР°"}`);
+        if (!mailRes.ok) warnings.push(`Email не отправлен: ${mailRes.error || "ошибка"}`);
       } catch (e: any) {
-        warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${String(e?.message || e)}`);
+        warnings.push(`Email не отправлен: ${String(e?.message || e)}`);
       }
       // === EMAIL END ===
-
 
       setSentOk(true);
       if (warnings.length) setLastWarnings(warnings);
@@ -1155,42 +1144,43 @@ if (plateEnabled && p1PreviewUrl) {
       await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
-    }};
+    }
+  };
 
   async function handleSavePdf() {
-  try {
-    setIsSaving(true);
-    await new Promise((r) => setTimeout(r, 0));
+    try {
+      setIsSaving(true);
+      await new Promise((r) => setTimeout(r, 0));
 
-    const plateNodes = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
-    const plateUrlFallbacks = showPlate ? plateToShow.map((p) => p.url) : [];
+      const plateNodes = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
+      const plateUrlFallbacks = showPlate ? plateToShow.map((p) => p.url) : [];
 
-    const blob = await generateOrderPdfShots({
-      draft: loadOrderDraft(),
-      intro: loadIntroState(),
+      const blob = await generateOrderPdfShots({
+        draft: loadOrderDraft(),
+        intro: loadIntroState(),
 
-      topbarNode: document.getElementById("topbar-shot-root"),
+        topbarNode: document.getElementById("topbar-shot-root"),
 
-      frontNode: document.getElementById("pdf-front-sketch"),
-      backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
-      backUrlFallback: showBack ? backCandidateUrl : null,
+        frontNode: document.getElementById("pdf-front-sketch"),
+        backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
+        backUrlFallback: showBack ? backCandidateUrl : null,
 
-      plateNodes,
-      plateUrlFallbacks,
+        plateNodes,
+        plateUrlFallbacks,
 
-      orderText: buildOrderText(),
-      includeAttachedPhotos: true
-    });
+        orderText: buildOrderText(),
+        includeAttachedPhotos: true
+      });
 
-    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-    downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
-    setPdfSavedOnce(true);
-  } catch (e: any) {
-    alert(`Не удалось сформировать PDF\n\n${e?.message || e}`);
-  } finally {
-    setIsSaving(false);
+      const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+      downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
+      setPdfSavedOnce(true);
+    } catch (e: any) {
+      alert(`Не удалось сформировать PDF\n\n${e?.message || e}`);
+    } finally {
+      setIsSaving(false);
+    }
   }
-}
 
   async function handleSend() {
     if (isSending) return;
@@ -1202,7 +1192,8 @@ if (plateEnabled && p1PreviewUrl) {
       setTimeout(() => afterHintRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 150);
     } finally {
       setIsSending(false);
-    }}
+    }
+  }
 
   const overlayText =
     uploading ? `Отправляем… ${Math.max(0, Math.min(100, uploadProgress || 0))}%` :
@@ -1252,28 +1243,25 @@ if (plateEnabled && p1PreviewUrl) {
       )}
 
       {/* Эскиз надгробной плиты (только если есть) */}
-{showPlate && (
-  <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
-    <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита</div>
+      {showPlate && (
+        <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Надгробная плита</div>
 
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${plateToShow.length}, 1fr)`, gap: 10 }}>
-      {plateToShow.map((p) => (
-        <div
-          key={`plate-sketch-${p.index}`}
-          style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}
-        >
-          <img
-            id={`pdf-plate-sketch-${p.index}`}
-            src={p.url}
-            crossOrigin="anonymous"
-            alt=""
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
-          />
-        </div>
-      ))}
-    </div>
-  </section>
-)}
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${plateToShow.length}, 1fr)`, gap: 10 }}>
+            {plateToShow.map((p) => (
+              <div key={`plate-sketch-${p.index}`} style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}>
+                <img
+                  id={`pdf-plate-sketch-${p.index}`}
+                  src={p.url}
+                  crossOrigin="anonymous"
+                  alt=""
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Комментарий к заказу */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
@@ -1284,20 +1272,19 @@ if (plateEnabled && p1PreviewUrl) {
           Не беспокойтесь: даже при отсутствии нужного пункта финальное подтверждение — по телефону или лично.
         </div>
         <textarea
-  id="order-notes"
-  rows={3}
-  defaultValue={String(((draft as any)?.extras?.orderNotes || "")).trim()}
-  onBlur={(e) => {
-    const v = String(e.target.value || "").trim();
-    saveOrderDraft({ extras: { orderNotes: v ? v : null } as any });
-    dispatchDraftUpdated();
-    setDraft(loadOrderDraft());
-    if (sentOk) setIsDirtyAfterSend(true);
-  }}
-  placeholder="Добавьте комментарий…"
-  style={{ ...inputStyle(), resize: "vertical" }}
-/>
-
+          id="order-notes"
+          rows={3}
+          defaultValue={String(((draft as any)?.extras?.orderNotes || "")).trim()}
+          onBlur={(e) => {
+            const v = String(e.target.value || "").trim();
+            saveOrderDraft({ extras: { orderNotes: v ? v : null } as any });
+            dispatchDraftUpdated();
+            setDraft(loadOrderDraft());
+            if (sentOk) setIsDirtyAfterSend(true);
+          }}
+          placeholder="Добавьте комментарий…"
+          style={{ ...inputStyle(), resize: "vertical" }}
+        />
       </section>
 
       {/* Кнопки */}
@@ -1401,8 +1388,8 @@ if (plateEnabled && p1PreviewUrl) {
           </section>
         </div>
       )}
-             
-            {/* Меню "Новая заявка" */}
+
+      {/* Меню "Новая заявка" */}
       {newOrderOpen && (
         <div>
           <div
@@ -1440,27 +1427,41 @@ if (plateEnabled && p1PreviewUrl) {
               gap: 12,
               alignItems: "stretch"
             }}
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             <div style={{ fontWeight: 700, fontSize: 21, textAlign: "center", marginBottom: 12 }}>
               Начать новую заявку?
             </div>
             <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Стереть все (очистить полностью)</button>
+              style={glassButtonStyle("sm")}
+              onClick={() => {
+                setNewOrderOpen(false);
+                setShowWipeWarn("wipeAll");
+              }}
+            >
+              Стереть все (очистить полностью)
+            </button>
             <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Стереть все, оставить заказчика</button>
-           <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Оставить все поля, новый номер заказа</button>
+              style={glassButtonStyle("sm")}
+              onClick={() => {
+                setNewOrderOpen(false);
+                setShowWipeWarn("wipeAll");
+              }}
+            >
+              Стереть все, оставить заказчика
+            </button>
             <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Отмена</button>
+              style={glassButtonStyle("sm")}
+              onClick={() => {
+                setNewOrderOpen(false);
+                setShowWipeWarn("wipeAll");
+              }}
+            >
+              Оставить все поля, новый номер заказа
+            </button>
+            <button style={glassButtonStyle("sm")} onClick={() => setNewOrderOpen(false)}>
+              Отмена
+            </button>
           </div>
         </div>
       )}
@@ -1474,7 +1475,7 @@ if (plateEnabled && p1PreviewUrl) {
             zIndex: 10002,
             background: "rgba(0,0,0,0.32)",
             display: "flex",
-            alignItems: "flex-end",
+            alignItems: "flex-end"
           }}
           onClick={() => setShowWipeWarn(null)}
         >
@@ -1494,13 +1495,13 @@ if (plateEnabled && p1PreviewUrl) {
               display: "flex",
               flexDirection: "column",
               gap: 18,
-              alignItems: "center",
+              alignItems: "center"
             }}
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
-            <div style={{fontWeight:700, marginBottom:4}}>Сначала сохраните PDF</div>
-            <div style={{marginBottom:0, fontSize:15}}>
-              Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа&nbsp;—
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Сначала сохраните PDF</div>
+            <div style={{ marginBottom: 0, fontSize: 15 }}>
+              Перед началом новой заявки <span style={{ color: "#c00" }}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа —
               иначе ваши данные будут безвозвратно утеряны.
             </div>
             <button
@@ -1509,27 +1510,28 @@ if (plateEnabled && p1PreviewUrl) {
                 setShowWipeWarn(null);
                 handleSavePdf();
               }}
-            >Скачать PDF</button>
-            <button
-  style={glassButtonStyle("sm")}
-  onClick={() => {
-    setShowWipeWarn(null);
-
-    if (showWipeWarn === "wipeAll") {
-      void hardResetAll({ preserveThemeKey: false });
-      return;
-    }
-    if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
-    if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
-  }}
->
-  Продолжить с потерей данных
-</button>
-
+            >
+              Скачать PDF
+            </button>
             <button
               style={glassButtonStyle("sm")}
-              onClick={() => setShowWipeWarn(null)}
-            >Отмена</button>
+              onClick={() => {
+                setShowWipeWarn(null);
+
+                if (showWipeWarn === "wipeAll") {
+                  void hardResetAll({ preserveThemeKey: false });
+                  return;
+                }
+                if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
+                if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
+              }}
+            >
+              Продолжить с потерей данных
+            </button>
+
+            <button style={glassButtonStyle("sm")} onClick={() => setShowWipeWarn(null)}>
+              Отмена
+            </button>
           </div>
         </div>
       )}
@@ -1551,7 +1553,7 @@ if (plateEnabled && p1PreviewUrl) {
           }}
         >
           <div
-              onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
             style={{
               background: "#181922",
               color: "#fff",
@@ -1575,38 +1577,24 @@ if (plateEnabled && p1PreviewUrl) {
                 title="Закрыть"
                 style={{ ...glassButtonStyle("sm"), width: 36, height: 36, fontWeight: 600, fontSize: 24, padding: 0, lineHeight: 1 }}
                 disabled={isSending || uploading}
-              >×</button>
+              >
+                ×
+              </button>
             </div>
             <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 5 }}>
               Отправить заказ менеджерам?
             </div>
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={handleSend}
-              disabled={isSending || uploading}
-            >
+            <button style={glassButtonStyle("sm")} onClick={handleSend} disabled={isSending || uploading}>
               {isSending || uploading ? "Отправляем…" : "Отправить"}
             </button>
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={() => setConfirmOpen(false)}
-              disabled={isSending || uploading}
-            >
+            <button style={glassButtonStyle("sm")} onClick={() => setConfirmOpen(false)} disabled={isSending || uploading}>
               Отмена
             </button>
           </div>
         </div>
       )}
 
-  {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
-
-</div>
+      {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
+    </div>
   );
 }
-
-
-
-
-
-
-
