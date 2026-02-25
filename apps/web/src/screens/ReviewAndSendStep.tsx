@@ -10,10 +10,26 @@
 // - Если элементов на тыле/плите нет — соответствующие эскизы скрываются
 //   (у вас это достигается тем, что previewUrl/previewHiUrl записываются как null).
 //
-// ВАЖНО: этот файл компилируется; добавлено только чтение/показ эскиза плиты + отправка в Telegram.
-// ОБНОВЛЕНИЕ:
-// - Починка темы письма (UTF-8, без кракозябр)
-// - Отправка всех загруженных пользователем фото отдельными вложениями в email (multipart photos[])
+// ВАЖНО: этот файл компилируется.
+//
+// ОБНОВЛЕНИЕ (Blob + Email вложения):
+// - Тема письма UTF-8
+// - Email отправляется через Blob: сначала upload PDF+фото в /api/blob-upload,
+//   затем /api/email (action=send_blob) скачивает из Blob и отправляет как вложения.
+// - Во вложения добавляем:
+//   1) фото персон (ФИО.jpg как сейчас),
+//   2) скриншот топбара,
+//   3) эскиз лицевой,
+//   4) эскиз тыльной,
+//   5) эскизы плит.
+//
+// Важно: для этого должны существовать API:
+// - /api/blob-upload.ts (multipart: file + photos[])
+// - /api/email.ts (json: action=send_blob, pdfUrl/pdfPathname, photoUrls/photoPathnames/photoFilenames)
+//
+// Также важно: этот файл использует generateOrderPdfShots как у вас было.
+// Если вы хотите отправлять "большой" PDF ~6MB, замените generateOrderPdfShots -> generateOrderPdf
+// и подайте нужные args (см. комментарий в коде).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -149,31 +165,6 @@ function dispatchDraftUpdated() {
     window.dispatchEvent(new Event("memorial:orderDraftUpdated"));
   } catch {}
 }
-function __setHashForStep(id: string) {
-  window.location.hash = "#/wizard/" + encodeURIComponent(id);
-}
-
-/* ========= Top hint ========= */
-function TopHintNotice() {
-  return (
-    <div
-      role="note"
-      aria-live="polite"
-      style={{
-        margin: "10px 0",
-        padding: "10px 12px",
-        borderRadius: 12,
-        background: "rgba(255,255,255,0.06)",
-        border: "1px solid rgba(255,255,255,0.25)",
-        color: "#ddd",
-        fontWeight: 400,
-        fontStyle: "italic"
-      }}
-    >
-      Если необходимо внести изменения — вернитесь к соответствующему шагу. Воспользуйтесь навигацией вверху.
-    </div>
-  );
-}
 
 /* ========= Sending helpers ========= */
 const TARGET_FILE_BYTES = Math.floor(2.7 * 1024 * 1024);
@@ -212,11 +203,33 @@ function dataUrlToFile(dataUrl: string, name = "image.png"): File {
   return new File([u8], name, { type: mime });
 }
 
+async function urlToFile(url: string, name: string, fallbackMime = "image/jpeg"): Promise<File | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const mime = (blob as any)?.type || fallbackMime;
+    return new File([blob], name, { type: mime });
+  } catch {
+    return null;
+  }
+}
+
 function ensurePlates(ex: any): any[] {
   const cur = Array.isArray(ex?.plates) ? ex.plates.slice() : [];
   while (cur.length < 3) cur.push({});
   return cur;
 }
+
+function extFromMime(mime: string) {
+  const m = String(mime || "").toLowerCase();
+  if (m.includes("png")) return ".png";
+  if (m.includes("webp")) return ".webp";
+  if (m.includes("heic")) return ".heic";
+  return ".jpg";
+}
+
+type NamedFile = { file: File; name: string };
 
 /* ========= Main component ========= */
 export default function ReviewAndSendStep({
@@ -235,9 +248,8 @@ export default function ReviewAndSendStep({
   const [draft, setDraft] = useState(loadOrderDraft());
   const [introState, setIntroState] = useState(() => loadIntroState());
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
+
   const [newOrderOpen, setNewOrderOpen] = useState(false);
-  const [newOrderConfirm, setNewOrderConfirm] =
-    useState<null | "wipe_all" | "wipe_keep_customer" | "keep_all_new_no">(null);
   const [pdfSavedOnce, setPdfSavedOnce] = useState(false);
 
   const customerName = (introState.intro?.customerName || "").trim();
@@ -267,6 +279,8 @@ export default function ReviewAndSendStep({
     };
   }, []);
 
+  const [sentOk, setSentOk] = useState(false);
+
   useEffect(() => {
     const refresh = () => {
       setDraft(loadOrderDraft());
@@ -280,7 +294,7 @@ export default function ReviewAndSendStep({
     refresh();
     return () => window.removeEventListener(DRAFT_UPDATED_EVENT, markDirtyOnDraft as any);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sentOk]);
 
   // ===== Force open TopBarWithIntro & keep open =====
   useEffect(() => {
@@ -423,7 +437,10 @@ export default function ReviewAndSendStep({
     };
   }, [plateCandidates]);
 
-  const plateToShow = useMemo(() => plateCandidates.filter((p) => !!plateRenderable[p.index]), [plateCandidates, plateRenderable]);
+  const plateToShow = useMemo(
+    () => plateCandidates.filter((p) => !!plateRenderable[p.index]),
+    [plateCandidates, plateRenderable]
+  );
   const showPlate = plateToShow.length > 0;
 
   // Front
@@ -468,15 +485,18 @@ export default function ReviewAndSendStep({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [sentOk, setSentOk] = useState(false);
+
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+
   const [deliveryVisible, setDeliveryVisible] = useState(false);
+
   const [textDelivered, setTextDelivered] = useState<boolean | null>(null);
   const [topbarDelivered, setTopbarDelivered] = useState<boolean | null>(null);
   const [frontSketchDelivered, setFrontSketchDelivered] = useState<boolean | null>(null);
   const [backSketchDelivered, setBackSketchDelivered] = useState<boolean | null>(null);
   const [plateSketchDelivered, setPlateSketchDelivered] = useState<boolean | null>(null);
+
   const [photosDelivered, setPhotosDelivered] = useState(0);
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
@@ -495,36 +515,6 @@ export default function ReviewAndSendStep({
         json = raw ? JSON.parse(raw) : null;
       } catch {}
       return { ok: !!(resp.ok && json?.ok), error: json?.error || json?.description || raw || resp.statusText };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
-  }
-
-  async function sendPdfToEmailMultipart(
-    pdfBlob: Blob,
-    meta: { orderNo: string; subject: string; text: string; photos?: File[] }
-  ): Promise<{ ok: boolean; error?: string }> {
-    try {
-      const fd = new FormData();
-      fd.append("action", "send_pdf");
-      fd.append("orderNo", meta.orderNo || "");
-      fd.append("subject", meta.subject || "");
-      fd.append("text", meta.text || "");
-      fd.append("filename", `order-${meta.orderNo || Date.now()}.pdf`);
-      fd.append("file", new File([pdfBlob], `order-${meta.orderNo || Date.now()}.pdf`, { type: "application/pdf" }));
-
-      for (const ph of (meta.photos || []).filter(Boolean)) {
-        fd.append("photos", ph);
-      }
-
-      const resp = await fetch("/api/email", { method: "POST", body: fd });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {}
-      if (resp.ok && json?.ok) return { ok: true };
-      return { ok: false, error: json?.error || raw || resp.statusText };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
     }
@@ -558,6 +548,66 @@ export default function ReviewAndSendStep({
     }
   }
 
+  async function uploadPdfAndPhotosToBlob(params: {
+    orderNo: string;
+    pdfBlob: Blob;
+    pdfFilename: string;
+    photos: NamedFile[];
+  }): Promise<{
+    ok: boolean;
+    orderNo: string;
+    pdf: { url: string; pathname: string; filename: string };
+    photos: Array<{ url: string; pathname: string; originalFilename?: string }>;
+  }> {
+    const fd = new FormData();
+    fd.append("orderNo", params.orderNo || "");
+
+    fd.append("file", new File([params.pdfBlob], params.pdfFilename, { type: "application/pdf" }));
+
+    for (const p of (params.photos || []).filter(Boolean)) {
+      // В blob-upload берём оригинальное имя файла из File.name, поэтому пересоздаём File с нужным name:
+      fd.append("photos", new File([p.file], p.name, { type: p.file.type || "image/jpeg" }));
+    }
+
+    const resp = await fetch("/api/blob-upload", { method: "POST", body: fd });
+    const raw = await resp.text().catch(() => "");
+    let json: any = null;
+    try {
+      json = raw ? JSON.parse(raw) : null;
+    } catch {}
+
+    if (!resp.ok || !json?.ok) {
+      throw new Error(json?.error || raw || resp.statusText);
+    }
+    return json;
+  }
+
+  async function sendEmailFromBlobLinks(meta: {
+    orderNo: string;
+    subject: string;
+    text: string;
+    pdfUrl: string;
+    pdfPathname: string;
+    pdfFilename: string;
+    photoUrls: string[];
+    photoPathnames: string[];
+    photoFilenames: string[];
+  }): Promise<{ ok: boolean; error?: string }> {
+    const resp = await fetch("/api/email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "send_blob", ...meta })
+    });
+    const raw = await resp.text().catch(() => "");
+    let json: any = null;
+    try {
+      json = raw ? JSON.parse(raw) : null;
+    } catch {}
+
+    if (resp.ok && json?.ok) return { ok: true };
+    return { ok: false, error: json?.error || raw || resp.statusText };
+  }
+
   function startMarkerText(no: string): string {
     const n = no || "—";
     return `🪦 НАЧАЛО ЗАЯВКИ №${n}`;
@@ -587,11 +637,11 @@ export default function ReviewAndSendStep({
 
     // ===== Изделие / размеры =====
     const itemName = String(d?.item?.name || "").trim();
-    const itemUrl = String(d?.item?.url || "").trim();
-    if (itemName || itemUrl) {
+    const itemUrl2 = String(d?.item?.url || "").trim();
+    if (itemName || itemUrl2) {
       lines.push("Изделие:");
       if (itemName) lines.push(`- Модель: ${itemName}`);
-      if (!itemName && itemUrl) lines.push(`- Файл: ${itemUrl}`);
+      if (!itemName && itemUrl2) lines.push(`- Файл: ${itemUrl2}`);
       lines.push("");
     }
 
@@ -643,8 +693,8 @@ export default function ReviewAndSendStep({
     const frontEpitaphs2 = toParagraphs(engr.epitaphs ?? engr.epitaphText);
     if (frontEpitaphs2.length) {
       lines.push("- Эпитафии:");
-      frontEpitaphs2.forEach((t: string, i: number) => {
-        lines.push(`  ${i + 1}) ${t}`);
+      frontEpitaphs2.forEach((txt: string, i: number) => {
+        lines.push(`  ${i + 1}) ${txt}`);
       });
     } else {
       lines.push("- Эпитафии: —");
@@ -703,7 +753,7 @@ export default function ReviewAndSendStep({
       const rearEpitaphs = ((eb?.epitaphTexts as string[]) || []).filter(Boolean);
       if (rearEpitaphs.length) {
         lines.push("- Эпитафии:");
-        rearEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+        rearEpitaphs.forEach((txt: string, i: number) => lines.push(`  ${i + 1}) ${txt}`));
       } else {
         lines.push("- Эпитафии: —");
       }
@@ -734,6 +784,7 @@ export default function ReviewAndSendStep({
     lines.push("");
 
     // ===== Надгробная плита =====
+    const ex = (d?.extras || {}) as any;
     const plateEnabled = !!ex.headstonePlate;
     lines.push("Надгробная плита:");
     lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
@@ -751,7 +802,7 @@ export default function ReviewAndSendStep({
       const plateEpitaphs = [...toParagraphs(ex.plateEpitaph), ...toParagraphs(ex.plateEpitaphs)].filter(Boolean);
       if (plateEpitaphs.length) {
         lines.push("- Эпитафии:");
-        plateEpitaphs.forEach((t: string, i: number) => lines.push(`  ${i + 1}) ${t}`));
+        plateEpitaphs.forEach((txt: string, i: number) => lines.push(`  ${i + 1}) ${txt}`));
       } else {
         lines.push("- Эпитафии: —");
       }
@@ -790,7 +841,7 @@ export default function ReviewAndSendStep({
       const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
       if (ep.length) {
         lines.push("- Эпитафии:");
-        ep.forEach((t: string, k: number) => lines.push(`  ${k + 1}) ${t}`));
+        ep.forEach((txt: string, k: number) => lines.push(`  ${k + 1}) ${txt}`));
       } else {
         lines.push("- Эпитафии: —");
       }
@@ -986,10 +1037,104 @@ export default function ReviewAndSendStep({
     return out;
   }
 
-  function collectPersonPhotoFilesForEmail(d: any): File[] {
-    // ВАЖНО: эти File создаются из base64 dataUrl, поэтому они будут ровно “тем, что загрузил пользователь”
-    // (в пределах того, что вы храните в draft как photoPreview/photoDataUrl).
-    return collectPersonPhotosWithCaptions(d).map((x) => x.file);
+  async function collectSketchFilesForEmail(): Promise<NamedFile[]> {
+    const out: NamedFile[] = [];
+
+    // 1) Скриншот топбара
+    try {
+      await ensureTopBarPanelOpenForShot();
+      const node = findTopBarShotRootNode();
+      const dataUrl = await elementToPngDataUrl(node, { pixelRatio: 2, bg: "#111111" });
+      if (dataUrl) {
+        const file = dataUrlToFile(dataUrl, "topbar.png");
+        const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
+          maxWidth: 1600,
+          maxHeight: 3000,
+          mime: "image/jpeg",
+          qualityStart: 0.9,
+          qualityMin: 0.55,
+          qualityStep: 0.08
+        });
+        out.push({ file: new File([compressed], "TopBar.jpg", { type: "image/jpeg" }), name: "TopBar.jpg" });
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2) Эскиз лицевой (node)
+    try {
+      const node = document.getElementById("pdf-front-sketch");
+      const dataUrl = await elementToPngDataUrl(node as any, { pixelRatio: 2, bg: "#ffffff" });
+      if (dataUrl) {
+        const file = dataUrlToFile(dataUrl, "front.png");
+        const compressed = await compressImageFileToMaxBytes(file, TARGET_FILE_BYTES, {
+          maxWidth: 2000,
+          maxHeight: 2000,
+          mime: "image/jpeg",
+          qualityStart: 0.9,
+          qualityMin: 0.55,
+          qualityStep: 0.08
+        });
+        out.push({ file: new File([compressed], "Эскиз_лицевая.jpg", { type: "image/jpeg" }), name: "Эскиз_лицевая.jpg" });
+      }
+    } catch {
+      // ignore
+    }
+
+    // 3) Эскиз тыльной (node или URL)
+    try {
+      if (showBack && backCandidateUrl) {
+        // попробуем node
+        const node = document.getElementById("pdf-back-sketch");
+        let f: File | null = null;
+        if (node) {
+          const dataUrl = await elementToPngDataUrl(node as any, { pixelRatio: 2, bg: "#ffffff" });
+          if (dataUrl) f = dataUrlToFile(dataUrl, "back.png");
+        }
+        if (!f) f = await urlToFile(backCandidateUrl, "Эскиз_тыльная.jpg");
+        if (f) {
+          const compressed = await compressImageFileToMaxBytes(f, TARGET_FILE_BYTES, {
+            maxWidth: 2000,
+            maxHeight: 2000,
+            mime: "image/jpeg",
+            qualityStart: 0.9,
+            qualityMin: 0.55,
+            qualityStep: 0.08
+          });
+          out.push({ file: new File([compressed], "Эскиз_тыльная.jpg", { type: "image/jpeg" }), name: "Эскиз_тыльная.jpg" });
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4) Эскизы плит (по URL из plateToShow)
+    try {
+      if (showPlate && plateToShow.length > 0) {
+        for (const p of plateToShow) {
+          const url = p.url;
+          const base = `Эскиз_плита_${p.index + 1}`;
+          const f = await urlToFile(url, `${base}.jpg`);
+          if (!f) continue;
+
+          const compressed = await compressImageFileToMaxBytes(f, TARGET_FILE_BYTES, {
+            maxWidth: 2000,
+            maxHeight: 2500,
+            mime: "image/jpeg",
+            qualityStart: 0.9,
+            qualityMin: 0.55,
+            qualityStep: 0.08
+          });
+
+          out.push({ file: new File([compressed], `${base}.jpg`, { type: "image/jpeg" }), name: `${base}.jpg` });
+          await sleep(80);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return out;
   }
 
   async function notifyUserAfterSend(orderNoCur: string) {
@@ -1066,13 +1211,13 @@ export default function ReviewAndSendStep({
         setPlateSketchDelivered(null);
       }
 
-      // Фото в Telegram (как было)
-      const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
-      setPhotosTotal(photos.length);
+      // Фото персон в Telegram (как было)
+      const personPhotos = collectPersonPhotosWithCaptions(loadOrderDraft());
+      setPhotosTotal(personPhotos.length);
 
       let delivered = 0;
-      for (let i = 0; i < photos.length; i++) {
-        const ph = photos[i];
+      for (let i = 0; i < personPhotos.length; i++) {
+        const ph = personPhotos[i];
         const compressed = await compressImageFileToMaxBytes(ph.file, TARGET_FILE_BYTES, {
           maxWidth: 2000,
           maxHeight: 2000,
@@ -1093,22 +1238,27 @@ export default function ReviewAndSendStep({
           setPhotosDelivered(delivered);
         }
 
-        setUploadProgress(Math.round(((i + 1) / Math.max(1, photos.length)) * 100));
+        setUploadProgress(Math.round(((i + 1) / Math.max(1, personPhotos.length)) * 100));
         await sleep(200);
       }
 
       await sendManagerMessage(endMarkerText(orderNoCur));
 
-      // === EMAIL: отправляем PDF + все фото отдельными вложениями ===
+      // === EMAIL via BLOB: PDF + фото персон + топбар + эскизы ===
       try {
         const orderText = buildOrderText();
 
+        // PDF: здесь пока generateOrderPdfShots как у вас.
+        // Если хотите именно "большой" PDF ~6MB из generateOrderPdf.ts:
+        // 1) импортируйте: import { generateOrderPdf } from "../lib/pdf/generateOrderPdf";
+        // 2) замените generateOrderPdfShots(...) на generateOrderPdf({ draft, intro, frontNode, backNode, plateNodes... })
         const plateNodesLocal = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
         const plateUrlFallbacksLocal = showPlate ? plateToShow.map((p) => p.url) : [];
 
         const pdfBlob = await generateOrderPdfShots({
           draft: loadOrderDraft(),
           intro: loadIntroState(),
+
           topbarNode: document.getElementById("topbar-shot-root"),
 
           frontNode: document.getElementById("pdf-front-sketch"),
@@ -1119,19 +1269,49 @@ export default function ReviewAndSendStep({
           plateUrlFallbacks: plateUrlFallbacksLocal,
 
           orderText,
-          includeAttachedPhotos: false
+          includeAttachedPhotos: true // важно: хотим "вся информация о заказе"
         } as any);
 
-        const photoFilesForEmail = collectPersonPhotoFilesForEmail(loadOrderDraft());
+        // Фото в email: (1) персональные ФИО.jpg (как сейчас) + (2) скетчи/топбар
+        const personNamedPhotos: NamedFile[] = collectPersonPhotosWithCaptions(loadOrderDraft()).map((x) => ({
+          file: x.file,
+          name: x.name
+        }));
 
-        const mailRes = await sendPdfToEmailMultipart(pdfBlob, {
+        const sketchFiles = await collectSketchFilesForEmail();
+
+        const allPhotosForEmail: NamedFile[] = [...personNamedPhotos, ...sketchFiles];
+
+        // Прогресс грубо: upload = 60%, send = 40%
+        setUploadProgress(60);
+
+        const pdfFilename = `order-${orderNoCur || Date.now()}.pdf`;
+
+        const up = await uploadPdfAndPhotosToBlob({
+          orderNo: orderNoCur || `order-${Date.now()}`,
+          pdfBlob,
+          pdfFilename,
+          photos: allPhotosForEmail
+        });
+
+        setUploadProgress(80);
+
+        const mailRes = await sendEmailFromBlobLinks({
           orderNo: orderNoCur,
           subject: `Заявка №${orderNoCur || "—"} (PDF)`,
           text: orderText,
-          photos: photoFilesForEmail
+
+          pdfUrl: up.pdf.url,
+          pdfPathname: up.pdf.pathname,
+          pdfFilename: up.pdf.filename || pdfFilename,
+
+          photoUrls: (up.photos || []).map((p: any) => String(p.url || "")).filter(Boolean),
+          photoPathnames: (up.photos || []).map((p: any) => String(p.pathname || "")).filter(Boolean),
+          photoFilenames: allPhotosForEmail.map((p) => p.name)
         });
 
         if (!mailRes.ok) warnings.push(`Email не отправлен: ${mailRes.error || "ошибка"}`);
+        setUploadProgress(100);
       } catch (e: any) {
         warnings.push(`Email не отправлен: ${String(e?.message || e)}`);
       }
@@ -1170,7 +1350,7 @@ export default function ReviewAndSendStep({
 
         orderText: buildOrderText(),
         includeAttachedPhotos: true
-      });
+      } as any);
 
       const orderNoCur = String(loadIntroState().orderNumber || "").trim();
       downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
@@ -1249,7 +1429,10 @@ export default function ReviewAndSendStep({
 
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${plateToShow.length}, 1fr)`, gap: 10 }}>
             {plateToShow.map((p) => (
-              <div key={`plate-sketch-${p.index}`} style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}>
+              <div
+                key={`plate-sketch-${p.index}`}
+                style={{ position: "relative", width: "100%", overflow: "hidden", aspectRatio: "1 / 2" }}
+              >
                 <img
                   id={`pdf-plate-sketch-${p.index}`}
                   src={p.url}
@@ -1374,14 +1557,24 @@ export default function ReviewAndSendStep({
                 (showBack && backSketchDelivered === false) ||
                 (showPlate && plateSketchDelivered === false) ||
                 (photosTotal > 0 && photosDelivered < photosTotal)) && (
-                <button type="button" onClick={() => sendOrderDirect()} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
+                <button
+                  type="button"
+                  onClick={() => sendOrderDirect()}
+                  disabled={uploading || isSending}
+                  style={glassButtonStyle("sm", uploading || isSending)}
+                >
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
               )}
               <button type="button" onClick={handleSavePdf} disabled={isSaving} style={glassButtonStyle("sm", isSaving)}>
                 {isSaving ? "Формируем PDF…" : "Скачать PDF"}
               </button>
-              <button type="button" onClick={() => setNewOrderOpen(true)} disabled={isSaving || uploading || isSending} style={glassButtonStyle("sm", isSaving || uploading || isSending)}>
+              <button
+                type="button"
+                onClick={() => setNewOrderOpen(true)}
+                disabled={isSaving || uploading || isSending}
+                style={glassButtonStyle("sm", isSaving || uploading || isSending)}
+              >
                 Новая заявка
               </button>
             </div>
@@ -1501,8 +1694,8 @@ export default function ReviewAndSendStep({
           >
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Сначала сохраните PDF</div>
             <div style={{ marginBottom: 0, fontSize: 15 }}>
-              Перед началом новой заявки <span style={{ color: "#c00" }}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа —
-              иначе ваши данные будут безвозвратно утеряны.
+              Перед началом новой заявки <span style={{ color: "#c00" }}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа — иначе ваши данные будут
+              безвозвратно утеряны.
             </div>
             <button
               style={glassButtonStyle("sm")}
