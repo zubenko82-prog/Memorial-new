@@ -1160,7 +1160,7 @@ if (plateEnabled && p1PreviewUrl) {
         await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
-    };
+    }};
 
   async function handleSavePdf() {
   try {
@@ -1608,7 +1608,6 @@ if (plateEnabled && p1PreviewUrl) {
 </div>
   );
 }
-
 
 
 
