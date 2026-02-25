@@ -535,9 +535,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       const resp = await fetch("/api/email", { method: "POST", body: fd });
       const raw = await resp.text().catch(() => "");
       let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {}
+      try { json = raw ? JSON.parse(raw) : null; } catch {}
       if (resp.ok && json?.ok) return { ok: true };
       return { ok: false, error: json?.error || raw || resp.statusText };
     } catch (e: any) {
@@ -1114,7 +1112,7 @@ if (plateEnabled && p1PreviewUrl) {
       await sendManagerMessage(endMarkerText(orderNoCur));
 
       // === EMAIL: РѕС‚РїСЂР°РІР»СЏРµРј PDF РЅР° РїРѕС‡С‚Сѓ РјРµРЅРµРґР¶РµСЂРѕРІ ===
-      // (Р»С‘РіРєРёР№ PDF, Р±РµР· С„РѕС‚Рѕ, С‡С‚РѕР±С‹ РЅРµ СѓРїРёСЂР°С‚СЊСЃСЏ РІ Р»РёРјРёС‚С‹ Vercel РїРѕ СЂР°Р·РјРµСЂСѓ Р·Р°РїСЂРѕСЃР°)
+      // Р»С‘РіРєРёР№ PDF (Р±РµР· С„РѕС‚Рѕ), С‡С‚РѕР±С‹ РЅРµ СѓРїРёСЂР°С‚СЊСЃСЏ РІ Р»РёРјРёС‚С‹ Vercel
       try {
         const orderText = buildOrderText();
 
@@ -1150,17 +1148,14 @@ if (plateEnabled && p1PreviewUrl) {
       // === EMAIL END ===
 
 
-      // === EMAIL: РѕС‚РїСЂР°РІР»СЏРµРј PDF РЅР° РїРѕС‡С‚Сѓ РјРµРЅРµРґР¶РµСЂРѕРІ ===
-      try {
-        const orderText = buildOrderText();
+      setSentOk(true);
+      if (warnings.length) setLastWarnings(warnings);
+      setUploadProgress(100);
 
-        const plateNodesLocal = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
-        const plateUrlFallbacksLocal = showPlate ? plateToShow.map((p) => p.url) : [];
-
-        await notifyUserAfterSend(orderNoCur);
+      await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
-    };
+    }};
 
   async function handleSavePdf() {
   try {
@@ -1608,10 +1603,6 @@ if (plateEnabled && p1PreviewUrl) {
 </div>
   );
 }
-
-
-
-
 
 
 

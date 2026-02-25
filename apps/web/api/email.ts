@@ -56,6 +56,7 @@ async function sendMailWithPdf(params: { subject: string; text: string; filename
   text: params.text,
   attachments: [{ filename: params.filename, content: params.pdf, contentType: "application/pdf" }]
 });
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   cors(res);
