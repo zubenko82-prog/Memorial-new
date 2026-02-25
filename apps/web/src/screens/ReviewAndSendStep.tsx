@@ -17,7 +17,8 @@ import TopBarWithIntro from "../components/TopBarWithIntro";
 import SketchTemplate from "../components/SketchTemplate";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
 import { loadIntroState, saveIntro } from "../lib/intro";
-import { generateOrderPdf, downloadBlob } from "../lib/pdf/generateOrderPdf";
+import { downloadBlob } from "../lib/pdf/generateOrderPdf";
+import { generateOrderPdfShots } from "../lib/pdf/generateOrderPdfShots";
 import { compressImageFileToMaxBytes } from "../lib/media/resize";
 import { hardResetAll } from "../lib/hardReset";
 
@@ -1100,40 +1101,39 @@ if (plateEnabled && p1PreviewUrl) {
     }};
 
   async function handleSavePdf() {
-    try {
-      setIsSaving(true);
-      await new Promise((r) => setTimeout(r, 0));
-     const plateNodes = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
-const plateUrlFallbacks = showPlate ? plateToShow.map((p) => p.url) : [];
+  try {
+    setIsSaving(true);
+    await new Promise((r) => setTimeout(r, 0));
 
-const blob = await generateOrderPdf({
-  draft: loadOrderDraft(),
-  intro: loadIntroState(),
-  frontNode: document.getElementById("pdf-front-sketch"),
-  backNode: showBack ? document.getElementById("pdf-back-sketch") : null,
-  backUrlFallback: showBack ? backCandidateUrl : null,
+    const plateNodes = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
+    const plateUrlFallbacks = showPlate ? plateToShow.map((p) => p.url) : [];
 
-  // NEW:
-  plateNodes,
-  plateUrlFallbacks,
+    const blob = await generateOrderPdfShots({
+      draft: loadOrderDraft(),
+      intro: loadIntroState(),
 
-  // legacy fields keep (for backward compat inside generateOrderPdf):
-  plateNode: plateNodes[0] || null,
-  plateUrlFallback: plateUrlFallbacks[0] || null,
+      topbarNode: document.getElementById("topbar-shot-root"),
 
-  includeAttachedPhotos: true
-} as any);
+      frontNode: document.getElementById("pdf-front-sketch"),
+      backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
+      backUrlFallback: showBack ? backCandidateUrl : null,
 
+      plateNodes,
+      plateUrlFallbacks,
 
-      const orderNoCur = String(loadIntroState().orderNumber || "").trim();
-      downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
-            setPdfSavedOnce(true);
+      orderText: buildOrderText(),
+      includeAttachedPhotos: true
+    });
 
-    } catch (e: any) {
-      alert(`Не удалось сформировать PDF\n\n${e?.message || e}`);
-    } finally {
-      setIsSaving(false);
-    }}
+    const orderNoCur = String(loadIntroState().orderNumber || "").trim();
+    downloadBlob(blob, `order-${orderNoCur || Date.now()}.pdf`);
+    setPdfSavedOnce(true);
+  } catch (e: any) {
+    alert(`Не удалось сформировать PDF\n\n${e?.message || e}`);
+  } finally {
+    setIsSaving(false);
+  }
+}
 
   async function handleSend() {
     if (isSending) return;
