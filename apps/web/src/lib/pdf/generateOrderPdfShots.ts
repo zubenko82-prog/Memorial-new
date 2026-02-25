@@ -1,21 +1,22 @@
 // src/lib/pdf/generateOrderPdfShots.ts
 // PDF сборка "как в Telegram":
-// - 1-я страница: слева скрин TopBar (header+panel), справа эскизы (лицевая/тыльная/плиты) как превью.
-// - 2-я страница: текстовая версия заказа (кириллица безопасно: строки с нелатиницей рисуем на canvas и вставляем PNG).
-// - Далее: отдельные страницы с фотографиями (лицевая + тыл), если includeAttachedPhotos=true.
+// - Страница 1: слева скрин TopBar (header+panel), справа эскизы (лицевая/тыльная/плиты).
+// - Затем страницы с фото (если includeAttachedPhotos=true).
+// - ПОСЛЕДНЯЯ страница: текстовая версия заказа.
 //
-// Зависимости динамические (CDN):
-// - html-to-image
-// - jspdf
-//
-// ВАЖНО: стандартные PDF-шрифты (Helvetica) не поддерживают кириллицу.
-// Поэтому для doc.text(...) включён fallback: если строка содержит нелатиницу,
-// она рендерится в PNG через canvas и добавляется в PDF как изображение.
+// ВАЖНО ПРО "КРАКОЗЯБРЫ":
+// 1) jsPDF стандартными шрифтами не умеет кириллицу -> нужен fallback "кириллица как PNG".
+// 2) Ваш пример "5:..." — это не проблема PDF: это признак, что САМ orderText уже испорчен
+//    (похож на UTF-16/UTF-8 mis-decode). Поэтому здесь есть авто-починка:
+//    если в тексте встречаются управляющие символы вида \u0004 и т.п.,
+//    пытаемся восстановить строку через TextDecoder("utf-16le").
+// 3) Даже если текст нормальный — кириллица рисуется в canvas и добавляется как PNG, чтобы не ломалась.
 
 declare global {
   interface Window {
     htmlToImage?: any;
     jspdf?: any;
+    TextDecoder?: any;
   }
 }
 
@@ -86,8 +87,53 @@ async function urlToDataUrl(url?: string | null): Promise<string | null> {
   }
 }
 
-function splitToLines(doc: any, txt: string, maxW: number) {
+/** jsPDF split helper (uses current font metrics) */
+function splitToLines(doc: any, txt: string, maxW: number): string[] {
   return doc.splitTextToSize(txt, maxW);
+}
+
+/* ===== Detect/repair broken text like "5:..." ===== */
+function looksLikeBrokenUtf16(text: string): boolean {
+  // Many control chars (0x00..0x1F) mixed with readable characters -> typical sign of wrong decode.
+  let ctrl = 0;
+  let total = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 0) continue;
+    total++;
+    if (c < 0x20 && c !== 0x0a && c !== 0x0d && c !== 0x09) ctrl++;
+  }
+  return total > 20 && ctrl / total > 0.15;
+}
+
+function repairBrokenUtf16Le(text: string): string {
+  try {
+    // Interpret the JS string as a stream of 16-bit code units (little-endian bytes),
+    // then decode it back as UTF-16LE.
+    const u16 = new Uint16Array(text.length);
+    for (let i = 0; i < text.length; i++) u16[i] = text.charCodeAt(i);
+    const bytes = new Uint8Array(u16.buffer);
+    const TD = (window as any).TextDecoder;
+    if (!TD) return text;
+    const dec = new TD("utf-16le", { fatal: false });
+    const fixed = dec.decode(bytes);
+    return fixed && fixed.length ? fixed : text;
+  } catch {
+    return text;
+  }
+}
+
+function normalizeOrderText(input: any): string {
+  let t = String(input ?? "");
+  // Normalize line endings
+  t = t.replace(/\r\n?/g, "\n");
+
+  if (looksLikeBrokenUtf16(t)) {
+    const fixed = repairBrokenUtf16Le(t);
+    if (!looksLikeBrokenUtf16(fixed)) t = fixed;
+  }
+
+  return t;
 }
 
 /* ===== Fallback: кириллицу рисуем на canvas и вставляем в PDF как PNG ===== */
@@ -169,10 +215,11 @@ export type GenerateOrderPdfShotsArgs = {
   backNode?: HTMLElement | null;
   backUrlFallback?: string | null;
 
+  // plates shown on Review (order is the same as in plateNodes/plateUrlFallbacks arrays)
   plateNodes?: Array<HTMLElement | null>;
   plateUrlFallbacks?: Array<string | null>;
 
-  // Text version (already built in Review step)
+  // Text version (built in Review step)
   orderText?: string;
 
   includeAttachedPhotos?: boolean;
@@ -252,12 +299,7 @@ export async function generateOrderPdfShots(args: GenerateOrderPdfShotsArgs): Pr
 
   const backPng = backNode
     ? await nodeToPng(backNode, 2, "#ffffff")
-    : await urlToDataUrl(
-        backUrlFallback ||
-          (draft as any)?.editorBack?.previewHiUrl ||
-          (draft as any)?.editorBack?.previewUrl ||
-          null
-      );
+    : await urlToDataUrl(backUrlFallback || (draft as any)?.editorBack?.previewHiUrl || (draft as any)?.editorBack?.previewUrl || null);
 
   const normPlateNodes: Array<HTMLElement | null> = Array.isArray(plateNodes) ? plateNodes : [];
   const normPlateFallbacks: Array<string | null> = Array.isArray(plateUrlFallbacks) ? plateUrlFallbacks : [];
@@ -320,44 +362,16 @@ export async function generateOrderPdfShots(args: GenerateOrderPdfShotsArgs): Pr
     doc.text("Эскизы отсутствуют", xR + rightW / 2, margin + 30, { align: "center" });
   }
 
-  /* ===== Page 2: text version ===== */
-  onProgress?.("text-page");
-  doc.addPage();
-
-  const orderNo = String(intro?.orderNumber || "—");
-  useFont(true, 24);
-  doc.text(`Текст заказа №${orderNo}`, margin, margin + 24);
-
-  useFont(false, 16);
-  const body = String(orderText || "").trim() || "—";
-
-  const lines = splitToLines(doc, body, innerW);
-  const lineH = 20;
-
-  let yT = margin + 60;
-  for (const ln of lines) {
-    if (yT > pageH - margin) {
-      doc.addPage();
-      yT = margin;
-      useFont(false, 16);
-    }
-    doc.text(String(ln), margin, yT);
-    yT += lineH;
-  }
-
-  /* ===== Photos pages ===== */
+  /* ===== Photos pages (before text, so text is LAST) ===== */
   if (includeAttachedPhotos) {
     onProgress?.("photos");
 
     const frontPeople = (((draft?.engraving?.persons as any[]) || []).filter(Boolean) as any[]) || [];
     const rearPeople = ((((draft as any)?.editorBack?.people as any[]) || []).filter(Boolean) as any[]) || [];
-
     const persons = [...frontPeople, ...rearPeople];
 
     for (const p of persons) {
-      const photo =
-        p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || null;
-
+      const photo = p?.photoPreview || p?.photoDataUrl || p?.photoUrl || p?.photo || null;
       if (!photo) continue;
 
       const data = await urlToDataUrl(String(photo));
@@ -391,6 +405,33 @@ export async function generateOrderPdfShots(args: GenerateOrderPdfShotsArgs): Pr
 
       await placeImageContain(data, margin, yP, innerW, pageH - margin - yP);
     }
+  }
+
+  /* ===== LAST page: text version ===== */
+  onProgress?.("text-last-page");
+  doc.addPage();
+
+  const orderNo = String(intro?.orderNumber || "—");
+  useFont(true, 24);
+  doc.text(`Текст заказа №${orderNo}`, margin, margin + 24);
+
+  useFont(false, 16);
+
+  // IMPORTANT: normalize/repair text BEFORE splitting and printing
+  const body = normalizeOrderText(orderText).trim() || "—";
+
+  const lines = splitToLines(doc, body, innerW);
+  const lineH = 20;
+
+  let yT = margin + 60;
+  for (const ln of lines) {
+    if (yT > pageH - margin) {
+      doc.addPage();
+      yT = margin;
+      useFont(false, 16);
+    }
+    doc.text(String(ln), margin, yT);
+    yT += lineH;
   }
 
   return doc.output("blob");
