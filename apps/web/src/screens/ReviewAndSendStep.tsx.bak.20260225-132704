@@ -1114,43 +1114,6 @@ if (plateEnabled && p1PreviewUrl) {
       await sendManagerMessage(endMarkerText(orderNoCur));
 
       // === EMAIL: РѕС‚РїСЂР°РІР»СЏРµРј PDF РЅР° РїРѕС‡С‚Сѓ РјРµРЅРµРґР¶РµСЂРѕРІ ===
-      // (Р»С‘РіРєРёР№ PDF, Р±РµР· С„РѕС‚Рѕ, С‡С‚РѕР±С‹ РЅРµ СѓРїРёСЂР°С‚СЊСЃСЏ РІ Р»РёРјРёС‚С‹ Vercel РїРѕ СЂР°Р·РјРµСЂСѓ Р·Р°РїСЂРѕСЃР°)
-      try {
-        const orderText = buildOrderText();
-
-        const plateNodesLocal = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
-        const plateUrlFallbacksLocal = showPlate ? plateToShow.map((p) => p.url) : [];
-
-        const pdfBlob = await generateOrderPdfShots({
-          draft: loadOrderDraft(),
-          intro: loadIntroState(),
-          topbarNode: document.getElementById("topbar-shot-root"),
-
-          frontNode: document.getElementById("pdf-front-sketch"),
-          backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
-          backUrlFallback: showBack ? backCandidateUrl : null,
-
-          plateNodes: plateNodesLocal,
-          plateUrlFallbacks: plateUrlFallbacksLocal,
-
-          orderText,
-          includeAttachedPhotos: false
-        } as any);
-
-        const mailRes = await sendPdfToEmailMultipart(pdfBlob, {
-          orderNo: orderNoCur,
-          subject: `Р—Р°СЏРІРєР° в„–${orderNoCur || "вЂ”"} (PDF)`,
-          text: orderText
-        });
-
-        if (!mailRes.ok) warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${mailRes.error || "РѕС€РёР±РєР°"}`);
-      } catch (e: any) {
-        warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${String(e?.message || e)}`);
-      }
-      // === EMAIL END ===
-
-
-      // === EMAIL: РѕС‚РїСЂР°РІР»СЏРµРј PDF РЅР° РїРѕС‡С‚Сѓ РјРµРЅРµРґР¶РµСЂРѕРІ ===
       try {
         const orderText = buildOrderText();
 
@@ -1640,7 +1603,6 @@ if (plateEnabled && p1PreviewUrl) {
 </div>
   );
 }
-
 
 
 

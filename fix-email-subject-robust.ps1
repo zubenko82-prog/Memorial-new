@@ -1,31 +1,28 @@
-# patch-review-send-email.ps1
-# Делает бэкап ReviewAndSendStep.tsx и патчит: после Telegram-отправки отправляет PDF на почту через /api/email (multipart).
-# Запускать из корня репозитория (где есть папка apps).
+# fix-email-subject-robust.ps1
+# Делает бэкап и ПРИНУДИТЕЛЬНО добавляет/заменяет email-блок после endMarkerText(...)
+# без поиска sendPdfToEmailMultipart вызова.
+# Плюс гарантирует helper sendPdfToEmailMultipart (если нет) и ставит includeAttachedPhotos:false для email,
+# чтобы не упираться в FUNCTION_PAYLOAD_TOO_LARGE.
 
 $ErrorActionPreference = "Stop"
 
 $File = "apps/web/src/screens/ReviewAndSendStep.tsx"
-if (!(Test-Path $File)) {
-  throw "File not found: $File"
-}
+if (!(Test-Path $File)) { throw "File not found: $File" }
 
-# --- backup ---
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backup = "$File.bak.$stamp"
 Copy-Item $File $backup -Force
 Write-Host "Backup created: $backup"
 
-# --- read ---
 $src = Get-Content $File -Raw -Encoding UTF8
 
-# --- 1) insert helper function sendPdfToEmailMultipart (only if absent) ---
-if ($src -notmatch "sendPdfToEmailMultipart") {
-
+# --- ensure helper exists ---
+if ($src -notmatch "async function sendPdfToEmailMultipart") {
   $needle = "async function sendManagerPhoto"
   $idx = $src.IndexOf($needle)
   if ($idx -lt 0) { throw "Cannot find insertion point near: $needle" }
 
-  $insertBlock = @'
+  $helper = @'
   async function sendPdfToEmailMultipart(pdfBlob: Blob, meta: { orderNo: string; subject: string; text: string }): Promise<{ ok: boolean; error?: string }> {
     try {
       const fd = new FormData();
@@ -39,9 +36,7 @@ if ($src -notmatch "sendPdfToEmailMultipart") {
       const resp = await fetch("/api/email", { method: "POST", body: fd });
       const raw = await resp.text().catch(() => "");
       let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {}
+      try { json = raw ? JSON.parse(raw) : null; } catch {}
       if (resp.ok && json?.ok) return { ok: true };
       return { ok: false, error: json?.error || raw || resp.statusText };
     } catch (e: any) {
@@ -51,24 +46,29 @@ if ($src -notmatch "sendPdfToEmailMultipart") {
 
 '@
 
-  $src = $src.Substring(0, $idx) + $insertBlock + $src.Substring($idx)
-  Write-Host "Inserted sendPdfToEmailMultipart() helper."
+  $src = $src.Substring(0, $idx) + $helper + $src.Substring($idx)
+  Write-Host "Inserted helper sendPdfToEmailMultipart()."
 } else {
-  Write-Host "sendPdfToEmailMultipart() already exists; skip insert."
+  Write-Host "Helper exists; skip."
 }
 
-# --- 2) insert email sending block after end marker (only if absent) ---
-if ($src -notmatch "sendPdfToEmailMultipart\(") {
-  throw "Unexpected: helper name not found after insert."
-}
+# --- remove any old email block (best-effort) ---
+# Удаляем кусок между комментариями, если он есть
+$src = [regex]::Replace(
+  $src,
+  "(?s)\r?\n\s*//\s*===\s*EMAIL:.*?\r?\n\s*//\s*===\s*EMAIL END\s*===\s*\r?\n",
+  "`r`n"
+)
 
-if ($src -notmatch "Email не отправлен") {
-  $endMarker = 'await sendManagerMessage(endMarkerText(orderNoCur));'
-  $idx2 = $src.IndexOf($endMarker)
-  if ($idx2 -lt 0) { throw "Cannot find end marker line: $endMarker" }
+# --- insert fresh email block right after end marker line ---
+$endMarker = "await sendManagerMessage(endMarkerText(orderNoCur));"
+$pos = $src.IndexOf($endMarker)
+if ($pos -lt 0) { throw "Cannot find end marker line: $endMarker" }
+$insertPos = $pos + $endMarker.Length
 
-  $emailBlock = @'
+$emailBlock = @'
       // === EMAIL: отправляем PDF на почту менеджеров ===
+      // (лёгкий PDF, без фото, чтобы не упираться в лимиты Vercel по размеру запроса)
       try {
         const orderText = buildOrderText();
 
@@ -88,7 +88,7 @@ if ($src -notmatch "Email не отправлен") {
           plateUrlFallbacks: plateUrlFallbacksLocal,
 
           orderText,
-          includeAttachedPhotos: true
+          includeAttachedPhotos: false
         } as any);
 
         const mailRes = await sendPdfToEmailMultipart(pdfBlob, {
@@ -101,17 +101,13 @@ if ($src -notmatch "Email не отправлен") {
       } catch (e: any) {
         warnings.push(`Email не отправлен: ${String(e?.message || e)}`);
       }
+      // === EMAIL END ===
 
 '@
 
-  $insertPos = $idx2 + $endMarker.Length
-  $src = $src.Substring(0, $insertPos) + "`r`n`r`n" + $emailBlock + $src.Substring($insertPos)
-  Write-Host "Inserted email sending block after end marker."
-} else {
-  Write-Host "Email block seems already present (matched 'Email не отправлен'); skip insert."
-}
+$src = $src.Substring(0, $insertPos) + "`r`n`r`n" + $emailBlock + $src.Substring($insertPos)
+Write-Host "Inserted fresh email block after end marker."
 
-# --- write back ---
 Set-Content -Path $File -Value $src -Encoding UTF8
 Write-Host "Patched: $File"
 Write-Host "Done."
