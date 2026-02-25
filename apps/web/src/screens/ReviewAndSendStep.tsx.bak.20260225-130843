@@ -1,4 +1,4 @@
-﻿// src/screens/ReviewAndSendStep.tsx
+// src/screens/ReviewAndSendStep.tsx
 //
 // Шаг «Обзор и подтверждение»
 //
@@ -522,29 +522,7 @@ const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToS
       return { ok: false, error: String(e?.message || e) };
     }}
 
-    async function sendPdfToEmailMultipart(pdfBlob: Blob, meta: { orderNo: string; subject: string; text: string }): Promise<{ ok: boolean; error?: string }> {
-    try {
-      const fd = new FormData();
-      fd.append("action", "send_pdf");
-      fd.append("orderNo", meta.orderNo || "");
-      fd.append("subject", meta.subject || "");
-      fd.append("text", meta.text || "");
-      fd.append("filename", `order-${meta.orderNo || Date.now()}.pdf`);
-      fd.append("file", new File([pdfBlob], `order-${meta.orderNo || Date.now()}.pdf`, { type: "application/pdf" }));
-
-      const resp = await fetch("/api/email", { method: "POST", body: fd });
-      const raw = await resp.text().catch(() => "");
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {}
-      if (resp.ok && json?.ok) return { ok: true };
-      return { ok: false, error: json?.error || raw || resp.statusText };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
-  }
-async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: string }> {
+  async function sendManagerPhoto(fd: FormData): Promise<{ ok: boolean; error?: string }> {
     try {
       fd.append("action", "manager_photo");
       const resp = await fetch("/api/tg", { method: "POST", body: fd });
@@ -1113,41 +1091,6 @@ if (plateEnabled && p1PreviewUrl) {
 
       await sendManagerMessage(endMarkerText(orderNoCur));
 
-      // === EMAIL: РѕС‚РїСЂР°РІР»СЏРµРј PDF РЅР° РїРѕС‡С‚Сѓ РјРµРЅРµРґР¶РµСЂРѕРІ ===
-      try {
-        const orderText = buildOrderText();
-
-        const plateNodesLocal = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
-        const plateUrlFallbacksLocal = showPlate ? plateToShow.map((p) => p.url) : [];
-
-        const pdfBlob = await generateOrderPdfShots({
-          draft: loadOrderDraft(),
-          intro: loadIntroState(),
-          topbarNode: document.getElementById("topbar-shot-root"),
-
-          frontNode: document.getElementById("pdf-front-sketch"),
-          backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
-          backUrlFallback: showBack ? backCandidateUrl : null,
-
-          plateNodes: plateNodesLocal,
-          plateUrlFallbacks: plateUrlFallbacksLocal,
-
-          orderText,
-          includeAttachedPhotos: true
-        } as any);
-
-        const mailRes = await sendPdfToEmailMultipart(pdfBlob, {
-          orderNo: orderNoCur,
-          subject: `Р—Р°СЏРІРєР° в„–${orderNoCur || "вЂ”"} (PDF)`,
-          text: orderText
-        });
-
-        if (!mailRes.ok) warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${mailRes.error || "РѕС€РёР±РєР°"}`);
-      } catch (e: any) {
-        warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${String(e?.message || e)}`);
-      }
-
-
       setSentOk(true);
       if (warnings.length) setLastWarnings(warnings);
       setUploadProgress(100);
@@ -1603,7 +1546,6 @@ if (plateEnabled && p1PreviewUrl) {
 </div>
   );
 }
-
 
 
 

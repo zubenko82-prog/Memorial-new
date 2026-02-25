@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.27",
+    "@types/nodemailer": "^7.0.11",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vercel/node": "^5.5.33",
@@ -20,6 +21,7 @@
     "vite": "^5.4.21"
   },
   "dependencies": {
+    "nodemailer": "^8.0.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   }
