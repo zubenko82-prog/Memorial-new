@@ -50,13 +50,12 @@ async function sendMailWithPdf(params: { subject: string; text: string; filename
   });
 
   await transporter.sendMail({
-    from,
-    to,
-    subject,
-    text,
-    attachments: [{ filename, content: params.pdf, contentType: "application/pdf" }]
-  });
-}
+  from,
+  to,
+  subject: params.subject,
+  text: params.text,
+  attachments: [{ filename: params.filename, content: params.pdf, contentType: "application/pdf" }]
+});
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   cors(res);

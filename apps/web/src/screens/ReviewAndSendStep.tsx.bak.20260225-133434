@@ -1157,7 +1157,39 @@ if (plateEnabled && p1PreviewUrl) {
         const plateNodesLocal = showPlate ? plateToShow.map((p) => document.getElementById(`pdf-plate-sketch-${p.index}`)) : [];
         const plateUrlFallbacksLocal = showPlate ? plateToShow.map((p) => p.url) : [];
 
-        await notifyUserAfterSend(orderNoCur);
+        const pdfBlob = await generateOrderPdfShots({
+          draft: loadOrderDraft(),
+          intro: loadIntroState(),
+          topbarNode: document.getElementById("topbar-shot-root"),
+
+          frontNode: document.getElementById("pdf-front-sketch"),
+          backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
+          backUrlFallback: showBack ? backCandidateUrl : null,
+
+          plateNodes: plateNodesLocal,
+          plateUrlFallbacks: plateUrlFallbacksLocal,
+
+          orderText,
+          includeAttachedPhotos: true
+        } as any);
+
+        const mailRes = await sendPdfToEmailMultipart(pdfBlob, {
+          orderNo: orderNoCur,
+          subject: `Р—Р°СЏРІРєР° в„–${orderNoCur || "вЂ”"} (PDF)`,
+          text: orderText
+        });
+
+        if (!mailRes.ok) warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${mailRes.error || "РѕС€РёР±РєР°"}`);
+      } catch (e: any) {
+        warnings.push(`Email РЅРµ РѕС‚РїСЂР°РІР»РµРЅ: ${String(e?.message || e)}`);
+      }
+
+
+      setSentOk(true);
+      if (warnings.length) setLastWarnings(warnings);
+      setUploadProgress(100);
+
+      await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
     }};
@@ -1608,8 +1640,6 @@ if (plateEnabled && p1PreviewUrl) {
 </div>
   );
 }
-
-
 
 
 
