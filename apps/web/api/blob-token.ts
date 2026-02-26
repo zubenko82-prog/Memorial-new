@@ -4,21 +4,29 @@ import { handleUpload } from "@vercel/blob/client";
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const token = process.env.BLOB_READ_WRITE_TOKEN;
-    if (!token) {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: false, error: "BLOB_READ_WRITE_TOKEN missing" }));
+
+    // Быстрая диагностика GET (чтобы видеть env и что роут живой)
+    if (req.method === "GET") {
+      res.status(200).json({
+        ok: true,
+        method: "GET",
+        hasToken: !!token,
+        tokenLen: token ? token.length : 0
+      });
       return;
     }
 
-    return handleUpload({
-      req,
-      res,
-      token
-    });
+    if (!token) {
+      res.status(500).json({ ok: false, error: "BLOB_READ_WRITE_TOKEN missing" });
+      return;
+    }
+
+    return handleUpload({ req, res, token });
   } catch (e: any) {
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: false, error: e?.message || String(e) }));
+    res.status(500).json({
+      ok: false,
+      error: e?.message || String(e),
+      stack: String(e?.stack || "").slice(0, 3000)
+    });
   }
 }
