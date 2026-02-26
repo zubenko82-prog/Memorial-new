@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import nodemailer from "nodemailer";
-import { del, head, download } from "@vercel/blob";
+import { del, head } from "@vercel/blob";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "email@diag3-private-download";
+const VERSION = "email@diag4-private-head-auth";
 
 function cors(res: VercelResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -24,33 +24,32 @@ function safeStr(x: any, max = 200_000) {
   return String(x ?? "").slice(0, max);
 }
 
+function blobToken(): string | null {
+  // в проектах встречаются разные имена
+  return (
+    process.env.BLOB_READ_WRITE_TOKEN ||
+    process.env.VERCEL_BLOB_READ_WRITE_TOKEN ||
+    process.env.BLOB_TOKEN ||
+    null
+  );
+}
+
 async function blobPathnameToBuffer(pathname: string, maxBytes: number) {
-  // 1) Нормальный путь для private: download() через SDK
-  try {
-    const result = await download(pathname);
-    const ab = await result.arrayBuffer();
-    const buf = Buffer.from(ab);
+  const info = await head(pathname);
 
-    const ct =
-      (result as any)?.contentType ||
-      (result as any)?.blob?.type ||
-      "application/octet-stream";
+  const headers: Record<string, string> = {};
+  const tok = blobToken();
+  if (tok) headers.authorization = `Bearer ${tok}`;
 
-    if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
-    return { buf, contentType: ct };
-  } catch (e: any) {
-    // 2) fallback: head()+fetch(signedUrl)
-    const info = await head(pathname);
-    const res = await fetch(info.url);
-    if (!res.ok) throw new Error(`BLOB_FETCH_FAILED ${res.status} ${res.statusText} pathname=${pathname}`);
+  const res = await fetch(info.url, { headers });
+  if (!res.ok) throw new Error(`BLOB_FETCH_FAILED ${res.status} ${res.statusText} pathname=${pathname}`);
 
-    const ct = res.headers.get("content-type") || info.contentType || "application/octet-stream";
-    const ab = await res.arrayBuffer();
-    const buf = Buffer.from(ab);
+  const ct = res.headers.get("content-type") || info.contentType || "application/octet-stream";
+  const ab = await res.arrayBuffer();
+  const buf = Buffer.from(ab);
 
-    if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
-    return { buf, contentType: ct };
-  }
+  if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
+  return { buf, contentType: ct };
 }
 
 async function sendMailWithAttachments(params: {
@@ -96,7 +95,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         SMTP_USER: !!process.env.SMTP_USER,
         SMTP_PASS: process.env.SMTP_PASS ? `len=${process.env.SMTP_PASS.length}` : null,
         MAIL_FROM: !!process.env.MAIL_FROM,
-        MAIL_TO: !!process.env.MAIL_TO
+        MAIL_TO: !!process.env.MAIL_TO,
+        BLOB_TOKEN_PRESENT: !!blobToken()
       };
       return res.status(200).json({ ok: true, version: VERSION, env });
     } catch (e: any) {
@@ -136,19 +136,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
     let total = 0;
 
-    // PDF
     const pdfFetched = await blobPathnameToBuffer(pdfPathname, MAX_ONE_FILE);
     total += pdfFetched.buf.length;
     if (total > MAX_TOTAL_BYTES) throw new Error(`TOTAL_ATTACHMENTS_TOO_LARGE ${total} > ${MAX_TOTAL_BYTES}`);
-
     attachments.push({ filename: pdfFilename, content: pdfFetched.buf, contentType: "application/pdf" });
 
-    // Photos
     for (let i = 0; i < photoPathnames.length; i++) {
       const fetched = await blobPathnameToBuffer(photoPathnames[i], MAX_ONE_FILE);
       total += fetched.buf.length;
       if (total > MAX_TOTAL_BYTES) throw new Error(`TOTAL_ATTACHMENTS_TOO_LARGE ${total} > ${MAX_TOTAL_BYTES}`);
-
       attachments.push({
         filename: photoFilenames[i] || `photo-${i + 1}.jpg`,
         content: fetched.buf,
@@ -158,7 +154,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await sendMailWithAttachments({ subject, text, attachments });
 
-    // cleanup best-effort
     try {
       await del(pdfPathname);
     } catch {}
@@ -171,12 +166,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       ok: true,
       version: VERSION,
-      sent: {
-        attachments: attachments.length,
-        totalBytes: total,
-        pdfBytes: pdfFetched.buf.length,
-        photos: photoPathnames.length
-      }
+      sent: { attachments: attachments.length, totalBytes: total, pdfBytes: pdfFetched.buf.length, photos: photoPathnames.length }
     });
   } catch (e: any) {
     return res.status(500).json({
