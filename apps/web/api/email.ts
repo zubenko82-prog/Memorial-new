@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import nodemailer from "nodemailer";
-import { del, head } from "@vercel/blob";
+import { del, head, download } from "@vercel/blob";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "email@diag2-never-crash";
+const VERSION = "email@diag3-private-download";
 
 function cors(res: VercelResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
@@ -24,22 +24,33 @@ function safeStr(x: any, max = 200_000) {
   return String(x ?? "").slice(0, max);
 }
 
-/**
- * Для private Blob хранилища нельзя просто fetch(pdfUrl) — нужны подписанные URL.
- * head(pathname) возвращает info.url (signed), который можно fetch'ить.
- */
 async function blobPathnameToBuffer(pathname: string, maxBytes: number) {
-  const info = await head(pathname);
+  // 1) Нормальный путь для private: download() через SDK
+  try {
+    const result = await download(pathname);
+    const ab = await result.arrayBuffer();
+    const buf = Buffer.from(ab);
 
-  const res = await fetch(info.url);
-  if (!res.ok) throw new Error(`BLOB_FETCH_FAILED ${res.status} ${res.statusText} pathname=${pathname}`);
+    const ct =
+      (result as any)?.contentType ||
+      (result as any)?.blob?.type ||
+      "application/octet-stream";
 
-  const ct = res.headers.get("content-type") || info.contentType || "application/octet-stream";
-  const ab = await res.arrayBuffer();
-  const buf = Buffer.from(ab);
+    if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
+    return { buf, contentType: ct };
+  } catch (e: any) {
+    // 2) fallback: head()+fetch(signedUrl)
+    const info = await head(pathname);
+    const res = await fetch(info.url);
+    if (!res.ok) throw new Error(`BLOB_FETCH_FAILED ${res.status} ${res.statusText} pathname=${pathname}`);
 
-  if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
-  return { buf, contentType: ct };
+    const ct = res.headers.get("content-type") || info.contentType || "application/octet-stream";
+    const ab = await res.arrayBuffer();
+    const buf = Buffer.from(ab);
+
+    if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
+    return { buf, contentType: ct };
+  }
 }
 
 async function sendMailWithAttachments(params: {
@@ -77,7 +88,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method === "HEAD") return res.status(200).end();
 
-  // диагностический GET
   if (req.method === "GET") {
     try {
       const env = {
@@ -86,10 +96,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         SMTP_USER: !!process.env.SMTP_USER,
         SMTP_PASS: process.env.SMTP_PASS ? `len=${process.env.SMTP_PASS.length}` : null,
         MAIL_FROM: !!process.env.MAIL_FROM,
-        MAIL_TO: !!process.env.MAIL_TO,
-
-        EMAIL_MAX_TOTAL_BYTES: process.env.EMAIL_MAX_TOTAL_BYTES || null,
-        EMAIL_MAX_ONE_FILE_BYTES: process.env.EMAIL_MAX_ONE_FILE_BYTES || null
+        MAIL_TO: !!process.env.MAIL_TO
       };
       return res.status(200).json({ ok: true, version: VERSION, env });
     } catch (e: any) {
@@ -111,7 +118,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const subject = safeStr(body.subject || `Заявка №${orderNo} (PDF)`, 250);
     const text = safeStr(body.text || `Заявка №${orderNo}\n`, 200_000);
 
-    // Для private store используем pathname (pdfUrl может быть бесполезен)
     const pdfPathname = safeStr(body.pdfPathname, 4000);
     const pdfFilename = safeStr(body.pdfFilename || `order-${orderNo}.pdf`, 180);
 
@@ -152,7 +158,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await sendMailWithAttachments({ subject, text, attachments });
 
-    // cleanup (best-effort)
+    // cleanup best-effort
     try {
       await del(pdfPathname);
     } catch {}
