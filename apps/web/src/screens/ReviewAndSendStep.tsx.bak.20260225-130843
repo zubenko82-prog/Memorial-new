@@ -1346,208 +1346,235 @@ if (plateEnabled && p1PreviewUrl) {
       )}
              
             {/* Меню "Новая заявка" */}
-      {newOrderOpen && (
-        <div>
-          <div
-            aria-hidden
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 2147483600,
-              background: "rgba(12, 8, 8, 0.5)"
-            }}
-            onClick={() => setNewOrderOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            style={{
-              background: "#181922",
-              color: "#fff",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
-              boxSizing: "border-box",
-              padding: 24,
-              maxWidth: 420,
-              margin: "0 auto",
-              width: "100%",
-              position: "fixed",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              zIndex: 2147483601,
-              fontSize: 17,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-              alignItems: "stretch"
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ fontWeight: 700, fontSize: 21, textAlign: "center", marginBottom: 12 }}>
-              Начать новую заявку?
-            </div>
-            <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Стереть все (очистить полностью)</button>
-            <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Стереть все, оставить заказчика</button>
-           <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Оставить все поля, новый номер заказа</button>
-            <button
-  style={glassButtonStyle("sm")}
-  onClick={() => { setNewOrderOpen(false); setShowWipeWarn("wipeAll"); }}
->Отмена</button>
-          </div>
-        </div>
-      )}
+{newOrderOpen && (
+  <div>
+    <div
+      aria-hidden
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 2147483600,
+        background: "rgba(12, 8, 8, 0.5)"
+      }}
+      onClick={() => setNewOrderOpen(false)}
+    />
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        background: "#181922",
+        color: "#fff",
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
+        boxSizing: "border-box",
+        padding: 24,
+        maxWidth: 420,
+        margin: "0 auto",
+        width: "100%",
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 2147483601,
+        fontSize: 17,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        alignItems: "stretch"
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontWeight: 700, fontSize: 21, textAlign: "center", marginBottom: 12 }}>
+        Начать новую заявку?
+      </div>
 
-      {/* Предупреждение о необходимости сначала скачать PDF */}
-      {showWipeWarn && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10002,
-            background: "rgba(0,0,0,0.32)",
-            display: "flex",
-            alignItems: "flex-end",
-          }}
-          onClick={() => setShowWipeWarn(null)}
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setNewOrderOpen(false);
+          setShowWipeWarn("wipeAll");
+        }}
+      >
+        Стереть все (очистить полностью)
+      </button>
+
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setNewOrderOpen(false);
+          setShowWipeWarn("wipeKeepCustomer");
+        }}
+      >
+        Стереть все, оставить заказчика
+      </button>
+
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setNewOrderOpen(false);
+          setShowWipeWarn("wipeKeepAll");
+        }}
+      >
+        Оставить все поля, новый номер заказа
+      </button>
+
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setNewOrderOpen(false);
+        }}
+      >
+        Отмена
+      </button>
+    </div>
+  </div>
+)}
+
+{/* Предупреждение о необходимости сначала скачать PDF */}
+{showWipeWarn && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10002,
+      background: "rgba(0,0,0,0.32)",
+      display: "flex",
+      alignItems: "flex-end"
+    }}
+    onClick={() => setShowWipeWarn(null)}
+  >
+    <div
+      style={{
+        background: "#181922",
+        color: "#fff",
+        borderTopLeftRadius: 18,
+        borderTopRightRadius: 18,
+        padding: 24,
+        margin: "0 auto",
+        maxWidth: 420,
+        width: "100%",
+        boxShadow: "0 -8px 38px #0006",
+        textAlign: "center",
+        fontSize: 17,
+        display: "flex",
+        flexDirection: "column",
+        gap: 18,
+        alignItems: "center"
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>Сначала сохраните PDF</div>
+      <div style={{ marginBottom: 0, fontSize: 15 }}>
+        Перед началом новой заявки{" "}
+        <span style={{ color: "#c00" }}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа&nbsp;—
+        иначе ваши данные будут безвозвратно утеряны.
+      </div>
+
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          setShowWipeWarn(null);
+          void handleSavePdf();
+        }}
+      >
+        Скачать PDF
+      </button>
+
+      <button
+        style={glassButtonStyle("sm")}
+        onClick={() => {
+          const mode = showWipeWarn; // зафиксировать до setShowWipeWarn(null)
+          setShowWipeWarn(null);
+
+          if (mode === "wipeAll") {
+            void hardResetAll({ preserveThemeKey: true });
+            return;
+          }
+          if (mode === "wipeKeepCustomer") {
+            onNewOrderWipeKeepCustomer?.();
+            return;
+          }
+          if (mode === "wipeKeepAll") {
+            onNewOrderKeepAllNewNo?.();
+            return;
+          }
+        }}
+      >
+        Продолжить с потерей данных
+      </button>
+
+      <button style={glassButtonStyle("sm")} onClick={() => setShowWipeWarn(null)}>
+        Отмена
+      </button>
+    </div>
+  </div>
+)}
+
+{/* Подтверждение "Отправить заказ менеджерам в Telegram" */}
+{confirmOpen && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10000,
+      background: "rgba(0,0,0,0.47)",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "center"
+    }}
+    onClick={() => {
+      if (!isSending && !uploading) setConfirmOpen(false);
+    }}
+  >
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        background: "#181922",
+        color: "#fff",
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        padding: 24,
+        boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
+        margin: "0 auto",
+        maxWidth: 420,
+        width: "100%",
+        fontSize: 17,
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        position: "relative"
+      }}
+    >
+      <div style={{ position: "absolute", top: 10, right: 12 }}>
+        <button
+          onClick={() => setConfirmOpen(false)}
+          title="Закрыть"
+          style={{ ...glassButtonStyle("sm"), width: 36, height: 36, fontWeight: 600, fontSize: 24, padding: 0, lineHeight: 1 }}
+          disabled={isSending || uploading}
         >
-          <div
-            style={{
-              background: "#181922",
-              color: "#fff",
-              borderTopLeftRadius: 18,
-              borderTopRightRadius: 18,
-              padding: 24,
-              margin: "0 auto",
-              maxWidth: 420,
-              width: "100%",
-              boxShadow: "0 -8px 38px #0006",
-              textAlign: "center",
-              fontSize: 17,
-              display: "flex",
-              flexDirection: "column",
-              gap: 18,
-              alignItems: "center",
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{fontWeight:700, marginBottom:4}}>Сначала сохраните PDF</div>
-            <div style={{marginBottom:0, fontSize:15}}>
-              Перед началом новой заявки <span style={{color:'#c00'}}>настоятельно рекомендуем</span> скачать и сохранить PDF заказа&nbsp;—
-              иначе ваши данные будут безвозвратно утеряны.
-            </div>
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={() => {
-                setShowWipeWarn(null);
-                handleSavePdf();
-              }}
-            >Скачать PDF</button>
-            <button
-  style={glassButtonStyle("sm")}
-  onClick={() => {
-    setShowWipeWarn(null);
+          ×
+        </button>
+      </div>
 
-    if (showWipeWarn === "wipeAll") {
-      void hardResetAll({ preserveThemeKey: false });
-      return;
-    }
-    if (showWipeWarn === "wipeKeepCustomer") onNewOrderWipeKeepCustomer?.();
-    if (showWipeWarn === "wipeKeepAll") onNewOrderKeepAllNewNo?.();
-  }}
->
-  Продолжить с потерей данных
-</button>
+      <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 5 }}>Отправить заказ менеджерам?</div>
 
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={() => setShowWipeWarn(null)}
-            >Отмена</button>
-          </div>
-        </div>
-      )}
+      <button style={glassButtonStyle("sm")} onClick={handleSend} disabled={isSending || uploading}>
+        {isSending || uploading ? "Отправляем…" : "Отправить"}
+      </button>
 
-      {/* Подтверждение "Отправить заказ менеджерам в Telegram" */}
-      {confirmOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10000,
-            background: "rgba(0,0,0,0.47)",
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "center"
-          }}
-          onClick={() => {
-            if (!isSending && !uploading) setConfirmOpen(false);
-          }}
-        >
-          <div
-              onClick={e => e.stopPropagation()}
-            style={{
-              background: "#181922",
-              color: "#fff",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              padding: 24,
-              boxShadow: "0 -20px 60px rgba(0,0,0,0.57)",
-              margin: "0 auto",
-              maxWidth: 420,
-              width: "100%",
-              fontSize: 17,
-              display: "flex",
-              flexDirection: "column",
-              gap: 14,
-              position: "relative"
-            }}
-          >
-            <div style={{ position: "absolute", top: 10, right: 12 }}>
-              <button
-                onClick={() => setConfirmOpen(false)}
-                title="Закрыть"
-                style={{ ...glassButtonStyle("sm"), width: 36, height: 36, fontWeight: 600, fontSize: 24, padding: 0, lineHeight: 1 }}
-                disabled={isSending || uploading}
-              >×</button>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 5 }}>
-              Отправить заказ менеджерам?
-            </div>
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={handleSend}
-              disabled={isSending || uploading}
-            >
-              {isSending || uploading ? "Отправляем…" : "Отправить"}
-            </button>
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={() => setConfirmOpen(false)}
-              disabled={isSending || uploading}
-            >
-              Отмена
-            </button>
-          </div>
-        </div>
-      )}
+      <button style={glassButtonStyle("sm")} onClick={() => setConfirmOpen(false)} disabled={isSending || uploading}>
+        Отмена
+      </button>
+    </div>
+  </div>
+)}
 
-  {(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
+{(isSending || isSaving || uploading) && <BusyOverlay text={overlayText} />}
 
 </div>
-  );
+);
 }
-
-
 
 
 

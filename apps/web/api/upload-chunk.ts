@@ -51,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const buf = await fs.promises.readFile(filePath);
 
       const putRes = await put(p, buf, {
-        access: "public",
+        access: "private",
         contentType: ct,
         addRandomSuffix: true
       });
