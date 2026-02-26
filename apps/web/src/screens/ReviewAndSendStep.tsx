@@ -1534,7 +1534,7 @@ export default function ReviewAndSendStep({
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заказ отправлен</div>
             <div style={{ fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
-              {`Спасибо${customerName ? `, ${customerName}` : ""}! Мы перезвоним вам по указанному номеру в ближайшее время для уточнения деталей. Сохраните PDF заказа, при необходимости сможете отправить менеджеру.`}
+              {`${customerName ? `, ${customerName}` : ""}, спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.<br>Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.`}
             </div>
 
             <div style={{ ...sectionBox, marginBottom: 10 }}>

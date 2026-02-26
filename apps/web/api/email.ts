@@ -114,60 +114,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ ok: false, version: VERSION, error: `Unknown action: ${action}` });
     }
 
-    const orderNo = safeStr(body.orderNo || "—", 80).trim() || "—";
-    const subject = safeStr(body.subject || `Заявка №${orderNo} (PDF)`, 250);
-    const text = safeStr(body.text || `Заявка №${orderNo}\n`, 200_000);
+    // ...внутри handler, после чтения body/action/subject/text
 
-    const pdfPathname = safeStr(body.pdfPathname, 4000);
-    const pdfFilename = safeStr(body.pdfFilename || `order-${orderNo}.pdf`, 180);
+const orderNo = safeStr(body.orderNo || "—", 80).trim() || "—";
+const subject = safeStr(body.subject || `Заявка №${orderNo} (PDF)`, 250);
+const text = safeStr(body.text || `Заявка №${orderNo}\n`, 200_000);
 
-    const photoPathnames: string[] = Array.isArray(body.photoPathnames)
-      ? body.photoPathnames.map((x: any) => safeStr(x, 4000)).filter(Boolean)
-      : [];
-    const photoFilenames: string[] = Array.isArray(body.photoFilenames)
-      ? body.photoFilenames.map((x: any) => safeStr(x, 200)).filter(Boolean)
-      : [];
+const pdfPathname = safeStr(body.pdfPathname, 4000);
+const pdfFilename = safeStr(body.pdfFilename || `order-${orderNo}.pdf`, 180);
 
-    if (!pdfPathname) return res.status(400).json({ ok: false, version: VERSION, error: "pdfPathname required" });
+if (!pdfPathname) {
+  return res.status(400).json({ ok: false, version: VERSION, error: "pdfPathname required" });
+}
 
-    const MAX_TOTAL_BYTES = Number(process.env.EMAIL_MAX_TOTAL_BYTES || String(22 * 1024 * 1024));
-    const MAX_ONE_FILE = Number(process.env.EMAIL_MAX_ONE_FILE_BYTES || String(12 * 1024 * 1024));
+const MAX_ONE_FILE = Number(process.env.EMAIL_MAX_ONE_FILE_BYTES || String(12 * 1024 * 1024));
 
-    const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
-    let total = 0;
+const pdfFetched = await blobPathnameToBuffer(pdfPathname, MAX_ONE_FILE);
 
-    const pdfFetched = await blobPathnameToBuffer(pdfPathname, MAX_ONE_FILE);
-    total += pdfFetched.buf.length;
-    if (total > MAX_TOTAL_BYTES) throw new Error(`TOTAL_ATTACHMENTS_TOO_LARGE ${total} > ${MAX_TOTAL_BYTES}`);
-    attachments.push({ filename: pdfFilename, content: pdfFetched.buf, contentType: "application/pdf" });
+await sendMailWithAttachments({
+  subject,
+  text,
+  attachments: [{ filename: pdfFilename, content: pdfFetched.buf, contentType: "application/pdf" }]
+});
 
-    for (let i = 0; i < photoPathnames.length; i++) {
-      const fetched = await blobPathnameToBuffer(photoPathnames[i], MAX_ONE_FILE);
-      total += fetched.buf.length;
-      if (total > MAX_TOTAL_BYTES) throw new Error(`TOTAL_ATTACHMENTS_TOO_LARGE ${total} > ${MAX_TOTAL_BYTES}`);
-      attachments.push({
-        filename: photoFilenames[i] || `photo-${i + 1}.jpg`,
-        content: fetched.buf,
-        contentType: fetched.contentType
-      });
-    }
+// cleanup
+try {
+  await del(pdfPathname);
+} catch {}
 
-    await sendMailWithAttachments({ subject, text, attachments });
-
-    try {
-      await del(pdfPathname);
-    } catch {}
-    for (const p of photoPathnames) {
-      try {
-        await del(p);
-      } catch {}
-    }
-
-    return res.status(200).json({
-      ok: true,
-      version: VERSION,
-      sent: { attachments: attachments.length, totalBytes: total, pdfBytes: pdfFetched.buf.length, photos: photoPathnames.length }
-    });
+return res.status(200).json({
+  ok: true,
+  version: VERSION,
+  sent: { attachments: 1, pdfBytes: pdfFetched.buf.length }
+});
   } catch (e: any) {
     return res.status(500).json({
       ok: false,
