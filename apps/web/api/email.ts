@@ -4,18 +4,14 @@ import { del } from "@vercel/blob";
 
 export const config = { api: { bodyParser: true } };
 
-const VERSION = "email@2026-02-25+blob+attachments+fio+diag1";
+const VERSION = "email@diag2-never-crash";
 
 function cors(res: VercelResponse, json = false) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOW_ORIGIN || "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS,HEAD");
+  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS,HEAD,GET");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Cache-Control", "no-store");
   if (json) res.setHeader("Content-Type", "application/json; charset=utf-8");
-}
-
-function isDebug() {
-  return String(process.env.EMAIL_DEBUG || "").trim() === "1";
 }
 
 function mustEnv(name: string): string {
@@ -24,15 +20,14 @@ function mustEnv(name: string): string {
   return v;
 }
 
-function safeStr(x: any, max = 50_000) {
+function safeStr(x: any, max = 200_000) {
   return String(x ?? "").slice(0, max);
 }
 
-async function fetchToBuffer(url: string, maxBytes: number): Promise<{ buf: Buffer; contentType: string }> {
+async function fetchToBuffer(url: string, maxBytes: number) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`FETCH_FAILED ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`FETCH_FAILED ${res.status} ${res.statusText} url=${url}`);
   const ct = res.headers.get("content-type") || "application/octet-stream";
-
   const ab = await res.arrayBuffer();
   const buf = Buffer.from(ab);
   if (buf.length > maxBytes) throw new Error(`FILE_TOO_LARGE ${buf.length} > ${maxBytes}`);
@@ -70,21 +65,34 @@ async function sendMailWithAttachments(params: {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  cors(res);
+  cors(res, true);
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method === "HEAD") return res.status(200).end();
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST,OPTIONS,HEAD");
-    return res.status(405).end("Method Not Allowed");
+
+  // диагностический GET
+  if (req.method === "GET") {
+    try {
+      const env = {
+        SMTP_HOST: !!process.env.SMTP_HOST,
+        SMTP_PORT: !!process.env.SMTP_PORT,
+        SMTP_USER: !!process.env.SMTP_USER,
+        SMTP_PASS: process.env.SMTP_PASS ? `len=${process.env.SMTP_PASS.length}` : null,
+        MAIL_FROM: !!process.env.MAIL_FROM,
+        MAIL_TO: !!process.env.MAIL_TO
+      };
+      return res.status(200).json({ ok: true, version: VERSION, env });
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, version: VERSION, error: e?.message || String(e) });
+    }
   }
 
-  const debug = isDebug();
+  if (req.method !== "POST") return res.status(405).json({ ok: false, version: VERSION, error: "Method Not Allowed" });
 
   try {
     const body: any = req.body || {};
-    const action = safeStr(body.action || "send_blob", 64);
+    const action = safeStr(body.action || "", 64);
+
     if (action !== "send_blob") {
-      cors(res, true);
       return res.status(400).json({ ok: false, version: VERSION, error: `Unknown action: ${action}` });
     }
 
@@ -94,20 +102,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const pdfUrl = safeStr(body.pdfUrl, 4000);
     const pdfPathname = safeStr(body.pdfPathname, 4000);
-    const pdfFilename = safeStr(body.pdfFilename || `order-${orderNo}.pdf`, 180) || `order-${orderNo}.pdf`;
+    const pdfFilename = safeStr(body.pdfFilename || `order-${orderNo}.pdf`, 180);
 
     const photoUrls: string[] = Array.isArray(body.photoUrls) ? body.photoUrls.map((x: any) => safeStr(x, 4000)).filter(Boolean) : [];
     const photoPathnames: string[] = Array.isArray(body.photoPathnames) ? body.photoPathnames.map((x: any) => safeStr(x, 4000)).filter(Boolean) : [];
-    const photoFilenames: string[] = Array.isArray(body.photoFilenames) ? body.photoFilenames.map((x: any) => safeStr(x, 180)).filter(Boolean) : [];
+    const photoFilenames: string[] = Array.isArray(body.photoFilenames) ? body.photoFilenames.map((x: any) => safeStr(x, 200)).filter(Boolean) : [];
 
-    if (!pdfUrl || !pdfPathname) {
-      cors(res, true);
-      return res.status(400).json({ ok: false, version: VERSION, error: "pdfUrl/pdfPathname required" });
-    }
+    if (!pdfUrl || !pdfPathname) return res.status(400).json({ ok: false, version: VERSION, error: "pdfUrl/pdfPathname required" });
 
-    // Лимиты
-    const MAX_TOTAL_BYTES = Number(process.env.EMAIL_MAX_TOTAL_BYTES || String(22 * 1024 * 1024)); // ~22MB
-    const MAX_ONE_FILE = Number(process.env.EMAIL_MAX_ONE_FILE_BYTES || String(12 * 1024 * 1024)); // 12MB
+    const MAX_TOTAL_BYTES = Number(process.env.EMAIL_MAX_TOTAL_BYTES || String(22 * 1024 * 1024));
+    const MAX_ONE_FILE = Number(process.env.EMAIL_MAX_ONE_FILE_BYTES || String(12 * 1024 * 1024));
 
     const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
     let total = 0;
@@ -119,32 +123,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Photos
     for (let i = 0; i < photoUrls.length; i++) {
-      const url = photoUrls[i];
-      const fetched = await fetchToBuffer(url, MAX_ONE_FILE);
+      const fetched = await fetchToBuffer(photoUrls[i], MAX_ONE_FILE);
       total += fetched.buf.length;
-
       if (total > MAX_TOTAL_BYTES) throw new Error(`TOTAL_ATTACHMENTS_TOO_LARGE ${total} > ${MAX_TOTAL_BYTES}`);
-
-      const name = photoFilenames[i] || `photo-${i + 1}.jpg`;
-      attachments.push({ filename: name, content: fetched.buf, contentType: fetched.contentType });
-    }
-
-    try {
-      await sendMailWithAttachments({ subject, text, attachments });
-    } catch (e: any) {
-      cors(res, true);
-      return res.status(502).json({
-        ok: false,
-        version: VERSION,
-        error: e?.message || "SMTP error",
-        smtp: debug ? { code: e?.code, command: e?.command, response: e?.response, responseCode: e?.responseCode } : undefined,
-        diag: debug
-          ? { orderNo, subject, textLen: text.length, totalBytes: total, pdfBytes: pdfFetched.buf.length, photoCount: photoUrls.length }
-          : undefined
+      attachments.push({
+        filename: photoFilenames[i] || `photo-${i + 1}.jpg`,
+        content: fetched.buf,
+        contentType: fetched.contentType
       });
     }
 
-    // Удаление из Blob (временное хранение)
+    await sendMailWithAttachments({ subject, text, attachments });
+
+    // cleanup
     try {
       await del(pdfPathname);
     } catch {}
@@ -154,10 +145,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch {}
     }
 
-    cors(res, true);
-    return res.status(200).json({ ok: true, version: VERSION, totalBytes: total });
+    return res.status(200).json({
+      ok: true,
+      version: VERSION,
+      sent: { attachments: attachments.length, totalBytes: total, pdfBytes: pdfFetched.buf.length, photos: photoUrls.length }
+    });
   } catch (e: any) {
-    cors(res, true);
-    return res.status(500).json({ ok: false, version: VERSION, error: e?.message || "Internal error" });
+    return res.status(500).json({
+      ok: false,
+      version: VERSION,
+      error: e?.message || String(e),
+      stack: String(e?.stack || "").slice(0, 3000)
+    });
   }
 }
