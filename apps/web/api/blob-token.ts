@@ -5,13 +5,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const token = process.env.BLOB_READ_WRITE_TOKEN;
 
-    // Быстрая диагностика GET (чтобы видеть env и что роут живой)
+    // Диагностика: чтобы в браузере увидеть что функция вообще работает
     if (req.method === "GET") {
       res.status(200).json({
         ok: true,
         method: "GET",
         hasToken: !!token,
-        tokenLen: token ? token.length : 0
+        tokenLen: token ? token.length : 0,
+        // важно: покажем content-type запроса, чтобы понимать что приходит от sdk
+        contentType: String(req.headers["content-type"] || "")
       });
       return;
     }
@@ -21,6 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    // обязательно вернуть handleUpload
     return handleUpload({ req, res, token });
   } catch (e: any) {
     res.status(500).json({
