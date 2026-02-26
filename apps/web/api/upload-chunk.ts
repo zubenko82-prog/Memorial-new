@@ -9,26 +9,37 @@ function tmpPath(uploadId: string) {
   return path.join("/tmp", `upload-${uploadId}.bin`);
 }
 
-function safeName(name: string) {
+// санитизируем ИМЯ (сегмент), но не весь путь
+function safeSegment(name: string) {
   return String(name || "")
-    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/[\\/:*?"<>|]+/g, "_") // здесь / тоже заменяем, но это ОК для сегмента
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 180);
+}
+
+// нормализуем pathname, сохраняя "/" как разделитель
+function safePathname(input: string) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+
+  // убираем ведущие слэши, чтобы не было абсолютных путей
+  const noLead = raw.replace(/^\/+/, "");
+
+  // режем по "/", чистим каждый сегмент
+  const parts = noLead
+    .split("/")
+    .map((p) => safeSegment(p))
+    .filter(Boolean);
+
+  return parts.join("/");
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
   try {
-    const {
-      uploadId,
-      chunkBase64,
-      final,
-      pathname,
-      contentType,
-      originalName
-    } = (req.body || {}) as any;
+    const { uploadId, chunkBase64, final, pathname, contentType, originalName } = (req.body || {}) as any;
 
     if (!uploadId) return res.status(400).json({ ok: false, error: "uploadId required" });
 
@@ -44,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // finalize -> put to blob
     if (isFinal) {
-      const p = safeName(String(pathname || "").trim());
+      const p = safePathname(String(pathname || ""));
       if (!p) return res.status(400).json({ ok: false, error: "pathname required on final" });
 
       const ct = String(contentType || "application/octet-stream");
@@ -65,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ok: true,
         url: putRes.url,
         pathname: putRes.pathname,
-        name: safeName(String(originalName || "")) || undefined,
+        name: safeSegment(String(originalName || "")) || undefined,
         bytes: buf.length
       });
     }
