@@ -1532,9 +1532,9 @@ export default function ReviewAndSendStep({
       {(deliveryVisible || sentOk) && (
         <div ref={afterHintRef}>
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Заявка отправлена</div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Заказ отправлен</div>
             <div style={{ fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
-              {`Спасибо${customerName ? `, ${customerName}` : ""}! Сохраните PDF заказа, при необходимости сможете отправить менеджеру.`}
+              {`Спасибо${customerName ? `, ${customerName}` : ""}! Мы перезвоним вам по указанному номеру в ближайшее время для уточнения деталей. Сохраните PDF заказа, при необходимости сможете отправить менеджеру.`}
             </div>
 
             <div style={{ ...sectionBox, marginBottom: 10 }}>
