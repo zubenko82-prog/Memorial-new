@@ -1,11 +1,22 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { handleUpload } from "@vercel/blob/client";
 
-export const config = {
-  api: {
-    bodyParser: true // ВАЖНО: handleUpload ждёт req.body
+async function readJsonBody(req: VercelRequest): Promise<any> {
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    req.on("end", () => resolve());
+    req.on("error", (e) => reject(e));
+  });
+
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
   }
-};
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -29,6 +40,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!token) {
       res.status(500).json({ ok: false, error: "BLOB_READ_WRITE_TOKEN missing" });
       return;
+    }
+
+    // ВАЖНО: в @vercel/blob/client handleUpload ожидает req.body
+    const contentType = String(req.headers["content-type"] || "");
+    if (contentType.includes("application/json")) {
+      (req as any).body = await readJsonBody(req);
     }
 
     return await handleUpload({
