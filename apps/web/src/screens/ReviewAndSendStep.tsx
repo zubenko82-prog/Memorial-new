@@ -1442,8 +1442,11 @@ export default function ReviewAndSendStep({
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заказ отправлен</div>
             <div style={{ fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
-              {`${customerName ? ` ${customerName}` : ""}, спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.<br />Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.`}
-            </div>
+  {customerName ? `${customerName}, ` : ""}
+  спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.
+  <br />
+  Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.
+</div>
 
             {/* ===== "Статус доставки" как аккордеон, внутренности сохранены как в вашем коде ===== */}
             <details open={!allDelivered} style={{ ...sectionBox, marginBottom: 10 }}>
@@ -1771,7 +1774,7 @@ export default function ReviewAndSendStep({
             </button>
 
             <button style={glassButtonStyle("sm")} onClick={() => setConfirmOpen(false)} disabled={isSending || uploading}>
-              Отмена
+              Изменить
             </button>
           </div>
         </div>
