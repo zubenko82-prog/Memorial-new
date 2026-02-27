@@ -10,12 +10,13 @@
 // - Если элементов на тыле/плите нет — соответствующие эскизы скрываются
 //   (у вас это достигается тем, что previewUrl/previewHiUrl записываются как null).
 //
-// ИЗМЕНЕНИЯ (по задаче):
-// - Email: отправляем ТОЛЬКО PDF (без отдельных фото-вложений), тема: "Фамилия №Номер"
-// - В UI: один общий прогресс overallProgress (без TG/Email детализации)
-// - "Статус доставки": аккордеон. Если всё доставлено — закрыт, зелёный "Доставлен".
-//   Иначе открыт, красный "Не доставлен".
-// - Фото в Telegram оставляем как было. Email обязателен для "Доставлен".
+// ДОБАВЛЕНО/ИЗМЕНЕНО:
+// - Email: отправляем ТОЛЬКО PDF (в нем все есть), без отдельных фото/эскизов.
+// - Тема письма: "Фамилия1Усопшего №НОМЕР".
+// - UI: один общий прогресс отправки (без подробностей).
+// - "Статус доставки" — аккордеон: если все доставлено -> закрыт + "Доставлен" (зелёный),
+//   иначе открыт + "Не доставлен" (красный). Внутренности статусов оставлены как было.
+// - Меню "Новая заявка" и "Скачать PDF" сохранены.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -240,6 +241,8 @@ function ensurePlates(ex: any): any[] {
   return cur;
 }
 
+type NamedFile = { file: File; name: string };
+
 function safeBlobName(name: string) {
   return String(name || "")
     .replace(/[\\/:*?"<>|]+/g, "_")
@@ -333,6 +336,7 @@ export default function ReviewAndSendStep({
   const [introState, setIntroState] = useState(() => loadIntroState());
   const [isDirtyAfterSend, setIsDirtyAfterSend] = useState(false);
   const [newOrderOpen, setNewOrderOpen] = useState(false);
+  const [newOrderConfirm, setNewOrderConfirm] = useState<null | "wipe_all" | "wipe_keep_customer" | "keep_all_new_no">(null);
   const [pdfSavedOnce, setPdfSavedOnce] = useState(false);
 
   const customerName = (introState.intro?.customerName || "").trim();
@@ -521,6 +525,9 @@ export default function ReviewAndSendStep({
   const plateToShow = useMemo(() => plateCandidates.filter((p) => !!plateRenderable[p.index]), [plateCandidates, plateRenderable]);
   const showPlate = plateToShow.length > 0;
 
+  // пригодится для отправки по URL (fallback)
+  const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToShow]);
+
   // Front
   const item = (draft as any)?.item || null;
   const itemUrl = (item?.url || "") as string;
@@ -557,7 +564,7 @@ export default function ReviewAndSendStep({
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // ===== helpers (добавлено) =====
+  // ===== helpers (добавьте внутри компонента, рядом с buildOrderText) =====
   function firstDeceasedLastName(d: any): string {
     const p = ((d?.engraving?.persons as any[]) || []).filter(Boolean)[0];
     const last = String(p?.lastName || "").trim();
@@ -572,11 +579,11 @@ export default function ReviewAndSendStep({
   const [sentOk, setSentOk] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // old TG progress kept for compatibility (not shown in overlay anymore)
-  const [uploadProgress, setUploadProgress] = useState(0);
-
-  // NEW: single overall progress 0..100
+  // общий прогресс 0..100 (без подробностей)
   const [overallProgress, setOverallProgress] = useState(0);
+
+  // оставляем uploadProgress (используется в коде при отправке фото в TG)
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const [deliveryVisible, setDeliveryVisible] = useState(false);
   const [textDelivered, setTextDelivered] = useState<boolean | null>(null);
@@ -588,7 +595,7 @@ export default function ReviewAndSendStep({
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
 
-  // Email status (progress details removed)
+  // Email status
   const [emailDelivered, setEmailDelivered] = useState<boolean | null>(null);
 
   // ===== Telegram API (/api/tg) =====
@@ -642,12 +649,11 @@ export default function ReviewAndSendStep({
     orderNo: string;
     subject: string;
     text: string;
-
     pdfUrl: string;
     pdfPathname: string;
     pdfFilename: string;
 
-    // kept for compatibility with caller; api/email should ignore in send_blob
+    // оставлено для совместимости API-клиента, но фактически не используем (шлём пустые массивы)
     photoUrls: string[];
     photoPathnames: string[];
     photoFilenames: string[];
@@ -1094,10 +1100,10 @@ export default function ReviewAndSendStep({
     await sendDmToUser(userId, text);
   }
 
-  // ===== Main send (изменён по задаче) =====
+  // ===== Main send =====
   const sendOrderDirect = async () => {
     setUploading(true);
-    setUploadProgress(0); // legacy
+    setUploadProgress(0);
     setOverallProgress(0);
 
     setDeliveryVisible(true);
@@ -1115,28 +1121,24 @@ export default function ReviewAndSendStep({
     try {
       const orderNoCur = String(loadIntroState().orderNumber || "").trim() || `order-${Date.now()}`;
 
-      // 1) Telegram start
+      // Telegram start
       await sendManagerMessage(startMarkerText(orderNoCur));
       setOverallProgress(5);
 
-      // 2) Topbar
       const topRes = await sendTopbarShotWithHeaderAndPanel();
       setTopbarDelivered(topRes.ok);
       if (!topRes.ok && topRes.error) warnings.push(`Топбар не отправлен: ${topRes.error}`);
       setOverallProgress(15);
 
-      // 3) Text
       const tRes = await sendLargeText(buildOrderText());
       setTextDelivered(tRes.ok);
       if (!tRes.ok) warnings.push(`Текст не отправлен: ${tRes.errors.join(" | ")}`);
       setOverallProgress(25);
 
-      // 4) Front sketch
       const frontRes = await sendSketchFromNode("pdf-front-sketch", "Эскиз (лицевая)", null);
       setFrontSketchDelivered(frontRes.ok);
       if (!frontRes.ok && frontRes.error) warnings.push(`Эскиз (лицевая) не отправлен: ${frontRes.error}`);
 
-      // 5) Back sketch
       if (showBack && backCandidateUrl) {
         const backRes = await sendSketchFromNode("pdf-back-sketch", "Эскиз (тыльная)", backCandidateUrl);
         setBackSketchDelivered(backRes.ok);
@@ -1145,7 +1147,6 @@ export default function ReviewAndSendStep({
         setBackSketchDelivered(null);
       }
 
-      // 6) Plates
       if (showPlate && plateToShow.length > 0) {
         let allOk = true;
         for (const p of plateToShow) {
@@ -1162,7 +1163,6 @@ export default function ReviewAndSendStep({
 
       setOverallProgress(40);
 
-      // 7) Person photos to Telegram (оставляем как было)
       const photos = collectPersonPhotosWithCaptions(loadOrderDraft());
       setPhotosTotal(photos.length);
 
@@ -1189,7 +1189,6 @@ export default function ReviewAndSendStep({
           setPhotosDelivered(delivered);
         }
 
-        // legacy progress for compatibility
         setUploadProgress(Math.round(((i + 1) / Math.max(1, photos.length)) * 100));
 
         // общий прогресс: 40..70
@@ -1199,7 +1198,7 @@ export default function ReviewAndSendStep({
         await sleep(200);
       }
 
-      // 8) EMAIL: отправляем ТОЛЬКО PDF
+      // ===== EMAIL via Blob (chunk upload) -> отправляем ТОЛЬКО PDF =====
       try {
         setOverallProgress(72);
 
@@ -1252,7 +1251,7 @@ export default function ReviewAndSendStep({
           pdfPathname: pdfUploaded.pathname,
           pdfFilename: pdfFile.name,
 
-          // не отправляем вложения-изображения вообще
+          // не отправляем вложения-изображения
           photoUrls: [],
           photoPathnames: [],
           photoFilenames: []
@@ -1271,17 +1270,15 @@ export default function ReviewAndSendStep({
         warnings.push(`Email не отправлен: ${String(e?.message || e)}`);
       }
 
-      // 9) Telegram end
+      // Telegram end
       await sendManagerMessage(endMarkerText(orderNoCur));
       setOverallProgress(100);
 
       setSentOk(true);
       if (warnings.length) setLastWarnings(warnings);
-
       setUploadProgress(100);
-      await notifyUserAfterSend(orderNoCur);
 
-      onSend?.();
+      await notifyUserAfterSend(orderNoCur);
     } finally {
       setUploading(false);
     }
@@ -1335,10 +1332,6 @@ export default function ReviewAndSendStep({
     }
   }
 
-  const overlayText =
-    uploading ? `Отправляем… ${Math.max(0, Math.min(100, overallProgress || 0))}%` : isSending ? "Отправляем заказ…" : isSaving ? "Формируем PDF…" : "";
-
-  // ===== Delivery accordion status =====
   const allDelivered =
     topbarDelivered === true &&
     textDelivered === true &&
@@ -1347,6 +1340,9 @@ export default function ReviewAndSendStep({
     (!showPlate || plateSketchDelivered === true) &&
     (photosTotal === 0 || photosDelivered === photosTotal) &&
     emailDelivered === true;
+
+  const overlayText =
+    uploading ? `Отправляем… ${Math.max(0, Math.min(100, overallProgress || 0))}%` : isSending ? "Отправляем заказ…" : isSaving ? "Формируем PDF…" : "";
 
   return (
     <div style={safeRoot()}>
@@ -1446,9 +1442,10 @@ export default function ReviewAndSendStep({
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заказ отправлен</div>
             <div style={{ fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
-              {`${customerName ? ` ${customerName}` : ""}, спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.<br />Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.`}
+              {`${customerName ? `, ${customerName}` : ""}, спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.<br>Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.`}
             </div>
 
+            {/* ===== "Статус доставки" как аккордеон, внутренности сохранены как в вашем коде ===== */}
             <details open={!allDelivered} style={{ ...sectionBox, marginBottom: 10 }}>
               <summary style={{ cursor: "pointer", fontWeight: 800 }}>
                 <span style={{ color: allDelivered ? "#7dffa0" : "#ff6b6b" }}>{allDelivered ? "Доставлен" : "Не доставлен"}</span>
@@ -1461,21 +1458,18 @@ export default function ReviewAndSendStep({
                     {topbarDelivered == null ? "—" : topbarDelivered ? "да" : "нет"}
                   </strong>
                 </div>
-
                 <div>
                   <span style={{ opacity: 0.85 }}>Текст — </span>
                   <strong style={{ color: textDelivered == null ? "#ccc" : textDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {textDelivered == null ? "—" : textDelivered ? "да" : "нет"}
                   </strong>
                 </div>
-
                 <div>
                   <span style={{ opacity: 0.85 }}>Превью (лицевая) — </span>
                   <strong style={{ color: frontSketchDelivered == null ? "#ccc" : frontSketchDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {frontSketchDelivered == null ? "—" : frontSketchDelivered ? "да" : "нет"}
                   </strong>
                 </div>
-
                 {showBack && (
                   <div>
                     <span style={{ opacity: 0.85 }}>Превью (тыльная) — </span>
@@ -1484,7 +1478,6 @@ export default function ReviewAndSendStep({
                     </strong>
                   </div>
                 )}
-
                 {showPlate && (
                   <div>
                     <span style={{ opacity: 0.85 }}>Превью (плита) — </span>
@@ -1493,7 +1486,6 @@ export default function ReviewAndSendStep({
                     </strong>
                   </div>
                 )}
-
                 <div>
                   <span style={{ opacity: 0.85 }}>Фото — </span>
                   <strong
@@ -1507,7 +1499,7 @@ export default function ReviewAndSendStep({
                 </div>
 
                 <div>
-                  <span style={{ opacity: 0.85 }}>Email (PDF) — </span>
+                  <span style={{ opacity: 0.85 }}>Email — </span>
                   <strong style={{ color: emailDelivered == null ? "#ccc" : emailDelivered ? "#7dffa0" : "#ffb4b4" }}>
                     {emailDelivered == null ? "—" : emailDelivered ? "да" : "нет"}
                   </strong>
@@ -1515,7 +1507,7 @@ export default function ReviewAndSendStep({
               </div>
 
               {lastWarnings.length > 0 && (
-                <details style={{ marginTop: 10 }}>
+                <details style={{ marginTop: 8 }}>
                   <summary style={{ cursor: "pointer" }}>Подробности</summary>
                   <ul style={{ margin: "6px 0 0 20px" }}>
                     {lastWarnings.map((w, i) => (
@@ -1529,8 +1521,19 @@ export default function ReviewAndSendStep({
             </details>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {!allDelivered && (
-                <button type="button" onClick={() => sendOrderDirect()} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
+              {(topbarDelivered === false ||
+                textDelivered === false ||
+                frontSketchDelivered === false ||
+                (showBack && backSketchDelivered === false) ||
+                (showPlate && plateSketchDelivered === false) ||
+                (photosTotal > 0 && photosDelivered < photosTotal) ||
+                emailDelivered === false) && (
+                <button
+                  type="button"
+                  onClick={() => sendOrderDirect()}
+                  disabled={uploading || isSending}
+                  style={glassButtonStyle("sm", uploading || isSending)}
+                >
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
               )}
