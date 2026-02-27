@@ -834,7 +834,6 @@ export default function ReviewAndSendStep({
     lines.push("");
 
     // ===== Надгробная плита =====
-    const ex = (d?.extras || {}) as any;
     const plateEnabled = !!ex.headstonePlate;
     lines.push("Надгробная плита:");
     lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
