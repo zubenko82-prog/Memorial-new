@@ -1774,7 +1774,7 @@ export default function ReviewAndSendStep({
             </button>
 
             <button style={glassButtonStyle("sm")} onClick={() => setConfirmOpen(false)} disabled={isSending || uploading}>
-              Изменить
+              Изменить заказ
             </button>
           </div>
         </div>
