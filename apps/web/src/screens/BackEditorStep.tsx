@@ -530,29 +530,13 @@ async function renderStackedCenteredPreview(params: {
     const r = { x: padX, y, w: colW, h };
 
     if (it.kind === "photo" || it.kind === "img") {
-  const im = await loadImageSafe(it.url);
-  if (im) {
-    const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
-
-    // базовый прямоугольник (как было)
-    const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
-
-    // ✅ графика (img) должна занимать 75% ширины эскиза
-    // (портрет оставляем как было)
-    const TARGET_W_FRAC = 0.75;
-    const rr =
-      it.kind === "img"
-        ? {
-            x: rr0.x + Math.round((rr0.w - rr0.w * TARGET_W_FRAC) / 2),
-            y: rr0.y,
-            w: Math.round(rr0.w * TARGET_W_FRAC),
-            h: rr0.h
-          }
-        : rr0;
-
-    drawImageContain(ctx, im, rr);
-  }
-}
+      const im = await loadImageSafe(it.url);
+      if (im) {
+        const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
+        const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+        drawImageContain(ctx, im, rr);
+      }
+    }
 
     if (it.kind === "metrica") {
       const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
@@ -630,8 +614,8 @@ const rr = specialStair
     }
   : rr0;
 
-// ✅ обычные эпитафии: 75% ширины эскиза; "лесенка" остаётся шире как у вас
-const widthSafety = specialStair ? Math.round(rr.w * 0.98) : Math.round(rr.w * 0.75);
+// небольшой запас от краёв
+const widthSafety = specialStair ? Math.round(rr.w * 0.98) : rr.w;
 
 
 
