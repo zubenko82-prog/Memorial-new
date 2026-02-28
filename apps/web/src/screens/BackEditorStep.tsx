@@ -246,6 +246,26 @@ function drawImageCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r:
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
+function drawImageFitWidth(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
+  const iw = img.naturalWidth || img.width || 1;
+  const ih = img.naturalHeight || img.height || 1;
+
+  // хотим занять всю ширину r.w
+  let dw = r.w;
+  let dh = Math.round((dw * ih) / iw);
+
+  // если по высоте не влезает — уменьшаем пропорционально
+  if (dh > r.h) {
+    dh = r.h;
+    dw = Math.round((dh * iw) / ih);
+  }
+
+  const dx = r.x + Math.round((r.w - dw) / 2);
+  const dy = r.y + Math.round((r.h - dh) / 2);
+
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
 function drawImageContain(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
   const iw = img.naturalWidth || img.width || 1;
   const ih = img.naturalHeight || img.height || 1;
@@ -565,13 +585,20 @@ async function renderStackedCenteredPreview(params: {
     };
 
     if (it.kind === "photo" || it.kind === "img") {
-      const im = await loadImageSafe(it.url);
-      if (im) {
-        // фото оставляем как раньше (ширина колонки), а ГРАФИКУ сужаем до 75% W
-        const rr = it.kind === "img" ? rrNarrow : rr0;
-        drawImageContain(ctx, im, rr);
-      }
+  const im = await loadImageSafe(it.url);
+  if (im) {
+    const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
+    const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+
+    if (it.kind === "img") {
+      // ✅ графика: хотим 75% ширины ФРЕЙМА (canvas W), а не “как впишется”
+      drawImageFitWidth(ctx, im, rrNarrow);
+    } else {
+      // фото: как было
+      drawImageContain(ctx, im, rr0);
     }
+  }
+}
 
     if (it.kind === "metrica") {
       // метрику оставляем как раньше (по центру колонки)
