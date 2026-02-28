@@ -1,7 +1,14 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-// ---- Утилиты ----
+const redWarning = '<b><span class="tg-spoiler" style="color:#D52B1E">Если допустили ошибку - не исправляйте сообщение, исправить можно на этапе проверки воспользовавшись меню "✏️ Изменить"</span></b>';
+
+function warningNote() {
+  // Telegram поддерживает <b>, но не цвет; грязный хак — tg-spoiler добавляет контраст, но цвет red не работает.
+  // Можно эмодзи 🟥 / 🟥🛑 или просто <b>ВАЖНО:</b>
+  return '\n\n<b>🟥 Если допустили ошибку - не исправляйте сообщение, исправить можно на этапе проверки воспользовавшись меню "✏️ Изменить"</b>';
+}
+
 const normStr = (v) => String(v || '').trim();
 
 function extractPriceLineFromPostText(text) {
@@ -62,7 +69,6 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   return { priceLine, postUrl, compositionLines, totalLine };
 }
 
-// --- Формирует блок "Данные анкеты" в точном виде предпросмотра ---
 function buildFormPreview(s) {
   return [
     `👤 ${s.name || '—'}`,
@@ -77,7 +83,6 @@ function buildFormPreview(s) {
   ];
 }
 
-// --- Для менеджера: строим сообщение полностью ---
 async function buildManagerSummary(
   s,
   orderNo,
@@ -105,10 +110,8 @@ async function buildManagerSummary(
     '',
     '📋 Данные анкеты:',
     '',
-
     ...buildFormPreview(s),
-
-    '', // Отделаем extra-инфу от формы
+    '', // extra
   ];
 
   try {
@@ -161,7 +164,7 @@ export function registerOrders(bot, deps) {
     Markup.keyboard([
       ['📨 Отправить'],
       ['✏️ Изменить'],
-      ['⬅️ Назад', '❌ Отменить'],
+      ['❌ Отменить'],
     ]).resize();
 
   const kbEditMenu = () =>
@@ -169,26 +172,24 @@ export function registerOrders(bot, deps) {
       ['📝Имя', '📞Телефон'],
       ['🕊ФИО', '📅Даты'],
       ['🖼Фото', '💬Комментарий'],
-      ['⬅️ Назад'],
+      ['❌ Отменить'],
     ]).resize();
 
   const kbName = () => Markup.keyboard([['❌ Отменить']]).resize();
   const kbPhone = () =>
     Markup.keyboard([
       [Markup.button.contactRequest('📱 Отправить мой контакт')],
-      ['⬅️ Назад', '❌ Отменить'],
+      ['❌ Отменить'],
     ]).resize();
-  const kbBackCancel = () =>
-    Markup.keyboard([['⬅️ Назад', '❌ Отменить']]).resize();
   const kbPhotos = () =>
     Markup.keyboard([
       ['➡️ Далее'],
-      ['⬅️ Назад', '❌ Отменить'],
+      ['❌ Отменить'],
     ]).resize();
   const kbComment = () =>
     Markup.keyboard([
       ['✅ Продолжить'],
-      ['⬅️ Назад', '❌ Отменить'],
+      ['❌ Отменить'],
     ]).resize();
   const kbRemove = () => Markup.removeKeyboard();
 
@@ -206,28 +207,34 @@ export function registerOrders(bot, deps) {
 
     switch (st) {
       case 'name':
-        return ctx.reply('👋 Добро пожаловать!\n\nШаг 1 из 6.\n\n✍️ Представьтесь, как к вам обращаться (ФИО или имя):', kbName());
+        return ctx.reply(
+          '👋 Добро пожаловать!\n\nШаг 1 из 6.\n\n✍️ Представьтесь, как к вам обращаться (ФИО или имя):' + warningNote(),
+          { parse_mode: 'HTML', ...kbName() }
+        );
       case 'phone':
         return ctx.reply(
-          '📞 Шаг 2 из 6. Контактный телефон.\nВы можете:\n• отправить номер кнопкой «📱»\n• или ввести номер вручную в формате +7...',
-          kbPhone()
+          '📞 Шаг 2 из 6. Контактный телефон.\nВы можете:\n• отправить номер кнопкой «📱»\n• или ввести номер вручную в формате +7...' + warningNote(),
+          { parse_mode: 'HTML', ...kbPhone() }
         );
       case 'fio':
-        return ctx.reply('🕊 Шаг 3 из 6. ФИО усопшего.\nНапишите фамилию, имя и отчество так, как они должны быть на памятнике.', kbBackCancel());
+        return ctx.reply(
+          '🕊 Шаг 3 из 6. ФИО усопшего.\nНапишите фамилию, имя и отчество так, как они должны быть на памятнике.' + warningNote(),
+          { parse_mode: 'HTML', ...kbName() }
+        );
       case 'dates':
         return ctx.reply(
-          '📅 Шаг 4 из 6. Даты.\nУкажите даты в формате:\nDD.MM.YYYY - DD.MM.YYYY\nНапример:\n12.03.1950 - 05.11.2020',
-          { parse_mode: 'HTML', ...kbBackCancel() }
+          '📅 Шаг 4 из 6. Даты.\nУкажите даты в формате:\nDD.MM.YYYY - DD.MM.YYYY\nНапример:\n12.03.1950 - 05.11.2020' + warningNote(),
+          { parse_mode: 'HTML', ...kbName() }
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»',
+          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»' + warningNote(),
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
         return ctx.reply(
-          '💬 Шаг 6 из 6. Комментарий, способ связи или промокод.\nЕсли комментариев нет — просто нажмите «✅ Продолжить».',
-          kbComment()
+          '💬 Шаг 6 из 6. Комментарий, способ связи или промокод.\nЕсли комментариев нет — просто нажмите «✅ Продолжить».' + warningNote(),
+          { parse_mode: 'HTML', ...kbComment() }
         );
       case 'review':
         return stepReview(ctx);
@@ -235,22 +242,8 @@ export function registerOrders(bot, deps) {
         return ctx.reply('Что хотите изменить?', kbEditMenu());
       default:
         s.step = 'name';
-        return ctx.reply('👋 Добро пожаловать! Укажите, как к вам обращаться (ФИО или имя):', kbName());
+        return ctx.reply('👋 Добро пожаловать! Укажите, как к вам обращаться (ФИО или имя):' + warningNote(), { parse_mode: 'HTML', ...kbName() });
     }
-  }
-
-  async function stepBack(ctx) {
-    const s = ctx.session?.order;
-    if (!s?.step) return;
-
-    if (s.step === 'edit_menu') {
-      s.step = 'review';
-      return stepReview(ctx);
-    }
-
-    const idx = stepOrder.indexOf(s.step);
-    s.step = stepOrder[Math.max(0, idx - 1)];
-    return renderStep(ctx);
   }
 
   async function startOrder(ctx, sourceToken) {
@@ -268,9 +261,7 @@ export function registerOrders(bot, deps) {
       '',
       '🔍 Проверьте данные перед отправкой',
       '',
-
       ...buildFormPreview(s),
-
       '',
       '',
       '«✏️ Изменить», исправить данные.',
@@ -305,51 +296,59 @@ export function registerOrders(bot, deps) {
   }
 
   async function submitOrder(ctx) {
-  const s = getOrder(ctx);
-  if (!s.name || !s.phone || !phoneOk(s.phone)) {
-    return ctx.reply('❗️ Обязательные поля не заполнены.\nПроверьте: «Заказчик», «Номер телефона».', kbName());
-  }
-  const orderNo = s.orderNo || makeOrderNo();
-  try {
-    await sendOrderToManager(ctx, s, orderNo);
+    const s = getOrder(ctx);
+    if (!s.name || !s.phone || !phoneOk(s.phone)) {
+      return ctx.reply('❗️ Обязательные поля не заполнены.\nПроверьте: «Заказчик», «Номер телефона».', kbName());
+    }
+    const orderNo = s.orderNo || makeOrderNo();
+    try {
+      await sendOrderToManager(ctx, s, orderNo);
 
-    const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
-    await ctx.reply(
-      [
-        `✅ Заявка №${orderNo} отправлена.`,
-        ``,
-        `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
-        CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
-      ].filter(Boolean).join('\n'),
-      {
-        reply_markup: webAppUrl
-          ? Markup.keyboard([
-              [
-                Markup.button.webApp(
-                  '✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨',
-                  webAppUrl
-                ),
-              ],
-            ])
-              .resize()
-              .oneTime()
-              .reply_markup
-          : kbRemove().reply_markup,
-      }
-    );
-  } catch (e) {
-    await ctx.reply('😔 Не удалось отправить заявку. Попробуйте позже.', kbRemove());
-  } finally {
-    ctx.session.order = null;
+      const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
+      await ctx.reply(
+        [
+          `✅ Заявка №${orderNo} отправлена.`,
+          ``,
+          `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
+          CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
+        ].filter(Boolean).join('\n'),
+        {
+          reply_markup: webAppUrl
+            ? Markup.keyboard([
+                [
+                  Markup.button.webApp(
+                    '✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨',
+                    webAppUrl
+                  ),
+                ],
+              ])
+                .resize()
+                .oneTime()
+                .reply_markup
+            : kbRemove().reply_markup,
+        }
+      );
+    } catch (e) {
+      await ctx.reply('😔 Не удалось отправить заявку. Попробуйте позже.', kbRemove());
+    } finally {
+      ctx.session.order = null;
+    }
   }
-}
+
+  // внутри редактора "❌ Отменить" просто сбрасывает редактирование и возвращает к предпросмотру
+  async function cancelEditReturnToReview(ctx) {
+    const s = getOrder(ctx);
+    s.editReturnStep = 'review';
+    s.step = 'review';
+    return stepReview(ctx);
+  }
 
   async function cancelOrder(ctx, msg = 'Анкета отменена.') {
     ctx.session.order = null;
     return ctx.reply(`❌ ${msg}`, kbRemove());
   }
 
-  // ====== Меню редактирования ======
+  // Меню редактирования
   bot.hears(['✏️ Изменить'], async (ctx) => {
     const s = getOrder(ctx);
     s.step = 'edit_menu';
@@ -357,40 +356,37 @@ export function registerOrders(bot, deps) {
   });
 
   bot.hears('📝Имя', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'name'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'name'; await renderStep(ctx);
   });
   bot.hears('📞Телефон', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'phone'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'phone'; await renderStep(ctx);
   });
   bot.hears('🕊ФИО', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'fio'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'fio'; await renderStep(ctx);
   });
   bot.hears('📅Даты', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'dates'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'dates'; await renderStep(ctx);
   });
   bot.hears('🖼Фото', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'photos'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'photos'; await renderStep(ctx);
   });
   bot.hears('💬Комментарий', async (ctx) => {
-    const s = getOrder(ctx);
-    s.editReturnStep = 'review'; s.step = 'comment'; await renderStep(ctx);
+    const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'comment'; await renderStep(ctx);
   });
 
-  bot.hears(['⬅️ Назад'], async (ctx, next) => {
-    const s = getOrder(ctx);
-    if (s.step === 'edit_menu') {
-      s.step = 'review';
-      return stepReview(ctx);
+  // отмена в редакторе — выход в предпросмотр (не сброс всей анкеты!)
+  bot.hears(['❌ Отменить', 'Отменить'], async (ctx, next) => {
+    if (ctx.session?.order?.step === 'name'
+        || ctx.session?.order?.step === 'phone'
+        || ctx.session?.order?.step === 'fio'
+        || ctx.session?.order?.step === 'dates'
+        || ctx.session?.order?.step === 'photos'
+        || ctx.session?.order?.step === 'comment'
+        || ctx.session?.order?.step === 'edit_menu'
+      ) {
+      return cancelEditReturnToReview(ctx);
     }
-    return stepBack(ctx);
-  });
-
-  bot.hears(['Отменить', '❌ Отменить'], async (ctx, next) => {
+    // если этап предпросмотра — сброс всей анкеты
     if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
     return next();
   });
@@ -431,7 +427,6 @@ export function registerOrders(bot, deps) {
     const st = s.step;
     if (!st) return next();
 
-    // Если после редактирования — возвращаем к предпросмотру
     const restoreToReview = () => {
       if (s.editReturnStep === 'review') {
         s.step = 'review';
@@ -460,8 +455,8 @@ export function registerOrders(bot, deps) {
       if (st === 'phone') {
         if (!phoneOk(text)) {
           return ctx.reply(
-            '⚠️ Введите корректный номер телефона (минимум 6 цифр, можно с +)\nили нажмите «📱» для автоматической отправки.',
-            kbPhone()
+            '⚠️ Введите корректный номер телефона (минимум 6 цифр, можно с +)\nили нажмите «📱» для автоматической отправки.' + warningNote(),
+            { parse_mode: 'HTML', ...kbPhone() }
           );
         }
         s.phone = text;
@@ -485,8 +480,8 @@ export function registerOrders(bot, deps) {
         if (!['✅ Продолжить', 'Продолжить', '❌ Отменить', 'Отменить'].includes(text)) {
           s.comment = text;
           await ctx.reply(
-            '✍️ Комментарий сохранён.\nЕсли готовы перейти к итоговому просмотру заявки — нажмите «✅ Продолжить».',
-            kbComment()
+            '✍️ Комментарий сохранён.\nЕсли готовы перейти к итоговому просмотру заявки — нажмите «✅ Продолжить».' + warningNote(),
+            { parse_mode: 'HTML', ...kbComment() }
           );
           return restoreToReview();
         }
@@ -500,8 +495,8 @@ export function registerOrders(bot, deps) {
           s.photos = s.photos || [];
           s.photos.push(fileId);
           await ctx.reply(
-            '✅ Фото загружено.\nМожно отправить ещё фото или нажать «➡️ Далее».',
-            kbPhotos()
+            '✅ Фото загружено.\nМожно отправить ещё фото или нажать «➡️ Далее».' + warningNote(),
+            { parse_mode: 'HTML', ...kbPhotos() }
           );
           return restoreToReview();
         }
