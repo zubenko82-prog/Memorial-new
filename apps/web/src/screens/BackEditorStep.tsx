@@ -493,6 +493,8 @@ async function renderStackedCenteredPreview(params: {
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(255,0,0,0.18)";
+ctx.fillRect(0, 0, W, H);
   if (!ctx) return null;
 
   // ===== background (НЕ СУЖАЕМ — всегда на весь canvas) =====
