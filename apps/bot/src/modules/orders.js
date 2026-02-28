@@ -1,13 +1,15 @@
-// apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
 const redWarning = '<b><span class="tg-spoiler" style="color:#D52B1E">Если допустили ошибку - не исправляйте сообщение, исправить можно на этапе проверки воспользовавшись меню "✏️ Изменить"</span></b>';
 
 function warningNote() {
-  // Telegram поддерживает <b>, но не цвет; грязный хак — tg-spoiler добавляет контраст, но цвет red не работает.
-  // Можно эмодзи 🟥 / 🟥🛑 или просто <b>ВАЖНО:</b>
   return '\n\n<b>🛑 ВАЖНО: \nЕсли допустили ошибку — не правьте сообщение. В конце анкеты можно исправить через меню «✏️ Изменить».</b>';
 }
+
+const kbConfirmCancel = () =>
+  Markup.keyboard([
+    ['Да, отменить', 'Нет, вернуться']
+  ]).resize();
 
 const normStr = (v) => String(v || '').trim();
 
@@ -228,7 +230,7 @@ export function registerOrders(bot, deps) {
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»' + warningNote(),
+          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nЕсли цифрового файла нет - сфотографируйте фото на телефон.\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»' + warningNote(),
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
@@ -240,9 +242,14 @@ export function registerOrders(bot, deps) {
         return stepReview(ctx);
       case 'edit_menu':
         return ctx.reply('Что хотите изменить?', kbEditMenu());
+      case 'confirm_cancel':
+        return ctx.reply(
+          'Вы действительно хотите отменить анкету? Все введённые данные будут удалены.',
+          kbConfirmCancel()
+        );
       default:
         s.step = 'name';
-        return ctx.reply('👋 Добро пожаловать! Укажите, как к вам обращаться (ФИО или имя):' + warningNote(), { parse_mode: 'HTML', ...kbName() });
+        return ctx.reply('👋 Добро пожаловать! Представтесь, как к вам обращаться (ФИО или имя):' + warningNote(), { parse_mode: 'HTML', ...kbName() });
     }
   }
 
@@ -376,19 +383,36 @@ export function registerOrders(bot, deps) {
 
   // отмена в редакторе — выход в предпросмотр (не сброс всей анкеты!)
   bot.hears(['❌ Отменить', 'Отменить'], async (ctx, next) => {
-    if (ctx.session?.order?.step === 'name'
-        || ctx.session?.order?.step === 'phone'
-        || ctx.session?.order?.step === 'fio'
-        || ctx.session?.order?.step === 'dates'
-        || ctx.session?.order?.step === 'photos'
-        || ctx.session?.order?.step === 'comment'
-        || ctx.session?.order?.step === 'edit_menu'
-      ) {
+    if (
+      ctx.session?.order?.step === 'name' ||
+      ctx.session?.order?.step === 'phone' ||
+      ctx.session?.order?.step === 'fio' ||
+      ctx.session?.order?.step === 'dates' ||
+      ctx.session?.order?.step === 'photos' ||
+      ctx.session?.order?.step === 'comment' ||
+      ctx.session?.order?.step === 'edit_menu'
+    ) {
       return cancelEditReturnToReview(ctx);
     }
-    // если этап предпросмотра — сброс всей анкеты
-    if (ctx.session?.order) return cancelOrder(ctx, 'Анкета отменена.');
+    // если этап предпросмотра — ЗАПРОШИВАЕМ ПОДТВЕРЖДЕНИЕ
+    if (ctx.session?.order && ctx.session?.order?.step === 'review') {
+      ctx.session.order.step = 'confirm_cancel';
+      return renderStep(ctx);
+    }
     return next();
+  });
+
+  // подтверждение отмены анкеты
+  bot.hears(['Да, отменить'], async (ctx) => {
+    if (ctx.session?.order && ctx.session?.order?.step === 'confirm_cancel') {
+      return cancelOrder(ctx, 'Анкета отменена.');
+    }
+  });
+  bot.hears(['Нет, вернуться'], async (ctx) => {
+    if (ctx.session?.order && ctx.session?.order?.step === 'confirm_cancel') {
+      ctx.session.order.step = 'review';
+      return stepReview(ctx);
+    }
   });
 
   bot.hears(['➡️ Далее', 'Далее'], async (ctx, next) => {
