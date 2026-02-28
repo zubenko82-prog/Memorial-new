@@ -537,9 +537,11 @@ async function renderStackedCenteredPreview(params: {
 
   // allocate heights by type (plate larger, then auto-scale down by k if crowded)
   const basePhotoH = Math.round(H * (isPlate ? 0.28 : 0.26));
-  const baseMetricaH = Math.round(H * (isPlate ? 0.16 : 0.14));
-  const baseImgH = Math.round(H * (isPlate ? 0.18 : 0.14));
-  const baseTextH = Math.round(H * (isPlate ? 0.18 : 0.14));
+const baseMetricaH = Math.round(H * (isPlate ? 0.16 : 0.14));
+
+// ✅ было мелко: не хватало высоты под графику/эпитафии
+const baseImgH = Math.round(H * (isPlate ? 0.26 : 0.20));
+const baseTextH = Math.round(H * (isPlate ? 0.24 : 0.18));
 
   const plannedHeights = items.map((it) => {
     if (it.kind === "photo") return basePhotoH;
@@ -563,6 +565,25 @@ async function renderStackedCenteredPreview(params: {
   const targetWFromSketch = Math.round(W * TARGET_FRAC_OF_SKETCH);
   const maxItemW = Math.min(colW, targetWFromSketch); // не шире колонки
   const itemX = Math.round((W - maxItemW) / 2); // центрируем относительно всего эскиза
+
+  function drawImageFitWidth(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
+  const iw = img.naturalWidth || img.width || 1;
+  const ih = img.naturalHeight || img.height || 1;
+
+  // хотим занять всю ширину r.w
+  let dw = r.w;
+  let dh = Math.round((dw * ih) / iw);
+
+  // если по высоте не влезает — уменьшаем
+  if (dh > r.h) {
+    dh = r.h;
+    dw = Math.round((dh * iw) / ih);
+  }
+
+  const dx = r.x + Math.round((r.w - dw) / 2);
+  const dy = r.y + Math.round((r.h - dh) / 2);
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
 
   // draw each item centered
   for (let i = 0; i < items.length; i++) {
@@ -591,10 +612,9 @@ async function renderStackedCenteredPreview(params: {
     const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
 
     if (it.kind === "img") {
-      // ✅ графика: хотим 75% ширины ФРЕЙМА (canvas W), а не “как впишется”
-      drawImageFitWidth(ctx, im, rrNarrow);
+      const rr = { x: itemX, y: rr0.y, w: maxItemW, h: rr0.h };
+      drawImageFitWidth(ctx, im, rr); // ✅ принудительно по ширине
     } else {
-      // фото: как было
       drawImageContain(ctx, im, rr0);
     }
   }
