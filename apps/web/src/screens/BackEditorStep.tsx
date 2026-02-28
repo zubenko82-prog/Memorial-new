@@ -443,6 +443,21 @@ type StackItem =
   | { kind: "img"; url: string }
   | { kind: "text"; text: string };
 
+// PATCH for src/screens/BackEditorStep.tsx
+// Цель:
+// 1) Графика + эпитафии в превью ТЫЛ/ПЛИТА должны занимать ~75% ШИРИНЫ ЭСКИЗА (canvas W), а не внутренней колонки.
+// 2) Градиентный фон на тыле НЕ должен “сужаться” — он должен заполнять весь canvas как раньше (как на лицевой).
+//
+// Почему “не изменилось”:
+// - ранее 75% применялось к rr (внутренний блок), который и так почти весь W, визуально эффект слабый.
+// - кроме того, drawImageContain оставляет размер по высоте, и картинка могла упираться в высоту, а не ширину.
+// Поэтому делаем:
+// - целевую ширину считаем от W (ширины canvas), а не от rr.w.
+// - эпитафии fit по maxW считаем от W.
+// - фон-градент рисуем на весь W/H (как и был), и НЕ трогаем padX/clip.
+//
+// Вставьте изменения внутрь renderStackedCenteredPreview()
+
 async function renderStackedCenteredPreview(params: {
   W: number;
   H: number;
@@ -460,7 +475,7 @@ async function renderStackedCenteredPreview(params: {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // background
+  // ===== background (НЕ СУЖАЕМ — всегда на весь canvas) =====
   if (bg.type === "gradient") {
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, "#6e6e6e");
@@ -523,40 +538,45 @@ async function renderStackedCenteredPreview(params: {
   const totalH = heights.reduce((a, b) => a + b, 0) + totalGaps;
   let y = Math.round(top + (usable - totalH) / 2);
 
+  // ✅ 75% от ширины ЭСКИЗА (canvas)
+  const TARGET_FRAC_OF_SKETCH = 0.75;
+  const targetWFromSketch = Math.round(W * TARGET_FRAC_OF_SKETCH);
+  const maxItemW = Math.min(colW, targetWFromSketch); // не шире колонки
+  const itemX = Math.round((W - maxItemW) / 2); // центрируем относительно всего эскиза
+
   // draw each item centered
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const h = heights[i];
+
+    // базовый прямоугольник “колонки”
     const r = { x: padX, y, w: colW, h };
 
-    if (it.kind === "photo" || it.kind === "img") {
-  const im = await loadImageSafe(it.url);
-  if (im) {
+    // ✅ общий внутренний rr0 как раньше, но считаем от r
     const innerPad = Math.round(Math.min(r.w, r.h) * 0.06);
-
-    // базовый прямоугольник (как было)
     const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
 
-    // ✅ графика (img) должна занимать 75% ширины эскиза
-    // (портрет оставляем как было)
-    const TARGET_W_FRAC = 0.75;
-    const rr =
-      it.kind === "img"
-        ? {
-            x: rr0.x + Math.round((rr0.w - rr0.w * TARGET_W_FRAC) / 2),
-            y: rr0.y,
-            w: Math.round(rr0.w * TARGET_W_FRAC),
-            h: rr0.h
-          }
-        : rr0;
+    // ✅ для img/text используем ширину 75% от W (скетча)
+    const rrNarrow = {
+      x: itemX,
+      y: rr0.y,
+      w: maxItemW,
+      h: rr0.h
+    };
 
-    drawImageContain(ctx, im, rr);
-  }
-}
+    if (it.kind === "photo" || it.kind === "img") {
+      const im = await loadImageSafe(it.url);
+      if (im) {
+        // фото оставляем как раньше (ширина колонки), а ГРАФИКУ сужаем до 75% W
+        const rr = it.kind === "img" ? rrNarrow : rr0;
+        drawImageContain(ctx, im, rr);
+      }
+    }
 
     if (it.kind === "metrica") {
-      const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
-      const rr = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+      // метрику оставляем как раньше (по центру колонки)
+      const innerPad2 = Math.round(Math.min(r.w, r.h) * 0.10);
+      const rr = { x: r.x + innerPad2, y: r.y + innerPad2, w: r.w - innerPad2 * 2, h: r.h - innerPad2 * 2 };
 
       const ln = (it.lastName || "").trim();
       const fn = [it.firstName, it.middleName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
@@ -610,94 +630,78 @@ async function renderStackedCenteredPreview(params: {
       ctx.restore();
     }
 
-   if (it.kind === "text") {
-  const innerPad = Math.round(Math.min(r.w, r.h) * 0.10);
-  const rr0 = { x: r.x + innerPad, y: r.y + innerPad, w: r.w - innerPad * 2, h: r.h - innerPad * 2 };
+    if (it.kind === "text") {
+      const innerPad3 = Math.round(Math.min(r.w, r.h) * 0.10);
+      const rr0text = { x: r.x + innerPad3, y: r.y + innerPad3, w: r.w - innerPad3 * 2, h: r.h - innerPad3 * 2 };
 
-  const specialStair = isPomnimLubenSkorbim(it.text);
-  const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
+      const specialStair = isPomnimLubenSkorbim(it.text);
+      const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
 
-  // ✅ делаем лесенку шире: ~92% ширины блока (видны “ступеньки”)
-const stairW = isPlate ? 0.98 : 0.92;          // на плите ещё шире, чтобы ступени читались
-const stairPad = (1 - stairW) / 2;
+      // лесенка: как было (широкая), обычный текст: 75% ширины ЭСКИЗА
+      const rr = specialStair
+        ? rr0text
+        : {
+            x: itemX,
+            y: rr0text.y,
+            w: maxItemW,
+            h: rr0text.h
+          };
 
-const rr = specialStair
-  ? {
-      x: rr0.x + Math.round(rr0.w * stairPad),
-      y: rr0.y,
-      w: Math.round(rr0.w * stairW),
-      h: rr0.h
-    }
-  : rr0;
+      const widthSafety = specialStair ? Math.round(rr.w * 0.98) : rr.w;
 
-// ✅ обычные эпитафии: 75% ширины эскиза; "лесенка" остаётся шире как у вас
-const widthSafety = specialStair ? Math.round(rr.w * 0.98) : Math.round(rr.w * 0.75);
+      ctx.save();
+      ctx.fillStyle = "#fff";
+      ctx.textBaseline = "middle";
 
+      const fontFamily = FONT_CENTURY;
 
+      const startRaw = specialStair
+        ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
+        : Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
 
-  ctx.save();
-  ctx.fillStyle = "#fff";
-  ctx.textBaseline = "middle";
+      ctx.font = `italic ${startRaw}px ${fontFamily}`;
+      const lineH = specialStair ? 1.15 : 1.18;
 
-  // Эпитафии в SketchTemplate выглядят курсивом; для canvas используем italic
-  // (в т.ч. для лесенки)
-  const fontFamily = FONT_CENTURY;
+      const fs = fitFontToBoxHardLines({
+        ctx,
+        lines: Array.from(lines),
+        maxW: widthSafety,
+        maxH: rr.h,
+        startSize: Math.round(startRaw),
+        minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
+        lineH
+      });
 
-  // База шрифта: для плиты больше; для лесенки ещё больше (как вы сделали в SketchTemplate)
-  const plateMul = isPlate ? (specialStair ? 0.98 : 0.96) : 1; // чуть меньше на плите
+      ctx.font = `italic ${fs}px ${fontFamily}`;
 
-const startRaw = specialStair
-  ? Math.min(isPlate ? 40 : 34, Math.max(isPlate ? 18 : 16, Math.floor(rr.h * (isPlate ? 0.50 : 0.44))))
-  : Math.min(isPlate ? 32 : 26, Math.max(isPlate ? 16 : 14, Math.floor(rr.h * (isPlate ? 0.40 : 0.32))));
+      const lineHpx = Math.round(fs * lineH);
+      const total = lineHpx * lines.length;
+      let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineHpx / 2);
 
-const start = Math.round(startRaw * plateMul);
+      for (let li = 0; li < lines.length; li++) {
+        const line = (lines[li] || " ") as string;
 
-ctx.font = `italic ${start}px ${fontFamily}`;
-const lineH = specialStair ? 1.15 : 1.18;
+        if (specialStair && lines.length === 3) {
+          if (li === 0) {
+            ctx.textAlign = "left";
+            ctx.fillText(line, rr.x, ty);
+          } else if (li === 1) {
+            ctx.textAlign = "center";
+            ctx.fillText(line, rr.x + rr.w / 2, ty);
+          } else {
+            ctx.textAlign = "right";
+            ctx.fillText(line, rr.x + rr.w, ty);
+          }
+        } else {
+          ctx.textAlign = "center";
+          ctx.fillText(line, rr.x + rr.w / 2, ty);
+        }
 
-const fs = fitFontToBoxHardLines({
-  ctx,
-  lines: Array.from(lines),
-  maxW: widthSafety,
-  maxH: rr.h,
-  startSize: start,
-  minSize: specialStair ? (isPlate ? 13 : 12) : isPlate ? 11 : 10,
-  lineH
-});
-
-ctx.font = `italic ${fs}px ${fontFamily}`;
-
-
-  const lineHpx = Math.round(fs * lineH);
-  const total = lineHpx * lines.length;
-  let ty = rr.y + Math.round(rr.h / 2 - total / 2 + lineHpx / 2);
-
-  for (let li = 0; li < lines.length; li++) {
-    const line = (lines[li] || " ") as string;
-
-    if (specialStair && lines.length === 3) {
-      // лесенка: слева / по центру / справа
-      if (li === 0) {
-        ctx.textAlign = "left";
-        ctx.fillText(line, rr.x, ty);
-      } else if (li === 1) {
-        ctx.textAlign = "center";
-        ctx.fillText(line, rr.x + rr.w / 2, ty);
-      } else {
-        ctx.textAlign = "right";
-        ctx.fillText(line, rr.x + rr.w, ty);
+        ty += lineHpx;
       }
-    } else {
-      ctx.textAlign = "center";
-      ctx.fillText(line, rr.x + rr.w / 2, ty);
+
+      ctx.restore();
     }
-
-    ty += lineHpx;
-  }
-
-  ctx.restore();
-}
-
 
     y += h + gap;
   }
