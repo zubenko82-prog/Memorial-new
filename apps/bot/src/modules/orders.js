@@ -310,9 +310,7 @@ export function registerOrders(bot, deps) {
           .join('\n'),
         {
           reply_markup: webAppUrl
-            ? Markup.keyboard([
-                [Markup.button.webApp('✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨', webAppUrl)],
-              ])
+            ? Markup.keyboard([[Markup.button.webApp('✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨', webAppUrl)]])
                 .resize()
                 .oneTime()
                 .reply_markup
@@ -338,52 +336,65 @@ export function registerOrders(bot, deps) {
     return ctx.reply(`❌ ${msg}`, kbRemove());
   }
 
-  // Меню редактирования
-  bot.hears(['✏️ Изменить'], async (ctx) => {
+  // ====== ВАЖНО: если активен мастер /post — анкета не должна ловить кнопки ======
+  const skipIfPostWizard = (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
+    return null;
+  };
+
+  bot.hears(['✏️ Изменить'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.step = 'edit_menu';
     await ctx.reply('Что хотите изменить?', kbEditMenu());
   });
 
-  bot.hears('📝Имя', async (ctx) => {
+  bot.hears('📝Имя', async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
     s.step = 'name';
     await renderStep(ctx);
   });
-  bot.hears('📞Телефон', async (ctx) => {
+  bot.hears('📞Телефон', async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
     s.step = 'phone';
     await renderStep(ctx);
   });
-  bot.hears('🕊ФИО', async (ctx) => {
+  bot.hears('🕊ФИО', async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
     s.step = 'fio';
     await renderStep(ctx);
   });
-  bot.hears('📅Даты', async (ctx) => {
+  bot.hears('📅Даты', async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
     s.step = 'dates';
     await renderStep(ctx);
   });
-  bot.hears('🖼Фото', async (ctx) => {
+  bot.hears('🖼Фото', async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
     s.step = 'photos';
     await renderStep(ctx);
   });
-  bot.hears('💬Комментарий', async (ctx) => {
+  bot.hears('💬Комментарий', async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
     s.step = 'comment';
     await renderStep(ctx);
   });
 
-  // отмена: в редакторе — возврат к review, в review — подтверждение отмены
   bot.hears(['❌ Отменить', 'Отменить'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
+
     const step = ctx.session?.order?.step;
 
     if (
@@ -406,20 +417,25 @@ export function registerOrders(bot, deps) {
     return next();
   });
 
-  bot.hears(['Да, отменить'], async (ctx) => {
+  bot.hears(['Да, отменить'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     if (ctx.session?.order && ctx.session?.order?.step === 'confirm_cancel') {
       return cancelOrder(ctx, 'Анкета отменена.');
     }
+    return next();
   });
 
-  bot.hears(['Нет, вернуться'], async (ctx) => {
+  bot.hears(['Нет, вернуться'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     if (ctx.session?.order && ctx.session?.order?.step === 'confirm_cancel') {
       ctx.session.order.step = 'review';
       return stepReview(ctx);
     }
+    return next();
   });
 
   bot.hears(['➡️ Далее', 'Далее'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     if (ctx.session?.order?.step === 'photos') {
       ctx.session.order.step = 'comment';
       return renderStep(ctx);
@@ -428,33 +444,44 @@ export function registerOrders(bot, deps) {
   });
 
   bot.hears(['✅ Продолжить', 'Продолжить'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     if (ctx.session?.order?.step === 'comment') return stepReview(ctx);
     return next();
   });
 
   bot.hears(['📨 Отправить', 'Отправить'], async (ctx, next) => {
+    if (ctx.session?.postWizard) return next();
     if (ctx.session?.order?.step === 'review') return submitOrder(ctx);
     return next();
   });
 
   bot.start(async (ctx) => {
+    // если мастер /post активен — /start не трогаем (обычно не нужно, но безопасно)
     ctx.session.order = null;
+
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     let sourceToken = null;
     const prefix = `${DEEPLINK_PREFIX}_`;
     if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
+
     await ctx.reply(HINT_TEXT);
     await startOrder(ctx, sourceToken || undefined);
   });
 
-  bot.command('cancel', async (ctx) => cancelOrder(ctx, 'Анкета отменена по команде /cancel.'));
+  bot.command('cancel', async (ctx) => {
+    // /cancel всегда отменяет анкету
+    return cancelOrder(ctx, 'Анкета отменена по команде /cancel.');
+  });
 
   bot.on('message', async (ctx, next) => {
+    // ✅ если активен postWizard — анкета не обрабатывает вообще ничего
+    if (ctx.session?.postWizard) return next();
+
     const s = getOrder(ctx);
     const st = s.step;
     if (!st) return next();
 
-    // ====== КРИТИЧНО: пропускаем любые команды (/post, /start, /cancel, /id ...) ======
+    // пропускаем команды (/post и т.п.)
     if ('text' in ctx.message && typeof ctx.message.text === 'string') {
       const t = ctx.message.text.trim();
       if (t.startsWith('/')) return next();

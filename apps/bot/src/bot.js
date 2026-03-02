@@ -47,11 +47,10 @@ function getChannelId() {
 }
 
 // ---------------- Optional Redis (Upstash) ----------------
-// используем Upstash Redis, если заданы переменные UPSTASH_REDIS_REST_URL/TOKEN
-let redisInstance; // undefined = не инициализирован, null = нет Redis, object = клиент
-const mem = new Map(); // sessions fallback
-const memCatalogPosts = new Map(); // fallback storage for catalogpost:<messageId> -> meta
-const memPostMeta = new Map(); // fallback storage for postmeta:<sourceToken> -> meta
+let redisInstance;
+const mem = new Map();
+const memCatalogPosts = new Map();
+const memPostMeta = new Map();
 
 async function getRedis() {
   if (redisInstance !== undefined) return redisInstance;
@@ -85,18 +84,18 @@ async function loadSession(userId) {
 async function saveSession(userId, data) {
   const r = await getRedis();
   if (r) {
-    await r.set(`sess:${userId}`, data, { ex: 60 * 60 * 24 }); // TTL 1 день
+    await r.set(`sess:${userId}`, data, { ex: 60 * 60 * 24 });
   } else {
     mem.set(userId, data);
   }
 }
 
-// ---------- post meta (sourceToken -> {text, messageId, absChatId, mediaType, fileId}) ----------
+// ---------- post meta ----------
 async function setPostMeta(sourceToken, meta) {
   const key = `postmeta:${sourceToken}`;
   const r = await getRedis();
   if (r) {
-    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 }); // 365 дней
+    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
   } else {
     memPostMeta.set(key, meta);
   }
@@ -108,7 +107,7 @@ async function getPostMeta(sourceToken) {
   return memPostMeta.get(key) || null;
 }
 
-// ---------- catalog post meta (для обновления цен по постам) ----------
+// ---------- catalog post meta ----------
 async function setCatalogPostMeta(messageId, meta) {
   const key = `catalogpost:${messageId}`;
   const r = await getRedis();
@@ -168,7 +167,6 @@ function makeOrderNo(d = new Date()) {
   return `${DD}.${MM}.${YYYY}-${HH}.${mm}.${ss}`;
 }
 
-// Публичный канал: ссылка вида https://t.me/<username>/<message_id>
 function makePostLink(absChatId, messageId) {
   if (!messageId) return '';
   if (CHANNEL_USERNAME) {
@@ -191,7 +189,6 @@ let bot = null;
 if (token) {
   bot = new Telegraf(token);
 
-  // Глобальный лог всех сообщений
   bot.on('message', (ctx, next) => {
     try {
       console.log(
@@ -209,7 +206,6 @@ if (token) {
     return next();
   });
 
-  // Middleware сессий
   bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (!uid) return next();
@@ -221,7 +217,6 @@ if (token) {
     }
   });
 
-  // Модуль анкеты заказов
   registerOrders(bot, {
     HINT_TEXT,
     DEEPLINK_PREFIX,
@@ -235,7 +230,6 @@ if (token) {
     loadCatalogFromXlsx,
   });
 
-  // Модуль мастера /post
   registerPostWizard(bot, {
     HINT_TEXT,
     WEBAPP_URL,
@@ -243,12 +237,8 @@ if (token) {
     CATALOG_XLSX_PATH,
     getChannelId,
     isAdmin,
-
-    // meta для deeplink -> пост
     setPostMeta,
     CHANNEL_USERNAME,
-
-    // хранилище для обновления цен
     setCatalogPostMeta,
     getCatalogPostMeta,
     getAllCatalogPostKeys,
