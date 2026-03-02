@@ -302,11 +302,6 @@ export function registerPostWizard(bot, deps) {
     if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
     if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
 
-    // ✅ админам разрешаем /post даже если активна анкета
-    if (ctx.session?.order && !isAdmin(ctx)) {
-      return ctx.reply('Сейчас активна анкета. Завершите/отмените /cancel, затем используйте /post.');
-    }
-
     const raw = ctx.message?.text || '';
     const baseTextNoHint = raw.replace(/^\/post(@\S+)?\s*/i, '').trim();
 
@@ -327,6 +322,8 @@ export function registerPostWizard(bot, deps) {
 
     ctx.session.postWizard = {
       step: 'menu',
+      mode: 'new', // new | edit_existing
+      editTarget: null, // { chatId, messageId }
       baseTextNoHint,
       mediaPayload,
       selected: {
@@ -348,8 +345,10 @@ export function registerPostWizard(bot, deps) {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
 
+    ctx.session.postWizard.mode = 'new';
+    ctx.session.postWizard.editTarget = null;
+
     ctx.session.postWizard.step = 'STELA';
-    console.log('[postWizard] start wizard, step STELA');
     return askStep(ctx, 'STELA');
   });
 
@@ -359,13 +358,12 @@ export function registerPostWizard(bot, deps) {
 
     ctx.session.postWizard.step = 'update_prices_menu';
     await ctx.reply(
-      'Обновление цен постов:\n\n1) «🧾 Обновить по пересланному посту» — перешлите сюда пост из канала, и цена в нём будет пересчитана по текущему catalog.xlsx.\n\n2) «🔁 Обновить все» — пересчитать цены во всех постах, созданных через /post.',
+      'Обновление постов:\n\n1) «🧾 Обновить по пересланному посту» — перешлите пост из канала. Можно отредактировать параметры (стела/тумба/цветник/плита/работа/опции/графика) и обновить пост.\n\n2) «🔁 Обновить все» — пересчитать цены во всех постах, созданных через /post (параметры не меняются).',
       Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
     );
   });
 
   bot.hears('⬅️ Назад', async (ctx, next) => {
-    if (ctx.session?.order) return next();
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard) return next();
 
@@ -414,7 +412,6 @@ export function registerPostWizard(bot, deps) {
 
     if (step === 'OPTION' || step === 'GRAFIKA') rows.unshift(['Далее', 'Сбросить']);
 
-    console.log('[postWizard] askStep', step, 'buttons=', buttons);
     await ctx.reply(titleMap[step] || `Выберите ${step}:`, Markup.keyboard(rows).resize());
   }
 
@@ -424,7 +421,6 @@ export function registerPostWizard(bot, deps) {
 
     const idx = stepsOrder.indexOf(wiz.step);
     wiz.step = stepsOrder[idx + 1] || 'PREVIEW';
-    console.log('[postWizard] advance to', wiz.step);
 
     if (wiz.step === 'PREVIEW') return preview(ctx);
     return askStep(ctx, wiz.step);
@@ -441,14 +437,17 @@ export function registerPostWizard(bot, deps) {
     wiz.step = 'CONFIRM';
     wiz._previewTotal = total;
 
-    await ctx.reply(
-      `Предпросмотр:\n\n${fullCaption}\n\nЕсли всё верно — нажмите «Опубликовать».`,
-      Markup.keyboard([['Опубликовать'], ['Отменить']]).resize()
-    );
+    const confirmText =
+      wiz.mode === 'edit_existing'
+        ? 'Предпросмотр обновления:\n\n' + fullCaption + '\n\nЕсли всё верно — нажмите «Обновить пост».'
+        : 'Предпросмотр:\n\n' + fullCaption + '\n\nЕсли всё верно — нажмите «Опубликовать».';
+
+    const btn = wiz.mode === 'edit_existing' ? 'Обновить пост' : 'Опубликовать';
+
+    await ctx.reply(confirmText, Markup.keyboard([[btn], ['Отменить']]).resize());
   }
 
-  // --------- обновление цен ---------
-
+  // --------- пересчитать/обновить подпись поста (только цена) ---------
   async function recalcPriceForMessage(ctx, chatId, messageId, catalog, metaFromStore) {
     const meta = metaFromStore || (await getCatalogPostMeta(messageId));
     if (!meta) {
@@ -464,39 +463,63 @@ export function registerPostWizard(bot, deps) {
       1024
     );
 
-    console.log('[postWizard] recalcPriceForMessage', { chatId, messageId, total });
-
     try {
       await ctx.telegram.editMessageCaption(chatId, messageId, undefined, newCaption);
     } catch (e) {
-      const desc = e?.response?.description || e?.message || String(e);
-      console.warn('[postWizard] editMessageCaption failed, trying editMessageText:', desc);
       await ctx.telegram.editMessageText(chatId, messageId, undefined, newCaption, {
         disable_web_page_preview: true,
       });
     }
 
     await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
+    return total;
+  }
+
+  // --------- ВАЖНО: обновить параметры + пересчитать + обновить пост ---------
+  async function applyEditsToExistingPost(ctx, { chatId, messageId }, baseTextNoHint, selected) {
+    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+    const { caption, total } = calcCaptionAndTags(catalog, selected);
+
+    const baseText = normStr(baseTextNoHint);
+    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
+      0,
+      1024
+    );
+
+    try {
+      await ctx.telegram.editMessageCaption(chatId, messageId, undefined, newCaption);
+    } catch (e) {
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, newCaption, {
+        disable_web_page_preview: true,
+      });
+    }
+
+    await setCatalogPostMeta(messageId, {
+      selected,
+      baseTextNoHint: baseText,
+      last_total_price: total,
+      updatedAt: Date.now(),
+    });
 
     return total;
   }
 
+  // обработчик "🧾 Обновить по пересланному посту"
   bot.hears('🧾 Обновить по пересланному посту', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
-    if (ctx.session?.order) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
 
     await ctx.reply(
-      'Перешлите сюда пост из канала, который нужно обновить.\n\nВажно: пересылать нужно ОРИГИНАЛЬНЫЙ пост с ценой, опубликованный через /post.',
+      'Перешлите сюда пост из канала, который нужно изменить (параметры/состав/цена).',
       Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize()
     );
 
-    ctx.session.postWizard.step = 'update_prices_wait_post';
+    ctx.session.postWizard.step = 'edit_wait_post';
   });
 
+  // обработчик "🔁 Обновить все"
   bot.hears('🔁 Обновить все', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
-    if (ctx.session?.order) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
 
     const channelId = getChannelId();
@@ -505,8 +528,6 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Начинаю обновление цен во всех постах...\nЭто может занять некоторое время.');
 
     const keys = await getAllCatalogPostKeys();
-    console.log('[postWizard] update-all keys count =', keys.length);
-
     if (!keys.length) {
       await ctx.reply('Нет сохранённых постов для обновления.');
       return;
@@ -535,8 +556,6 @@ export function registerPostWizard(bot, deps) {
         await recalcPriceForMessage(ctx, channelId, messageId, catalog, meta);
         ok++;
       } catch (e) {
-        const desc = e?.response?.description || e?.message || String(e);
-        console.error('[postWizard] update-all error for key', key, desc);
         fail++;
       }
     }
@@ -546,53 +565,10 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
+  // ---------- ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST ----------
   bot.on('message', async (ctx, next) => {
-    if (ctx.session?.order) {
-      return next();
-    }
-
     const wiz = ctx.session?.postWizard;
-    console.log('[postWizard] on message, step =', wiz?.step);
     if (!wiz) return next();
-
-    if (wiz.step === 'update_prices_wait_post') {
-      const fwd = ctx.message?.forward_from_message_id ? ctx.message : null;
-
-      if (!fwd || !fwd.forward_from_chat || !fwd.forward_from_message_id) {
-        await ctx.reply(
-          'Это сообщение не похоже на пересланный пост из канала.\nПожалуйста, перешлите ОРИГИНАЛЬНЫЙ пост из канала (через кнопку «Переслать»).'
-        );
-        return;
-      }
-
-      const channelId = fwd.forward_from_chat.id;
-      const messageId = fwd.forward_from_message_id;
-
-      const expectedChannelId = getChannelId();
-      if (expectedChannelId && Number(expectedChannelId) !== Number(channelId)) {
-        await ctx.reply('Похоже, этот пост из другого канала. Перешлите пост из нужного канала.');
-        return;
-      }
-
-      await ctx.reply('Считаю новую цену по текущему catalog.xlsx, обновляю пост...');
-
-      try {
-        const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-        const total = await recalcPriceForMessage(ctx, channelId, messageId, catalog, null);
-        await ctx.reply(`Готово. Новая цена в посте: ${formatRub(total)} ₽.`);
-      } catch (e) {
-        const desc = e?.response?.description || e?.message || String(e);
-        console.error('[postWizard] update-by-forward error', desc);
-        await ctx.reply('Не удалось обновить цену в этом посте. Проверьте, что он был создан через /post.');
-      }
-
-      wiz.step = 'update_prices_menu';
-      await ctx.reply(
-        'Выберите следующее действие:',
-        Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
-      );
-      return;
-    }
 
     if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;
@@ -600,12 +576,89 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
+    // --- режим: ждём пересланный пост, чтобы редактировать параметры ---
+    if (wiz.step === 'edit_wait_post') {
+      const fwd = ctx.message?.forward_from_message_id ? ctx.message : null;
+
+      if (!fwd || !fwd.forward_from_chat || !fwd.forward_from_message_id) {
+        await ctx.reply('Пожалуйста, перешлите ОРИГИНАЛЬНЫЙ пост из канала.');
+        return;
+      }
+
+      const chatId = fwd.forward_from_chat.id;
+      const messageId = fwd.forward_from_message_id;
+
+      const expectedChannelId = getChannelId();
+      if (expectedChannelId && Number(expectedChannelId) !== Number(chatId)) {
+        await ctx.reply('Похоже, этот пост из другого канала. Перешлите пост из нужного канала.');
+        return;
+      }
+
+      const meta = await getCatalogPostMeta(messageId);
+      if (!meta || !meta.selected) {
+        await ctx.reply('Не нашёл данные этого поста в базе. Он должен быть создан через /post.');
+        return;
+      }
+
+      // стартуем визард как "редактирование", подставляя старые выбранные параметры
+      wiz.mode = 'edit_existing';
+      wiz.editTarget = { chatId, messageId };
+      wiz.baseTextNoHint = normStr(meta.baseTextNoHint);
+      wiz.selected = {
+        STELA: meta.selected?.STELA ?? null,
+        TUMBA: meta.selected?.TUMBA ?? null,
+        CVETNIK: meta.selected?.CVETNIK ?? null,
+        PLITA: meta.selected?.PLITA ?? null,
+        WORK: meta.selected?.WORK ?? null,
+        OPTION: Array.isArray(meta.selected?.OPTION) ? meta.selected.OPTION : [],
+        GRAFIKA: Array.isArray(meta.selected?.GRAFIKA) ? meta.selected.GRAFIKA : [],
+      };
+
+      wiz.step = 'STELA';
+
+      await ctx.reply(
+        'Редактирование поста запущено.\nМожно изменить один или несколько параметров, а затем нажать «Обновить пост».',
+        Markup.removeKeyboard()
+      );
+
+      return askStep(ctx, 'STELA');
+    }
+
+    // ниже — стандартная логика визарда (как у вас), но CONFIRM учитывает режим edit_existing
     if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
+    // CONFIRM
     if (wiz.step === 'CONFIRM') {
-      if (text !== 'Опубликовать') return next();
+      const isEdit = wiz.mode === 'edit_existing';
+      const needText = isEdit ? 'Обновить пост' : 'Опубликовать';
+      if (text !== needText) return next();
 
+      if (isEdit) {
+        if (!wiz.editTarget?.chatId || !wiz.editTarget?.messageId) {
+          await ctx.reply('Ошибка: не указан пост для обновления.');
+          return;
+        }
+
+        try {
+          const total = await applyEditsToExistingPost(
+            ctx,
+            wiz.editTarget,
+            wiz.baseTextNoHint,
+            wiz.selected
+          );
+
+          ctx.session.postWizard = null;
+          await ctx.reply(`Пост обновлён.\nНовая цена: ${formatRub(total)} ₽`, Markup.removeKeyboard());
+          return;
+        } catch (e) {
+          const desc = e?.response?.description || e?.message || String(e);
+          await ctx.reply(`Не удалось обновить пост: ${desc}`);
+          return;
+        }
+      }
+
+      // обычная публикация нового поста (ваш код)
       const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
       const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
 
@@ -641,9 +694,8 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
+    // OPTION / GRAFIKA (мультивыбор)
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
-      console.log('[postWizard] OPTION/GRAFIKA step=', wiz.step, 'text=', JSON.stringify(text));
-
       if (text === 'Далее') return advance(ctx);
       if (text === 'Сбросить') {
         wiz.selected[wiz.step] = [];
@@ -658,10 +710,7 @@ export function registerPostWizard(bot, deps) {
         pool.find((x) => normStr(x.sku) === text) ||
         pool.find((x) => up(x.sku) === up(text));
 
-      if (!it) {
-        console.log('[postWizard] item not found for text', text);
-        return next();
-      }
+      if (!it) return next();
 
       const arr = Array.isArray(wiz.selected[wiz.step]) ? wiz.selected[wiz.step] : [];
       const idx = arr.indexOf(it.sku);
@@ -669,14 +718,12 @@ export function registerPostWizard(bot, deps) {
       else arr.push(it.sku);
       wiz.selected[wiz.step] = arr;
 
-      console.log('[postWizard] selected', wiz.step, wiz.selected[wiz.step]);
       return;
     }
 
+    // одиночные группы STELA/TUMBA/...
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
-      console.log('[postWizard] single step', wiz.step, 'text=', JSON.stringify(text));
-
       if (text === '— Нет —') {
         wiz.selected[wiz.step] = null;
         return advance(ctx);
@@ -684,13 +731,9 @@ export function registerPostWizard(bot, deps) {
 
       const { items } = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
       const it = items.find((x) => x.group === wiz.step && normStr(x.label) === text);
-      if (!it) {
-        console.log('[postWizard] single item not found for', wiz.step, text);
-        return next();
-      }
+      if (!it) return next();
 
       wiz.selected[wiz.step] = it.sku;
-      console.log('[postWizard] chosen', wiz.step, it.sku);
       return advance(ctx);
     }
 
