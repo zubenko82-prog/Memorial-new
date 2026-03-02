@@ -517,9 +517,10 @@ export function registerPostWizard(bot, deps) {
     ctx.session.postWizard.step = 'edit_wait_post';
   });
 
-  // обработчик "🔁 Обновить все"
+    // обработчик "🔁 Обновить все" (подробный отчёт)
   bot.hears('🔁 Обновить все', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
+    if (ctx.session?.order) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
 
     const channelId = getChannelId();
@@ -528,6 +529,8 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Начинаю обновление цен во всех постах...\nЭто может занять некоторое время.');
 
     const keys = await getAllCatalogPostKeys();
+    console.log('[postWizard] update-all keys count =', keys.length);
+
     if (!keys.length) {
       await ctx.reply('Нет сохранённых постов для обновления.');
       return;
@@ -535,32 +538,102 @@ export function registerPostWizard(bot, deps) {
 
     const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
 
-    let ok = 0;
-    let fail = 0;
+    const okRows = [];
+    const failRows = [];
 
     for (const key of keys) {
+      const messageIdStr = String(key).replace(/^catalogpost:/, '');
+      const messageId = Number(messageIdStr);
+
+      if (!Number.isFinite(messageId)) {
+        failRows.push({
+          key,
+          messageId: messageIdStr,
+          reason: `Некорректный ключ (не число): ${messageIdStr}`,
+        });
+        continue;
+      }
+
       try {
         const meta = await getCatalogPostMetaByKey(key);
         if (!meta) {
-          fail++;
+          failRows.push({
+            key,
+            messageId,
+            reason: 'Нет метаданных (meta=null) для этого поста',
+          });
           continue;
         }
 
-        const messageIdStr = String(key).replace(/^catalogpost:/, '');
-        const messageId = Number(messageIdStr);
-        if (!Number.isFinite(messageId)) {
-          fail++;
-          continue;
-        }
+        const total = await recalcPriceForMessage(ctx, channelId, messageId, catalog, meta);
 
-        await recalcPriceForMessage(ctx, channelId, messageId, catalog, meta);
-        ok++;
+        // ссылка на пост
+        const link =
+          typeof channelId === 'string' && channelId.startsWith('@')
+            ? `https://t.me/${channelId.replace('@', '')}/${messageId}`
+            : null;
+
+        okRows.push({
+          messageId,
+          total,
+          link,
+        });
       } catch (e) {
-        fail++;
+        const desc = e?.response?.description || e?.message || String(e);
+        failRows.push({
+          key,
+          messageId,
+          reason: desc,
+        });
       }
     }
 
-    await ctx.reply(`Обновление завершено.\n\nУспешно: ${ok}\nОшибок: ${fail}`);
+    // helper: форматирование отчёта в несколько сообщений (лимит телеграма ~4096)
+    const chunks = [];
+    const pushChunk = (text) => {
+      if (!text) return;
+      chunks.push(text);
+    };
+
+    const header = `Обновление завершено.\n\nУспешно: ${okRows.length}\nОшибок: ${failRows.length}`;
+    pushChunk(header);
+
+    if (okRows.length) {
+      const lines = okRows.map((r) => {
+        const price = formatRub(r.total);
+        const base = `✅ message_id: ${r.messageId} → ${price} ₽`;
+        return r.link ? `${base}\n${r.link}` : base;
+      });
+
+      let cur = '---\n✅ Успешно обновлены:\n';
+      for (const l of lines) {
+        if ((cur + '\n' + l).length > 3500) {
+          pushChunk(cur);
+          cur = '✅ Успешно обновлены (продолжение):\n';
+        }
+        cur += l + '\n';
+      }
+      pushChunk(cur.trim());
+    }
+
+    if (failRows.length) {
+      const lines = failRows.map((r) => `❌ message_id: ${r.messageId}\nПричина: ${r.reason}`);
+
+      let cur = '---\n❌ Ошибки:\n';
+      for (const l of lines) {
+        if ((cur + '\n' + l).length > 3500) {
+          pushChunk(cur);
+          cur = '❌ Ошибки (продолжение):\n';
+        }
+        cur += l + '\n\n';
+      }
+      pushChunk(cur.trim());
+    }
+
+    for (const msg of chunks) {
+      await ctx.reply(msg);
+    }
+
     ctx.session.postWizard.step = 'menu';
     await ctx.reply('Меню /post:', kbPostMenu());
   });
