@@ -342,7 +342,6 @@ export function registerOrders(bot, deps) {
     }
   }
 
-  // внутри редактора "❌ Отменить" просто сбрасывает редактирование и возвращает к предпросмотру
   async function cancelEditReturnToReview(ctx) {
     const s = getOrder(ctx);
     s.editReturnStep = 'review';
@@ -355,7 +354,6 @@ export function registerOrders(bot, deps) {
     return ctx.reply(`❌ ${msg}`, kbRemove());
   }
 
-  // Меню редактирования
   bot.hears(['✏️ Изменить'], async (ctx) => {
     const s = getOrder(ctx);
     s.step = 'edit_menu';
@@ -381,7 +379,6 @@ export function registerOrders(bot, deps) {
     const s = getOrder(ctx); s.editReturnStep = 'review'; s.step = 'comment'; await renderStep(ctx);
   });
 
-  // отмена в редакторе — выход в предпросмотр (не сброс всей анкеты!)
   bot.hears(['❌ Отменить', 'Отменить'], async (ctx, next) => {
     if (
       ctx.session?.order?.step === 'name' ||
@@ -394,7 +391,6 @@ export function registerOrders(bot, deps) {
     ) {
       return cancelEditReturnToReview(ctx);
     }
-    // если этап предпросмотра — ЗАПРОШИВАЕМ ПОДТВЕРЖДЕНИЕ
     if (ctx.session?.order && ctx.session?.order?.step === 'review') {
       ctx.session.order.step = 'confirm_cancel';
       return renderStep(ctx);
@@ -402,7 +398,6 @@ export function registerOrders(bot, deps) {
     return next();
   });
 
-  // подтверждение отмены анкеты
   bot.hears(['Да, отменить'], async (ctx) => {
     if (ctx.session?.order && ctx.session?.order?.step === 'confirm_cancel') {
       return cancelOrder(ctx, 'Анкета отменена.');
@@ -450,6 +445,12 @@ export function registerOrders(bot, deps) {
     const s = getOrder(ctx);
     const st = s.step;
     if (!st) return next();
+
+    // === ВАЖНО: пропускаем команды типа /post, /start, /cancel и т.п. ===
+    if ('text' in ctx.message && typeof ctx.message.text === 'string') {
+      const t = ctx.message.text.trim();
+      if (t.startsWith('/')) return next();
+    }
 
     const restoreToReview = () => {
       if (s.editReturnStep === 'review') {
