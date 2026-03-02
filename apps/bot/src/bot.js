@@ -1,4 +1,3 @@
-// apps/bot/src/bot.js
 import { resolve, dirname as pathDirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as dotenv from 'dotenv';
