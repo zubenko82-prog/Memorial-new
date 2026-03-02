@@ -301,7 +301,9 @@ export function registerPostWizard(bot, deps) {
     const channelId = getChannelId();
     if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
     if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
-    if (ctx.session?.order) {
+
+    // ✅ админам разрешаем /post даже если активна анкета
+    if (ctx.session?.order && !isAdmin(ctx)) {
       return ctx.reply('Сейчас активна анкета. Завершите/отмените /cancel, затем используйте /post.');
     }
 
@@ -447,7 +449,6 @@ export function registerPostWizard(bot, deps) {
 
   // --------- обновление цен ---------
 
-  // пересчитать цену и обновить подпись для одного поста
   async function recalcPriceForMessage(ctx, chatId, messageId, catalog, metaFromStore) {
     const meta = metaFromStore || (await getCatalogPostMeta(messageId));
     if (!meta) {
@@ -465,7 +466,6 @@ export function registerPostWizard(bot, deps) {
 
     console.log('[postWizard] recalcPriceForMessage', { chatId, messageId, total });
 
-    // пробуем как caption; если это чисто текстовый пост — используем editMessageText
     try {
       await ctx.telegram.editMessageCaption(chatId, messageId, undefined, newCaption);
     } catch (e) {
@@ -481,7 +481,6 @@ export function registerPostWizard(bot, deps) {
     return total;
   }
 
-  // обработчик "🧾 Обновить по пересланному посту"
   bot.hears('🧾 Обновить по пересланному посту', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (ctx.session?.order) return next();
@@ -495,7 +494,6 @@ export function registerPostWizard(bot, deps) {
     ctx.session.postWizard.step = 'update_prices_wait_post';
   });
 
-  // обработчик "🔁 Обновить все"
   bot.hears('🔁 Обновить все', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (ctx.session?.order) return next();
@@ -548,9 +546,7 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  // ---------- ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST ----------
   bot.on('message', async (ctx, next) => {
-    // если сейчас идёт анкета заказа — мастер /post не трогаем
     if (ctx.session?.order) {
       return next();
     }
@@ -559,11 +555,8 @@ export function registerPostWizard(bot, deps) {
     console.log('[postWizard] on message, step =', wiz?.step);
     if (!wiz) return next();
 
-    // режим "ждём пересланный пост для обновления"
     if (wiz.step === 'update_prices_wait_post') {
-      const fwd = ctx.message?.forward_from_message_id
-        ? ctx.message
-        : null;
+      const fwd = ctx.message?.forward_from_message_id ? ctx.message : null;
 
       if (!fwd || !fwd.forward_from_chat || !fwd.forward_from_message_id) {
         await ctx.reply(
@@ -601,8 +594,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // общий обработчик для мастера
-
     if ('text' in ctx.message && ctx.message.text?.trim() === 'Отменить') {
       ctx.session.postWizard = null;
       await ctx.reply('Отменено.', Markup.removeKeyboard());
@@ -612,7 +603,6 @@ export function registerPostWizard(bot, deps) {
     if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
-    // CONFIRM
     if (wiz.step === 'CONFIRM') {
       if (text !== 'Опубликовать') return next();
 
@@ -630,26 +620,11 @@ export function registerPostWizard(bot, deps) {
 
       let primary;
       if (kind === 'photo') {
-        ({ primary } = await postToChannelWithKb(
-          ctx,
-          'photo',
-          { fileId: payload.fileId, caption: finalCaption },
-          baseText
-        ));
+        ({ primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else if (kind === 'video') {
-        ({ primary } = await postToChannelWithKb(
-          ctx,
-          'video',
-          { fileId: payload.fileId, caption: finalCaption },
-          baseText
-        ));
+        ({ primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else if (kind === 'document') {
-        ({ primary } = await postToChannelWithKb(
-          ctx,
-          'document',
-          { fileId: payload.fileId, caption: finalCaption },
-          baseText
-        ));
+        ({ primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else {
         ({ primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
       }
@@ -666,7 +641,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // OPTION / GRAFIKA (мультивыбор)
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
       console.log('[postWizard] OPTION/GRAFIKA step=', wiz.step, 'text=', JSON.stringify(text));
 
@@ -699,7 +673,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // одиночные группы STELA/TUMBA/...
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
       console.log('[postWizard] single step', wiz.step, 'text=', JSON.stringify(text));
