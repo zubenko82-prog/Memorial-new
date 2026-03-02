@@ -11,6 +11,10 @@ function formatRub(n) {
   return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 }
 
+// --- helpers ---
+const normStr = (v) => String(v || '').trim();
+const up = (v) => normStr(v).toUpperCase();
+
 function normalizeSelectedToSkuList(selected) {
   const res = [];
   for (const v of Object.values(selected || {})) {
@@ -34,6 +38,18 @@ function pickBandTag(bands, total) {
     if (total >= b.min && total <= b.max) return b.tag;
   }
   return '';
+}
+
+function isOptionItem(it) {
+  const g = up(it.group);
+  const sku = up(it.sku);
+  return g === 'OPTION' || sku.startsWith('OPT_');
+}
+
+function isGrafikaItem(it) {
+  const g = up(it.group);
+  const sku = up(it.sku);
+  return g === 'GRAFIKA' || sku.startsWith('GRAF_');
 }
 
 function calcCaptionAndTags({ items, bands }, selected) {
@@ -86,22 +102,6 @@ function calcCaptionAndTags({ items, bands }, selected) {
 
   const caption = `Цена: ${formatRub(total)} ₽\n${uniq.join(' ')}`.trim();
   return { total, tags: uniq, caption };
-}
-
-// --- helpers ---
-const normStr = (v) => String(v || '').trim();
-const up = (v) => normStr(v).toUpperCase();
-
-function isOptionItem(it) {
-  const g = up(it.group);
-  const sku = up(it.sku);
-  return g === 'OPTION' || sku.startsWith('OPT_');
-}
-
-function isGrafikaItem(it) {
-  const g = up(it.group);
-  const sku = up(it.sku);
-  return g === 'GRAFIKA' || sku.startsWith('GRAF_');
 }
 
 async function loadCatalogFromXlsx(CATALOG_XLSX_PATH) {
@@ -187,8 +187,41 @@ export function registerPostWizard(bot, deps) {
     setCatalogPostMetaByKey,
   } = deps;
 
+  // ====== UI ======
+  const kbPostMenu = () =>
+    Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
+
+  const kbUpdateMenu = () =>
+    Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize();
+
+  const editFieldMenuKb = () =>
+    Markup.keyboard([
+      ['🪧 Стела', '🧱 Тумба'],
+      ['🌿 Цветник', '🪨 Плита'],
+      ['🛠 Работа', '➕ Опции'],
+      ['🎨 Графика', '👁 Предпросмотр'],
+      ['⬅️ Назад', 'Отменить'],
+    ]).resize();
+
+  // ====== stepsOrder for full wizard ======
   const stepsOrder = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'OPTION', 'GRAFIKA', 'PREVIEW'];
 
+  // ====== link helpers ======
+  function makeChannelPostLink(chatId, messageId) {
+    // публичный username
+    if (typeof chatId === 'string' && chatId.startsWith('@')) {
+      return `https://t.me/${chatId.replace('@', '')}/${messageId}`;
+    }
+    // private channel id -> нужно absChatId; если у нас -100..., делаем t.me/c/<abs>/<msg>
+    const n = Number(chatId);
+    if (Number.isFinite(n)) {
+      const abs = Math.abs(n);
+      return `https://t.me/c/${abs}/${messageId}`;
+    }
+    return '';
+  }
+
+  // ====== post buttons ======
   function channelPostKbFull(botUsername, sourceToken) {
     const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
     const webAppUrl = new URL(WEBAPP_URL).toString();
@@ -293,91 +326,29 @@ export function registerPostWizard(bot, deps) {
     return { primary: msg, sourceToken };
   }
 
-  const kbPostMenu = () =>
-    Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
+  // ====== Render selected to human readable ======
+  async function describeSelected(selected) {
+    const { items } = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+    const map = new Map(items.map((it) => [it.sku, it]));
 
-  // ---------- /post старт ----------
-  bot.command('post', async (ctx) => {
-    const channelId = getChannelId();
-    if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
-    if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
+    const one = (sku) => (sku ? map.get(sku)?.label || sku : '— Нет —');
+    const many = (arr) =>
+      Array.isArray(arr) && arr.length
+        ? arr.map((sku) => map.get(sku)?.label || sku).join(', ')
+        : '—';
 
-    const raw = ctx.message?.text || '';
-    const baseTextNoHint = raw.replace(/^\/post(@\S+)?\s*/i, '').trim();
+    return [
+      `🪧 Стела: ${one(selected?.STELA)}`,
+      `🧱 Тумба: ${one(selected?.TUMBA)}`,
+      `🌿 Цветник: ${one(selected?.CVETNIK)}`,
+      `🪨 Плита: ${one(selected?.PLITA)}`,
+      `🛠 Работа: ${one(selected?.WORK)}`,
+      `➕ Опции: ${many(selected?.OPTION)}`,
+      `🎨 Графика: ${many(selected?.GRAFIKA)}`,
+    ].join('\n');
+  }
 
-    const r = ctx.message?.reply_to_message;
-    const mediaPayload = {};
-    if (r?.photo?.length) {
-      mediaPayload.kind = 'photo';
-      mediaPayload.fileId = r.photo.at(-1).file_id;
-    } else if (r?.video) {
-      mediaPayload.kind = 'video';
-      mediaPayload.fileId = r.video.file_id;
-    } else if (r?.document) {
-      mediaPayload.kind = 'document';
-      mediaPayload.fileId = r.document.file_id;
-    } else {
-      mediaPayload.kind = 'text';
-    }
-
-    ctx.session.postWizard = {
-      step: 'menu',
-      mode: 'new', // new | edit_existing
-      editTarget: null, // { chatId, messageId }
-      baseTextNoHint,
-      mediaPayload,
-      selected: {
-        STELA: null,
-        TUMBA: null,
-        CVETNIK: null,
-        PLITA: null,
-        WORK: null,
-        OPTION: [],
-        GRAFIKA: [],
-      },
-    };
-
-    return ctx.reply('Меню /post:', kbPostMenu());
-  });
-
-  // ---------- Меню мастера ----------
-  bot.hears('▶️ Новая публикация', async (ctx, next) => {
-    if (!isAdmin(ctx)) return next();
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
-
-    ctx.session.postWizard.mode = 'new';
-    ctx.session.postWizard.editTarget = null;
-
-    ctx.session.postWizard.step = 'STELA';
-    return askStep(ctx, 'STELA');
-  });
-
-  bot.hears('♻️ Обновить цены', async (ctx, next) => {
-    if (!isAdmin(ctx)) return next();
-    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
-
-    ctx.session.postWizard.step = 'update_prices_menu';
-    await ctx.reply(
-      'Обновление постов:\n\n1) «🧾 Обновить по пересланному посту» — перешлите пост из канала. Можно отредактировать параметры (стела/тумба/цветник/плита/работа/опции/графика) и обновить пост.\n\n2) «🔁 Обновить все» — пересчитать цены во всех постах, созданных через /post (параметры не меняются).',
-      Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize()
-    );
-  });
-
-  bot.hears('⬅️ Назад', async (ctx, next) => {
-    if (!isAdmin(ctx)) return next();
-    if (!ctx.session?.postWizard) return next();
-
-    ctx.session.postWizard.step = 'menu';
-    await ctx.reply('Меню /post:', kbPostMenu());
-  });
-
-  bot.hears('Отменить', async (ctx, next) => {
-    if (!ctx.session?.postWizard) return next();
-    ctx.session.postWizard = null;
-    await ctx.reply('Отменено.', Markup.removeKeyboard());
-  });
-
-  // ---------- Локальные функции мастера ----------
+  // ====== Ask step (full wizard) ======
   async function askStep(ctx, step) {
     const wiz = ctx.session.postWizard;
     if (!wiz) return;
@@ -437,61 +408,27 @@ export function registerPostWizard(bot, deps) {
     wiz.step = 'CONFIRM';
     wiz._previewTotal = total;
 
+    const btn = wiz.mode === 'edit_existing' ? 'Обновить пост' : 'Опубликовать';
     const confirmText =
       wiz.mode === 'edit_existing'
-        ? 'Предпросмотр обновления:\n\n' + fullCaption + '\n\nЕсли всё верно — нажмите «Обновить пост».'
-        : 'Предпросмотр:\n\n' + fullCaption + '\n\nЕсли всё верно — нажмите «Опубликовать».';
-
-    const btn = wiz.mode === 'edit_existing' ? 'Обновить пост' : 'Опубликовать';
+        ? `Предпросмотр обновления:\n\n${fullCaption}\n\nЕсли всё верно — нажмите «${btn}».`
+        : `Предпросмотр:\n\n${fullCaption}\n\nЕсли всё верно — нажмите «${btn}».`;
 
     await ctx.reply(confirmText, Markup.keyboard([[btn], ['Отменить']]).resize());
   }
 
-  // --------- пересчитать/обновить подпись поста (только цена) ---------
-  async function recalcPriceForMessage(ctx, chatId, messageId, catalog, metaFromStore) {
-    const meta = metaFromStore || (await getCatalogPostMeta(messageId));
-    if (!meta) {
-      throw new Error(`Нет метаданных для поста message_id=${messageId}`);
-    }
-
-    const { selected, baseTextNoHint } = meta;
-
-    const { caption, total } = calcCaptionAndTags(catalog, selected);
-    const baseText = normStr(baseTextNoHint);
-    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
-      0,
-      1024
-    );
-
-    try {
-      await ctx.telegram.editMessageCaption(chatId, messageId, undefined, newCaption);
-    } catch (e) {
-      await ctx.telegram.editMessageText(chatId, messageId, undefined, newCaption, {
-        disable_web_page_preview: true,
-      });
-    }
-
-    await setCatalogPostMeta(messageId, { ...meta, last_total_price: total, updatedAt: Date.now() });
-    return total;
-  }
-
-  // --------- ВАЖНО: обновить параметры + пересчитать + обновить пост ---------
-  async function applyEditsToExistingPost(ctx, { chatId, messageId }, baseTextNoHint, selected) {
+  // ====== edit caption/text by selection ======
+  async function applySelectedToMessage(ctx, { chatId, messageId }, baseTextNoHint, selected) {
     const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
     const { caption, total } = calcCaptionAndTags(catalog, selected);
 
     const baseText = normStr(baseTextNoHint);
-    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
-      0,
-      1024
-    );
+    const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
     try {
       await ctx.telegram.editMessageCaption(chatId, messageId, undefined, newCaption);
     } catch (e) {
-      await ctx.telegram.editMessageText(chatId, messageId, undefined, newCaption, {
-        disable_web_page_preview: true,
-      });
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, newCaption, { disable_web_page_preview: true });
     }
 
     await setCatalogPostMeta(messageId, {
@@ -499,28 +436,118 @@ export function registerPostWizard(bot, deps) {
       baseTextNoHint: baseText,
       last_total_price: total,
       updatedAt: Date.now(),
+      // полезно для ссылок:
+      channelId: chatId,
+      messageId,
     });
 
     return total;
   }
 
-  // обработчик "🧾 Обновить по пересланному посту"
+  // ====== /post ======
+  bot.command('post', async (ctx) => {
+    const channelId = getChannelId();
+    if (!channelId) return ctx.reply('CHANNEL_ID не задан или некорректен.');
+    if (!isAdmin(ctx)) return ctx.reply('Недостаточно прав.');
+
+    const raw = ctx.message?.text || '';
+    const baseTextNoHint = raw.replace(/^\/post(@\S+)?\s*/i, '').trim();
+
+    const r = ctx.message?.reply_to_message;
+    const mediaPayload = {};
+    if (r?.photo?.length) {
+      mediaPayload.kind = 'photo';
+      mediaPayload.fileId = r.photo.at(-1).file_id;
+    } else if (r?.video) {
+      mediaPayload.kind = 'video';
+      mediaPayload.fileId = r.video.file_id;
+    } else if (r?.document) {
+      mediaPayload.kind = 'document';
+      mediaPayload.fileId = r.document.file_id;
+    } else {
+      mediaPayload.kind = 'text';
+    }
+
+    ctx.session.postWizard = {
+      step: 'menu',
+
+      mode: 'new', // new | edit_existing
+      editTarget: null, // { chatId, messageId }
+      editMeta: null, // meta for edited post
+
+      baseTextNoHint,
+      mediaPayload,
+
+      // selection
+      selected: {
+        STELA: null,
+        TUMBA: null,
+        CVETNIK: null,
+        PLITA: null,
+        WORK: null,
+        OPTION: [],
+        GRAFIKA: [],
+      },
+    };
+
+    return ctx.reply('Меню /post:', kbPostMenu());
+  });
+
+  // ====== menu handlers ======
+  bot.hears('▶️ Новая публикация', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
+
+    const wiz = ctx.session.postWizard;
+    wiz.mode = 'new';
+    wiz.editTarget = null;
+    wiz.editMeta = null;
+
+    wiz.step = 'STELA';
+    return askStep(ctx, 'STELA');
+  });
+
+  bot.hears('♻️ Обновить цены', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
+
+    ctx.session.postWizard.step = 'update_prices_menu';
+    await ctx.reply(
+      'Обновление постов:\n\n1) «🧾 Обновить по пересланному посту» — редактирование параметров выбранного поста.\n2) «🔁 Обновить все» — пересчитать цены во всех постах, созданных через /post.',
+      kbUpdateMenu()
+    );
+  });
+
+  bot.hears('⬅️ Назад', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard) return next();
+    ctx.session.postWizard.step = 'menu';
+    return ctx.reply('Меню /post:', kbPostMenu());
+  });
+
+  bot.hears('Отменить', async (ctx, next) => {
+    if (!ctx.session?.postWizard) return next();
+    ctx.session.postWizard = null;
+    await ctx.reply('Отменено.', Markup.removeKeyboard());
+  });
+
+  // ====== update menu ======
   bot.hears('🧾 Обновить по пересланному посту', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
 
+    ctx.session.postWizard.step = 'edit_wait_post';
     await ctx.reply(
-      'Перешлите сюда пост из канала, который нужно изменить (параметры/состав/цена).',
+      'Перешлите сюда ОРИГИНАЛЬНЫЙ пост из канала, который нужно изменить.',
       Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize()
     );
-
-    ctx.session.postWizard.step = 'edit_wait_post';
   });
 
-    // обработчик "🔁 Обновить все" (подробный отчёт)
+  // ====== IMPORTANT FIX: 🔁 Обновить все "не происходит" ======
+  // Частая причина: в bot.js registerOrders блокирует любые сообщения когда postWizard активен.
+  // Поэтому это hears должен сработать ДО любых on('message') и без зависимости от ctx.session.order.
   bot.hears('🔁 Обновить все', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
-    if (ctx.session?.order) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
 
     const channelId = getChannelId();
@@ -528,15 +555,27 @@ export function registerPostWizard(bot, deps) {
 
     await ctx.reply('Начинаю обновление цен во всех постах...\nЭто может занять некоторое время.');
 
-    const keys = await getAllCatalogPostKeys();
-    console.log('[postWizard] update-all keys count =', keys.length);
+    let keys = [];
+    try {
+      keys = await getAllCatalogPostKeys();
+    } catch (e) {
+      const desc = e?.message || String(e);
+      await ctx.reply('Не удалось получить список постов из хранилища: ' + desc);
+      return;
+    }
 
-    if (!keys.length) {
+    if (!Array.isArray(keys) || keys.length === 0) {
       await ctx.reply('Нет сохранённых постов для обновления.');
       return;
     }
 
-    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+    let catalog;
+    try {
+      catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+    } catch (e) {
+      await ctx.reply('Не удалось загрузить catalog.xlsx: ' + (e?.message || String(e)));
+      return;
+    }
 
     const okRows = [];
     const failRows = [];
@@ -546,99 +585,102 @@ export function registerPostWizard(bot, deps) {
       const messageId = Number(messageIdStr);
 
       if (!Number.isFinite(messageId)) {
-        failRows.push({
-          key,
-          messageId: messageIdStr,
-          reason: `Некорректный ключ (не число): ${messageIdStr}`,
-        });
+        failRows.push({ messageId: messageIdStr, reason: 'Некорректный ключ' });
         continue;
       }
 
       try {
         const meta = await getCatalogPostMetaByKey(key);
-        if (!meta) {
-          failRows.push({
-            key,
-            messageId,
-            reason: 'Нет метаданных (meta=null) для этого поста',
-          });
+        if (!meta?.selected) {
+          failRows.push({ messageId, reason: 'Нет метаданных selected (пост не из /post?)' });
           continue;
         }
 
-        const total = await recalcPriceForMessage(ctx, channelId, messageId, catalog, meta);
+        const total = await (async () => {
+          // если meta хранит свой channelId — используем его, иначе общий
+          const targetChatId = meta.channelId ?? channelId;
+          return await (async () => {
+            const { caption } = calcCaptionAndTags(catalog, meta.selected);
+            const baseText = normStr(meta.baseTextNoHint);
+            const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
-        // ссылка на пост
-        const link =
-          typeof channelId === 'string' && channelId.startsWith('@')
-            ? `https://t.me/${channelId.replace('@', '')}/${messageId}`
-            : null;
+            try {
+              await ctx.telegram.editMessageCaption(targetChatId, messageId, undefined, newCaption);
+            } catch (e1) {
+              await ctx.telegram.editMessageText(targetChatId, messageId, undefined, newCaption, {
+                disable_web_page_preview: true,
+              });
+            }
+
+            const { total } = calcCaptionAndTags(catalog, meta.selected);
+            await setCatalogPostMetaByKey(key, { ...meta, last_total_price: total, updatedAt: Date.now(), channelId: targetChatId });
+            return total;
+          })();
+        })();
 
         okRows.push({
           messageId,
           total,
-          link,
+          link: makeChannelPostLink(channelId, messageId),
         });
       } catch (e) {
         const desc = e?.response?.description || e?.message || String(e);
-        failRows.push({
-          key,
-          messageId,
-          reason: desc,
-        });
+        failRows.push({ messageId, reason: desc });
       }
     }
 
-    // helper: форматирование отчёта в несколько сообщений (лимит телеграма ~4096)
-    const chunks = [];
-    const pushChunk = (text) => {
-      if (!text) return;
-      chunks.push(text);
-    };
-
-    const header = `Обновление завершено.\n\nУспешно: ${okRows.length}\nОшибок: ${failRows.length}`;
-    pushChunk(header);
+    const summary = `Обновление завершено.\n\nУспешно: ${okRows.length}\nОшибок: ${failRows.length}`;
+    await ctx.reply(summary);
 
     if (okRows.length) {
-      const lines = okRows.map((r) => {
-        const price = formatRub(r.total);
-        const base = `✅ message_id: ${r.messageId} → ${price} ₽`;
-        return r.link ? `${base}\n${r.link}` : base;
-      });
-
-      let cur = '---\n✅ Успешно обновлены:\n';
-      for (const l of lines) {
-        if ((cur + '\n' + l).length > 3500) {
-          pushChunk(cur);
-          cur = '✅ Успешно обновлены (продолжение):\n';
-        }
-        cur += l + '\n';
-      }
-      pushChunk(cur.trim());
+      const text = okRows
+        .slice(0, 50)
+        .map((r) => `✅ ${r.messageId} → ${formatRub(r.total)} ₽\n${r.link}`)
+        .join('\n\n');
+      await ctx.reply('✅ Успешно обновлены:\n\n' + text);
+      if (okRows.length > 50) await ctx.reply(`...и ещё ${okRows.length - 50} постов (слишком длинный список).`);
     }
 
     if (failRows.length) {
-      const lines = failRows.map((r) => `❌ message_id: ${r.messageId}\nПричина: ${r.reason}`);
-
-      let cur = '---\n❌ Ошибки:\n';
-      for (const l of lines) {
-        if ((cur + '\n' + l).length > 3500) {
-          pushChunk(cur);
-          cur = '❌ Ошибки (продолжение):\n';
-        }
-        cur += l + '\n\n';
-      }
-      pushChunk(cur.trim());
-    }
-
-    for (const msg of chunks) {
-      await ctx.reply(msg);
+      const text = failRows
+        .slice(0, 50)
+        .map((r) => `❌ ${r.messageId}\nПричина: ${r.reason}`)
+        .join('\n\n');
+      await ctx.reply('❌ Ошибки:\n\n' + text);
+      if (failRows.length > 50) await ctx.reply(`...и ещё ${failRows.length - 50} ошибок (слишком длинный список).`);
     }
 
     ctx.session.postWizard.step = 'menu';
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  // ---------- ОБРАБОТЧИК СООБЩЕНИЙ МАСТЕРА /POST ----------
+  // ====== edit specific post: точечное редактирование ======
+  async function openEditMenuForForwardedPost(ctx, chatId, messageId, meta) {
+    const wiz = ctx.session.postWizard;
+    wiz.mode = 'edit_existing';
+    wiz.editTarget = { chatId, messageId };
+    wiz.editMeta = meta;
+    wiz.baseTextNoHint = normStr(meta.baseTextNoHint);
+
+    wiz.selected = {
+      STELA: meta.selected?.STELA ?? null,
+      TUMBA: meta.selected?.TUMBA ?? null,
+      CVETNIK: meta.selected?.CVETNIK ?? null,
+      PLITA: meta.selected?.PLITA ?? null,
+      WORK: meta.selected?.WORK ?? null,
+      OPTION: Array.isArray(meta.selected?.OPTION) ? meta.selected.OPTION : [],
+      GRAFIKA: Array.isArray(meta.selected?.GRAFIKA) ? meta.selected.GRAFIKA : [],
+    };
+
+    wiz.step = 'edit_menu';
+
+    const selectedText = await describeSelected(wiz.selected);
+    const link = makeChannelPostLink(chatId, messageId);
+
+    await ctx.reply(`Текущие параметры поста:\n\n${selectedText}\n\nПост: ${link}`, editFieldMenuKb());
+  }
+
+  // ====== message handler ======
   bot.on('message', async (ctx, next) => {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
@@ -649,7 +691,7 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // --- режим: ждём пересланный пост, чтобы редактировать параметры ---
+    // --- ждём пересланный пост для редактирования ---
     if (wiz.step === 'edit_wait_post') {
       const fwd = ctx.message?.forward_from_message_id ? ctx.message : null;
 
@@ -673,73 +715,65 @@ export function registerPostWizard(bot, deps) {
         return;
       }
 
-      // стартуем визард как "редактирование", подставляя старые выбранные параметры
-      wiz.mode = 'edit_existing';
-      wiz.editTarget = { chatId, messageId };
-      wiz.baseTextNoHint = normStr(meta.baseTextNoHint);
-      wiz.selected = {
-        STELA: meta.selected?.STELA ?? null,
-        TUMBA: meta.selected?.TUMBA ?? null,
-        CVETNIK: meta.selected?.CVETNIK ?? null,
-        PLITA: meta.selected?.PLITA ?? null,
-        WORK: meta.selected?.WORK ?? null,
-        OPTION: Array.isArray(meta.selected?.OPTION) ? meta.selected.OPTION : [],
-        GRAFIKA: Array.isArray(meta.selected?.GRAFIKA) ? meta.selected.GRAFIKA : [],
-      };
-
-      wiz.step = 'STELA';
-
-      await ctx.reply(
-        'Редактирование поста запущено.\nМожно изменить один или несколько параметров, а затем нажать «Обновить пост».',
-        Markup.removeKeyboard()
-      );
-
-      return askStep(ctx, 'STELA');
+      await openEditMenuForForwardedPost(ctx, chatId, messageId, meta);
+      return;
     }
 
-    // ниже — стандартная логика визарда (как у вас), но CONFIRM учитывает режим edit_existing
+    // --- точечное меню редактирования ---
     if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
-    // CONFIRM
-    if (wiz.step === 'CONFIRM') {
-      const isEdit = wiz.mode === 'edit_existing';
-      const needText = isEdit ? 'Обновить пост' : 'Опубликовать';
-      if (text !== needText) return next();
+    if (wiz.step === 'edit_menu') {
+      if (text === '⬅️ Назад') {
+        wiz.step = 'update_prices_menu';
+        await ctx.reply('Обновление постов:', kbUpdateMenu());
+        return;
+      }
 
-      if (isEdit) {
+      if (text === '👁 Предпросмотр') {
+        wiz.step = 'PREVIEW';
+        return preview(ctx);
+      }
+
+      const goStep = async (step) => {
+        wiz.step = step;
+        return askStep(ctx, step);
+      };
+
+      if (text === '🪧 Стела') return goStep('STELA');
+      if (text === '🧱 Тумба') return goStep('TUMBA');
+      if (text === '🌿 Цветник') return goStep('CVETNIK');
+      if (text === '🪨 Плита') return goStep('PLITA');
+      if (text === '🛠 Работа') return goStep('WORK');
+      if (text === '➕ Опции') return goStep('OPTION');
+      if (text === '🎨 Графика') return goStep('GRAFIKA');
+
+      return next();
+    }
+
+    // --- CONFIRM ---
+    if (wiz.step === 'CONFIRM') {
+      const need = wiz.mode === 'edit_existing' ? 'Обновить пост' : 'Опубликовать';
+      if (text !== need) return next();
+
+      if (wiz.mode === 'edit_existing') {
         if (!wiz.editTarget?.chatId || !wiz.editTarget?.messageId) {
           await ctx.reply('Ошибка: не указан пост для обновления.');
           return;
         }
 
-        try {
-          const total = await applyEditsToExistingPost(
-            ctx,
-            wiz.editTarget,
-            wiz.baseTextNoHint,
-            wiz.selected
-          );
-
-          ctx.session.postWizard = null;
-          await ctx.reply(`Пост обновлён.\nНовая цена: ${formatRub(total)} ₽`, Markup.removeKeyboard());
-          return;
-        } catch (e) {
-          const desc = e?.response?.description || e?.message || String(e);
-          await ctx.reply(`Не удалось обновить пост: ${desc}`);
-          return;
-        }
+        const total = await applySelectedToMessage(ctx, wiz.editTarget, wiz.baseTextNoHint, wiz.selected);
+        ctx.session.postWizard.step = 'menu';
+        await ctx.reply(`Пост обновлён.\nНовая цена: ${formatRub(total)} ₽`, kbPostMenu());
+        return;
       }
 
-      // обычная публикация нового поста (ваш код)
+      // --- publish new ---
       const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
       const { caption, total } = calcCaptionAndTags(catalog, wiz.selected);
 
       const baseText = normStr(wiz.baseTextNoHint);
-      const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(
-        0,
-        1024
-      );
+      const finalCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
       const payload = wiz.mediaPayload || { kind: 'text' };
       const kind = payload.kind;
@@ -755,11 +789,14 @@ export function registerPostWizard(bot, deps) {
         ({ primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
       }
 
+      // сохраняем meta (и channelId) чтобы update-all работал стабильно
       await setCatalogPostMeta(primary.message_id, {
         selected: wiz.selected,
         baseTextNoHint: baseText,
         last_total_price: total,
         createdAt: Date.now(),
+        channelId: getChannelId(),
+        messageId: primary.message_id,
       });
 
       ctx.session.postWizard = null;
@@ -767,9 +804,19 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // OPTION / GRAFIKA (мультивыбор)
+    // --- OPTION / GRAFIKA (multi) ---
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
-      if (text === 'Далее') return advance(ctx);
+      if (text === 'Далее') {
+        // если мы пришли из точечного меню — возвращаемся в него, а не идём дальше по цепочке
+        if (wiz.mode === 'edit_existing') {
+          wiz.step = 'edit_menu';
+          const selectedText = await describeSelected(wiz.selected);
+          await ctx.reply(`Текущие параметры:\n\n${selectedText}`, editFieldMenuKb());
+          return;
+        }
+        return advance(ctx);
+      }
+
       if (text === 'Сбросить') {
         wiz.selected[wiz.step] = [];
         return askStep(ctx, wiz.step);
@@ -794,11 +841,19 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // одиночные группы STELA/TUMBA/...
+    // --- single groups ---
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
     if (singleGroups.includes(wiz.step)) {
       if (text === '— Нет —') {
         wiz.selected[wiz.step] = null;
+
+        if (wiz.mode === 'edit_existing') {
+          wiz.step = 'edit_menu';
+          const selectedText = await describeSelected(wiz.selected);
+          await ctx.reply(`Текущие параметры:\n\n${selectedText}`, editFieldMenuKb());
+          return;
+        }
+
         return advance(ctx);
       }
 
@@ -807,6 +862,14 @@ export function registerPostWizard(bot, deps) {
       if (!it) return next();
 
       wiz.selected[wiz.step] = it.sku;
+
+      if (wiz.mode === 'edit_existing') {
+        wiz.step = 'edit_menu';
+        const selectedText = await describeSelected(wiz.selected);
+        await ctx.reply(`Текущие параметры:\n\n${selectedText}`, editFieldMenuKb());
+        return;
+      }
+
       return advance(ctx);
     }
 
