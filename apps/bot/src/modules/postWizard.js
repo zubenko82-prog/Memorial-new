@@ -185,14 +185,16 @@ export function registerPostWizard(bot, deps) {
     getAllCatalogPostKeys,
     getCatalogPostMetaByKey,
     setCatalogPostMetaByKey,
+    deleteCatalogPostMetaByKey, // ✅ добавили
   } = deps;
 
   // ====== UI ======
   const kbPostMenu = () =>
     Markup.keyboard([['♻️ Обновить цены'], ['▶️ Новая публикация'], ['Отменить']]).resize();
 
+  // ✅ добавили кнопку очистки
   const kbUpdateMenu = () =>
-    Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['⬅️ Назад'], ['Отменить']]).resize();
+    Markup.keyboard([['🧾 Обновить по пересланному посту'], ['🔁 Обновить все'], ['🧹 Очистить отсутствующие'], ['⬅️ Назад'], ['Отменить']]).resize();
 
   const editFieldMenuKb = () =>
     Markup.keyboard([
@@ -206,9 +208,8 @@ export function registerPostWizard(bot, deps) {
   const stepsOrder = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK', 'OPTION', 'GRAFIKA', 'PREVIEW'];
 
   function makeChannelPostLink(chatId, messageId) {
-    if (typeof chatId === 'string' && chatId.startsWith('@')) {
-      return `https://t.me/${chatId.replace('@', '')}/${messageId}`;
-    }
+    if (CHANNEL_USERNAME) return `https://t.me/${String(CHANNEL_USERNAME).replace('@', '')}/${messageId}`;
+    if (typeof chatId === 'string' && chatId.startsWith('@')) return `https://t.me/${chatId.replace('@', '')}/${messageId}`;
     const n = Number(chatId);
     if (Number.isFinite(n)) {
       const abs = Math.abs(n);
@@ -327,8 +328,7 @@ export function registerPostWizard(bot, deps) {
     const map = new Map(items.map((it) => [it.sku, it]));
 
     const one = (sku) => (sku ? map.get(sku)?.label || sku : '— Нет —');
-    const many = (arr) =>
-      Array.isArray(arr) && arr.length ? arr.map((sku) => map.get(sku)?.label || sku).join(', ') : '—';
+    const many = (arr) => (Array.isArray(arr) && arr.length ? arr.map((sku) => map.get(sku)?.label || sku).join(', ') : '—');
 
     const { total } = calcCaptionAndTags(catalog, selected);
 
@@ -366,7 +366,6 @@ export function registerPostWizard(bot, deps) {
     if (optionalSingles.includes(step)) rows.push(['— Нет —']);
 
     rows.push(['Отменить']);
-
     const titleMap = {
       STELA: 'Выберите стелу:',
       TUMBA: 'Выберите тумбу:',
@@ -378,7 +377,6 @@ export function registerPostWizard(bot, deps) {
     };
 
     if (step === 'OPTION' || step === 'GRAFIKA') rows.unshift(['Далее', 'Сбросить']);
-
     await ctx.reply(titleMap[step] || `Выберите ${step}:`, Markup.keyboard(rows).resize());
   }
 
@@ -404,22 +402,17 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply(`Предпросмотр:\n\n${fullCaption}`);
   }
 
-  // === ВАЖНО: возвращаем changed=true/false ===
   async function editPostTextOrCaption(ctx, { chatId, messageId }, textOrCaption, kind) {
     try {
       if (kind === 'text') {
-        await ctx.telegram.editMessageText(chatId, messageId, undefined, textOrCaption, {
-          disable_web_page_preview: true,
-        });
+        await ctx.telegram.editMessageText(chatId, messageId, undefined, textOrCaption, { disable_web_page_preview: true });
       } else {
         await ctx.telegram.editMessageCaption(chatId, messageId, undefined, textOrCaption);
       }
       return { changed: true };
     } catch (e) {
       const desc = e?.response?.description || e?.message || String(e);
-      if (/message is not modified/i.test(desc)) {
-        return { changed: false };
-      }
+      if (/message is not modified/i.test(desc)) return { changed: false };
       throw e;
     }
   }
@@ -432,7 +425,6 @@ export function registerPostWizard(bot, deps) {
     const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
 
     const kind = metaKind || 'photo';
-
     const { changed } = await editPostTextOrCaption(ctx, { chatId, messageId }, newCaption, kind);
 
     await setCatalogPostMeta(messageId, {
@@ -474,35 +466,24 @@ export function registerPostWizard(bot, deps) {
 
     ctx.session.postWizard = {
       step: 'menu',
-      mode: 'new', // new | edit_existing
-      editTarget: null, // { chatId, messageId }
+      mode: 'new',
+      editTarget: null,
       editMeta: null,
       baseTextNoHint,
       mediaPayload,
-      selected: {
-        STELA: null,
-        TUMBA: null,
-        CVETNIK: null,
-        PLITA: null,
-        WORK: null,
-        OPTION: [],
-        GRAFIKA: [],
-      },
+      selected: { STELA: null, TUMBA: null, CVETNIK: null, PLITA: null, WORK: null, OPTION: [], GRAFIKA: [] },
     };
 
     return ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  // ====== menu handlers ======
   bot.hears('▶️ Новая публикация', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
-
     const wiz = ctx.session.postWizard;
     wiz.mode = 'new';
     wiz.editTarget = null;
     wiz.editMeta = null;
-
     wiz.step = 'STELA';
     return askStep(ctx, 'STELA');
   });
@@ -510,10 +491,9 @@ export function registerPostWizard(bot, deps) {
   bot.hears('♻️ Обновить цены', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'menu') return next();
-
     ctx.session.postWizard.step = 'update_prices_menu';
-    await ctx.reply(
-      'Обновление постов:\n\n1) «🧾 Обновить по пересланному посту» — точечное редактирование выбранного поста.\n2) «🔁 Обновить все» — пересчитать цены во всех постах, созданных через /post.',
+    return ctx.reply(
+      'Обновление постов:\n\n1) «🧾 Обновить по пересланному посту» — точечное редактирование выбранного поста.\n2) «🔁 Обновить все» — пересчитать цены.\n3) «🧹 Очистить отсутствующие» — удалить из базы посты, которых уже нет.',
       kbUpdateMenu()
     );
   });
@@ -528,22 +508,72 @@ export function registerPostWizard(bot, deps) {
   bot.hears('Отменить', async (ctx, next) => {
     if (!ctx.session?.postWizard) return next();
     ctx.session.postWizard = null;
-    await ctx.reply('Отменено.', Markup.removeKeyboard());
+    return ctx.reply('Отменено.', Markup.removeKeyboard());
   });
 
-  // ====== update menu ======
   bot.hears('🧾 Обновить по пересланному посту', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
-
     ctx.session.postWizard.step = 'edit_wait_post';
-    await ctx.reply(
+    return ctx.reply(
       'Перешлите сюда ОРИГИНАЛЬНЫЙ пост из канала, который нужно изменить.',
       Markup.keyboard([['⬅️ Назад'], ['Отменить']]).resize()
     );
   });
 
-  // 🔁 Обновить все — с changed=true/false и правильным kind
+  // ✅ Реальная очистка: удаляем ключи catalogpost:* если Telegram говорит "message to edit not found"
+  bot.hears('🧹 Очистить отсутствующие', async (ctx, next) => {
+    if (!isAdmin(ctx)) return next();
+    if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
+    if (typeof deleteCatalogPostMetaByKey !== 'function') {
+      return ctx.reply('deleteCatalogPostMetaByKey не передан из bot.js. Проверьте прокидывание deps.');
+    }
+
+    await ctx.reply('Проверяю посты и УДАЛЯЮ из базы те, которых уже нет...');
+
+    const keys = await getAllCatalogPostKeys();
+    if (!Array.isArray(keys) || keys.length === 0) {
+      await ctx.reply('Нет записей.');
+      return;
+    }
+
+    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
+
+    let checked = 0;
+    let deleted = 0;
+    let skipped = 0;
+
+    for (const key of keys) {
+      const meta = await getCatalogPostMetaByKey(key);
+      const messageIdStr = String(key).replace(/^catalogpost:/, '');
+      const messageId = Number(messageIdStr);
+
+      if (!meta?.selected || !meta?.channelChatId || !Number.isFinite(messageId)) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const { caption } = calcCaptionAndTags(catalog, meta.selected);
+        const baseText = normStr(meta.baseTextNoHint);
+        const txt = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+
+        await editPostTextOrCaption(ctx, { chatId: meta.channelChatId, messageId }, txt, meta.kind || 'photo');
+      } catch (e) {
+        const desc = e?.response?.description || e?.message || String(e);
+        if (/message to edit not found/i.test(desc)) {
+          await deleteCatalogPostMetaByKey(key);
+          deleted++;
+        }
+      } finally {
+        checked++;
+      }
+    }
+
+    await ctx.reply(`Готово.\nПроверено: ${checked}\nУдалено ключей: ${deleted}\nПропущено: ${skipped}`);
+    await ctx.reply('Меню обновления:', kbUpdateMenu());
+  });
+
   bot.hears('🔁 Обновить все', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
@@ -581,13 +611,13 @@ export function registerPostWizard(bot, deps) {
         if (!targetChatId) {
           failRows.push({
             messageId,
-            reason: 'Нет channelChatId в метаданных. Откройте пост через «🧾 Обновить по пересланному посту» и нажмите «🚀 Опубликовать».',
+            reason:
+              'Нет channelChatId в метаданных. Откройте пост через «🧾 Обновить по пересланному посту» и нажмите «🚀 Опубликовать».',
           });
           continue;
         }
 
         const kind = meta.kind || 'photo';
-
         const { caption, total } = calcCaptionAndTags(catalog, meta.selected);
         const baseText = normStr(meta.baseTextNoHint);
         const newCaption = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
@@ -667,9 +697,8 @@ export function registerPostWizard(bot, deps) {
       GRAFIKA: Array.isArray(meta.selected?.GRAFIKA) ? meta.selected.GRAFIKA : [],
     };
 
-    // Сохраняем chatId для update-all (если раньше не было)
     meta.channelChatId = meta.channelChatId || chatId;
-    meta.kind = meta.kind || 'photo'; // уточним при первой публикации (fallback в publish)
+    meta.kind = meta.kind || 'photo';
     await setCatalogPostMeta(messageId, meta);
 
     wiz.step = 'edit_menu';
@@ -680,7 +709,6 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply(`Текущие параметры поста:\n\n${selectedText}\n\nПост: ${link}`, editFieldMenuKb());
   }
 
-  // ====== message handler ======
   bot.on('message', async (ctx, next) => {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
@@ -737,18 +765,12 @@ export function registerPostWizard(bot, deps) {
         const metaKind = wiz.editMeta?.kind;
 
         try {
-          const { total, changed, kind } = await applySelectedToMessage(
-            ctx,
-            wiz.editTarget,
-            wiz.baseTextNoHint,
-            wiz.selected,
-            metaKind
-          );
+          const { total, changed, kind } = await applySelectedToMessage(ctx, wiz.editTarget, wiz.baseTextNoHint, wiz.selected, metaKind);
 
-          // если мета была неверной (text vs caption) — обновим в памяти
           wiz.editMeta = wiz.editMeta || {};
           wiz.editMeta.kind = kind;
           wiz.editMeta.channelChatId = wiz.editTarget.chatId;
+
           await setCatalogPostMeta(wiz.editTarget.messageId, {
             ...wiz.editMeta,
             selected: wiz.selected,
@@ -756,52 +778,11 @@ export function registerPostWizard(bot, deps) {
           });
 
           wiz.step = 'update_prices_menu';
-
-          if (changed) {
-            await ctx.reply(`✅ Пост обновлён.\nЦена: от ${formatRub(total)} ₽`, kbUpdateMenu());
-          } else {
-            await ctx.reply(`ℹ️ Изменений нет.\nЦена: от ${formatRub(total)} ₽`, kbUpdateMenu());
-          }
+          if (changed) await ctx.reply(`✅ Пост обновлён.\nЦена: от ${formatRub(total)} ₽`, kbUpdateMenu());
+          else await ctx.reply(`ℹ️ Изменений нет.\nЦена: от ${formatRub(total)} ₽`, kbUpdateMenu());
           return;
         } catch (e) {
           const desc = e?.response?.description || e?.message || String(e);
-
-          // Если ошиблись с kind — пробуем альтернативный способ и сохраним правильный kind
-          if (/there is no caption|no caption|there is no text/i.test(desc)) {
-            const fallbackKind = metaKind === 'text' ? 'photo' : 'text';
-            try {
-              const { total, changed, kind } = await applySelectedToMessage(
-                ctx,
-                wiz.editTarget,
-                wiz.baseTextNoHint,
-                wiz.selected,
-                fallbackKind
-              );
-
-              wiz.editMeta = wiz.editMeta || {};
-              wiz.editMeta.kind = kind;
-              wiz.editMeta.channelChatId = wiz.editTarget.chatId;
-              await setCatalogPostMeta(wiz.editTarget.messageId, {
-                ...wiz.editMeta,
-                selected: wiz.selected,
-                baseTextNoHint: wiz.baseTextNoHint,
-              });
-
-              wiz.step = 'update_prices_menu';
-
-              if (changed) {
-                await ctx.reply(`✅ Пост обновлён.\nЦена: от ${formatRub(total)} ₽`, kbUpdateMenu());
-              } else {
-                await ctx.reply(`ℹ️ Изменений нет.\nЦена: от ${formatRub(total)} ₽`, kbUpdateMenu());
-              }
-              return;
-            } catch (e2) {
-              const desc2 = e2?.response?.description || e2?.message || String(e2);
-              await ctx.reply(`Не удалось обновить пост: ${desc2}`);
-              return;
-            }
-          }
-
           await ctx.reply(`Не удалось обновить пост: ${desc}`);
           return;
         }

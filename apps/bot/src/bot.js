@@ -21,7 +21,7 @@ console.log('[env] MANAGER_CHAT_ID raw =', process.env.MANAGER_CHAT_ID);
 
 const token = process.env.TGBOT_TOKEN ?? '';
 const MANAGER_CHAT_ID = process.env.MANAGER_CHAT_ID ? Number(process.env.MANAGER_CHAT_ID) : 0;
-const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // можно -100… или @username
+const CHANNEL_ID_RAW = process.env.CHANNEL_ID || ''; // -100… или @username
 const BOT_ADMINS = (process.env.BOT_ADMINS || '')
   .split(',')
   .map((s) => Number(String(s).trim()))
@@ -149,6 +149,23 @@ async function setCatalogPostMetaByKey(key, meta) {
   }
 }
 
+// ✅ НАСТОЯЩЕЕ УДАЛЕНИЕ КЛЮЧА catalogpost:...
+async function deleteCatalogPostMetaByKey(key) {
+  const r = await getRedis();
+  if (r) {
+    if (typeof r.del === 'function') {
+      await r.del(key);
+    } else if (typeof r.delete === 'function') {
+      await r.delete(key);
+    } else {
+      // fallback (если вдруг нет del/delete): превращаем в короткоживущий ключ
+      await r.set(key, null, { ex: 1 });
+    }
+  } else {
+    memCatalogPosts.delete(key);
+  }
+}
+
 // ---------------- Helpers ----------------
 const phoneOk = (s) => {
   if (!s) return false;
@@ -244,18 +261,14 @@ if (token) {
     getAllCatalogPostKeys,
     getCatalogPostMetaByKey,
     setCatalogPostMetaByKey,
+    deleteCatalogPostMetaByKey, // ✅ прокинули
   });
 
   bot.command('dump', async (ctx) => {
     const chat = ctx.chat || {};
     const from = ctx.from || {};
     const me = ctx.botInfo || (await ctx.telegram.getMe());
-    const info = [
-      `chat_id = ${chat.id}`,
-      `chat_type = ${chat.type}`,
-      `user_id = ${from.id}`,
-      `username = ${me.username}`,
-    ].join('\n');
+    const info = [`chat_id = ${chat.id}`, `chat_type = ${chat.type}`, `user_id = ${from.id}`, `username = ${me.username}`].join('\n');
     return ctx.reply('DEBUG:\n' + info);
   });
 
