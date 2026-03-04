@@ -271,6 +271,32 @@ export function registerPostWizard(bot, deps) {
     return sourceToken;
   }
 
+  // ✅ Безопасная проверка существования сообщения: copyMessage НЕ меняет оригинал
+  async function checkMessageExistsSafe(ctx, channelChatId, messageId) {
+    try {
+      const copy = await ctx.telegram.copyMessage(ctx.chat.id, channelChatId, messageId);
+      // попробуем удалить копию, чтобы не засорять чат
+      try {
+        const copiedMsgId = copy?.message_id;
+        if (copiedMsgId) await ctx.telegram.deleteMessage(ctx.chat.id, copiedMsgId);
+      } catch {}
+      return { ok: true };
+    } catch (e) {
+      const desc = e?.response?.description || e?.message || String(e);
+
+      if (/message to copy not found/i.test(desc) || /message to forward not found/i.test(desc) || /message to edit not found/i.test(desc)) {
+        return { ok: false, reason: 'not_found', desc };
+      }
+      if (/chat not found/i.test(desc)) {
+        return { ok: false, reason: 'chat_not_found', desc };
+      }
+      if (/forbidden|not a member|kicked|not enough rights/i.test(desc)) {
+        return { ok: false, reason: 'no_access', desc };
+      }
+      return { ok: false, reason: 'other', desc };
+    }
+  }
+
   async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     const chatId = getChannelId();
     if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
@@ -473,7 +499,6 @@ export function registerPostWizard(bot, deps) {
     const kind = metaKind || 'photo';
     const { changed } = await editPostTextOrCaption(ctx, { chatId, messageId }, newCaption, kind);
 
-    // ✅ восстановим кнопки (и сохраним sourceToken)
     const sourceToken = await ensurePostKb(ctx, chatId, messageId, metaSourceToken);
 
     await setCatalogPostMeta(messageId, {
@@ -613,7 +638,8 @@ export function registerPostWizard(bot, deps) {
         if (!targetChatId) {
           failRows.push({
             messageId,
-            reason: 'Нет channelChatId в метаданных. Откройте пост через «🧾 Обновить по пересланному посту» и нажмите «🚀 Опубликовать».',
+            reason:
+              'Нет channelChatId в метаданных. Откройте пост через «🧾 Обновить по пересланному посту» и нажмите «🚀 Опубликовать».',
           });
           continue;
         }
@@ -625,7 +651,6 @@ export function registerPostWizard(bot, deps) {
 
         const { changed } = await editPostTextOrCaption(ctx, { chatId: targetChatId, messageId }, newCaption, kind);
 
-        // ✅ восстановить/зафиксировать кнопки
         const sourceToken = await ensurePostKb(ctx, targetChatId, messageId, meta.sourceToken);
 
         await setCatalogPostMetaByKey(key, {
@@ -654,7 +679,7 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Меню /post:', kbPostMenu());
   });
 
-  // ====== CLEANUP (реальное удаление) ======
+  // ====== CLEANUP (реальное удаление, БЕЗ редактирования оригинала) ======
   bot.hears('🧹 Очистить отсутствующие', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
@@ -662,7 +687,7 @@ export function registerPostWizard(bot, deps) {
       return ctx.reply('deleteCatalogPostMetaByKey не передан из bot.js.');
     }
 
-    await ctx.reply('Проверяю посты и УДАЛЯЮ из базы те, которых уже нет...');
+    await ctx.reply('Проверяю посты и УДАЛЯЮ из базы те, которых уже нет...\n(проверка безопасная: без редактирования постов)');
 
     const keys = await getAllCatalogPostKeys();
     if (!Array.isArray(keys) || keys.length === 0) {
@@ -670,40 +695,44 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
-
     let checked = 0;
     let deleted = 0;
     let skipped = 0;
+    let noAccess = 0;
+    let otherErr = 0;
 
     for (const key of keys) {
       const meta = await getCatalogPostMetaByKey(key);
       const messageIdStr = String(key).replace(/^catalogpost:/, '');
       const messageId = Number(messageIdStr);
 
-      if (!meta?.selected || !meta?.channelChatId || !Number.isFinite(messageId)) {
+      if (!meta?.channelChatId || !Number.isFinite(messageId)) {
         skipped++;
         continue;
       }
 
-      try {
-        const { caption } = calcCaptionAndTags(catalog, meta.selected);
-        const baseText = normStr(meta.baseTextNoHint);
-        const txt = (baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`).slice(0, 1024);
+      const res = await checkMessageExistsSafe(ctx, meta.channelChatId, messageId);
+      checked++;
 
-        await editPostTextOrCaption(ctx, { chatId: meta.channelChatId, messageId }, txt, meta.kind || 'photo');
-      } catch (e) {
-        const desc = e?.response?.description || e?.message || String(e);
-        if (/message to edit not found/i.test(desc) || /chat not found/i.test(desc)) {
-          await deleteCatalogPostMetaByKey(key);
-          deleted++;
-        }
-      } finally {
-        checked++;
+      if (res.ok) continue;
+
+      if (res.reason === 'not_found' || res.reason === 'chat_not_found') {
+        await deleteCatalogPostMetaByKey(key);
+        deleted++;
+        continue;
       }
+
+      if (res.reason === 'no_access') {
+        noAccess++;
+        continue;
+      }
+
+      otherErr++;
     }
 
-    await ctx.reply(`Готово.\nПроверено: ${checked}\nУдалено ключей: ${deleted}\nПропущено: ${skipped}`);
+    await ctx.reply(
+      `Готово.\nПроверено: ${checked}\nУдалено ключей: ${deleted}\nПропущено: ${skipped}\nНет доступа: ${noAccess}\nПрочие ошибки: ${otherErr}`
+    );
     await ctx.reply('Меню обновления:', kbUpdateMenu());
   });
 
@@ -772,7 +801,6 @@ export function registerPostWizard(bot, deps) {
       return;
     }
 
-    // дальше работаем только с текстовыми кнопками
     if (!('text' in ctx.message) || !ctx.message.text) return next();
     const text = ctx.message.text.trim();
 
@@ -794,12 +822,7 @@ export function registerPostWizard(bot, deps) {
       } else if (kind === 'video') {
         ({ primary, sourceToken } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else if (kind === 'document') {
-        ({ primary, sourceToken } = await postToChannelWithKb(
-          ctx,
-          'document',
-          { fileId: payload.fileId, caption: finalCaption },
-          baseText
-        ));
+        ({ primary, sourceToken } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else {
         ({ primary, sourceToken } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
       }
