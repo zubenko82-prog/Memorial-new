@@ -240,6 +240,37 @@ export function registerPostWizard(bot, deps) {
     ]);
   }
 
+  // ✅ Восстановление inline-кнопок на уже опубликованных постах
+  async function ensurePostKb(ctx, chatId, messageId, sourceTokenHint) {
+    const me = ctx.botInfo || (await ctx.telegram.getMe());
+    const botUsername = me.username;
+
+    const absChatId = Math.abs(Number(chatId));
+    const sourceToken = sourceTokenHint || makeSourceTokenForPost(absChatId, messageId);
+
+    const kbFull = channelPostKbFull(botUsername, sourceToken).reply_markup;
+    const kbFallback = channelPostKbFallback(botUsername, sourceToken).reply_markup;
+
+    const isWebAppIssue = (desc) =>
+      /BUTTON_TYPE_INVALID/i.test(desc) ||
+      /web_app/i.test(desc) ||
+      /domain/i.test(desc) ||
+      /not allowed/i.test(desc);
+
+    try {
+      await ctx.telegram.editMessageReplyMarkup(chatId, messageId, undefined, kbFull);
+    } catch (e) {
+      const desc = e?.response?.description || e?.message || String(e);
+      if (isWebAppIssue(desc)) {
+        await ctx.telegram.editMessageReplyMarkup(chatId, messageId, undefined, kbFallback);
+      } else if (!/message is not modified/i.test(desc)) {
+        console.warn('[postWizard] ensurePostKb failed:', desc);
+      }
+    }
+
+    return sourceToken;
+  }
+
   async function postToChannelWithKb(ctx, kind, payload, baseTextNoHint) {
     const chatId = getChannelId();
     if (!chatId) throw new Error('CHANNEL_ID отсутствует или некорректен');
@@ -330,7 +361,8 @@ export function registerPostWizard(bot, deps) {
     const map = new Map(items.map((it) => [it.sku, it]));
 
     const one = (sku) => (sku ? map.get(sku)?.label || sku : '— Нет —');
-    const many = (arr) => (Array.isArray(arr) && arr.length ? arr.map((sku) => map.get(sku)?.label || sku).join(', ') : '—');
+    const many = (arr) =>
+      Array.isArray(arr) && arr.length ? arr.map((sku) => map.get(sku)?.label || sku).join(', ') : '—';
 
     const { total } = calcCaptionAndTags(catalog, selected);
 
@@ -403,7 +435,6 @@ export function registerPostWizard(bot, deps) {
     const baseText = normStr(wiz.baseTextNoHint);
     const fullCaption = baseText ? `${baseText}\n\n${caption}\n\n${HINT_TEXT}` : `${caption}\n\n${HINT_TEXT}`;
 
-    // PREVIEW для new/edit: в new предлагаем "Опубликовать", в edit меню отдельно "🚀 Опубликовать"
     wiz._preview = { fullCaption, total };
     if (wiz.mode === 'new') {
       await ctx.reply(
@@ -432,7 +463,7 @@ export function registerPostWizard(bot, deps) {
     }
   }
 
-  async function applySelectedToMessage(ctx, { chatId, messageId }, baseTextNoHint, selected, metaKind) {
+  async function applySelectedToMessage(ctx, { chatId, messageId }, baseTextNoHint, selected, metaKind, metaSourceToken) {
     const catalog = await loadCatalogFromXlsx(CATALOG_XLSX_PATH);
     const { caption, total } = calcCaptionAndTags(catalog, selected);
 
@@ -442,6 +473,9 @@ export function registerPostWizard(bot, deps) {
     const kind = metaKind || 'photo';
     const { changed } = await editPostTextOrCaption(ctx, { chatId, messageId }, newCaption, kind);
 
+    // ✅ восстановим кнопки (и сохраним sourceToken)
+    const sourceToken = await ensurePostKb(ctx, chatId, messageId, metaSourceToken);
+
     await setCatalogPostMeta(messageId, {
       selected,
       baseTextNoHint: baseText,
@@ -450,9 +484,10 @@ export function registerPostWizard(bot, deps) {
       channelChatId: chatId,
       kind,
       messageId,
+      sourceToken,
     });
 
-    return { total, changed, kind };
+    return { total, changed, kind, sourceToken };
   }
 
   // ====== /post ======
@@ -540,7 +575,7 @@ export function registerPostWizard(bot, deps) {
     );
   });
 
-  // ====== UPDATE ALL (ваш обработчик, без изменений по сути) ======
+  // ====== UPDATE ALL ======
   bot.hears('🔁 Обновить все', async (ctx, next) => {
     if (!isAdmin(ctx)) return next();
     if (!ctx.session?.postWizard || ctx.session.postWizard.step !== 'update_prices_menu') return next();
@@ -590,7 +625,17 @@ export function registerPostWizard(bot, deps) {
 
         const { changed } = await editPostTextOrCaption(ctx, { chatId: targetChatId, messageId }, newCaption, kind);
 
-        await setCatalogPostMetaByKey(key, { ...meta, last_total_price: total, updatedAt: Date.now(), channelChatId: targetChatId, kind });
+        // ✅ восстановить/зафиксировать кнопки
+        const sourceToken = await ensurePostKb(ctx, targetChatId, messageId, meta.sourceToken);
+
+        await setCatalogPostMetaByKey(key, {
+          ...meta,
+          last_total_price: total,
+          updatedAt: Date.now(),
+          channelChatId: targetChatId,
+          kind,
+          sourceToken,
+        });
 
         const row = { messageId, total, link: makeChannelPostLink(targetChatId, messageId) };
         if (changed) changedRows.push(row);
@@ -662,7 +707,7 @@ export function registerPostWizard(bot, deps) {
     await ctx.reply('Меню обновления:', kbUpdateMenu());
   });
 
-  // ====== message handler (ВАЖНО: здесь была дырка) ======
+  // ====== message handler ======
   bot.on('message', async (ctx, next) => {
     const wiz = ctx.session?.postWizard;
     if (!wiz) return next();
@@ -698,7 +743,6 @@ export function registerPostWizard(bot, deps) {
         return;
       }
 
-      // открыть меню редактирования (ваша логика)
       wiz.mode = 'edit_existing';
       wiz.editTarget = { chatId, messageId };
       wiz.editMeta = meta;
@@ -716,6 +760,7 @@ export function registerPostWizard(bot, deps) {
 
       meta.channelChatId = meta.channelChatId || chatId;
       meta.kind = meta.kind || 'photo';
+      meta.sourceToken = meta.sourceToken || makeSourceTokenForPost(Math.abs(Number(chatId)), messageId);
       await setCatalogPostMeta(messageId, meta);
 
       wiz.step = 'edit_menu';
@@ -743,17 +788,22 @@ export function registerPostWizard(bot, deps) {
       const kind = payload.kind;
 
       let primary;
+      let sourceToken;
       if (kind === 'photo') {
-        ({ primary } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText));
+        ({ primary, sourceToken } = await postToChannelWithKb(ctx, 'photo', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else if (kind === 'video') {
-        ({ primary } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText));
+        ({ primary, sourceToken } = await postToChannelWithKb(ctx, 'video', { fileId: payload.fileId, caption: finalCaption }, baseText));
       } else if (kind === 'document') {
-        ({ primary } = await postToChannelWithKb(ctx, 'document', { fileId: payload.fileId, caption: finalCaption }, baseText));
+        ({ primary, sourceToken } = await postToChannelWithKb(
+          ctx,
+          'document',
+          { fileId: payload.fileId, caption: finalCaption },
+          baseText
+        ));
       } else {
-        ({ primary } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
+        ({ primary, sourceToken } = await postToChannelWithKb(ctx, 'text', { text: finalCaption }, baseText));
       }
 
-      // сохраняем meta для update-all
       await setCatalogPostMeta(primary.message_id, {
         selected: wiz.selected,
         baseTextNoHint: baseText,
@@ -762,6 +812,7 @@ export function registerPostWizard(bot, deps) {
         channelChatId: primary.chat.id,
         kind,
         messageId: primary.message_id,
+        sourceToken,
       });
 
       ctx.session.postWizard = null;
@@ -784,19 +835,22 @@ export function registerPostWizard(bot, deps) {
         }
 
         const metaKind = wiz.editMeta?.kind;
+        const metaSourceToken = wiz.editMeta?.sourceToken;
 
         try {
-          const { total, changed, kind } = await applySelectedToMessage(
+          const { total, changed, kind, sourceToken } = await applySelectedToMessage(
             ctx,
             wiz.editTarget,
             wiz.baseTextNoHint,
             wiz.selected,
-            metaKind
+            metaKind,
+            metaSourceToken
           );
 
           wiz.editMeta = wiz.editMeta || {};
           wiz.editMeta.kind = kind;
           wiz.editMeta.channelChatId = wiz.editTarget.chatId;
+          wiz.editMeta.sourceToken = sourceToken;
 
           await setCatalogPostMeta(wiz.editTarget.messageId, {
             ...wiz.editMeta,
@@ -834,7 +888,6 @@ export function registerPostWizard(bot, deps) {
     // MULTI groups
     if (wiz.step === 'OPTION' || wiz.step === 'GRAFIKA') {
       if (text === 'Далее') {
-        // edit -> назад в меню, new -> дальше по мастеру
         if (wiz.mode === 'edit_existing') {
           wiz.step = 'edit_menu';
           const selectedText = await describeSelected(wiz.selected);
