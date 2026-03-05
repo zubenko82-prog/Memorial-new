@@ -1,31 +1,11 @@
 // src/screens/BackEditorStep.tsx
 //
-// Превью (тыл/плита):
-// - пропорция строго 1:2
-// - длинная сторона 900 (W=450, H=900)
-// - без hi-res (previewHiUrl/platePreviewHiUrl = null)
-// - композиция: портрет (если есть) сверху -> метрика под ним -> далее графика/эпитафии по порядку добавления
-// - всё центрируем по горизонтали, равномерно распределяем по вертикали
-// - эпитафии: сохраняем разрывы строк как в тексте (не делаем перенос по словам), только уменьшаем шрифт при необходимости
-// - для маленьких экранов масштабируем UI (не здесь; это относится к месту показа превью, но генерация корректна)
-//
-// Доп. требования к превью:
-// - эпитафия "Помним, любим, скорбим..." рисуется лесенкой:
-//   "Помним," слева, "любим," по центру, "скорбим..." справа (3 строки).
-// - на плите элементы (графика/эпитафии/метрика) делаем крупнее, но автоматически уменьшаем,
-//   если элементов много и они начинают мешать друг другу.
-//
-// UI (по финальным требованиям):
-// - "Дополнительно" — не аккордеон, просто плашка с 3 чекбоксами.
-// - Тыл/Плита: чекбокс перед названием (без "включено/выключено").
-// - "Выбрано" всегда видно (не аккордеон).
-// - "Усопшие", "Эпитафии", "Графика" — аккордеоны на главном экране,
-//   по умолчанию закрыты, и открыт может быть только один (на сторону).
-// - Аккордеон "Эпитафии" выделен: рамка 1px белая, фон на тон светлее.
-// - В "Графика" категории и подкатегории — тоже аккордеоны LoudAccordion с плавным раскрытием (без отдельных кнопок).
-// - Плита: добавлен выбор размера (80-40-5, 100-50-5, 120-60-5, свой вариант) над "Выбрано (плита)".
-//   Значение сохраняется в extras.plateSize => отображается в TopBarWithIntro.
-// - Радио по умолчанию: 100-50-5 (если plateSize отсутствует).
+// ВАЖНО (последняя архитектура):
+// - Генерация превью тыла/плит УБРАНА отсюда.
+// - Превью генерируется в ReviewAndSendStep.tsx (чтобы работало при пропуске этого шага).
+// - Здесь оставляем только:
+//   1) редактирование данных (people/graphics/epitaphs/plate settings)
+//   2) очистку previewUrl/platePreviewUrl при выключении тыла/плиты (чтобы не показывались “старые” превью)
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -33,13 +13,6 @@ import PhotoField, { type PhotoValue } from "../components/PhotoField";
 import { fetchCatalog } from "../api";
 import { QUICK_EPITAPHS, MORE_EPITAPHS } from "../data/epitaphs";
 import { loadOrderDraft, saveOrderDraft, DRAFT_UPDATED_EVENT, type OrderDraft } from "../lib/order";
-import {
-  PREVIEW_W,
-  PREVIEW_H,
-  type StackItem,
-  buildSilhouetteOverlayDataUrl,
-  renderStackedCenteredPreview
-} from "../lib/stackedPreview";
 
 /* ========= Styles ========= */
 function glassPanelStyle(): React.CSSProperties {
@@ -210,9 +183,6 @@ function LoudAccordion({
     </div>
   );
 }
-
-/* ========= Preview constants (plate bg) ========= */
-const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
 
 /* ========= People (rear) types ========= */
 type Person = {
@@ -411,7 +381,6 @@ function iconBtn(): React.CSSProperties {
 }
 
 function legacyExtrasToPlate0(ex: any) {
-  // plate object in extras.plates[i]
   return {
     enabled: !!ex?.enabled,
     plateSize: ex?.plateSize ?? null,
@@ -420,11 +389,9 @@ function legacyExtrasToPlate0(ex: any) {
     plateGraphicsIds: Array.isArray(ex?.plateGraphicsIds) ? ex.plateGraphicsIds : [],
     plateGraphicsMeta: ex?.plateGraphicsMeta || {},
 
-    // epitaphs
     plateEpitaph: typeof ex?.plateEpitaph === "string" ? ex.plateEpitaph : null,
     plateEpitaphs: Array.isArray(ex?.plateEpitaphs) ? ex.plateEpitaphs : null,
 
-    // preview (KEEP NAMES)
     platePreviewUrl: ex?.platePreviewUrl ?? ex?.previewUrl ?? null,
     platePreviewHiUrl: ex?.platePreviewHiUrl ?? ex?.previewHiUrl ?? null
   };
@@ -474,7 +441,6 @@ function PlateBlock({
 }) {
   const { draft, setDraft, catsLoading, catsError, cats, catOpenPlate, setCatOpenPlate, plateGrid, CatGrid } = ctx;
 
-  // index=0 оставляем как текущую "старую" плиту (плоские поля), чтобы ничего не сломать.
   const isLegacy0 = index === 0;
 
   const d0 = draft;
@@ -482,12 +448,10 @@ function PlateBlock({
   const plates = ensurePlates(ex0);
   const plateX = plates[index] || legacyExtrasToPlate0({ enabled: false });
 
-  // enabled
   const [enabledLocal, setEnabledLocal] = useState<boolean>(() => (isLegacy0 ? !!ex0.headstonePlate : !!plateX.enabled));
   const enabled = enabledProp ?? enabledLocal;
   const setEnabled = onEnabledChange ?? setEnabledLocal;
 
-  // ✅ Persist "enabled" to draft so TopBar + reload state are correct
   useEffect(() => {
     if (isLegacy0) {
       saveOrderDraft({ extras: { headstonePlate: !!enabled } as any });
@@ -503,7 +467,24 @@ function PlateBlock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, index, isLegacy0]);
 
-  // qty (identical copies)
+  // ✅ ONLY CLEAR PREVIEW ON DISABLE (preview генерируется в ReviewAndSendStep)
+  useEffect(() => {
+    if (enabled) return;
+
+    if (isLegacy0) {
+      saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
+    } else {
+      const d2 = loadOrderDraft();
+      const ex2: any = (d2 as any)?.extras || {};
+      const all = ensurePlates(ex2);
+      all[index] = { ...(all[index] || {}), platePreviewUrl: null, platePreviewHiUrl: null };
+      saveOrderDraft({ extras: { plates: all } as any } as any);
+    }
+
+    dispatchDraftUpdated();
+    setDraft(loadOrderDraft());
+  }, [enabled, index, isLegacy0, setDraft]);
+
   const [qty, setQty] = useState<number>(() => {
     if (isLegacy0) {
       const v = Number((ex0 as any)?.plateQty);
@@ -513,9 +494,7 @@ function PlateBlock({
     return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
   });
 
-  // size
   const plateSize0local = String((isLegacy0 ? (ex0 as any)?.plateSize : plateX.plateSize) || "").trim();
-
   const presetSizesLocal = ["80-40-5", "100-50-5", "120-60-5"] as const;
   type PlateSizePresetLocal = (typeof presetSizesLocal)[number];
   const DEFAULT_PLATE_SIZE_LOCAL: PlateSizePresetLocal = "100-50-5";
@@ -531,13 +510,11 @@ function PlateBlock({
     return "";
   });
 
-  // graphics
   const [ids, setIds] = useState<string[]>(() => (isLegacy0 ? ((ex0.plateGraphicsIds as string[]) || []) : ((plateX.plateGraphicsIds as string[]) || [])));
   const [meta, setMeta] = useState<Record<string, any>>(() =>
     isLegacy0 ? ((ex0.plateGraphicsMeta as Record<string, any>) || {}) : ((plateX.plateGraphicsMeta as Record<string, any>) || {})
   );
 
-  // epitaphs
   const initialSelected = useMemo(() => {
     if (isLegacy0) {
       const d = loadOrderDraft();
@@ -554,7 +531,6 @@ function PlateBlock({
 
   const [selectedEpitaphs, setSelectedEpitaphs] = useState<string[]>(initialSelected);
 
-  // sync from draft -> local state (ids/meta/epitaphs), so preview generation sees actual data
   useEffect(() => {
     const ex: any = (draft as any)?.extras || {};
 
@@ -740,83 +716,6 @@ function PlateBlock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, selectedEpitaphs]);
 
-  /* AUTO-PATCH: PLATE PREVIEW EFFECT (per PlateBlock) */
-  useEffect(() => {
-    let alive = true;
-
-    const run = async () => {
-      if (!enabled) {
-        if (isLegacy0) {
-          saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
-        } else {
-          const d2 = loadOrderDraft();
-          const ex2: any = (d2 as any)?.extras || {};
-          const all = ensurePlates(ex2);
-          all[index] = { ...(all[index] || {}), platePreviewUrl: null, platePreviewHiUrl: null };
-          saveOrderDraft({ extras: { plates: all } as any } as any);
-        }
-        dispatchDraftUpdated();
-        setDraft(loadOrderDraft());
-        return;
-      }
-
-      const items: StackItem[] = [];
-
-      // graphics in add order
-      for (const gid of ids) {
-        const m = meta[gid] || {};
-        const url = String(m.url || "").trim();
-        if (url) items.push({ kind: "img", url });
-      }
-
-      // epitaphs in selected order
-      for (const t of uniqueByNorm(selectedEpitaphs)) {
-        const tt = String(t || "").trim();
-        if (tt) items.push({ kind: "text", text: tt });
-      }
-
-      const write = (val: string | null) => {
-        if (isLegacy0) {
-          saveOrderDraft({ extras: { platePreviewUrl: val, platePreviewHiUrl: null } as any });
-        } else {
-          const d2 = loadOrderDraft();
-          const ex2: any = (d2 as any)?.extras || {};
-          const all = ensurePlates(ex2);
-          all[index] = { ...(all[index] || {}), platePreviewUrl: val, platePreviewHiUrl: null };
-          saveOrderDraft({ extras: { plates: all } as any } as any);
-        }
-        dispatchDraftUpdated();
-        setDraft(loadOrderDraft());
-      };
-
-      if (items.length === 0) {
-        write(null);
-        return;
-      }
-
-      const preview = await renderStackedCenteredPreview({
-        W: PREVIEW_W,
-        H: PREVIEW_H,
-        bg: { type: "image", url: PLATE_BG_URL, fit: "contain" },
-        overlayPng: null,
-        items,
-        profile: "plate",
-        contentWidthFrac: 0.75
-      });
-
-      if (!alive) return;
-      write(preview || null);
-    };
-
-    const t = window.setTimeout(() => void run(), 420);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [enabled, ids, meta, selectedEpitaphs, index, isLegacy0, setDraft]);
-  /* END AUTO-PATCH: PLATE PREVIEW EFFECT (per PlateBlock) */
-
-  // отдельное "single-open accordion" для каждой плиты
   type PlateAccLocal = "epitaphs" | "graphics" | null;
   const [openAcc, setOpenAcc] = useState<PlateAccLocal>(null);
   useEffect(() => {
@@ -854,7 +753,6 @@ function PlateBlock({
 
       {enabled && (
         <>
-          {/* Размер плиты */}
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Размер плиты</div>
 
@@ -890,7 +788,6 @@ function PlateBlock({
             </div>
           </section>
 
-          {/* Выбрано */}
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10, borderColor: "rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Выбрано (плита {index + 1})</div>
 
@@ -942,16 +839,12 @@ function PlateBlock({
             {chosenList.length === 0 && epitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </section>
 
-          {/* Аккордеоны плиты */}
           <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
             <LoudAccordion
               title="Эпитафии"
               open={openAcc === "epitaphs"}
               onToggle={() => toggleAcc("epitaphs")}
-              containerStyle={{
-                border: "1px solid rgba(255,255,255,1)",
-                background: "rgba(255,255,255,0.08)"
-              }}
+              containerStyle={{ border: "1px solid rgba(255,255,255,1)", background: "rgba(255,255,255,0.08)" }}
             >
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={sectionBoxStyle()}>
@@ -1014,13 +907,7 @@ function PlateBlock({
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    <textarea
-                      rows={3}
-                      value={customText}
-                      onChange={(e) => setCustomText(e.target.value)}
-                      placeholder="Введите текст и нажмите «Добавить»"
-                      style={{ ...inputStyle(), resize: "vertical" }}
-                    />
+                    <textarea rows={3} value={customText} onChange={(e) => setCustomText(e.target.value)} placeholder="Введите текст и нажмите «Добавить»" style={{ ...inputStyle(), resize: "vertical" }} />
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       <button type="button" style={glassButtonStyle("nano")} onClick={addCustom}>
                         Добавить
@@ -1077,7 +964,7 @@ function PlateBlock({
   );
 }
 
-export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => void; onContinue?: (payload?: any) => void }) {
+export default function BackEditorStep({ onBack, onContinue }: Props) {
   const [outro, setOutro] = useState(false);
   const [draft, setDraft] = useState<OrderDraft>(() => loadOrderDraft());
 
@@ -1092,8 +979,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
       window.removeEventListener("focus", sync);
     };
   }, []);
-
-  const itemUrl = String((draft as any)?.item?.url || "").trim();
 
   /* ========= Shared catalog ========= */
   const [catsLoading, setCatsLoading] = useState(false);
@@ -1142,7 +1027,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
    * ========================= */
   const extras0: any = (draft as any)?.extras || {};
 
-  // derive plate2/3 enabled from draft
   const platesFromDraft = useMemo(() => ensurePlates(extras0), [extras0]);
   const plate2Enabled = !!platesFromDraft[1]?.enabled;
   const plate3Enabled = !!platesFromDraft[2]?.enabled;
@@ -1179,7 +1063,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
   const rearPeople0 = draftPersonsToLocal((editorBack0.people as NormalizedPerson[]) || null);
   const [rearPeople, setRearPeople] = useState<Person[]>(rearPeople0.length ? rearPeople0 : [makeBlankPerson("p-0")]);
 
-  // transient photo urls
   const [rearTransientPhotoUrlById, setRearTransientPhotoUrlById] = useState<Record<string, string | null>>({});
   const setRearTransientFor = useCallback((id: string, url: string | null) => {
     setRearTransientPhotoUrlById((prev) => {
@@ -1281,37 +1164,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     },
     [setRearTransientFor]
   );
-
-  type PersonPreview = {
-    id: string;
-    photo: string | null;
-    lastName: string;
-    firstName: string;
-    middleName: string;
-    birthDate: string;
-    deathDate: string;
-  };
-
-  const rearPeopleForPreview = useMemo<PersonPreview[]>(() => {
-    // take first person as "portrait block"
-    const p = rearPeople[0];
-    if (!p) return [];
-    const transient = rearTransientPhotoUrlById[p.id];
-    const stable = p.photoDataUrl ?? p.photoUrl ?? null;
-    const photo = (transient ?? stable) as string | null;
-
-    return [
-      {
-        id: p.id,
-        photo,
-        lastName: (p.lastName || "").trim(),
-        firstName: (p.firstName || "").trim(),
-        middleName: (p.middleName || "").trim(),
-        birthDate: (p.birthDate || "").trim(),
-        deathDate: (p.deathDate || "").trim()
-      }
-    ].filter((x) => x.photo || x.lastName || x.firstName || x.middleName || x.birthDate || x.deathDate);
-  }, [rearPeople, rearTransientPhotoUrlById]);
 
   const prevRearEpiJsonRef = useRef<string>("");
   useEffect(() => {
@@ -1436,6 +1288,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
           graphicsMeta: null,
           epitaphTexts: null,
           people: null,
+          previewUrl: null,
           previewHiUrl: null
         } as any
       });
@@ -1460,7 +1313,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rearEnabled]);
 
-  // очистка превью при rearEnabled=false
+  // ✅ ONLY CLEAR PREVIEW ON DISABLE (preview генерируется в ReviewAndSendStep)
   useEffect(() => {
     if (rearEnabled) return;
     saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
@@ -1468,93 +1321,21 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     setDraft(loadOrderDraft());
   }, [rearEnabled]);
 
-  // генерация превью (только когда включено)
-  useEffect(() => {
-    if (!rearEnabled) return;
-
-    let alive = true;
-    const run = async () => {
-      const d = loadOrderDraft();
-      const eb: any = (d as any)?.editorBack || {};
-      const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
-      const meta: Record<string, any> = eb.graphicsMeta || {};
-      const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
-
-      const graphicsInOrder: string[] = ids.slice();
-      const epitaphsInOrder: string[] = ep.map((s) => String(s || "")).filter((s) => String(s || "").trim());
-
-      const items: StackItem[] = [];
-
-      const p0 = rearPeopleForPreview[0];
-      if (p0?.photo) items.push({ kind: "photo", url: p0.photo });
-      if (p0 && (p0.lastName || p0.firstName || p0.middleName || p0.birthDate || p0.deathDate)) {
-        const dates = [p0.birthDate, p0.deathDate].map((s) => (s || "").trim()).filter(Boolean).join(" — ");
-        items.push({
-          kind: "metrica",
-          lastName: p0.lastName,
-          firstName: p0.firstName,
-          middleName: p0.middleName,
-          dates
-        });
-      }
-
-      for (const gid of graphicsInOrder) {
-        const m = meta[gid] || {};
-        const url = String(m.url || "").trim();
-        if (url) items.push({ kind: "img", url });
-      }
-
-      for (const t of epitaphsInOrder) items.push({ kind: "text", text: t });
-
-      if (items.length === 0) {
-        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
-        dispatchDraftUpdated();
-        return;
-      }
-
-      const overlay = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: PREVIEW_W, H: PREVIEW_H, mirrorX: true }) : null;
-
-      const preview = await renderStackedCenteredPreview({
-        W: PREVIEW_W,
-        H: PREVIEW_H,
-        bg: { type: "gradient" },
-        overlayPng: overlay,
-        items,
-        profile: "rear",
-        contentWidthFrac: 0.75
-      });
-
-      if (!alive) return;
-
-      saveOrderDraft({ editorBack: { previewUrl: preview || null, previewHiUrl: null } as any });
-      dispatchDraftUpdated();
-    };
-
-    const t = window.setTimeout(() => void run(), 420);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [rearEnabled, itemUrl, rearPeopleForPreview, rearIds, rearMeta, rearSelectedEpitaphs]);
-
   /* =========================
-   * PLATE (extras)
+   * PLATE (legacy plate enabled flag)
    * ========================= */
   const [plateEnabled, setPlateEnabled] = useState<boolean>(() => !!extras0.headstonePlate);
 
-  // Show counter only when plate is enabled.
   const [plateQty, setPlateQty] = useState<number>(() => {
     const v = Number((extras0 as any)?.plateQty);
     return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
   });
 
-  // UI: активная "плита" (вкладка). Пока содержимое общее, но кнопка "добавить" будет только на последней вкладке.
   const [activePlateIndex, setActivePlateIndex] = useState<number>(0);
 
   const [plateIds, setPlateIds] = useState<string[]>((extras0.plateGraphicsIds as string[]) || []);
   const [plateMeta, setPlateMeta] = useState<Record<string, any>>((extras0.plateGraphicsMeta as Record<string, any>) || {});
 
-  // plate size -> extras.plateSize (displayed in TopBarWithIntro)
   const plateSize0 = String((extras0 as any)?.plateSize || "").trim();
   const presetSizes = ["80-40-5", "100-50-5", "120-60-5"] as const;
   type PlateSizePreset = (typeof presetSizes)[number];
@@ -1581,11 +1362,9 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
   useEffect(() => {
     if (!plateEnabled) return;
 
-    if (plateSizeMode === "custom") {
-      commitPlateSize(plateSizeCustom);
-    } else {
-      commitPlateSize(plateSizeMode);
-    }
+    if (plateSizeMode === "custom") commitPlateSize(plateSizeCustom);
+    else commitPlateSize(plateSizeMode);
+
     setDraft(loadOrderDraft());
   }, [plateEnabled, plateSizeMode, plateSizeCustom, commitPlateSize]);
 
@@ -1636,11 +1415,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     dispatchDraftUpdated();
     setDraft(loadOrderDraft());
   };
-
-  const chosenPlateList = useMemo(() => {
-    const uniq = Array.from(new Set(plateIds));
-    return uniq.map((gid) => plateMeta[gid] || { id: gid, name: gid, url: "" });
-  }, [plateIds, plateMeta]);
 
   const togglePlateEpitaph = (text: string) => {
     if (!plateEnabled) return;
@@ -1703,15 +1477,11 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     if (!plateEnabled) {
       const d = loadOrderDraft();
       const ex: any = (d as any)?.extras || {};
-
-      // важно: сохранить plates как есть, чтобы 2/3 не отключались
       const plates = ex.plates ?? null;
 
       saveOrderDraft({
         extras: {
           headstonePlate: false,
-
-          // чистим только legacy plate #1
           plateSize: null,
           plateGraphicsIds: null,
           plateGraphicsMeta: null,
@@ -1720,8 +1490,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
           plateEpitaphTexts: null,
           platePreviewUrl: null,
           platePreviewHiUrl: null,
-
-          // НЕ ТРОГАЕМ 2/3
           plates
         } as any
       });
@@ -1759,9 +1527,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plateEnabled]);
 
-  /* =========================
-   * Single-open accordion state (per side)
-   * ========================= */
   type RearAcc = "people" | "epitaphs" | "graphics" | null;
   type PlateAcc = "epitaphs" | "graphics" | null;
 
@@ -1785,9 +1550,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     dispatchDraftUpdated();
   }, [plateEnabled, plateQty]);
 
-  /* =========================
-   * Catalog grid helpers
-   * ========================= */
   function useColsByWidth() {
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [colsCount, setColsCount] = useState<number>(2);
@@ -1923,7 +1685,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     CatGrid
   };
 
-  // enable/disable plates[1]/plates[2] (plate #2/#3) safely
   const setPlateNEnabled = useCallback(
     (idx: 1 | 2, v: boolean) => {
       const d = loadOrderDraft();
@@ -1943,9 +1704,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     [setDraft]
   );
 
-  /* =========================
-   * Actions
-   * ========================= */
   const handleBack = useCallback(() => {
     try {
       if (rearEnabled) flushRearPeopleSaveNow();
@@ -1966,7 +1724,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
     <div style={{ color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease", maxWidth: 600, margin: "0 auto" }}>
       <TopBarWithIntro title="Тыл" />
 
-      {/* Дополнительно (НЕ accordion) */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Дополнительно</div>
         <div style={{ ...sectionBoxStyle(), padding: 10 }}>
@@ -2019,16 +1776,12 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
         </div>
       </section>
 
-      {/* =======================
-          Тыльная сторона
-         ======================= */}
       <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 12 }}>
         {titleWithCheckbox({ title: "Тыльная сторона", enabled: rearEnabled, onToggle: setRearEnabled })}
       </section>
 
       {rearEnabled && (
         <>
-          {/* Выбрано (тыл) */}
           <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10, borderColor: "rgba(255,80,80,0.95)" }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Выбрано (тыл)</div>
 
@@ -2080,7 +1833,6 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
             {rearChosenList.length === 0 && rearEpitaphList.length === 0 && <div style={{ opacity: 0.85 }}>Пока ничего не выбрано.</div>}
           </section>
 
-          {/* Аккордеоны тыла: только один открыт */}
           <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
             <LoudAccordion title="Усопшие" open={rearOpen === "people"} onToggle={() => toggleRearAcc("people")}>
               <div style={{ display: "grid", gap: 10 }}>
@@ -2153,28 +1905,13 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
                         <div style={{ display: "grid", gap: 10 }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
                             <Field label="Фамилия">
-                              <input
-                                value={p.lastName ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, lastName: e.target.value } : x)))}
-                                style={inputStyle()}
-                                placeholder="Иванов"
-                              />
+                              <input value={p.lastName ?? ""} onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, lastName: e.target.value } : x)))} style={inputStyle()} placeholder="Иванов" />
                             </Field>
                             <Field label="Имя">
-                              <input
-                                value={p.firstName ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, firstName: e.target.value } : x)))}
-                                style={inputStyle()}
-                                placeholder="Иван"
-                              />
+                              <input value={p.firstName ?? ""} onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, firstName: e.target.value } : x)))} style={inputStyle()} placeholder="Иван" />
                             </Field>
                             <Field label="Отчество">
-                              <input
-                                value={p.middleName ?? ""}
-                                onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, middleName: e.target.value } : x)))}
-                                style={inputStyle()}
-                                placeholder="Иванович"
-                              />
+                              <input value={p.middleName ?? ""} onChange={(e) => setRearPeople((prev) => prev.map((x, i) => (i === idx ? { ...x, middleName: e.target.value } : x)))} style={inputStyle()} placeholder="Иванович" />
                             </Field>
                           </div>
 
@@ -2200,11 +1937,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
 
                           <div>
                             {!hasPhoto && <div style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.35, opacity: 0.92 }}>Прикрепите фотографию. Она сохранится в заявке.</div>}
-                            <PhotoField
-                              label="Фотография"
-                              value={{ url: rearTransientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }}
-                              onChange={(pv) => setRearPersonPhotoById(p.id, pv)}
-                            />
+                            <PhotoField label="Фотография" value={{ url: rearTransientPhotoUrlById[p.id] ?? p.photoUrl ?? undefined, dataUrl: p.photoDataUrl ?? undefined }} onChange={(pv) => setRearPersonPhotoById(p.id, pv)} />
                           </div>
                         </div>
                       </div>
@@ -2233,13 +1966,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
                     {QUICK_EPITAPHS.map((t) => {
                       const active = hasByNorm(rearSelectedEpitaphs, t);
                       return (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => toggleRearEpitaph(t)}
-                          style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }}
-                          title={t}
-                        >
+                        <button key={t} type="button" onClick={() => toggleRearEpitaph(t)} style={{ ...glassButtonStyle("nano"), border: active ? "2px solid #8ab4ff" : "1px solid rgba(255,255,255,0.28)" }} title={t}>
                           {t}
                         </button>
                       );
@@ -2287,13 +2014,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
                 <div style={sectionBoxStyle()}>
                   <div style={{ marginBottom: 6, textAlign: "left" }}>Свой вариант:</div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    <textarea
-                      rows={3}
-                      value={rearCustomText}
-                      onChange={(e) => setRearCustomText(e.target.value)}
-                      placeholder="Введите текст и нажмите «Добавить»"
-                      style={{ ...inputStyle(), resize: "vertical" }}
-                    />
+                    <textarea rows={3} value={rearCustomText} onChange={(e) => setRearCustomText(e.target.value)} placeholder="Введите текст и нажмите «Добавить»" style={{ ...inputStyle(), resize: "vertical" }} />
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       <button type="button" style={glassButtonStyle("nano")} onClick={addRearCustom}>
                         Добавить
@@ -2332,14 +2053,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
                           return (
                             <div key={subKey} style={{ marginTop: 10 }}>
                               <LoudAccordion title={sub.name || `Подкатегория ${j + 1}`} open={subOpen} onToggle={subToggle}>
-                                <CatGrid
-                                  items={sub.items || []}
-                                  ids={rearIds}
-                                  addGraphic={addRearGraphic}
-                                  removeGraphic={removeRearGraphic}
-                                  rootRef={rearGrid.rootRef}
-                                  colsCount={rearGrid.colsCount}
-                                />
+                                <CatGrid items={sub.items || []} ids={rearIds} addGraphic={addRearGraphic} removeGraphic={removeRearGraphic} rootRef={rearGrid.rootRef} colsCount={rearGrid.colsCount} />
                               </LoudAccordion>
                             </div>
                           );
@@ -2354,11 +2068,7 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
         </>
       )}
 
-      {/* =======================
-          Надгробная плита / плиты
-         ======================= */}
       <PlateBlock index={0} ctx={plateCtx} />
-
       {plate2Enabled && <PlateBlock index={1} ctx={plateCtx} />}
 
       {plateEnabled && !plate2Enabled && (
@@ -2383,7 +2093,14 @@ export default function BackEditorStep({ onBack, onContinue }: { onBack?: () => 
         <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
           Назад
         </button>
-        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
+        <button
+          type="button"
+          onClick={() => {
+            setOutro(true);
+            setTimeout(() => onContinue?.(), 320);
+          }}
+          style={glassButtonStyle("sm")}
+        >
           Продолжить
         </button>
       </div>

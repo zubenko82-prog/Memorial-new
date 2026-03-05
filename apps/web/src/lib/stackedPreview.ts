@@ -1,13 +1,20 @@
 // src/lib/stackedPreview.ts
 //
-// Генерация превью для тыла/плит (canvas -> dataURL)
+// Canvas-превью для тыла/плит.
+// - Формат превью: строго 1:2 (W=450, H=900)
+// - Сборка: портрет (если есть) -> метрика -> далее графика/эпитафии по порядку
+// - Эпитафии: без переносов по словам, только по \n, шрифт уменьшаем при необходимости
+// - Спец-эпитафия "Помним, любим, скорбим..." лесенкой (3 строки)
 //
-// ВАЖНО: этот файл не зависит от React. Его можно вызывать из любых шагов.
-// Здесь собраны:
-// - loadImageSafe
-// - drawImageCover/drawImageContain
-// - buildSilhouetteOverlayDataUrl (для тыла с отзеркаливанием)
-// - рендер "портрет/метрика/графика/эпитафии" в композицию 1:2
+// ВАЖНО (по текущей задаче):
+// - эпитафии уже ок
+// - нужно УВЕЛИЧИТЬ графику (kind:"img") на всех превью
+//   => делаем "img" рисование по ширине (fit by width) и увеличиваем долю высоты под графику,
+//      плюс уменьшаем внутренние отступы у графики.
+//
+// Использование:
+// - buildSilhouetteOverlayDataUrl({ src:itemUrl, W:PREVIEW_W, H:PREVIEW_H, mirrorX:true })
+// - renderStackedCenteredPreview({ W, H, bg:{type:"gradient"}, overlayPng, items, profile:"rear"|"plate" })
 
 export const PREVIEW_W = 450;
 export const PREVIEW_H = 900;
@@ -137,6 +144,28 @@ export function drawImageContain(ctx: CanvasRenderingContext2D, img: HTMLImageEl
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
+// ✅ ВАЖНО: для графики (kind:"img") мы НЕ используем contain,
+// а стараемся занять всю заданную ширину (fit-by-width),
+// чтобы графика была реально крупнее.
+export function drawImageFitWidth(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
+  const iw = img.naturalWidth || img.width || 1;
+  const ih = img.naturalHeight || img.height || 1;
+
+  // хотим занять всю ширину r.w
+  let dw = r.w;
+  let dh = Math.round((dw * ih) / iw);
+
+  // если по высоте не влезает — уменьшаем пропорционально
+  if (dh > r.h) {
+    dh = r.h;
+    dw = Math.round((dh * iw) / ih);
+  }
+
+  const dx = r.x + Math.round((r.w - dw) / 2);
+  const dy = r.y + Math.round((r.h - dh) / 2);
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
 export async function buildSilhouetteOverlayDataUrl(params: { src: string; W: number; H: number; mirrorX?: boolean }): Promise<string | null> {
   const { src, W, H, mirrorX } = params;
   const baseImg = await loadImageSafe(src);
@@ -235,7 +264,6 @@ export async function buildSilhouetteOverlayDataUrl(params: { src: string; W: nu
     ctx.scale(-1, 1);
   }
 
-  // заливка силуэта
   ctx.fillStyle = "#1b1b1b";
   ctx.fillRect(0, 0, W, H);
   ctx.globalCompositeOperation = "destination-in";
@@ -247,23 +275,6 @@ export async function buildSilhouetteOverlayDataUrl(params: { src: string; W: nu
   return canvas.toDataURL("image/png");
 }
 
-function drawImageFitWidth(ctx: CanvasRenderingContext2D, img: HTMLImageElement, r: { x: number; y: number; w: number; h: number }) {
-  const iw = img.naturalWidth || img.width || 1;
-  const ih = img.naturalHeight || img.height || 1;
-
-  let dw = r.w;
-  let dh = Math.round((dw * ih) / iw);
-
-  if (dh > r.h) {
-    dh = r.h;
-    dw = Math.round((dh * iw) / ih);
-  }
-
-  const dx = r.x + Math.round((r.w - dw) / 2);
-  const dy = r.y + Math.round((r.h - dh) / 2);
-  ctx.drawImage(img, dx, dy, dw, dh);
-}
-
 export async function renderStackedCenteredPreview(params: {
   W: number;
   H: number;
@@ -271,7 +282,6 @@ export async function renderStackedCenteredPreview(params: {
   overlayPng?: string | null;
   items: StackItem[];
   profile?: "rear" | "plate";
-  // если хотите строго: графика/эпитафии = 75% ширины фрейма
   contentWidthFrac?: number; // default 0.75
 }): Promise<string | null> {
   const { W, H, bg, overlayPng, items, profile = "rear", contentWidthFrac = 0.75 } = params;
@@ -315,17 +325,22 @@ export async function renderStackedCenteredPreview(params: {
   const isPlate = profile === "plate";
 
   const padY = Math.round(H * 0.06);
-
   const gap = Math.max(10, Math.round(H * 0.02));
   const top = padY;
   const bottom = H - padY;
   const usable = Math.max(10, bottom - top);
+
   if (!items.length) return null;
 
-  // Высоты: чуть более “крупные” для img/text, чтобы не получалось “мелко” на сетке в Review
+  // ✅ Увеличиваем базовую высоту под графику (img), чтобы она не получалась мелкой
+  // (эпитафии оставляем как сейчас — "нормальные")
   const basePhotoH = Math.round(H * (isPlate ? 0.28 : 0.26));
   const baseMetricaH = Math.round(H * (isPlate ? 0.16 : 0.14));
-  const baseImgH = Math.round(H * (isPlate ? 0.26 : 0.20));
+
+  // было: plate 0.26/ rear 0.20 — поднимем ещё, чтобы графика стала заметно крупнее
+  const baseImgH = Math.round(H * (isPlate ? 0.32 : 0.26));
+
+  // эпитафии оставим как в прошлой версии "нормальные"
   const baseTextH = Math.round(H * (isPlate ? 0.24 : 0.18));
 
   const plannedHeights = items.map((it) => {
@@ -338,36 +353,50 @@ export async function renderStackedCenteredPreview(params: {
   const totalGaps = gap * (items.length - 1);
   const totalPlanned = plannedHeights.reduce((a, b) => a + b, 0);
 
+  // auto-scale down if not fit
   const k = Math.min(1, (usable - totalGaps) / Math.max(1, totalPlanned));
   const heights = plannedHeights.map((h) => Math.max(34, Math.floor(h * k)));
 
   const totalH = heights.reduce((a, b) => a + b, 0) + totalGaps;
   let y = Math.round(top + (usable - totalH) / 2);
 
-  // ✅ “контент” (графика/эпитафии) по ширине от всего фрейма W
+  // "контент" (графика/эпитафии) по ширине от всего фрейма W
   const targetW = Math.max(10, Math.min(W, Math.round(W * contentWidthFrac)));
   const contentX = Math.round((W - targetW) / 2);
 
-  // draw
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const h = heights[i];
 
-    // общий прямоугольник для элемента (по ширине весь фрейм)
     const r = { x: 0, y, w: W, h };
 
-    if (it.kind === "photo" || it.kind === "img") {
+    if (it.kind === "photo") {
       const im = await loadImageSafe(it.url);
       if (im) {
-        if (it.kind === "img") {
-          // ✅ графика: строго 75% ширины фрейма
-          const rr = { x: contentX, y: r.y + Math.round(h * 0.08), w: targetW, h: h - Math.round(h * 0.16) };
-          drawImageFitWidth(ctx, im, rr);
-        } else {
-          // фото: оставляем "contain" по центру, но шире (почти весь кадр)
-          const rr = { x: Math.round(W * 0.08), y: r.y + Math.round(h * 0.08), w: Math.round(W * 0.84), h: h - Math.round(h * 0.16) };
-          drawImageContain(ctx, im, rr);
-        }
+        const rr = {
+          x: Math.round(W * 0.08),
+          y: r.y + Math.round(h * 0.08),
+          w: Math.round(W * 0.84),
+          h: h - Math.round(h * 0.16)
+        };
+        drawImageContain(ctx, im, rr);
+      }
+    }
+
+    if (it.kind === "img") {
+      const im = await loadImageSafe(it.url);
+      if (im) {
+        // ✅ уменьшаем внутренние отступы для графики, чтобы она реально была большой
+        // (и чтобы в сетке Review она читалась)
+        const rr = {
+          x: contentX,
+          y: r.y + Math.round(h * 0.04),
+          w: targetW,
+          h: h - Math.round(h * 0.08)
+        };
+
+        // ✅ ключевое: рисуем по ширине (а не contain), чтобы графика занимала 75% ширины фрейма
+        drawImageFitWidth(ctx, im, rr);
       }
     }
 
@@ -434,7 +463,6 @@ export async function renderStackedCenteredPreview(params: {
       const specialStair = isPomnimLubenSkorbim(it.text);
       const lines = specialStair ? pomnimStairLines() : splitHardLines(it.text);
 
-      // лесенка шире (как у вас было), обычный текст — 75% ширины фрейма
       const rr = specialStair ? rr0 : { x: contentX, y: rr0.y, w: targetW, h: rr0.h };
       const widthSafety = specialStair ? Math.round(rr.w * 0.98) : rr.w;
 

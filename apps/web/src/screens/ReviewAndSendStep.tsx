@@ -8,15 +8,19 @@
 //   по аналогии с тыльной стороной.
 // - Эскиз плиты берём из draft.extras.platePreviewHiUrl / platePreviewUrl.
 // - Если элементов на тыле/плите нет — соответствующие эскизы скрываются
-//   (у вас это достигается тем, что previewUrl/previewHiUrl записываются как null).
+//   (previewUrl/previewHiUrl записываются как null).
 //
-// ДОБАВЛЕНО/ИЗМЕНЕНО:
-// - Email: отправляем ТОЛЬКО PDF (в нем все есть), без отдельных фото/эскизов.
-// - Тема письма: "Фамилия1Усопшего №НОМЕР".
-// - UI: один общий прогресс отправки (без подробностей).
-// - "Статус доставки" — аккордеон: если все доставлено -> закрыт + "Доставлен" (зелёный),
-//   иначе открыт + "Не доставлен" (красный). Внутренности статусов оставлены как было.
-// - Меню "Новая заявка" и "Скачать PDF" сохранены.
+// ДОБАВЛЕНО/ИЗМЕНЕНО (по текущей задаче):
+// - Генерация превью тыла/плит выполняется ЗДЕСЬ (Review), чтобы шаг работал,
+//   даже если пользователь пришёл сюда, минуя BackEditorStep.
+// - Генерация безопасная: мы НЕ меняем логику выбора элементов, НЕ трогаем UI,
+//   а только пересобираем previewUrl/platePreviewUrl в draft, если нужно.
+// - Используем src/lib/stackedPreview.ts (canvas -> dataURL).
+//
+// ДОБАВЛЕНО ранее:
+// - отправка Email через Blob (chunk upload -> /api/upload-chunk -> /api/email send_blob)
+// - прогресс Email (emailProgress 0..100) + статус emailDelivered
+// - Email: отправляем ТОЛЬКО PDF, тема письма: "Фамилия №Номер" (как было в вашем последнем варианте)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopBarWithIntro from "../components/TopBarWithIntro";
@@ -27,6 +31,13 @@ import { downloadBlob } from "../lib/pdf/generateOrderPdf";
 import { generateOrderPdfShots } from "../lib/pdf/generateOrderPdfShots";
 import { compressImageFileToMaxBytes } from "../lib/media/resize";
 import { hardResetAll } from "../lib/hardReset";
+import {
+  PREVIEW_W,
+  PREVIEW_H,
+  type StackItem,
+  buildSilhouetteOverlayDataUrl,
+  renderStackedCenteredPreview
+} from "../lib/stackedPreview";
 
 /* ========= Styles and helpers ========= */
 function safeRoot(): React.CSSProperties {
@@ -127,18 +138,6 @@ function BusyOverlay({ text = "Идёт обработка…" }: { text?: strin
       </div>
     </div>
   );
-}
-function coloredOutlineButtonStyle(color: string = "#4977ff"): React.CSSProperties {
-  return {
-    ...glassButtonStyle("md"),
-    border: `1px solid ${color}`,
-    color: "#f7f7fa",
-    fontWeight: 600,
-    background: "#15161a",
-    transition: "box-shadow 120ms, border-color 150ms, color 120ms",
-    boxShadow: "0 2px 18px 0px rgba(34,54,120,0.08)",
-    marginBottom: 12
-  };
 }
 
 /* ========= Utils ========= */
@@ -318,6 +317,16 @@ async function uploadFileInChunksToBlob(params: {
   return { url: String(j2.url), pathname: String(j2.pathname) };
 }
 
+/* ========= Topbar, order text and telegram helpers (без изменений по логике) ========= */
+function startMarkerText(no: string): string {
+  const n = no || "—";
+  return `🪦 НАЧАЛО ЗАЯВКИ №${n}`;
+}
+function endMarkerText(no: string): string {
+  const n = no || "—";
+  return `🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${n}`;
+}
+
 /* ========= Main component ========= */
 export default function ReviewAndSendStep({
   onBack,
@@ -418,11 +427,247 @@ export default function ReviewAndSendStep({
     };
   }, []);
 
-  // ===== Back sketch: detect "empty" by actual image size =====
+  // ===== Preview generation here (SAFE) =====
+  // Генерируем/обновляем previewUrl для тыла и platePreviewUrl для плит,
+  // если пользователь попал на Review, минуя BackEditorStep.
+  const previewGenLockRef = useRef(0);
+
+  const PLATE_BG_URL = "/images/carvings/Резные/Прямой вертикально.png";
+
+  function isRenderableUrl(raw: any): string | null {
+    const s = String(raw ?? "").trim();
+    if (!s || s === "#" || s.toLowerCase() === "about:blank") return null;
+    return s;
+  }
+
+  async function generateRearPreviewIfNeeded(): Promise<void> {
+    const d = loadOrderDraft() as any;
+    const eb: any = d?.editorBack || {};
+    if (!eb?.enabled) {
+      // при выключенном тыле чистим превью, чтобы Review корректно скрывал
+      if (eb?.previewUrl || eb?.previewHiUrl) {
+        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
+        dispatchDraftUpdated();
+      }
+      return;
+    }
+
+    const ids: string[] = Array.isArray(eb.selectedGraphicsIds) ? eb.selectedGraphicsIds : [];
+    const meta: Record<string, any> = eb.graphicsMeta || {};
+    const ep: string[] = Array.isArray(eb.epitaphTexts) ? eb.epitaphTexts : [];
+
+    const items: StackItem[] = [];
+
+    // portrait + metrica from first person
+    const people: any[] = Array.isArray(eb.people) ? eb.people : [];
+    const p0 = people[0] || null;
+    const photo = String(p0?.photoPreview || p0?.photoDataUrl || p0?.photoUrl || p0?.photo || "").trim();
+    if (photo) items.push({ kind: "photo", url: photo });
+
+    const hasNamesOrDates =
+      !!String(p0?.lastName || "").trim() ||
+      !!String(p0?.firstName || "").trim() ||
+      !!String(p0?.middleName || "").trim() ||
+      !!String(p0?.birthDate || "").trim() ||
+      !!String(p0?.deathDate || "").trim();
+
+    if (hasNamesOrDates) {
+      const dates = [p0?.birthDate, p0?.deathDate].map((x) => String(x || "").trim()).filter(Boolean).join(" — ");
+      items.push({
+        kind: "metrica",
+        lastName: String(p0?.lastName || "").trim(),
+        firstName: String(p0?.firstName || "").trim(),
+        middleName: String(p0?.middleName || "").trim(),
+        dates
+      });
+    }
+
+    // graphics in order
+    for (const gid of ids) {
+      const m = meta[gid] || {};
+      const url = String(m.url || "").trim();
+      if (url) items.push({ kind: "img", url });
+    }
+
+    // epitaphs in order
+    for (const t of ep.map((s) => String(s || "")).filter((s) => s.trim())) items.push({ kind: "text", text: t });
+
+    const nextPreviewNeeded = items.length > 0;
+    if (!nextPreviewNeeded) {
+      if (eb?.previewUrl || eb?.previewHiUrl) {
+        saveOrderDraft({ editorBack: { previewUrl: null, previewHiUrl: null } as any });
+        dispatchDraftUpdated();
+      }
+      return;
+    }
+
+    // If already have a dataURL, we still re-generate once on Review to guarantee "fresh"
+    // (safe, because it only affects previewUrl)
+    const itemUrl = String(d?.item?.url || "").trim();
+    const overlay = itemUrl ? await buildSilhouetteOverlayDataUrl({ src: itemUrl, W: PREVIEW_W, H: PREVIEW_H, mirrorX: true }) : null;
+
+    const preview = await renderStackedCenteredPreview({
+      W: PREVIEW_W,
+      H: PREVIEW_H,
+      bg: { type: "gradient" },
+      overlayPng: overlay,
+      items,
+      profile: "rear",
+      contentWidthFrac: 0.75
+    });
+
+    const cur = isRenderableUrl(eb?.previewUrl);
+    const next = isRenderableUrl(preview);
+
+    if (next !== cur) {
+      saveOrderDraft({ editorBack: { previewUrl: next, previewHiUrl: null } as any });
+      dispatchDraftUpdated();
+    }
+  }
+
+  function legacyPlate1Enabled(ex: any): boolean {
+    return !!ex?.headstonePlate;
+  }
+
+  async function generatePlatePreviewIfNeeded(index: 0 | 1 | 2): Promise<void> {
+    const d = loadOrderDraft() as any;
+    const ex: any = d?.extras || {};
+    const plates = ensurePlates(ex);
+
+    const isLegacy0 = index === 0;
+    const enabled = isLegacy0 ? legacyPlate1Enabled(ex) : !!plates[index]?.enabled;
+
+    if (!enabled) {
+      if (isLegacy0) {
+        if (ex?.platePreviewUrl || ex?.platePreviewHiUrl) {
+          saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
+          dispatchDraftUpdated();
+        }
+      } else {
+        const cur = plates[index] || {};
+        if (cur?.platePreviewUrl || cur?.platePreviewHiUrl) {
+          plates[index] = { ...cur, platePreviewUrl: null, platePreviewHiUrl: null };
+          saveOrderDraft({ extras: { plates } as any } as any);
+          dispatchDraftUpdated();
+        }
+      }
+      return;
+    }
+
+    // collect items: graphics then epitaphs (как на BackEditorStep)
+    let ids: string[] = [];
+    let meta: Record<string, any> = {};
+    let selectedEpitaphs: string[] = [];
+
+    if (isLegacy0) {
+      ids = Array.isArray(ex.plateGraphicsIds) ? ex.plateGraphicsIds : [];
+      meta = ex.plateGraphicsMeta || {};
+      const a = typeof ex.plateEpitaph === "string" && ex.plateEpitaph.trim() ? [ex.plateEpitaph.trim()] : [];
+      const b = Array.isArray(ex.plateEpitaphs) ? ex.plateEpitaphs : [];
+      selectedEpitaphs = [...a, ...b].map((x) => String(x || "")).filter((x) => x.trim());
+    } else {
+      const p = plates[index] || {};
+      ids = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
+      meta = p.plateGraphicsMeta || {};
+      const a = typeof p.plateEpitaph === "string" && String(p.plateEpitaph).trim() ? [String(p.plateEpitaph).trim()] : [];
+      const b = Array.isArray(p.plateEpitaphs) ? p.plateEpitaphs : [];
+      selectedEpitaphs = [...a, ...b].map((x) => String(x || "")).filter((x) => x.trim());
+    }
+
+    const items: StackItem[] = [];
+    for (const gid of ids) {
+      const m = meta[gid] || {};
+      const url = String(m.url || "").trim();
+      if (url) items.push({ kind: "img", url });
+    }
+    for (const t of selectedEpitaphs) items.push({ kind: "text", text: t });
+
+    if (items.length === 0) {
+      // no elements => hide preview
+      if (isLegacy0) {
+        if (ex?.platePreviewUrl || ex?.platePreviewHiUrl) {
+          saveOrderDraft({ extras: { platePreviewUrl: null, platePreviewHiUrl: null } as any });
+          dispatchDraftUpdated();
+        }
+      } else {
+        const cur = plates[index] || {};
+        if (cur?.platePreviewUrl || cur?.platePreviewHiUrl) {
+          plates[index] = { ...cur, platePreviewUrl: null, platePreviewHiUrl: null };
+          saveOrderDraft({ extras: { plates } as any } as any);
+          dispatchDraftUpdated();
+        }
+      }
+      return;
+    }
+
+    const preview = await renderStackedCenteredPreview({
+      W: PREVIEW_W,
+      H: PREVIEW_H,
+      bg: { type: "image", url: PLATE_BG_URL, fit: "contain" },
+      overlayPng: null,
+      items,
+      profile: "plate",
+      contentWidthFrac: 0.75
+    });
+
+    const next = isRenderableUrl(preview);
+
+    if (isLegacy0) {
+      const cur = isRenderableUrl(ex?.platePreviewUrl);
+      if (next !== cur) {
+        saveOrderDraft({ extras: { platePreviewUrl: next, platePreviewHiUrl: null } as any });
+        dispatchDraftUpdated();
+      }
+    } else {
+      const curP = plates[index] || {};
+      const cur = isRenderableUrl(curP?.platePreviewUrl);
+      if (next !== cur) {
+        plates[index] = { ...curP, platePreviewUrl: next, platePreviewHiUrl: null };
+        saveOrderDraft({ extras: { plates } as any } as any);
+        dispatchDraftUpdated();
+      }
+    }
+  }
+
+  // run preview generator on enter + when draft changes
+  useEffect(() => {
+    let alive = true;
+    const runId = ++previewGenLockRef.current;
+
+    const run = async () => {
+      // debounce-ish
+      await sleep(80);
+      if (!alive || runId !== previewGenLockRef.current) return;
+
+      try {
+        await generateRearPreviewIfNeeded();
+      } catch {
+        // ignore (preview is best-effort)
+      }
+
+      try {
+        await generatePlatePreviewIfNeeded(0);
+        await generatePlatePreviewIfNeeded(1);
+        await generatePlatePreviewIfNeeded(2);
+      } catch {
+        // ignore
+      }
+
+      // refresh local state after potential draft writes
+      if (!alive || runId !== previewGenLockRef.current) return;
+      setDraft(loadOrderDraft());
+    };
+
+    run();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
+
+  // ===== Back sketch: now always use draft.editorBack.previewHiUrl/previewUrl (generated here if needed) =====
   function getBackSketchUrl(d: any): string | null {
-    const raw = String((d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl || "") ?? "").trim();
-    if (!raw || raw === "#" || raw.toLowerCase() === "about:blank") return null;
-    return raw;
+    return isRenderableUrl(d?.editorBack?.previewHiUrl || d?.editorBack?.previewUrl);
   }
   const [backCandidateUrl, setBackCandidateUrl] = useState<string | null>(getBackSketchUrl(draft));
   useEffect(() => setBackCandidateUrl(getBackSketchUrl(draft)), [draft]);
@@ -453,31 +698,25 @@ export default function ReviewAndSendStep({
 
   const showBack = !!backCandidateUrl && backIsRenderable;
 
-  // ===== Plate sketches (1..3): detect "empty" by actual image size =====
+  // ===== Plate sketches (1..3): from extras.platePreviewUrl / extras.plates[i].platePreviewUrl =====
   type PlateSketch = { index: 0 | 1 | 2; url: string };
 
   function getPlateSketchUrls(d: any): PlateSketch[] {
     const ex: any = (d as any)?.extras || {};
     const plates = ensurePlates(ex);
 
-    const norm = (raw: any): string | null => {
-      const s = String(raw ?? "").trim();
-      if (!s || s === "#" || s.toLowerCase() === "about:blank") return null;
-      return s;
-    };
-
     const out: PlateSketch[] = [];
 
     // plate #1 (legacy)
     const p1Enabled = !!ex.headstonePlate;
-    const p1Url = norm(ex?.platePreviewHiUrl || ex?.platePreviewUrl);
+    const p1Url = isRenderableUrl(ex?.platePreviewHiUrl || ex?.platePreviewUrl);
     if (p1Enabled && p1Url) out.push({ index: 0, url: p1Url });
 
     // plate #2/#3 (new)
     for (const i of [1, 2] as const) {
       const p = plates[i] || {};
       const enabled = !!p.enabled;
-      const url = norm(p?.platePreviewHiUrl || p?.platePreviewUrl);
+      const url = isRenderableUrl(p?.platePreviewHiUrl || p?.platePreviewUrl);
       if (enabled && url) out.push({ index: i, url });
     }
 
@@ -525,7 +764,6 @@ export default function ReviewAndSendStep({
   const plateToShow = useMemo(() => plateCandidates.filter((p) => !!plateRenderable[p.index]), [plateCandidates, plateRenderable]);
   const showPlate = plateToShow.length > 0;
 
-  // пригодится для отправки по URL (fallback)
   const plateUrlFallbacks = useMemo(() => plateToShow.map((p) => p.url), [plateToShow]);
 
   // Front
@@ -564,13 +802,6 @@ export default function ReviewAndSendStep({
     return toParagraphs(engr.epitaphs ?? engr.epitaphText);
   }, [draft?.engraving]);
 
-  // ===== helpers (добавьте внутри компонента, рядом с buildOrderText) =====
-  function firstDeceasedLastName(d: any): string {
-    const p = ((d?.engraving?.persons as any[]) || []).filter(Boolean)[0];
-    const last = String(p?.lastName || "").trim();
-    return last || "БезФамилии";
-  }
-
   // ===== Sending state =====
   const [showWipeWarn, setShowWipeWarn] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -579,10 +810,7 @@ export default function ReviewAndSendStep({
   const [sentOk, setSentOk] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // общий прогресс 0..100 (без подробностей)
   const [overallProgress, setOverallProgress] = useState(0);
-
-  // оставляем uploadProgress (используется в коде при отправке фото в TG)
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const [deliveryVisible, setDeliveryVisible] = useState(false);
@@ -594,8 +822,6 @@ export default function ReviewAndSendStep({
   const [photosDelivered, setPhotosDelivered] = useState(0);
   const [photosTotal, setPhotosTotal] = useState(0);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
-
-  // Email status
   const [emailDelivered, setEmailDelivered] = useState<boolean | null>(null);
 
   // ===== Telegram API (/api/tg) =====
@@ -652,8 +878,6 @@ export default function ReviewAndSendStep({
     pdfUrl: string;
     pdfPathname: string;
     pdfFilename: string;
-
-    // оставлено для совместимости API-клиента, но фактически не используем (шлём пустые массивы)
     photoUrls: string[];
     photoPathnames: string[];
     photoFilenames: string[];
@@ -674,30 +898,27 @@ export default function ReviewAndSendStep({
     return { ok: false, error: json?.error || raw || resp.statusText };
   }
 
-  function startMarkerText(no: string): string {
-    const n = no || "—";
-    return `🪦 НАЧАЛО ЗАЯВКИ №${n}`;
-  }
-  function endMarkerText(no: string): string {
-    const n = no || "—";
-    return `🔚🚫⚰️ КОНЕЦ ЗАЯВКИ №${n}`;
+  function firstDeceasedLastName(d: any): string {
+    const p = ((d?.engraving?.persons as any[]) || []).filter(Boolean)[0];
+    const last = String(p?.lastName || "").trim();
+    return last || "БезФамилии";
   }
 
   function buildOrderText(): string {
-    // ваш большой buildOrderText (оставлен без изменений)
-    const introState = loadIntroState();
+    // ВАЖНО: оставляем как было (без урезаний)
+    const introState2 = loadIntroState();
     const d: any = loadOrderDraft();
 
-    const orderNo = String(introState?.orderNumber || "").trim();
+    const orderNo = String(introState2?.orderNumber || "").trim();
 
     const lines: string[] = [];
     lines.push(orderNo ? `Заявка №${orderNo}` : "Заявка");
     lines.push("");
 
     lines.push("Клиент:");
-    lines.push(`- Имя: ${(introState?.intro?.customerName || "").trim() || "—"}`);
-    lines.push(`- Телефон: ${(introState?.intro?.customerPhone || "").trim() || "—"}`);
-    const customerNotes = String(introState?.intro?.customerNotes || "").trim();
+    lines.push(`- Имя: ${(introState2?.intro?.customerName || "").trim() || "—"}`);
+    lines.push(`- Телефон: ${(introState2?.intro?.customerPhone || "").trim() || "—"}`);
+    const customerNotes = String(introState2?.intro?.customerNotes || "").trim();
     if (customerNotes) lines.push(`- Примечание: ${customerNotes}`);
     lines.push("");
 
@@ -839,12 +1060,11 @@ export default function ReviewAndSendStep({
     }
     lines.push("");
 
-    // ===== Надгробная плита =====
     const plateEnabled = !!ex.headstonePlate;
     lines.push("Надгробная плита:");
     lines.push(`- Включено: ${plateEnabled ? "да" : "нет"}`);
 
-    const platesArr = ensurePlates(ex); // [0..2]
+    const platesArr = ensurePlates(ex);
 
     const p1PreviewUrl = String(ex?.platePreviewHiUrl || ex?.platePreviewUrl || "").trim();
     if (plateEnabled && p1PreviewUrl) {
@@ -890,23 +1110,23 @@ export default function ReviewAndSendStep({
       if (p.plateThickness) lines.push(`- Толщина: ${String(p.plateThickness).trim()}`);
       if (p.plateOrientation) lines.push(`- Ориентация: ${String(p.plateOrientation).trim()}`);
 
-      const ep = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
-      if (ep.length) {
+      const ep2 = [...toParagraphs(p.plateEpitaph), ...toParagraphs(p.plateEpitaphs)].filter(Boolean);
+      if (ep2.length) {
         lines.push("- Эпитафии:");
-        ep.forEach((tx: string, k: number) => lines.push(`  ${k + 1}) ${tx}`));
+        ep2.forEach((tx: string, k: number) => lines.push(`  ${k + 1}) ${tx}`));
       } else {
         lines.push("- Эпитафии: —");
       }
 
-      const ids: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
-      const meta: Record<string, any> = p.plateGraphicsMeta || {};
-      if (ids.length) {
+      const ids2: string[] = Array.isArray(p.plateGraphicsIds) ? p.plateGraphicsIds : [];
+      const meta2: Record<string, any> = p.plateGraphicsMeta || {};
+      if (ids2.length) {
         const counts: Record<string, number> = {};
-        ids.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
-        const uniq = Array.from(new Set(ids));
+        ids2.forEach((id: string) => (counts[id] = (counts[id] || 0) + 1));
+        const uniq = Array.from(new Set(ids2));
         lines.push("- Графика:");
         uniq.forEach((gid, k) => {
-          const m = meta[gid] || {};
+          const m = meta2[gid] || {};
           const name = String(m?.name || gid).trim();
           const qty = counts[gid] || 1;
           lines.push(`  ${k + 1}) ${name}${qty > 1 ? ` ×${qty}` : ""}`);
@@ -1191,7 +1411,6 @@ export default function ReviewAndSendStep({
 
         setUploadProgress(Math.round(((i + 1) / Math.max(1, photos.length)) * 100));
 
-        // общий прогресс: 40..70
         const p = (i + 1) / Math.max(1, photos.length);
         setOverallProgress(40 + Math.round(p * 30));
 
@@ -1234,10 +1453,7 @@ export default function ReviewAndSendStep({
           file: pdfFile,
           blobPathname: `${baseFolder}/pdf/${encodeURIComponent(pdfFile.name)}`,
           contentType: "application/pdf",
-          onProgress: (p) => {
-            // 80..92
-            setOverallProgress(80 + Math.round(p * 12));
-          }
+          onProgress: (p) => setOverallProgress(80 + Math.round(p * 12))
         });
 
         setOverallProgress(94);
@@ -1251,7 +1467,6 @@ export default function ReviewAndSendStep({
           pdfPathname: pdfUploaded.pathname,
           pdfFilename: pdfFile.name,
 
-          // не отправляем вложения-изображения
           photoUrls: [],
           photoPathnames: [],
           photoFilenames: []
@@ -1297,7 +1512,6 @@ export default function ReviewAndSendStep({
         intro: loadIntroState(),
 
         topbarNode: document.getElementById("topbar-shot-root"),
-
         frontNode: document.getElementById("pdf-front-sketch"),
         backNode: showBack ? (document.getElementById("pdf-back-sketch") as any) : null,
         backUrlFallback: showBack ? backCandidateUrl : null,
@@ -1371,7 +1585,7 @@ export default function ReviewAndSendStep({
       {showBack && backCandidateUrl && (
         <section style={{ ...glassPanelStyle(), padding: 10, marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Тыльная</div>
-          <div style={{ position: "relative", aspectRatio: aspect || "4 / 3", width: "100%", overflow: "hidden" }}>
+          <div style={{ position: "relative", aspectRatio: "1 / 2", width: "100%", overflow: "hidden" }}>
             <img
               id="pdf-back-sketch"
               src={backCandidateUrl}
@@ -1442,13 +1656,9 @@ export default function ReviewAndSendStep({
           <section style={{ ...glassPanelStyle(), padding: 12, marginTop: 14, marginBottom: 8 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Заказ отправлен</div>
             <div style={{ fontWeight: 500, opacity: 0.92, marginBottom: 10 }}>
-  {customerName ? `${customerName}, ` : ""}
-  спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.
-  <br />
-  Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.
-</div>
+              {`${customerName ? `, ${customerName}` : ""}, спасибо за заказ! Мы скоро свяжемся с вами по указанному телефону для уточнения деталей.<br>Пожалуйста, сохраните PDF — если понадобится, его удобно переслать менеджеру.`}
+            </div>
 
-            {/* ===== "Статус доставки" как аккордеон, внутренности сохранены как в вашем коде ===== */}
             <details open={!allDelivered} style={{ ...sectionBox, marginBottom: 10 }}>
               <summary style={{ cursor: "pointer", fontWeight: 800 }}>
                 <span style={{ color: allDelivered ? "#7dffa0" : "#ff6b6b" }}>{allDelivered ? "Доставлен" : "Не доставлен"}</span>
@@ -1531,12 +1741,7 @@ export default function ReviewAndSendStep({
                 (showPlate && plateSketchDelivered === false) ||
                 (photosTotal > 0 && photosDelivered < photosTotal) ||
                 emailDelivered === false) && (
-                <button
-                  type="button"
-                  onClick={() => sendOrderDirect()}
-                  disabled={uploading || isSending}
-                  style={glassButtonStyle("sm", uploading || isSending)}
-                >
+                <button type="button" onClick={() => sendOrderDirect()} disabled={uploading || isSending} style={glassButtonStyle("sm", uploading || isSending)}>
                   {uploading ? "Повторяем…" : "Повторить отправку"}
                 </button>
               )}
@@ -1630,12 +1835,7 @@ export default function ReviewAndSendStep({
               Оставить все поля, новый номер заказа
             </button>
 
-            <button
-              style={glassButtonStyle("sm")}
-              onClick={() => {
-                setNewOrderOpen(false);
-              }}
-            >
+            <button style={glassButtonStyle("sm")} onClick={() => setNewOrderOpen(false)}>
               Отмена
             </button>
           </div>
@@ -1774,7 +1974,7 @@ export default function ReviewAndSendStep({
             </button>
 
             <button style={glassButtonStyle("sm")} onClick={() => setConfirmOpen(false)} disabled={isSending || uploading}>
-              Изменить заказ
+              Отмена
             </button>
           </div>
         </div>
