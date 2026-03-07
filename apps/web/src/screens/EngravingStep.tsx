@@ -679,7 +679,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
           </div>
 
           <div style={{ marginTop: 10 }}>
-            <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>Добавить данные ещё одного человека,</button>
+            <button type="button" onClick={addPerson} style={glassButtonStyle("sm")}>Добавить данные ещё одного человека</button>
           </div>
         </section>
 
