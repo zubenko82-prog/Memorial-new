@@ -414,6 +414,7 @@ export default function SketchTemplate({
     const metricWpx = Math.max(80, Math.round(Math.min(colW, baseMetricW * k)));
     const metricHpx = Math.max(22, Math.round(baseMetricH * k * 2));
     const gapPx = Math.max(6, Math.round(hBase.gap * k));
+    const portraitMetricGapPx = Math.max(10, Math.round(0.02 * H * k));
 
     return (
       <div
@@ -453,7 +454,7 @@ export default function SketchTemplate({
               </div>
             </div>
 
-            <div style={{ height: gapPx, width: 1 }} />
+            <div style={{ height: portraitMetricGapPx, width: 1 }} />
 
             <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <PersonMetricText lines={p.lines} sizeMult={k * 2} />
@@ -489,8 +490,9 @@ export default function SketchTemplate({
     const portraitW = Math.max(32, Math.round(basePortraitW * k));
     const portraitH = Math.max(32, Math.round(basePortraitH * k));
     const metricWpx = Math.max(70, Math.round(Math.min(colW, baseMetricW * k)));
-    const metricHpx = Math.max(22, Math.round(baseMetricH * k * 2));
+    const metricHpx = Math.max(22, Math.round(baseMetricH * k * 1.35));
     const gapPx = Math.max(6, Math.round(hBase.gap * k));
+    const portraitMetricGapPx = Math.max(8, Math.round(0.018 * H * k));
 
     return (
       <div
@@ -530,10 +532,10 @@ export default function SketchTemplate({
               </div>
             </div>
 
-            <div style={{ height: gapPx, width: 1 }} />
+            <div style={{ height: portraitMetricGapPx, width: 1 }} />
 
             <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <PersonMetricText lines={p.lines} sizeMult={k * 2} />
+              <PersonMetricText lines={p.lines} sizeMult={k * 1.35} />
             </div>
           </div>
         ))}
