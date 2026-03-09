@@ -548,12 +548,12 @@ export default function SketchTemplate({
     const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
     const colW = Math.floor(availableW / cols);
 
-    // portrait is 85% of column width
-    const portraitW = Math.max(26, Math.floor(colW * 0.85));
+    // portrait is 65% of column width
+    const portraitW = Math.max(26, Math.floor(colW * 0.65));
     const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3))); // 3/4 ratio => H = W*(4/3)
 
-    // metric width is 95% of column width
-    const metricWpx = Math.max(30, Math.floor(colW * 0.95));
+    // metric width is 75% of column width
+    const metricWpx = Math.max(30, Math.floor(colW * 0.75));
 
     const portraitMetricGapPx = Math.max(10, Math.round(0.02 * H));
 
@@ -569,7 +569,7 @@ export default function SketchTemplate({
 
     const Metric3Lines = ({ lines }: { lines: string[] }) => {
       const [l1, l2, l3] = build3Lines(lines).map((s) => s.toUpperCase());
-      const maxW = metricWpx; // already 95% of col
+      const maxW = metricWpx; // already 75% of col
 
       const fs1 = fitFontSizeToWidth({ text: l1 || " ", maxW, start: 18, min: 10, weight: 700 });
       const fs2 = fitFontSizeToWidth({ text: l2 || " ", maxW, start: 16, min: 9, weight: 600 });
