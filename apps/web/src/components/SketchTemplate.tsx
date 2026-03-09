@@ -485,7 +485,7 @@ export default function SketchTemplate({
   const HorizontalMany = () => {
     if (!H || !W) return null;
 
-    const topOffset = Math.round(0.09 * H);
+    const topOffset = Math.round(0.18 * H); // было 0.07 увеличиваем отступ сверху
     const gapSide = 16;
 
     const colGap = Math.max(2, Math.round(CFG.horizontal.layout.gap * 0.33)); // 12 -> ~4
