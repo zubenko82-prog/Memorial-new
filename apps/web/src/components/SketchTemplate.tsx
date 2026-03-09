@@ -550,12 +550,12 @@ export default function SketchTemplate({
 
     // portrait is 50% of column width
     const portraitW = Math.max(26, Math.floor(colW * 0.50));
-    const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3))); // 3/4 ratio => H = W*(4/3)
+    const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3) * 0.88)); // 3/4 ratio => H = W*(4/3)
 
     // metric width is 75% of column width
     const metricWpx = Math.max(30, Math.floor(colW * 0.75));
 
-    const portraitMetricGapPx = Math.max(10, Math.round(0.02 * H));
+    const portraitMetricGapPx = Math.max(8, Math.round(0.014 * H));
 
     
     const build3Lines = (lines: string[]) => {
@@ -629,7 +629,7 @@ export default function SketchTemplate({
   data-sketch-key={p.id}
   style={{
     width: metricWpx,
-    minHeight: Math.max(44, Math.floor(0.18 * H)),
+    minHeight: Math.max(38, Math.floor(0.14 * H)),
     display: "flex",
     alignItems: "center",
     justifyContent: "center"
