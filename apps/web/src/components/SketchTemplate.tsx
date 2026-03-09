@@ -380,10 +380,12 @@ export default function SketchTemplate({
     );
   };
 
-  const HorizontalTwo = () => {
+  // ВСТАВЬТЕ ЭТИ ДВЕ ФУНКЦИИ ВМЕСТО ТЕКУЩИХ HorizontalTwo / HorizontalMany
+
+const HorizontalTwo = () => {
   if (!H || !W) return null;
 
-  // 2 человека: портрет крупный, метрика чуть меньше
+  // 2 человека: портрет крупный, метрика чуть больше, и заметный зазор
   const topOffset = Math.round(0.08 * H);
   const gapSide = 16;
   const colGap = CFG.horizontal.layout.gap;
@@ -395,15 +397,16 @@ export default function SketchTemplate({
   const basePortraitH = Math.max(40, Math.round(0.65 * H));
   const basePortraitW = Math.round(basePortraitH * (3 / 4));
 
-  const baseMetricH = Math.max(22, Math.round(0.18 * H));
+  // ✅ метрика чуть больше
+  const baseMetricH = Math.max(22, Math.round(0.20 * H));
   const baseMetricW = Math.round(W * 0.80);
 
   const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
   const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
 
-  // ✅ гарантируем ощутимый зазор даже при маленьком k
-  const portraitMetricGapPxBase = Math.max(10, Math.round(0.018 * H));
-  const neededH = basePortraitH + portraitMetricGapPxBase + baseMetricH;
+  // ✅ делаем ощутимый зазор и НЕ даём ему схлопнуться
+  const gapBase = Math.max(16, Math.round(0.028 * H));
+  const neededH = basePortraitH + gapBase + baseMetricH;
 
   const kH = Math.min(1, availableH / Math.max(1, neededH));
   const k = Math.min(kW, kH);
@@ -411,13 +414,13 @@ export default function SketchTemplate({
   const portraitW = Math.max(40, Math.round(basePortraitW * k));
   const portraitH = Math.max(40, Math.round(basePortraitH * k));
   const metricWpx = Math.max(80, Math.round(Math.min(colW, baseMetricW * k)));
-  const metricHpx = Math.max(20, Math.round(baseMetricH * k));
+  const metricHpx = Math.max(22, Math.round(baseMetricH * k));
 
-  // ✅ финальный зазор: минимум 10px
-  const portraitMetricGapPx = Math.max(10, Math.round(portraitMetricGapPxBase * k));
+  // ✅ минимум 16px — чтобы визуально точно был зазор
+  const portraitMetricGapPx = Math.max(16, Math.round(gapBase * k));
 
-  // шрифт метрики меньше
-  const metricTextMult = 0.90;
+  // ✅ метрику чуть увеличиваем (раньше было 0.90)
+  const metricTextMult = 1.02;
 
   return (
     <div
@@ -468,30 +471,32 @@ export default function SketchTemplate({
   );
 };
 
-  const HorizontalMany = () => {
+const HorizontalMany = () => {
   if (!H || !W) return null;
 
   const topOffset = Math.round(0.07 * H);
   const gapSide = 16;
   const colGap = CFG.horizontal.layout.gap;
 
-  const cols = Math.min(4, Math.max(3, peopleBlocks.length));
+  // ✅ при 3-4 людях держим 3 колонки (крупнее); при 5+ — 4 колонки
+  const cols = peopleBlocks.length <= 4 ? 3 : 4;
+
   const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
   const colW = Math.floor(availableW / cols);
 
-  // ✅ 3+ людей: делаем заметно крупнее, но не как для "двух"
-  const basePortraitH = Math.max(34, Math.round(0.55 * H)); // было 0.46
+  // ✅ делаем 3-4 человека заметно крупнее
+  const basePortraitH = Math.max(34, Math.round(0.60 * H));
   const basePortraitW = Math.round(basePortraitH * (3 / 4));
 
-  const baseMetricH = Math.max(22, Math.round(0.24 * H)); // было 0.22
+  const baseMetricH = Math.max(22, Math.round(0.26 * H));
   const baseMetricW = Math.round(W * 0.82);
 
   const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
   const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
 
-  // ✅ ощутимый зазор между портретом и метрикой
-  const portraitMetricGapPxBase = Math.max(9, Math.round(0.016 * H));
-  const neededH = basePortraitH + portraitMetricGapPxBase + baseMetricH;
+  // ✅ зазор больше и с большим минимумом, чтобы не “липло”
+  const gapBase = Math.max(14, Math.round(0.024 * H));
+  const neededH = basePortraitH + gapBase + baseMetricH;
 
   const kH = Math.min(1, availableH / Math.max(1, neededH));
   const k = Math.min(kW, kH);
@@ -499,11 +504,12 @@ export default function SketchTemplate({
   const portraitW = Math.max(34, Math.round(basePortraitW * k));
   const portraitH = Math.max(34, Math.round(basePortraitH * k));
   const metricWpx = Math.max(72, Math.round(Math.min(colW, baseMetricW * k)));
-  const metricHpx = Math.max(20, Math.round(baseMetricH * k));
+  const metricHpx = Math.max(22, Math.round(baseMetricH * k));
 
-  const portraitMetricGapPx = Math.max(9, Math.round(portraitMetricGapPxBase * k));
+  // ✅ минимум 14px
+  const portraitMetricGapPx = Math.max(14, Math.round(gapBase * k));
 
-  // ✅ шрифт чуть увеличиваем (но умеренно)
+  // ✅ метрика чуть крупнее, но умеренно
   const metricTextMult = 1.12;
 
   return (
