@@ -567,19 +567,25 @@ export default function SketchTemplate({
 
     const Metric3Lines = ({ lines }: { lines: string[] }) => {
       const [l1, l2, l3] = build3Lines(lines).map((s) => s.toUpperCase());
-      const maxW = metricWpx; // already 75% of col
+      const maxW = Math.floor(metricWpx * 0.92); // запас под letterSpacing/рендер
 
       const fs1 = fitFontSizeToWidth({ text: l1 || " ", maxW, start: 18, min: 10, weight: 700 });
       const fs2 = fitFontSizeToWidth({ text: l2 || " ", maxW, start: 16, min: 9, weight: 600 });
       const fs3 = fitFontSizeToWidth({ text: l3 || " ", maxW, start: 14, min: 8, weight: 400 });
 
-      const line: React.CSSProperties = { width: "100%", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden" };
+      const line: React.CSSProperties = {
+  width: "100%",
+  textAlign: "center",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "clip" // или "ellipsis" если хотите точки
+};
 
       return (
         <div style={{ width: "100%", display: "grid", gap: 2, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-          {!!l1 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 700, fontSize: fs1, lineHeight: 1.1, letterSpacing: "0.3px" }}>{l1}</div>}
-          {!!l2 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 600, fontSize: fs2, lineHeight: 1.1, letterSpacing: "0.25px" }}>{l2}</div>}
-          {!!l3 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 400, fontSize: fs3, lineHeight: 1.1, letterSpacing: "0.2px", opacity: 0.95 }}>{l3}</div>}
+          {!!l1 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 700, fontSize: fs1, lineHeight: 1.1, letterSpacing: "0px" }}>{l1}</div>}
+          {!!l2 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 600, fontSize: fs2, lineHeight: 1.1, letterSpacing: "0px" }}>{l2}</div>}
+          {!!l3 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 400, fontSize: fs3, lineHeight: 1.1, letterSpacing: "0px", opacity: 0.95 }}>{l3}</div>}
         </div>
       );
     };

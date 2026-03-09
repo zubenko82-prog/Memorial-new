@@ -585,10 +585,11 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
 
         {/* Список персон */}
         <section>
-          <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
            <div style={{ margin: "0 0 8px 0" }}>
         Запишите ФИО и даты так - как они должны быть на памятнике. 
       </div>
+          <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Информация об усопших</h2>
+          
 
           {persons.length > 1 && (
             <div style={{ margin: "0 0 8px 0", textAlign: "left" }}>
