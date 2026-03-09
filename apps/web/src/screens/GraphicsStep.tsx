@@ -1,18 +1,14 @@
 // src/screens/GraphicsStep.tsx
-// Поддержка подпапок ЛЮБОЙ глубины из путей relPath/path/url.
-// Навигация и горизонтальный/вертикальный шаблон эскиза — как в EngravingStep.
-// Теперь предпросмотр построен на общем компоненте SketchTemplate, а ЭПИТАФИИ тоже отображаются.
 //
-// Что делает экран:
-// - Каталог с аккордеонами (категории и подкатегории), выбор графики с подсветкой и управляющими +/-.
-// - Клик по миниатюре добавляет элемент (не более 2 одинаковых — предупреждаем).
-// - Предпросмотр эскиза: на изображение изделия накладываем людей (портрет+метрика), выбранные оверлеи и эпитафии.
-// - Горизонтальный/вертикальный шаблон и метрика — внутри SketchTemplate.
-// - Кресты и прочая графика — передаём в SketchTemplate как оверлеи.
-// - Кнопка «Эскиз» и скролл к категории/подкатегории учитывают высоту навигации и анимации раскрытия.
-//
-// Изменение: галерея сеткой — минимум 2 в ряд (минимум две колонки) даже на узком экране.
-// Реализовано через minmax(clamp(..., (100% - gap)/2, ...), 1fr), чтобы ячейки сжимались до половины ширины контейнера.
+// Правки по задаче:
+// 1) НЕ запрещаем добавление одинаковой графики:
+//    - убран лимит и алерт, addGraphicWithLimit заменён на addGraphicUnlimited.
+// 2) Кнопки +/- в "выбранных" (и в каталоге) нажимаются не с первого раза:
+//    - причина обычно в том, что внутри карточки есть перекрывающий слой/кнопка-миниатюра,
+//      который перехватывает тап (особенно на iOS).
+//    - фикс: у контейнеров превью-картинок и img ставим pointerEvents: "none",
+//      а у области с +/- — pointerEvents: "auto" + небольшой zIndex.
+//    - также добавлен onPointerDown с stopPropagation, чтобы тап точно не уходил в родителя.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchCatalog } from "../api";
@@ -49,14 +45,10 @@ function glassPanelStyle() {
 function bottomUnderlayGradient() {
   return {
     backgroundColor: "#000000",
-    backgroundImage:
-      "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
+    backgroundImage: "linear-gradient(to bottom, #6e6e6e 0%, #464545 20%, #424242 40%, #888 70%, #ffffff 100%)"
   } as React.CSSProperties;
 }
 
-// Общая формула колонок: минимум 2 в ряд
-// gap = 10px => на 2 колонки ширина колонки ≈ (100% - 10px) / 2.
-// min 100px, целевая половина контейнера, max 140px (или 120px где нужно).
 const GAP_PX = 10;
 const twoColGrid = (maxPx = 140, minPx = 100) =>
   `repeat(auto-fill, minmax(clamp(${minPx}px, calc((100% - ${GAP_PX}px)/2), ${maxPx}px), 1fr))`;
@@ -316,7 +308,6 @@ export default function GraphicsStep(props: any) {
 
   const [outro, setOutro] = useState(false);
 
-  // Навигация (sticky + dashed)
   const navRef = useRef<HTMLDivElement | null>(null);
   const [navH, setNavH] = useState(56);
   useLayoutEffect(() => {
@@ -334,22 +325,20 @@ export default function GraphicsStep(props: any) {
     };
   }, [navH]);
 
-  // Унифицированный скролл с учётом высоты навигации
-  const scrollToElWithOffset = useCallback((el: HTMLElement | null) => {
-    if (!el) return;
-    const extra = 14;
-    const rect = el.getBoundingClientRect();
-    const target = Math.max(0, window.scrollY + rect.top - (navH + extra));
-    window.scrollTo({ top: target, behavior: "smooth" });
-  }, [navH]);
+  const scrollToElWithOffset = useCallback(
+    (el: HTMLElement | null) => {
+      if (!el) return;
+      const extra = 14;
+      const rect = el.getBoundingClientRect();
+      const target = Math.max(0, window.scrollY + rect.top - (navH + extra));
+      window.scrollTo({ top: target, behavior: "smooth" });
+    },
+    [navH]
+  );
 
   const previewSectionRef = useRef<HTMLElement | null>(null);
   const scrollToPreview = useCallback(() => {
     scrollToElWithOffset(previewSectionRef.current);
-  }, [scrollToElWithOffset]);
-
-  const scrollToCat = useCallback((id: string) => {
-    scrollToElWithOffset(document.getElementById(id));
   }, [scrollToElWithOffset]);
 
   // Каталог
@@ -395,35 +384,38 @@ export default function GraphicsStep(props: any) {
       }
     }
     loadGraphics();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  // Открыть только указанную категорию и прокрутить к началу ПОСЛЕ анимации
   const COLLAPSE_MS = 300;
-  const openOnlyCatAndScroll = useCallback((catId: string) => {
-    setOpenCats(() => {
-      const next: Record<string, boolean> = {};
-      gCats.forEach((c) => (next[c._id] = c._id === catId));
-      return next;
-    });
-    setOpenSubs(() => {
-      const next: Record<string, boolean> = {};
-      gCats.forEach((c) => c.children.forEach((s: any) => (next[s._id] = false)));
-      return next;
-    });
-    const el = document.getElementById(`cat-${catId}`);
-    if (!el) return;
-    const tryScroll = (delay: number) => setTimeout(() => scrollToElWithOffset(el), delay);
-    tryScroll(COLLAPSE_MS + 20);
-    tryScroll(COLLAPSE_MS + 180);
-    tryScroll(COLLAPSE_MS + 360);
-  }, [gCats, scrollToElWithOffset]);
+  const openOnlyCatAndScroll = useCallback(
+    (catId: string) => {
+      setOpenCats(() => {
+        const next: Record<string, boolean> = {};
+        gCats.forEach((c) => (next[c._id] = c._id === catId));
+        return next;
+      });
+      setOpenSubs(() => {
+        const next: Record<string, boolean> = {};
+        gCats.forEach((c) => c.children.forEach((s: any) => (next[s._id] = false)));
+        return next;
+      });
+      const el = document.getElementById(`cat-${catId}`);
+      if (!el) return;
+      const tryScroll = (delay: number) => setTimeout(() => scrollToElWithOffset(el), delay);
+      tryScroll(COLLAPSE_MS + 20);
+      tryScroll(COLLAPSE_MS + 180);
+      tryScroll(COLLAPSE_MS + 360);
+    },
+    [gCats, scrollToElWithOffset]
+  );
 
-  // Заголовки аккордеонов
   const toggleCat = useCallback((catId: string) => setOpenCats((s) => ({ ...s, [catId]: !s[catId] })), []);
   const toggleSub = useCallback((subId: string) => setOpenSubs((s) => ({ ...s, [subId]: !s[subId] })), []);
 
-  // Драфт и выбор (дубликаты через instanceId)
+  // Драфт и выбор
   const draft0 = loadOrderDraft();
   const [selectedGraphics, setSelectedGraphics] = useState<any[]>(
     (draft0.graphics || []).map((g: any, i: number) => ({ ...g, instanceId: g.instanceId || `inst-${i}-${Date.now()}` }))
@@ -431,7 +423,9 @@ export default function GraphicsStep(props: any) {
 
   const countsById = useMemo(() => {
     const map: Record<string, number> = {};
-    selectedGraphics.forEach((g) => { map[g.id] = (map[g.id] || 0) + 1; });
+    selectedGraphics.forEach((g) => {
+      map[g.id] = (map[g.id] || 0) + 1;
+    });
     return map;
   }, [selectedGraphics]);
 
@@ -473,15 +467,10 @@ export default function GraphicsStep(props: any) {
     );
   }, []);
 
-  // Добавление с лимитом: не более 4 одинаковых изображений
-  const addGraphicWithLimit = useCallback((g: any) => {
-    const qty = countsById[g.id] || 0;
-    if (qty >= 4) {
-      window.alert("Нельзя добавить более 4 одинаковых изображений");
-      return;
-    }
+  // ✅ БЕЗ ЛИМИТА
+  const addGraphicUnlimited = useCallback((g: any) => {
     addGraphic(g);
-  }, [addGraphic, countsById]);
+  }, [addGraphic]);
 
   const removeOneById = useCallback((id: string) => {
     setSelectedGraphics((prev) => {
@@ -492,16 +481,24 @@ export default function GraphicsStep(props: any) {
       return copy;
     });
   }, []);
+
   const clearGraphics = useCallback(() => setSelectedGraphics([]), []);
 
-  // Навигация по шагам
-  const handleBack = () => { setOutro(true); setTimeout(() => onBack && onBack(), 320); };
+  const handleBack = () => {
+    setOutro(true);
+    setTimeout(() => onBack && onBack(), 320);
+  };
   const handleContinue = () => {
     setOutro(true);
-    setTimeout(() => onDone && onDone({
-      graphics: selectedGraphics.map(({ instanceId, ...rest }) => rest),
-      graphic: selectedGraphics[0] || null
-    }), 320);
+    setTimeout(
+      () =>
+        onDone &&
+        onDone({
+          graphics: selectedGraphics.map(({ instanceId, ...rest }) => rest),
+          graphic: selectedGraphics[0] || null
+        }),
+      320
+    );
   };
 
   // Люди из драфта для эскиза
@@ -511,7 +508,10 @@ export default function GraphicsStep(props: any) {
     if (Array.isArray(engraving?.persons) && engraving.persons.length > 0) {
       return engraving.persons.map((p: any, idx: number) => {
         const l1 = (p.lastName || "").trim();
-        const l2 = [p.firstName, p.middleName].map((s: string) => (s || "").trim()).filter(Boolean).join(" ");
+        const l2 = [p.firstName, p.middleName]
+          .map((s: string) => (s || "").trim())
+          .filter(Boolean)
+          .join(" ");
         const l3 = [p.birthDate, p.deathDate].map((s: string) => (s || "").trim()).filter(Boolean).join(" — ");
         const lines = [l1, l2, l3].filter(Boolean);
         const photo = p.photoPreview || p.photoDataUrl || p.photoUrl || null;
@@ -521,7 +521,6 @@ export default function GraphicsStep(props: any) {
     return [];
   }, [engraving]);
 
-  // Эпитафии из драфта — для отображения в эскизе
   const epitaphsForPreview: string[] = useMemo(() => {
     const arr = Array.isArray(engraving?.epitaphs) ? engraving.epitaphs.filter(Boolean) : [];
     if (arr.length) return arr as string[];
@@ -531,7 +530,6 @@ export default function GraphicsStep(props: any) {
     return [];
   }, [engraving]);
 
-  // Группировка выбранной графики для оверлеев
   const selectedCrosses = useMemo(
     () => selectedGraphics.filter((g) => (g.catName || "").toLowerCase().includes("крест") || (g.catSlug || "").toLowerCase().includes("cross")),
     [selectedGraphics]
@@ -541,11 +539,16 @@ export default function GraphicsStep(props: any) {
     [selectedGraphics]
   );
 
+  // helper for tap reliability
+  const stopTap = (e: React.SyntheticEvent) => {
+    e.preventDefault?.();
+    e.stopPropagation?.();
+  };
+
   return (
     <div style={{ maxWidth: 600, margin: "0 auto", color: "#fff", padding: 12, opacity: outro ? 0 : 1, transition: "opacity 320ms ease" }}>
       <TopBarWithIntro title="Графика" />
 
-      {/* Навигация — стиль EngravingStep */}
       <div
         ref={navRef}
         style={{
@@ -561,12 +564,7 @@ export default function GraphicsStep(props: any) {
       >
         <div style={{ display: "flex", gap: 6, padding: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-start" }}>
           {gCats.map((cat) => (
-            <button
-              key={"nav-" + cat._id}
-              title={"Перейти к: " + cat.name}
-              onClick={() => openOnlyCatAndScroll(cat._id)}
-              style={glassButtonStyle("nano")}
-            >
+            <button key={"nav-" + cat._id} title={"Перейти к: " + cat.name} onClick={() => openOnlyCatAndScroll(cat._id)} style={glassButtonStyle("nano")}>
               {cat.name}
             </button>
           ))}
@@ -577,7 +575,6 @@ export default function GraphicsStep(props: any) {
         </div>
       </div>
 
-      {/* Каталог с управлением количеством и подсветкой выбранных */}
       <section>
         <h2 style={{ margin: "0 0 8px 0", textAlign: "left" }}>Графика</h2>
         <div style={{ ...glassPanelStyle(), padding: 12 }}>
@@ -624,13 +621,7 @@ export default function GraphicsStep(props: any) {
                     >
                       <div style={{ padding: 10, display: "grid", gap: 12 }}>
                         {cat.items.length > 0 && (
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: twoColGrid(140, 100),
-                              gap: GAP_PX
-                            }}
-                          >
+                          <div style={{ display: "grid", gridTemplateColumns: twoColGrid(140, 100), gap: GAP_PX }}>
                             {cat.items.map((g: any) => {
                               const qty = countsById[g.id] || 0;
                               return (
@@ -646,10 +637,9 @@ export default function GraphicsStep(props: any) {
                                 >
                                   <button
                                     type="button"
-                                    onClick={() => addGraphicWithLimit(g)}
+                                    onClick={() => addGraphicUnlimited(g)}
                                     title="Добавить в эскиз"
                                     style={{
-                                      ...bottomUnderlayGradient(),
                                       borderRadius: 10,
                                       aspectRatio: "1/1",
                                       display: "flex",
@@ -659,18 +649,44 @@ export default function GraphicsStep(props: any) {
                                       width: "100%",
                                       border: "none",
                                       cursor: "pointer",
-                                      background: "transparent"
+                                      background: "transparent",
+                                      position: "relative",
+                                      zIndex: 1
                                     }}
                                   >
-                                    <img src={g.preview || g.url} alt={g.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", pointerEvents: "none" }} />
+                                    <div style={{ ...bottomUnderlayGradient(), borderRadius: 10, position: "absolute", inset: 0, pointerEvents: "none" }} />
+                                    <img
+                                      src={g.preview || g.url}
+                                      alt={g.name}
+                                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", pointerEvents: "none", position: "relative", zIndex: 2 }}
+                                    />
                                   </button>
 
-                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                                    <button type="button" aria-label="Удалить один" onClick={() => removeOneById(g.id)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0), padding: "2px 8px", fontSize: 14 }}>
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8, position: "relative", zIndex: 5, pointerEvents: "auto" }}>
+                                    <button
+                                      type="button"
+                                      aria-label="Удалить один"
+                                      onPointerDown={stopTap}
+                                      onClick={(e) => {
+                                        stopTap(e);
+                                        removeOneById(g.id);
+                                      }}
+                                      disabled={qty === 0}
+                                      style={{ ...glassButtonStyle("nano", qty === 0), padding: "2px 8px", fontSize: 14 }}
+                                    >
                                       −
                                     </button>
                                     <span style={{ minWidth: 20, textAlign: "center", fontWeight: 600 }}>{qty}</span>
-                                    <button type="button" aria-label="Добавить один" onClick={() => addGraphicWithLimit(g)} style={{ ...glassButtonStyle("nano"), padding: "2px 8px", fontSize: 14 }}>
+                                    <button
+                                      type="button"
+                                      aria-label="Добавить один"
+                                      onPointerDown={stopTap}
+                                      onClick={(e) => {
+                                        stopTap(e);
+                                        addGraphicUnlimited(g);
+                                      }}
+                                      style={{ ...glassButtonStyle("nano"), padding: "2px 8px", fontSize: 14 }}
+                                    >
                                       +
                                     </button>
                                   </div>
@@ -716,13 +732,7 @@ export default function GraphicsStep(props: any) {
                                   }
                                 >
                                   <div style={{ padding: 10 }}>
-                                    <div
-                                      style={{
-                                        display: "grid",
-                                        gridTemplateColumns: twoColGrid(140, 100),
-                                        gap: GAP_PX
-                                      }}
-                                    >
+                                    <div style={{ display: "grid", gridTemplateColumns: twoColGrid(140, 100), gap: GAP_PX }}>
                                       {sub.items.map((g: any) => {
                                         const qty = countsById[g.id] || 0;
                                         return (
@@ -738,10 +748,9 @@ export default function GraphicsStep(props: any) {
                                           >
                                             <button
                                               type="button"
-                                              onClick={() => addGraphicWithLimit(g)}
+                                              onClick={() => addGraphicUnlimited(g)}
                                               title="Добавить в эскиз"
                                               style={{
-                                                ...bottomUnderlayGradient(),
                                                 borderRadius: 10,
                                                 aspectRatio: "1/1",
                                                 display: "flex",
@@ -751,17 +760,44 @@ export default function GraphicsStep(props: any) {
                                                 width: "100%",
                                                 border: "none",
                                                 cursor: "pointer",
-                                                background: "transparent"
+                                                background: "transparent",
+                                                position: "relative",
+                                                zIndex: 1
                                               }}
                                             >
-                                              <img src={g.preview || g.url} alt={g.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", pointerEvents: "none" }} />
+                                              <div style={{ ...bottomUnderlayGradient(), borderRadius: 10, position: "absolute", inset: 0, pointerEvents: "none" }} />
+                                              <img
+                                                src={g.preview || g.url}
+                                                alt={g.name}
+                                                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", pointerEvents: "none", position: "relative", zIndex: 2 }}
+                                              />
                                             </button>
-                                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
-                                              <button type="button" aria-label="Удалить один" onClick={() => removeOneById(g.id)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0), padding: "2px 8px", fontSize: 14 }}>
+
+                                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8, position: "relative", zIndex: 5, pointerEvents: "auto" }}>
+                                              <button
+                                                type="button"
+                                                aria-label="Удалить один"
+                                                onPointerDown={stopTap}
+                                                onClick={(e) => {
+                                                  stopTap(e);
+                                                  removeOneById(g.id);
+                                                }}
+                                                disabled={qty === 0}
+                                                style={{ ...glassButtonStyle("nano", qty === 0), padding: "2px 8px", fontSize: 14 }}
+                                              >
                                                 −
                                               </button>
                                               <span style={{ minWidth: 20, textAlign: "center", fontWeight: 600 }}>{qty}</span>
-                                              <button type="button" aria-label="Добавить один" onClick={() => addGraphicWithLimit(g)} style={{ ...glassButtonStyle("nano"), padding: "2px 8px", fontSize: 14 }}>
+                                              <button
+                                                type="button"
+                                                aria-label="Добавить один"
+                                                onPointerDown={stopTap}
+                                                onClick={(e) => {
+                                                  stopTap(e);
+                                                  addGraphicUnlimited(g);
+                                                }}
+                                                style={{ ...glassButtonStyle("nano"), padding: "2px 8px", fontSize: 14 }}
+                                              >
                                                 +
                                               </button>
                                             </div>
@@ -784,36 +820,71 @@ export default function GraphicsStep(props: any) {
         </div>
       </section>
 
-      {/* Блок выбранной графики — НИЖНЯЯ ПАНЕЛЬ */}
+      {/* Блок выбранной графики */}
       <section style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <strong>Выбрано: {selectedGraphics.length}</strong>
-          <button type="button" onClick={clearGraphics} style={glassButtonStyle("nano")}>Очистить всё</button>
+          <button type="button" onClick={clearGraphics} style={glassButtonStyle("nano")}>
+            Очистить всё
+          </button>
         </div>
+
         {(() => {
           const firstById: Record<string, any> = {};
-          selectedGraphics.forEach((g) => { if (!firstById[g.id]) firstById[g.id] = g; });
+          selectedGraphics.forEach((g) => {
+            if (!firstById[g.id]) firstById[g.id] = g;
+          });
           const unique = Object.values(firstById);
           if (unique.length === 0) return <div style={{ opacity: 0.8 }}>Не выбрано ни одного элемента</div>;
+
           return (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: twoColGrid(140, 100),
-                gap: GAP_PX
-              }}
-            >
+            <div style={{ display: "grid", gridTemplateColumns: twoColGrid(140, 100), gap: GAP_PX }}>
               {unique.map((g: any) => {
                 const qty = countsById[g.id] || 0;
                 return (
                   <div key={"chosen-" + g.id} style={{ ...glassPanelStyle(), borderRadius: 12, padding: 8, textAlign: "center", outline: "2px solid #8ab4ff" }}>
-                    <div style={{ ...bottomUnderlayGradient(), borderRadius: 10, aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center", padding: 6 }}>
-                      <img src={g.preview || g.url} alt={g.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                    <div
+                      style={{
+                        ...bottomUnderlayGradient(),
+                        borderRadius: 10,
+                        aspectRatio: "1/1",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 6,
+                        pointerEvents: "none" // ✅ чтобы не перехватывало тап по кнопкам ниже
+                      }}
+                    >
+                      <img src={g.preview || g.url} alt={g.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", pointerEvents: "none" }} />
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 10 }}>
-                      <button type="button" aria-label="Удалить один" onClick={() => removeOneById(g.id)} disabled={qty === 0} style={{ ...glassButtonStyle("nano", qty === 0), padding: "4px 10px", fontSize: 14 }}>−</button>
+
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 10, position: "relative", zIndex: 5, pointerEvents: "auto" }}>
+                      <button
+                        type="button"
+                        aria-label="Удалить один"
+                        disabled={qty === 0}
+                        onPointerDown={stopTap}
+                        onClick={(e) => {
+                          stopTap(e);
+                          removeOneById(g.id);
+                        }}
+                        style={{ ...glassButtonStyle("nano", qty === 0), padding: "4px 10px", fontSize: 14 }}
+                      >
+                        −
+                      </button>
                       <span style={{ minWidth: 28, textAlign: "center", fontWeight: 700 }}>{qty}</span>
-                      <button type="button" aria-label="Добавить один" onClick={() => addGraphicWithLimit(g)} style={{ ...glassButtonStyle("nano"), padding: "4px 10px", fontSize: 14 }}>+</button>
+                      <button
+                        type="button"
+                        aria-label="Добавить один"
+                        onPointerDown={stopTap}
+                        onClick={(e) => {
+                          stopTap(e);
+                          addGraphicUnlimited(g);
+                        }}
+                        style={{ ...glassButtonStyle("nano"), padding: "4px 10px", fontSize: 14 }}
+                      >
+                        +
+                      </button>
                     </div>
                   </div>
                 );
@@ -823,34 +894,22 @@ export default function GraphicsStep(props: any) {
         })()}
       </section>
 
-      {/* Предпросмотр — общий SketchTemplate с гориз./верт. шаблоном, оверлеями и ЭПИТАФИЯМИ */}
-      <div
-        style={{
-          color: "#fff",
-          opacity: 0.9,
-          fontSize: 15,
-          lineHeight: 1.25,
-          margin: "6px 0 8px",
-          textAlign: "center",
-          fontWeight: 400,
-        }}
-      >
+      {/* Предпросмотр */}
+      <div style={{ color: "#fff", opacity: 0.9, fontSize: 15, lineHeight: 1.25, margin: "6px 0 8px", textAlign: "center", fontWeight: 400 }}>
         Перед вами визуализация заказа, а не готовый макет для гравировки. Возможны наложения объектов. Итоговый макет выполнит специалист.
       </div>
+
       <section ref={previewSectionRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0", scrollMarginTop: navH + 24 }}>
-        <SketchTemplate
-          item={item}
-          peopleBlocks={peopleBlocks}
-          crosses={selectedCrosses}
-          others={selectedOtherGraphics}
-          epitaphs={epitaphsForPreview}
-          carvingOpacity={0.4}
-        />
+        <SketchTemplate item={item} peopleBlocks={peopleBlocks} crosses={selectedCrosses} others={selectedOtherGraphics} epitaphs={epitaphsForPreview} carvingOpacity={0.4} />
       </section>
 
       <div style={{ display: "flex", justifyContent: "center", gap: 10, margin: "12px 0", flexWrap: "wrap" }}>
-        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>Назад</button>
-        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>Продолжить</button>
+        <button type="button" onClick={handleBack} style={glassButtonStyle("sm")}>
+          Назад
+        </button>
+        <button type="button" onClick={handleContinue} style={glassButtonStyle("sm")}>
+          Продолжить
+        </button>
       </div>
     </div>
   );

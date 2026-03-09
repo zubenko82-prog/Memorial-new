@@ -485,7 +485,7 @@ export default function SketchTemplate({
   const HorizontalMany = () => {
     if (!H || !W) return null;
 
-    const topOffset = Math.round(0.07 * H);
+    const topOffset = Math.round(0.09 * H);
     const gapSide = 16;
 
     const colGap = Math.max(2, Math.round(CFG.horizontal.layout.gap * 0.33)); // 12 -> ~4
@@ -512,9 +512,9 @@ export default function SketchTemplate({
       const [l1, l2, l3] = build3Lines(lines).map((s) => s.toUpperCase());
 
       // ✅ разные "запасы" — 2 строку ужимаем сильнее, чтобы ФИО точно не резалось
-      const maxW1 = Math.floor(metricWpx * 0.94);
-      const maxW2 = Math.floor(metricWpx * 0.86);
-      const maxW3 = Math.floor(metricWpx * 0.82);
+      const maxW1 = Math.floor(metricWpx * 0.90);
+      const maxW2 = Math.floor(metricWpx * 0.82);
+      const maxW3 = Math.floor(metricWpx * 0.84);
 
       const fs1 = fitFontSizeToWidth({ text: l1 || " ", maxW: maxW1, start: 18, min: 10, weight: 700 });
       const fs2 = fitFontSizeToWidth({ text: l2 || " ", maxW: maxW2, start: 16, min: 8, weight: 600 });
