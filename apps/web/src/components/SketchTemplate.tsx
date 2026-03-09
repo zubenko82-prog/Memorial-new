@@ -495,7 +495,7 @@ export default function SketchTemplate({
     const colW = Math.floor(availableW / cols);
 
     // ✅ НАСТРОЙКИ ШИРИНЫ:
-    const portraitW = Math.max(26, Math.floor(colW * 0.85)); // 85% ширины колонки
+    const portraitW = Math.max(26, Math.floor(colW * 0.50)); // 50% ширины колонки
     const metricWpx = Math.max(30, Math.floor(colW * 0.95)); // 95% ширины колонки
 
     const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3) * 0.88));
@@ -514,7 +514,7 @@ export default function SketchTemplate({
       // ✅ разные "запасы" — 2 строку ужимаем сильнее, чтобы ФИО точно не резалось
       const maxW1 = Math.floor(metricWpx * 0.94);
       const maxW2 = Math.floor(metricWpx * 0.86);
-      const maxW3 = Math.floor(metricWpx * 0.94);
+      const maxW3 = Math.floor(metricWpx * 0.82);
 
       const fs1 = fitFontSizeToWidth({ text: l1 || " ", maxW: maxW1, start: 18, min: 10, weight: 700 });
       const fs2 = fitFontSizeToWidth({ text: l2 || " ", maxW: maxW2, start: 16, min: 8, weight: 600 });
