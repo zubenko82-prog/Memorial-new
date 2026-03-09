@@ -225,7 +225,7 @@ export default function SketchTemplate({
     const topOffset = Math.round(0.06 * H);
     const gap = Math.max(10, Math.round(0.015 * H));
 
-    let portraitH = Math.max(40, Math.round(0.40 * H));
+    let portraitH = Math.max(40, Math.round(0.65 * H));
     let portraitW = Math.round(portraitH * (3 / 4));
 
     if (portraitW > W * 0.9) {
@@ -234,7 +234,7 @@ export default function SketchTemplate({
       portraitH = Math.max(40, Math.round(portraitH * k));
     }
 
-    const metricTargetH = Math.max(24, Math.round(0.20 * H));
+    const metricTargetH = Math.max(24, Math.round(0.25 * H));
     const metricW = Math.round(W * 0.8);
 
     return { topOffset, gap, portraitW, portraitH, metricTargetH, metricW };
@@ -412,7 +412,7 @@ export default function SketchTemplate({
     const portraitW = Math.max(40, Math.round(basePortraitW * k));
     const portraitH = Math.max(40, Math.round(basePortraitH * k));
     const metricWpx = Math.max(80, Math.round(Math.min(colW, baseMetricW * k)));
-    const metricHpx = Math.max(22, Math.round(baseMetricH * k));
+    const metricHpx = Math.max(22, Math.round(baseMetricH * k * 2));
     const gapPx = Math.max(6, Math.round(hBase.gap * k));
 
     return (
@@ -456,7 +456,7 @@ export default function SketchTemplate({
             <div style={{ height: gapPx, width: 1 }} />
 
             <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <PersonMetricText lines={p.lines} sizeMult={k} />
+              <PersonMetricText lines={p.lines} sizeMult={k * 2} />
             </div>
           </div>
         ))}
@@ -489,7 +489,7 @@ export default function SketchTemplate({
     const portraitW = Math.max(32, Math.round(basePortraitW * k));
     const portraitH = Math.max(32, Math.round(basePortraitH * k));
     const metricWpx = Math.max(70, Math.round(Math.min(colW, baseMetricW * k)));
-    const metricHpx = Math.max(22, Math.round(baseMetricH * k));
+    const metricHpx = Math.max(22, Math.round(baseMetricH * k * 2));
     const gapPx = Math.max(6, Math.round(hBase.gap * k));
 
     return (
@@ -533,7 +533,7 @@ export default function SketchTemplate({
             <div style={{ height: gapPx, width: 1 }} />
 
             <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <PersonMetricText lines={p.lines} sizeMult={k} />
+              <PersonMetricText lines={p.lines} sizeMult={k * 2} />
             </div>
           </div>
         ))}
