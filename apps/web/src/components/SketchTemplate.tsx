@@ -557,9 +557,7 @@ export default function SketchTemplate({
 
     const portraitMetricGapPx = Math.max(10, Math.round(0.02 * H));
 
-    // metric height: around 3 lines
-    const metricHpx = undefined as unknown as number;
-
+    
     const build3Lines = (lines: string[]) => {
       const last = String(lines?.[0] || "").trim();
       const namePatr = String(lines?.[1] || "").trim();
@@ -627,18 +625,18 @@ export default function SketchTemplate({
             <div style={{ height: portraitMetricGapPx, width: 1 }} />
 
             <div
-              data-sketch-el="metric"
-              data-sketch-key={p.id}
-              style={{
-                width: metricWpx,
-                height: metricHpx,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center"
-              }}
-            >
-              <Metric3Lines lines={p.lines} />
-            </div>
+  data-sketch-el="metric"
+  data-sketch-key={p.id}
+  style={{
+    width: metricWpx,
+    minHeight: Math.max(44, Math.floor(0.18 * H)),
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center"
+  }}
+>
+  <Metric3Lines lines={p.lines} />
+</div>
           </div>
         ))}
       </div>
