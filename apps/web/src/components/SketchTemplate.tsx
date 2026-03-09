@@ -3,10 +3,13 @@
 //
 // Правки (актуальные):
 // - Горизонтальный 1 человек: НЕ увеличиваем (оставляем как было до правок).
-// - Горизонтальный 2 человека: портрет крупный, но метрику уменьшаем (по просьбе).
-// - Горизонтальный 3+ людей: немного увеличиваем портрет и метрику (но мягко, без "гигантской" метрики).
+// - Горизонтальный 2 человека: портрет крупный, но метрику уменьшаем.
+// - Горизонтальный 3+ людей: немного увеличиваем портрет и метрику (мягко).
 // - Для horizontal 2 и 3+ оставляем явный отступ между портретом и метрикой.
-// - Лесенка "Помним, любим, скорбим..." — как у вас (крупнее и уже).
+// - "Помним, любим, скорбим..." в горизонтальных шаблонах пишем В ОДНУ СТРОКУ.
+// - Для 3+ людей уменьшаем gap между колонками.
+// - Если крестов >= 3 и ориентация горизонтальная — размещаем кресты слева от портретов (колонкой), чтобы они не пропадали.
+// - Лесенка "Помним, любим, скорбим..." сохраняется для вертикальных (как было).
 //
 // Остальная логика — как в вашем текущем файле.
 
@@ -86,6 +89,10 @@ function pomnimStairLines(): [string, string, string] {
   return ["Помним,", "любим,", "скорбим..."];
 }
 
+function pomnimSingleLine(): string {
+  return "Помним, любим, скорбим...";
+}
+
 export default function SketchTemplate({
   item,
   peopleBlocks,
@@ -100,7 +107,6 @@ export default function SketchTemplate({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
 
-  const [metricBottomPx, setMetricBottomPx] = useState(0);
   const metricMeasureSigRef = useRef<string>("");
   const metricRafRef = useRef<number | null>(null);
 
@@ -157,7 +163,8 @@ export default function SketchTemplate({
   function PersonMetricText({ lines, sizeMult = 1 }: { lines: string[]; sizeMult?: number }) {
     const L = [(lines[0] || "").trim(), (lines[1] || "").trim(), (lines[2] || "").trim()];
     const toUp = (s: string) => s.toUpperCase();
-    const S = (minPx: number, vw: number, maxPx: number) => `clamp(${Math.round(minPx * sizeMult)}px, ${vw * sizeMult}vw, ${Math.round(maxPx * sizeMult)}px)`;
+    const S = (minPx: number, vw: number, maxPx: number) =>
+      `clamp(${Math.round(minPx * sizeMult)}px, ${vw * sizeMult}vw, ${Math.round(maxPx * sizeMult)}px)`;
     const lineBase: React.CSSProperties = { wordBreak: "break-word", whiteSpace: "normal" };
     return (
       <div style={{ width: "100%", display: "grid", gap: 4, textAlign: "center", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
@@ -172,6 +179,8 @@ export default function SketchTemplate({
     );
   }
 
+  // metricBottomPx больше не нужен для логики (как у вас раньше), но оставим измерение как “безопасный” side-effect,
+  // чтобы не ломать возможные зависимости (в текущем коде он нигде не используется).
   useEffect(() => {
     if (!H || !W) return;
     const root = containerRef.current;
@@ -183,16 +192,9 @@ export default function SketchTemplate({
 
     if (metricRafRef.current) cancelAnimationFrame(metricRafRef.current);
     metricRafRef.current = requestAnimationFrame(() => {
-      const rootRect = root.getBoundingClientRect();
-      const nodes = root.querySelectorAll('[data-sketch-el="metric"]');
-      let maxBottom = 0;
-      nodes.forEach((el) => {
-        const r = (el as HTMLElement).getBoundingClientRect();
-        const bottom = r.bottom - rootRect.top;
-        if (bottom > maxBottom) maxBottom = bottom;
-      });
-      const next = Math.max(0, Math.min(maxBottom, H));
-      setMetricBottomPx((prev) => (pxChanged(prev, next) ? next : prev));
+      // no-op measure; раньше считали metricBottomPx
+      // оставлено, чтобы не “дергался” layout при старых доп. фичах
+      void root.getBoundingClientRect();
     });
 
     return () => {
@@ -201,15 +203,13 @@ export default function SketchTemplate({
     };
   }, [H, W, isVertical, tplKey, peopleBlocks]);
 
-  // База размеров для horizontal.
-  // ВАЖНО: НЕ увеличиваем базу глобально, чтобы не вырос HorizontalOne.
+  // База размеров для horizontal (НЕ увеличиваем глобально, чтобы не вырос HorizontalOne)
   const hBase = useMemo(() => {
     if (!H || !W) return null;
 
     const topOffset = Math.round(0.06 * H);
     const gap = Math.max(10, Math.round(0.015 * H));
 
-    // базовые размеры (для HorizontalOne и как базовая точка)
     let portraitH = Math.max(40, Math.round(0.40 * H));
     let portraitW = Math.round(portraitH * (3 / 4));
 
@@ -254,7 +254,10 @@ export default function SketchTemplate({
   const CrossOverlay = () => {
     if (!crosses.length) return null;
 
-    const isHorizontalTwo = !isVertical && tplKey === "two";
+    const isHorizontal = !isVertical;
+    const isHorizontalTwo = isHorizontal && tplKey === "two";
+    const isHorizontalMany = isHorizontal && tplKey === "many";
+
     const baseSize = (isVertical
       ? tplKey === "one"
         ? CFG.vertical.one.blocks.cross.size
@@ -270,9 +273,44 @@ export default function SketchTemplate({
     const baseFilter: React.CSSProperties = {
       objectFit: "contain",
       filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-      zIndex: 3,
+      zIndex: 6,
       position: "absolute"
     };
+
+    // ✅ если крестов >= 3 и ориентация горизонтальная — рисуем колонкой слева от портретов
+    if (isHorizontal && crosses.length >= 3) {
+      const sizeW = isHorizontalMany ? "6.5%" : "7.5%";
+      return (
+        <div
+          style={{
+            position: "absolute",
+            left: "2.5%",
+            top: "10%",
+            bottom: "10%",
+            width: sizeW,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            justifyContent: "flex-start",
+            alignItems: "center",
+            zIndex: 6,
+            pointerEvents: "none"
+          }}
+        >
+          {crosses.slice(0, 6).map((c, i) => (
+            <img
+              key={`cross-left-${i}`}
+              data-sketch-el="cross"
+              data-sketch-key={`${i}`}
+              src={c.url}
+              alt={c.name || "Крест"}
+              style={{ ...baseFilter, width: "100%", height: "auto" }}
+              draggable={false}
+            />
+          ))}
+        </div>
+      );
+    }
 
     const topLeftPos: React.CSSProperties = { top: "6%", left: "4%" };
     const topCenterPos: React.CSSProperties = { top: "6%", left: "50%", transform: "translateX(-50%)" };
@@ -307,6 +345,8 @@ export default function SketchTemplate({
         </>
       );
     }
+
+    // (никогда)
     return null;
   };
 
@@ -380,72 +420,204 @@ export default function SketchTemplate({
     );
   };
 
-  // ВСТАВЬТЕ ЭТИ ДВЕ ФУНКЦИИ ВМЕСТО ТЕКУЩИХ HorizontalTwo / HorizontalMany
+  const HorizontalTwo = () => {
+    if (!H || !W) return null;
 
-const HorizontalTwo = () => {
-  if (!H || !W) return null;
+    const topOffset = Math.round(0.08 * H);
+    const gapSide = 16;
 
-  // 2 человека: портрет крупный, метрика чуть больше, и заметный зазор
-  const topOffset = Math.round(0.08 * H);
-  const gapSide = 16;
-  const colGap = CFG.horizontal.layout.gap;
+    // gap между колонками оставляем стандартный для 2
+    const colGap = CFG.horizontal.layout.gap;
 
-  const cols = 2;
-  const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
-  const colW = Math.floor(availableW / cols);
+    const cols = 2;
+    const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
+    const colW = Math.floor(availableW / cols);
 
-  const basePortraitH = Math.max(40, Math.round(0.65 * H));
-  const basePortraitW = Math.round(basePortraitH * (3 / 4));
+    const basePortraitH = Math.max(40, Math.round(0.65 * H));
+    const basePortraitW = Math.round(basePortraitH * (3 / 4));
 
-  // ✅ метрика чуть больше
-  const baseMetricH = Math.max(22, Math.round(0.20 * H));
-  const baseMetricW = Math.round(W * 0.80);
+    const baseMetricH = Math.max(22, Math.round(0.20 * H));
+    const baseMetricW = Math.round(W * 0.80);
 
-  const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
-  const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
+    const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
+    const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
 
-  // ✅ делаем ощутимый зазор и НЕ даём ему схлопнуться
-  const gapBase = Math.max(16, Math.round(0.028 * H));
-  const neededH = basePortraitH + gapBase + baseMetricH;
+    const gapBase = Math.max(16, Math.round(0.028 * H));
+    const neededH = basePortraitH + gapBase + baseMetricH;
 
-  const kH = Math.min(1, availableH / Math.max(1, neededH));
-  const k = Math.min(kW, kH);
+    const kH = Math.min(1, availableH / Math.max(1, neededH));
+    const k = Math.min(kW, kH);
 
-  const portraitW = Math.max(40, Math.round(basePortraitW * k));
-  const portraitH = Math.max(40, Math.round(basePortraitH * k));
-  const metricWpx = Math.max(80, Math.round(Math.min(colW, baseMetricW * k)));
-  const metricHpx = Math.max(22, Math.round(baseMetricH * k));
+    const portraitW = Math.max(40, Math.round(basePortraitW * k));
+    const portraitH = Math.max(40, Math.round(basePortraitH * k));
+    const metricWpx = Math.max(80, Math.round(Math.min(colW, baseMetricW * k)));
+    const metricHpx = Math.max(22, Math.round(baseMetricH * k));
+    const portraitMetricGapPx = Math.max(16, Math.round(gapBase * k));
 
-  // ✅ минимум 16px — чтобы визуально точно был зазор
-  const portraitMetricGapPx = Math.max(16, Math.round(gapBase * k));
+    const metricTextMult = 1.02;
 
-  // ✅ метрику чуть увеличиваем (раньше было 0.90)
-  const metricTextMult = 1.02;
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: gapSide,
+          right: gapSide,
+          top: topOffset,
+          display: "grid",
+          gridTemplateColumns: `repeat(2, ${colW}px)`,
+          gap: colGap,
+          justifyContent: "center",
+          alignItems: "start",
+          pointerEvents: "none"
+        }}
+      >
+        {peopleBlocks.slice(0, 2).map((p) => (
+          <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ width: portraitW, height: portraitH }}>
+              <div
+                data-sketch-el="portrait"
+                data-sketch-key={p.id}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                }}
+              >
+                {p.photo ? (
+                  <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                )}
+              </div>
+            </div>
 
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: gapSide,
-        right: gapSide,
-        top: topOffset,
-        display: "grid",
-        gridTemplateColumns: `repeat(2, ${colW}px)`,
-        gap: colGap,
-        justifyContent: "center",
-        alignItems: "start",
-        pointerEvents: "none"
-      }}
-    >
-      {peopleBlocks.slice(0, 2).map((p) => (
-        <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ width: portraitW, height: portraitH }}>
+            <div style={{ height: portraitMetricGapPx, width: 1 }} />
+
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <PersonMetricText lines={p.lines} sizeMult={k * metricTextMult} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const HorizontalMany = () => {
+    if (!H || !W) return null;
+
+    const topOffset = Math.round(0.07 * H);
+    const gapSide = 16;
+
+    // ✅ меньше gap при 3+
+    const colGap = Math.max(4, Math.round(CFG.horizontal.layout.gap * 0.5)); // было 12 -> станет 6 (примерно)
+
+    // ✅ каждый в своей колонке (строго)
+    const cols = Math.max(3, peopleBlocks.length);
+
+    const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
+    const colW = Math.floor(availableW / cols);
+
+    const basePortraitH = Math.max(34, Math.round(0.62 * H));
+    const basePortraitW = Math.round(basePortraitH * (3 / 4));
+
+    const baseMetricH = Math.max(22, Math.round(0.28 * H));
+    const baseMetricW = Math.round(W * 0.84);
+
+    const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
+    const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
+
+    const gapBase = Math.max(14, Math.round(0.024 * H));
+    const neededH = basePortraitH + gapBase + baseMetricH;
+
+    const kH = Math.min(1, availableH / Math.max(1, neededH));
+    const k = Math.min(kW, kH);
+
+    const portraitW = Math.max(34, Math.round(basePortraitW * k));
+    const portraitH = Math.max(34, Math.round(basePortraitH * k));
+    const metricWpx = Math.max(70, Math.round(Math.min(colW, baseMetricW * k)));
+    const metricHpx = Math.max(22, Math.round(baseMetricH * k));
+    const portraitMetricGapPx = Math.max(14, Math.round(gapBase * k));
+
+    const metricTextMult = 1.18;
+
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: gapSide,
+          right: gapSide,
+          top: topOffset,
+          display: "grid",
+          gridTemplateColumns: `repeat(${cols}, ${colW}px)`,
+          gap: colGap,
+          alignItems: "start",
+          justifyContent: "center",
+          pointerEvents: "none"
+        }}
+      >
+        {peopleBlocks.map((p) => (
+          <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ width: portraitW, height: portraitH }}>
+              <div
+                data-sketch-el="portrait"
+                data-sketch-key={p.id}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                }}
+              >
+                {p.photo ? (
+                  <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ height: portraitMetricGapPx, width: 1 }} />
+
+            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <PersonMetricText lines={p.lines} sizeMult={k * metricTextMult} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const VerticalOne = () => {
+    const p = peopleBlocks[0];
+    if (!p) return null;
+    const metricGapPx = Math.max(10, Math.round(0.02 * H));
+
+    return (
+      <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: "12%",
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center"
+          }}
+        >
+          <div style={{ width: "60%", maxWidth: 400 }}>
             <div
               data-sketch-el="portrait"
               data-sketch-key={p.id}
               style={{
                 width: "100%",
-                height: "100%",
+                aspectRatio: "3 / 4",
                 borderRadius: 4,
                 overflow: "hidden",
                 background: "rgba(255,255,255,0.04)",
@@ -460,112 +632,15 @@ const HorizontalTwo = () => {
             </div>
           </div>
 
-          <div style={{ height: portraitMetricGapPx, width: 1 }} />
+          <div style={{ height: metricGapPx, width: 1 }} />
 
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <PersonMetricText lines={p.lines} sizeMult={k * metricTextMult} />
+          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "82%", maxWidth: 560 }}>
+            <PersonMetricText lines={p.lines} sizeMult={1.12} />
           </div>
         </div>
-      ))}
-    </div>
-  );
-};
-
-const HorizontalMany = () => {
-  if (!H || !W) return null;
-
-  const topOffset = Math.round(0.07 * H);
-  const gapSide = 16;
-  const colGap = CFG.horizontal.layout.gap;
-
-  // ✅ строго: каждый человек в своей колонке, без переноса в несколько строк
-  const cols = Math.max(3, peopleBlocks.length);
-
-  const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
-  const colW = Math.floor(availableW / cols);
-
-  // ✅ увеличиваем портрет и метрику (насколько позволит k)
-  const basePortraitH = Math.max(34, Math.round(0.62 * H));
-  const basePortraitW = Math.round(basePortraitH * (3 / 4));
-
-  const baseMetricH = Math.max(22, Math.round(0.28 * H));
-  const baseMetricW = Math.round(W * 0.84);
-
-  const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
-  const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
-
-  // ✅ большой и стабильный зазор (чтобы не “липло”)
-  const gapBase = Math.max(14, Math.round(0.024 * H));
-  const neededH = basePortraitH + gapBase + baseMetricH;
-
-  const kH = Math.min(1, availableH / Math.max(1, neededH));
-  const k = Math.min(kW, kH);
-
-  const portraitW = Math.max(34, Math.round(basePortraitW * k));
-  const portraitH = Math.max(34, Math.round(basePortraitH * k));
-
-  const metricWpx = Math.max(70, Math.round(Math.min(colW, baseMetricW * k)));
-
-  // ✅ даём метрике больше высоты, но без “гигантского” эффекта
-  const metricHpx = Math.max(22, Math.round(baseMetricH * k));
-
-  const portraitMetricGapPx = Math.max(14, Math.round(gapBase * k));
-
-  // ✅ метрика чуть крупнее
-  const metricTextMult = 1.18;
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: gapSide,
-        right: gapSide,
-        top: topOffset,
-        display: "grid",
-        gridTemplateColumns: `repeat(${cols}, ${colW}px)`,
-        gap: colGap,
-        alignItems: "start",
-        justifyContent: "center",
-        pointerEvents: "none"
-      }}
-    >
-      {peopleBlocks.map((p) => (
-        <div key={p.id} style={{ width: colW, display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ width: portraitW, height: portraitH }}>
-            <div
-              data-sketch-el="portrait"
-              data-sketch-key={p.id}
-              style={{
-                width: "100%",
-                height: "100%",
-                borderRadius: 4,
-                overflow: "hidden",
-                background: "rgba(255,255,255,0.04)",
-                boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
-              }}
-            >
-              {p.photo ? (
-                <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
-              ) : (
-                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ height: portraitMetricGapPx, width: 1 }} />
-
-          <div
-            data-sketch-el="metric"
-            data-sketch-key={p.id}
-            style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}
-          >
-            <PersonMetricText lines={p.lines} sizeMult={k * metricTextMult} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
+      </div>
+    );
+  };
 
   const VerticalTwo = () => {
     const rowsH = Math.max(100, Math.floor(H * (CFG.vertical.layout as any).rowsHeightFactor));
@@ -583,12 +658,31 @@ const HorizontalMany = () => {
         }}
       >
         {peopleBlocks.slice(0, 2).map((p) => (
-          <div key={p.id} style={{ width: "100%", height: "100%", display: "grid", gridTemplateColumns: `45% 55%`, columnGap: 12, alignItems: "center", padding: "6px 8px", boxSizing: "border-box" }}>
+          <div
+            key={p.id}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "grid",
+              gridTemplateColumns: `45% 55%`,
+              columnGap: 12,
+              alignItems: "center",
+              padding: "6px 8px",
+              boxSizing: "border-box"
+            }}
+          >
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
               <div
                 data-sketch-el="portrait"
                 data-sketch-key={p.id}
-                style={{ width: "60%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
+                style={{
+                  width: "60%",
+                  aspectRatio: "3 / 4",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                }}
               >
                 {p.photo ? (
                   <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
@@ -626,12 +720,31 @@ const HorizontalMany = () => {
         }}
       >
         {peopleBlocks.map((p) => (
-          <div key={p.id} style={{ width: "100%", height: "100%", display: "grid", gridTemplateColumns: `42% 58%`, columnGap: 12, alignItems: "center", padding: "6px 8px", boxSizing: "border-box" }}>
+          <div
+            key={p.id}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "grid",
+              gridTemplateColumns: `42% 58%`,
+              columnGap: 12,
+              alignItems: "center",
+              padding: "6px 8px",
+              boxSizing: "border-box"
+            }}
+          >
             <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
               <div
                 data-sketch-el="portrait"
                 data-sketch-key={p.id}
-                style={{ width: "52%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}
+                style={{
+                  width: "52%",
+                  aspectRatio: "3 / 4",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.04)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+                }}
               >
                 {p.photo ? (
                   <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} />
@@ -671,9 +784,13 @@ const HorizontalMany = () => {
     const gap = Math.round(0.015 * H);
     const bottomPadPx = Math.max(8, Math.round(0.02 * H));
 
-    const hasStair = Array.isArray(epitaphs) && epitaphs.some((t) => isPomnimLubenSkorbim(t));
-    const epW = Math.round(W * (hasStair ? 0.62 : 0.88));
+    const isHorizontal = !isVertical;
 
+    // в горизонтальных: "помним..." всегда в строку
+    const hasPomnim = Array.isArray(epitaphs) && epitaphs.some((t) => isPomnimLubenSkorbim(t));
+    const hasStair = !isHorizontal && hasPomnim;
+
+    const epW = Math.round(W * (hasStair ? 0.62 : 0.88));
     const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
 
     const desiredGfxH = isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H);
@@ -695,6 +812,33 @@ const HorizontalMany = () => {
       perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
     }
     const perItemMaxH = Math.max(16, Math.floor(gfxH * 0.9));
+
+    const renderEpitaphText = (t: string, idx: number) => {
+      if (isHorizontal && isPomnimLubenSkorbim(t)) {
+        return (
+          <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
+            {pomnimSingleLine()}
+          </div>
+        );
+      }
+
+      if (!isHorizontal && isPomnimLubenSkorbim(t)) {
+        const [a, b, c] = pomnimStairLines();
+        return (
+          <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 4 }}>
+            <div style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{a}</div>
+            <div style={{ textAlign: "center", whiteSpace: "pre-wrap" }}>{b}</div>
+            <div style={{ textAlign: "right", whiteSpace: "pre-wrap" }}>{c}</div>
+          </div>
+        );
+      }
+
+      return (
+        <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
+          {t}
+        </div>
+      );
+    };
 
     return (
       <>
@@ -726,23 +870,7 @@ const HorizontalMany = () => {
                 gap: hasStair ? 4 : 8
               }}
             >
-              {epitaphs.slice(0, 8).map((t, idx) => {
-                if (isPomnimLubenSkorbim(t)) {
-                  const [a, b, c] = pomnimStairLines();
-                  return (
-                    <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 4 }}>
-                      <div style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{a}</div>
-                      <div style={{ textAlign: "center", whiteSpace: "pre-wrap" }}>{b}</div>
-                      <div style={{ textAlign: "right", whiteSpace: "pre-wrap" }}>{c}</div>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
-                    {t}
-                  </div>
-                );
-              })}
+              {epitaphs.slice(0, 8).map((t, idx) => renderEpitaphText(t, idx))}
             </div>
           </div>
         )}
@@ -802,23 +930,7 @@ const HorizontalMany = () => {
                 gap: hasStair ? 4 : 8
               }}
             >
-              {epitaphs?.slice(0, 8).map((t, idx) => {
-                if (isPomnimLubenSkorbim(t)) {
-                  const [a, b, c] = pomnimStairLines();
-                  return (
-                    <div key={`ep-measure-${idx}`} style={{ display: "grid", gap: 4 }}>
-                      <div style={{ textAlign: "left" }}>{a}</div>
-                      <div style={{ textAlign: "center" }}>{b}</div>
-                      <div style={{ textAlign: "right" }}>{c}</div>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={`ep-measure-${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
-                    {t}
-                  </div>
-                );
-              })}
+              {epitaphs?.slice(0, 8).map((t, idx) => renderEpitaphText(t, idx))}
             </div>
           </div>
         </div>
