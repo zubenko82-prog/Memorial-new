@@ -685,7 +685,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
 
         {/* Пояснение */}
         <div style={{ color: "#fff", opacity: 0.9, fontSize: 15, lineHeight: 1.25, margin: "6px 0 8px", textAlign: "center", fontWeight: 400 }}>
-          Перед вами визуализация заказа, а не готовый макет для гравировки. Итоговый макет выполнит специалист.
+          Перед вами визуализация заказа, а не готовый макет для гравировки. Возможны наложения объектов. Итоговый макет выполнит специалист.
         </div>
 
         {/* Эскиз */}

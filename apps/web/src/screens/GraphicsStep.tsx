@@ -835,7 +835,7 @@ export default function GraphicsStep(props: any) {
           fontWeight: 400,
         }}
       >
-        Перед вами визуализация заказа, а не готовый макет для гравировки. Итоговый макет выполнит специалист.
+        Перед вами визуализация заказа, а не готовый макет для гравировки. Возможны наложения объектов. Итоговый макет выполнит специалист.
       </div>
       <section ref={previewSectionRef} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0", scrollMarginTop: navH + 24 }}>
         <SketchTemplate
