@@ -522,7 +522,7 @@ export default function EpitaphStep(props: any) {
           fontWeight: 400,
         }}
       >
-        Перед вами визуализация заказа, а не готовый макет для гравировки. Поэтому перекрытия элементов допустимы. Итоговый макет выполнит специалист.
+        Перед вами визуализация заказа, а не готовый макет для гравировки. Итоговый макет выполнит специалист.
       </div>
       <section id={previewSectionId} style={{ ...glassPanelStyle(), padding: 12, margin: "12px 0" }}>
         <SketchTemplate

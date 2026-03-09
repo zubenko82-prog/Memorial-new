@@ -478,23 +478,23 @@ const HorizontalMany = () => {
   const gapSide = 16;
   const colGap = CFG.horizontal.layout.gap;
 
-  // ✅ при 3-4 людях держим 3 колонки (крупнее); при 5+ — 4 колонки
-  const cols = peopleBlocks.length <= 4 ? 3 : 4;
+  // ✅ строго: каждый человек в своей колонке, без переноса в несколько строк
+  const cols = Math.max(3, peopleBlocks.length);
 
   const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
   const colW = Math.floor(availableW / cols);
 
-  // ✅ делаем 3-4 человека заметно крупнее
-  const basePortraitH = Math.max(34, Math.round(0.60 * H));
+  // ✅ увеличиваем портрет и метрику (насколько позволит k)
+  const basePortraitH = Math.max(34, Math.round(0.62 * H));
   const basePortraitW = Math.round(basePortraitH * (3 / 4));
 
-  const baseMetricH = Math.max(22, Math.round(0.26 * H));
-  const baseMetricW = Math.round(W * 0.82);
+  const baseMetricH = Math.max(22, Math.round(0.28 * H));
+  const baseMetricW = Math.round(W * 0.84);
 
   const kW = Math.min(1, colW / Math.max(1, Math.max(basePortraitW, baseMetricW)));
   const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
 
-  // ✅ зазор больше и с большим минимумом, чтобы не “липло”
+  // ✅ большой и стабильный зазор (чтобы не “липло”)
   const gapBase = Math.max(14, Math.round(0.024 * H));
   const neededH = basePortraitH + gapBase + baseMetricH;
 
@@ -503,14 +503,16 @@ const HorizontalMany = () => {
 
   const portraitW = Math.max(34, Math.round(basePortraitW * k));
   const portraitH = Math.max(34, Math.round(basePortraitH * k));
-  const metricWpx = Math.max(72, Math.round(Math.min(colW, baseMetricW * k)));
+
+  const metricWpx = Math.max(70, Math.round(Math.min(colW, baseMetricW * k)));
+
+  // ✅ даём метрике больше высоты, но без “гигантского” эффекта
   const metricHpx = Math.max(22, Math.round(baseMetricH * k));
 
-  // ✅ минимум 14px
   const portraitMetricGapPx = Math.max(14, Math.round(gapBase * k));
 
-  // ✅ метрика чуть крупнее, но умеренно
-  const metricTextMult = 1.12;
+  // ✅ метрика чуть крупнее
+  const metricTextMult = 1.18;
 
   return (
     <div
@@ -552,7 +554,11 @@ const HorizontalMany = () => {
 
           <div style={{ height: portraitMetricGapPx, width: 1 }} />
 
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div
+            data-sketch-el="metric"
+            data-sketch-key={p.id}
+            style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}
+          >
             <PersonMetricText lines={p.lines} sizeMult={k * metricTextMult} />
           </div>
         </div>
