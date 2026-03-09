@@ -1,15 +1,15 @@
 // src/components/SketchTemplate.tsx
 //
-// Изменения по последним требованиям:
-// - HorizontalMany: делаем крупнее портрет и метрику настолько, насколько позволяет ширина.
-//   Плюс: уменьшаем colGap при 3+ (чтобы освободить место).
-// - Кресты:
-//   - Если крестов >= 3 и ориентация горизонтальная — больше НЕ перекрываем: размещаем вертикальной колонкой,
-//     с равномерным распределением по высоте.
-//   - Если количество крестов === количеству людей (и людей >= 3) — ставим кресты левее соответствующих портретов
-//     (в каждой колонке: крест слева от портрета, не перекрывая).
-// - "Помним, любим, скорбим..." в горизонтальных шаблонах — одной строкой.
-// - Остальное оставлено как было (в т.ч. HorizontalOne без увеличения).
+// Изменения по последнему сообщению:
+// - HorizontalMany: портрет по ширине = 85% колонки (высота через aspect 3/4, без раздувания).
+// - HorizontalMany: метрика в 3 строки (Фамилия / Имя Отчество / Даты) и вписывается по ширине в 95% колонки.
+//   (авто-подбор размера шрифта по ширине, без переноса на 2+ строки внутри одной строки).
+// - При 3+ людей gap между колонками уменьшен.
+// - Кресты (>=3):
+//   - если крестов столько же, сколько людей (и людей >=3) — каждый крест слева от своего портрета (внутри колонки), не перекрывая.
+//   - иначе — колонка слева с равномерным распределением без перекрытий.
+// - "Помним, любим, скорбим..." в горизонтальных шаблонах всегда одной строкой.
+// - Остальное оставлено как было.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -87,6 +87,25 @@ function pomnimStairLines(): [string, string, string] {
 }
 function pomnimSingleLine(): string {
   return "Помним, любим, скорбим...";
+}
+
+// ===== helpers for "fit text to width" (for HorizontalMany metric) =====
+function measureTextPx(fontSize: number, fontWeight: number, text: string): number {
+  const c = document.createElement("canvas");
+  const ctx = c.getContext("2d");
+  if (!ctx) return text.length * fontSize * 0.55;
+  ctx.font = `${fontWeight} ${fontSize}px ${FONT_CENTURY}`;
+  return ctx.measureText(text || " ").width;
+}
+function fitFontSizeToWidth(params: { text: string; maxW: number; start: number; min: number; weight: number }) {
+  const { text, maxW, start, min, weight } = params;
+  let fs = start;
+  while (fs > min) {
+    const w = measureTextPx(fs, weight, text);
+    if (w <= maxW) break;
+    fs -= 1;
+  }
+  return fs;
 }
 
 export default function SketchTemplate({
@@ -172,7 +191,6 @@ export default function SketchTemplate({
     );
   }
 
-  // Horizontal base (keep HorizontalOne stable)
   const hBase = useMemo(() => {
     if (!H || !W) return null;
 
@@ -234,22 +252,16 @@ export default function SketchTemplate({
       pointerEvents: "none"
     };
 
-    // === HORIZONTAL: 3+ crosses ===
     if (isHorizontal && crosses.length >= 3) {
-      // If crosses == people count and people >= 3 => put each cross left of its portrait column
+      // if crosses == people and people>=3 => each cross sits left of its portrait inside the column
       if (peopleBlocks.length >= 3 && crosses.length === peopleBlocks.length && isHorizontalMany) {
         const cols = Math.max(3, peopleBlocks.length);
         const gapSide = 16;
-        const colGap = Math.max(4, Math.round(CFG.horizontal.layout.gap * 0.5));
+        const colGap = Math.max(2, Math.round(CFG.horizontal.layout.gap * 0.33)); // 12->~4
         const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
         const colW = Math.floor(availableW / cols);
 
-        // a small cross block that sits to the left of portrait inside each column
-        const crossBoxW = Math.max(14, Math.round(Math.min(colW * 0.22, W * 0.055)));
-
-        // Align crosses with portrait top used by HorizontalMany
         const topOffset = Math.round(0.07 * H);
-        const crossTop = topOffset + Math.round(0.01 * H);
 
         return (
           <div
@@ -257,7 +269,7 @@ export default function SketchTemplate({
               position: "absolute",
               left: gapSide,
               right: gapSide,
-              top: crossTop,
+              top: topOffset,
               display: "grid",
               gridTemplateColumns: `repeat(${cols}, ${colW}px)`,
               gap: colGap,
@@ -267,7 +279,7 @@ export default function SketchTemplate({
             }}
           >
             {crosses.map((c, i) => (
-              <div key={`cross-col-${i}`} style={{ width: colW, display: "flex", justifyContent: "flex-start" }}>
+              <div key={`cross-col-${i}`} style={{ width: colW, display: "flex", justifyContent: "flex-start", alignItems: "flex-start" }}>
                 <img
                   data-sketch-el="cross"
                   data-sketch-key={`${i}`}
@@ -276,8 +288,9 @@ export default function SketchTemplate({
                   style={{
                     ...baseFilter,
                     position: "static",
-                    width: crossBoxW,
-                    height: "auto"
+                    width: Math.max(14, Math.floor(colW * 0.18)),
+                    height: "auto",
+                    marginTop: Math.max(2, Math.floor(0.01 * H))
                   }}
                   draggable={false}
                 />
@@ -287,19 +300,15 @@ export default function SketchTemplate({
         );
       }
 
-      // Otherwise: put crosses in one vertical column on the left, evenly spaced, no overlap
-      const colW = "7%";
-      const topPad = "10%";
-      const bottomPad = "10%";
-
+      // else: one left column, evenly spaced, no overlap
       return (
         <div
           style={{
             position: "absolute",
             left: "2.5%",
-            top: topPad,
-            bottom: bottomPad,
-            width: colW,
+            top: "10%",
+            bottom: "10%",
+            width: "7%",
             display: "flex",
             flexDirection: "column",
             justifyContent: "space-between",
@@ -324,7 +333,6 @@ export default function SketchTemplate({
       );
     }
 
-    // === DEFAULT (<=2 crosses) ===
     const baseSize = (isVertical
       ? tplKey === "one"
         ? CFG.vertical.one.blocks.cross.size
@@ -527,49 +535,56 @@ export default function SketchTemplate({
     );
   };
 
+  // ===== HorizontalMany: portrait 85% of col, metric fit to 95% of col =====
   const HorizontalMany = () => {
     if (!H || !W) return null;
 
     const topOffset = Math.round(0.07 * H);
     const gapSide = 16;
 
-    // ✅ меньше gap при 3+
     const colGap = Math.max(2, Math.round(CFG.horizontal.layout.gap * 0.33)); // 12 -> ~4
-
-    // ✅ каждый в своей колонке
     const cols = Math.max(3, peopleBlocks.length);
 
     const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
     const colW = Math.floor(availableW / cols);
 
-    // ✅ делаем крупнее: увеличиваем базу, но всё равно упрёмся в kW
-    const basePortraitH = Math.max(34, Math.round(0.72 * H));
-    const basePortraitW = Math.round(basePortraitH * (3 / 4));
+    // portrait is 85% of column width
+    const portraitW = Math.max(26, Math.floor(colW * 0.85));
+    const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3))); // 3/4 ratio => H = W*(4/3)
 
-    const baseMetricH = Math.max(22, Math.round(0.30 * H));
-    const baseMetricW = Math.round(W * 0.90);
+    // metric width is 95% of column width
+    const metricWpx = Math.max(30, Math.floor(colW * 0.95));
 
-    // ✅ ключ к "крупнее": не даём kW слишком сильно уменьшать портрет из-за baseMetricW.
-    // метрику по ширине ограничим колоночной шириной ниже, поэтому здесь сравниваем в основном портрет.
-    const kW = Math.min(1, colW / Math.max(1, basePortraitW));
-    const availableH = Math.max(1, H - topOffset - Math.round(0.08 * H));
+    const portraitMetricGapPx = Math.max(10, Math.round(0.02 * H));
 
-    const gapBase = Math.max(14, Math.round(0.024 * H));
-    const neededH = basePortraitH + gapBase + baseMetricH;
+    // metric height: around 3 lines
+    const metricHpx = Math.max(44, Math.floor(0.18 * H));
 
-    const kH = Math.min(1, availableH / Math.max(1, neededH));
-    const k = Math.min(kW, kH);
+    const build3Lines = (lines: string[]) => {
+      const last = String(lines?.[0] || "").trim();
+      const namePatr = String(lines?.[1] || "").trim();
+      const dates = String(lines?.[2] || "").trim();
+      return [last, namePatr, dates];
+    };
 
-    const portraitW = Math.max(34, Math.round(basePortraitW * k));
-    const portraitH = Math.max(34, Math.round(basePortraitH * k));
+    const Metric3Lines = ({ lines }: { lines: string[] }) => {
+      const [l1, l2, l3] = build3Lines(lines).map((s) => s.toUpperCase());
+      const maxW = metricWpx; // already 95% of col
 
-    // метрика по ширине: почти вся колонка
-    const metricWpx = Math.max(70, Math.round(Math.min(colW, colW * 0.98)));
+      const fs1 = fitFontSizeToWidth({ text: l1 || " ", maxW, start: 18, min: 10, weight: 700 });
+      const fs2 = fitFontSizeToWidth({ text: l2 || " ", maxW, start: 16, min: 9, weight: 600 });
+      const fs3 = fitFontSizeToWidth({ text: l3 || " ", maxW, start: 14, min: 8, weight: 400 });
 
-    const metricHpx = Math.max(22, Math.round(baseMetricH * k));
-    const portraitMetricGapPx = Math.max(14, Math.round(gapBase * k));
+      const line: React.CSSProperties = { width: "100%", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden" };
 
-    const metricTextMult = 1.22;
+      return (
+        <div style={{ width: "100%", display: "grid", gap: 2, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+          {!!l1 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 700, fontSize: fs1, lineHeight: 1.1, letterSpacing: "0.3px" }}>{l1}</div>}
+          {!!l2 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 600, fontSize: fs2, lineHeight: 1.1, letterSpacing: "0.25px" }}>{l2}</div>}
+          {!!l3 && <div style={{ ...line, fontFamily: FONT_CENTURY, fontWeight: 400, fontSize: fs3, lineHeight: 1.1, letterSpacing: "0.2px", opacity: 0.95 }}>{l3}</div>}
+        </div>
+      );
+    };
 
     return (
       <div
@@ -611,8 +626,18 @@ export default function SketchTemplate({
 
             <div style={{ height: portraitMetricGapPx, width: 1 }} />
 
-            <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: metricWpx, height: metricHpx, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <PersonMetricText lines={p.lines} sizeMult={k * metricTextMult} />
+            <div
+              data-sketch-el="metric"
+              data-sketch-key={p.id}
+              style={{
+                width: metricWpx,
+                height: metricHpx,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+              }}
+            >
+              <Metric3Lines lines={p.lines} />
             </div>
           </div>
         ))}
@@ -891,7 +916,14 @@ export default function SketchTemplate({
         onLoad={() => requestAnimationFrame(recalc)}
       />
 
-      {renderPeople()}
+      {tplKey === "one" && !isVertical && <HorizontalOne />}
+      {tplKey === "two" && !isVertical && <HorizontalTwo />}
+      {tplKey === "many" && !isVertical && <HorizontalMany />}
+
+      {tplKey === "one" && isVertical && <VerticalOne />}
+      {tplKey === "two" && isVertical && <VerticalTwo />}
+      {tplKey === "many" && isVertical && <VerticalMany />}
+
       <CrossOverlay />
       <EpitaphAndGraphics />
     </div>

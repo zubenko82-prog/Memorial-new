@@ -535,6 +535,9 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
     >
       <div style={{ width: "100%", maxWidth: MAX_W, margin: "0 auto" }}>
         <TopBarWithIntro title="Усопшие" />
+        <div style={{ margin: "0 0 8px 0" }}>
+        Запишите ФИО и даты так - как они должны быть на памятнике. 
+      </div>
 
         {/* Навигация (липкая) */}
         <div
