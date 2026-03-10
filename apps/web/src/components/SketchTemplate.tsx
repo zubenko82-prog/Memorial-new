@@ -782,7 +782,7 @@ export default function SketchTemplate({
     return (
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ width: "60%", maxWidth: 400 }}>
+          <div style={{ width: "45%", maxWidth: 400 }}>
   <div
     data-sketch-el="portrait"
     data-sketch-key={p.id}
