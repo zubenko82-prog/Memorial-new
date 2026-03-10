@@ -783,16 +783,31 @@ export default function SketchTemplate({
       <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "12%", width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}>
           <div style={{ width: "60%", maxWidth: 400 }}>
-            <div data-sketch-el="portrait" data-sketch-key={p.id} style={{ width: "100%", aspectRatio: "3 / 4", borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.04)", boxShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
-              {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
-            </div>
-          </div>
+  <div
+    data-sketch-el="portrait"
+    data-sketch-key={p.id}
+    style={{
+      width: "100%",
+      aspectRatio: "3 / 4",
+      borderRadius: 4,
+      overflow: "hidden",
+      background: "rgba(255,255,255,0.04)",
+      boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
+    }}
+  >
+    ...
+  </div>
+</div>
 
-          <div style={{ height: metricGapPx, width: 1 }} />
+<div style={{ height: metricGapPx, width: 1 }} />
 
-          <div data-sketch-el="metric" data-sketch-key={p.id} style={{ width: "82%", maxWidth: 560 }}>
-            <PersonMetricText lines={p.lines} sizeMult={1.12} />
-          </div>
+<div
+  data-sketch-el="metric"
+  data-sketch-key={p.id}
+  style={{ width: "82%", maxWidth: 450 }}   // ✅ было 560
+>
+  <PersonMetricText lines={p.lines} sizeMult={1.12} />
+</div>
         </div>
       </div>
     );
