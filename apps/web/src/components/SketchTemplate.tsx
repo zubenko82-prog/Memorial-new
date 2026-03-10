@@ -795,11 +795,11 @@ export default function SketchTemplate({
       boxShadow: "0 1px 2px rgba(0,0,0,0.35)"
     }}
   >
-    ...
-  </div>
-</div>
+                  {p.photo ? <img src={p.photo} alt="Фото" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} draggable={false} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", opacity: 0.7 }}>(нет фото)</div>}
+            </div>
+          </div>
 
-<div style={{ height: metricGapPx, width: 1 }} />
+          <div style={{ height: metricGapPx, width: 1 }} />
 
 <div
   data-sketch-el="metric"
