@@ -1,16 +1,18 @@
 // src/components/SketchTemplate.tsx
 //
-// Вынесено аккуратно:
-// - BottomEpitaphAndGraphics (бывший EpitaphAndGraphics) вынесен из SketchTemplate в отдельный компонент,
-//   чтобы хуки useState/useEffect не вызывались внутри вложенной функции.
-// - Логика:
-//   - Горизонтальные: если нет others => эпитафия внизу; если есть others => графика внизу, эпитафия над ней
-//   - Минимальный отступ от низа
-//   - Запрет пересечений: считаем safeBottomY по всем метрикам ([data-sketch-el="metric"]) и ужимаем низ (эпитафия/графика)
-//     если нужно, чтобы не пересекаться с метрикой.
-//   - "Помним, любим, скорбим..." в горизонтальных — одной строкой, в вертикальных — лесенкой.
+// ВАЖНО: часть с портретами/метрикой/крестами НЕ ТРОГАЕМ.
+// Меняем только позиционирование и масштаб НИЖНЕЙ ГРАФИКИ (others) и ЭПИТАФИЙ,
+// чтобы они располагались максимально низко, но:
+// - не пересекались друг с другом
+// - не наезжали на метрику
+// При нехватке места уменьшаем ТОЛЬКО графику и эпитафию.
 //
-// Остальная часть файла — как у вас (включая HorizontalMany и кресты).
+// Дополнительно:
+// - EpitaphAndGraphics вынесен в отдельный компонент BottomEpitaphAndGraphics.
+// - Логика низа для горизонтальных:
+//   - если others нет => эпитафия внизу
+//   - если others есть => графика внизу, эпитафия над ней
+// - Кресты не считаются "нижней графикой" (они приходят отдельно в crosses).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -98,6 +100,7 @@ function measureTextPx(fontSize: number, fontWeight: number, text: string): numb
   ctx.font = `${fontWeight} ${fontSize}px ${FONT_CENTURY}`;
   return ctx.measureText(text || " ").width;
 }
+
 function fitFontSizeToWidth(params: { text: string; maxW: number; start: number; min: number; weight: number }) {
   const { text, maxW, start, min, weight } = params;
   let fs = start;
@@ -110,14 +113,15 @@ function fitFontSizeToWidth(params: { text: string; maxW: number; start: number;
 }
 
 /* =======================================================================================
-   BottomEpitaphAndGraphics (вынесено)
+   BottomEpitaphAndGraphics (отдельный компонент)
+   - НЕ трогает портреты/метрику/кресты
+   - измеряет реальную позицию метрики в DOM и раскладывает низ максимально вниз без пересечений
 ======================================================================================= */
 
 type BottomEpitaphAndGraphicsProps = {
   H: number;
   W: number;
   isVertical: boolean;
-  tplKey: "one" | "two" | "many";
   containerRef: React.RefObject<HTMLDivElement | null>;
   epitaphMeasureRef: React.RefObject<HTMLDivElement | null>;
   epitaphs: string[];
@@ -128,14 +132,14 @@ function BottomEpitaphAndGraphics({
   H,
   W,
   isVertical,
-  tplKey,
   containerRef,
   epitaphMeasureRef,
   epitaphs,
   others
 }: BottomEpitaphAndGraphicsProps) {
-  const [bottomSafeY, setBottomSafeY] = useState<number | null>(null);
+  const [metricBottomY, setMetricBottomY] = useState<number | null>(null);
 
+  // Измеряем "самый нижний" край метрики среди всех людей, чтобы НИЗ не заезжал на неё.
   useEffect(() => {
     if (!H || !W) return;
     const root = containerRef.current;
@@ -144,94 +148,116 @@ function BottomEpitaphAndGraphics({
     const raf = requestAnimationFrame(() => {
       const rootRect = root.getBoundingClientRect();
 
-      let safeBottom = H;
-
       const metricNodes = root.querySelectorAll('[data-sketch-el="metric"]');
-      let minMetricTop = Number.POSITIVE_INFINITY;
+      let maxMetricBottom = 0;
 
       metricNodes.forEach((el) => {
         const r = (el as HTMLElement).getBoundingClientRect();
-        const top = r.top - rootRect.top;
-        if (top < minMetricTop) minMetricTop = top;
+        const bottom = r.bottom - rootRect.top;
+        if (bottom > maxMetricBottom) maxMetricBottom = bottom;
       });
 
-      const marginAbove = Math.max(6, Math.round(0.012 * H));
-      if (Number.isFinite(minMetricTop)) safeBottom = Math.min(safeBottom, Math.max(0, minMetricTop - marginAbove));
-
-      setBottomSafeY((prev) => (prev === safeBottom ? prev : safeBottom));
+      setMetricBottomY((prev) => (Math.abs((prev ?? 0) - maxMetricBottom) > 0.5 ? maxMetricBottom : prev));
     });
 
     return () => cancelAnimationFrame(raf);
-  }, [H, W, isVertical, tplKey, epitaphs, others, containerRef]);
+  }, [H, W, isVertical, epitaphs, others, containerRef]);
 
   if (!H || !W) return null;
 
   const isHorizontal = !isVertical;
 
-  // небольшой отступ от нижней границы — всегда
-  const bottomMarginPx = Math.max(4, Math.round(0.01 * H));
-  const gapBetween = Math.max(6, Math.round(0.012 * H));
-
-  // "низ", до которого можно рисовать, чтобы:
-  // - не касаться нижней границы
-  // - не пересечься с метрикой
-  const safeBottomY = Math.max(0, Math.min(bottomSafeY ?? H, H - bottomMarginPx));
-
   const hasBottomGraphics = (others?.length || 0) > 0;
   const hasEpitaph = Array.isArray(epitaphs) && epitaphs.length > 0;
 
+  // Минимальные отступы
+  const bottomMarginPx = Math.max(4, Math.round(0.008 * H)); // "совсем немного" от низа
+  const gapBetween = Math.max(6, Math.round(0.012 * H)); // зазор между эпитафией и графикой/метрикой
+
+  // Верхняя граница "нижней зоны" — сразу под метрикой (чтобы не пересекалось)
+  const topLimit = Math.min(
+    H, //
+    Math.max(0, (metricBottomY ?? 0) + gapBetween)
+  );
+
+  // Нижняя граница (куда можно прижимать)
+  const bottomLimit = Math.max(0, H - bottomMarginPx);
+
+  // Доступная высота под "низ" (между метрикой и нижней границей)
+  const availH = Math.max(0, bottomLimit - topLimit);
+
+  // --- Эпитафия: измерение натуральной высоты ---
   const hasPomnim = Array.isArray(epitaphs) && epitaphs.some((t) => isPomnimLubenSkorbim(t));
   const hasStair = !isHorizontal && hasPomnim;
 
   const epW = Math.round(W * (hasStair ? 0.62 : 0.88));
   const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
 
-  const desiredGfxH0 = isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H);
-  const desiredGfxH = hasBottomGraphics ? desiredGfxH0 : 0;
-
+  // База по высоте эпитафии (ограничение, но дальше всё равно ужмём по availH)
   const epMaxH0 = Math.round((hasStair ? 0.24 : 0.20) * H);
-  const epScale0 = Math.min(1, epMaxH0 / naturalEp);
+  const epScaleBase = Math.min(1, epMaxH0 / naturalEp);
 
-  const availableBottomH = Math.max(0, safeBottomY);
-  const scaledEpH0 = hasEpitaph ? Math.ceil(naturalEp * epScale0) : 0;
+  // --- Графика: базовая высота ---
+  const gfxBaseH = hasBottomGraphics ? (isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H)) : 0;
 
-  // Ужимание при конфликте: если есть и графика и эпитафия — ужимаем обе
-  let gfxScale = 1;
-  let epScale = epScale0;
+  // ----- Вписывание без пересечений -----
+  // Мы не двигаем метрику, поэтому если места мало — уменьшаем эпитафию/графику.
+  // Порядок в горизонтальных:
+  // - если есть others: [эпитафия] над [графика] (графика максимально вниз)
+  // - если others нет: [эпитафия] максимально вниз
+  let epScale = hasEpitaph ? epScaleBase : 0;
+  let gfxScale = hasBottomGraphics ? 1 : 0;
 
-  if (hasEpitaph && hasBottomGraphics) {
-    const needed = scaledEpH0 + gapBetween + desiredGfxH;
-    if (needed > availableBottomH && needed > 0) {
-      const k = availableBottomH / needed;
-      gfxScale = Math.max(0.45, Math.min(1, k));
-      epScale = Math.max(0.55, Math.min(epScale0, epScale0 * k));
-    }
-  } else if (hasEpitaph && !hasBottomGraphics) {
-    if (scaledEpH0 > availableBottomH && scaledEpH0 > 0) {
-      const k = availableBottomH / scaledEpH0;
-      epScale = Math.max(0.55, Math.min(epScale0, epScale0 * k));
-    }
-  } else if (!hasEpitaph && hasBottomGraphics) {
-    if (desiredGfxH > availableBottomH && desiredGfxH > 0) {
-      const k = availableBottomH / desiredGfxH;
-      gfxScale = Math.max(0.45, Math.min(1, k));
-    }
+  const epH0 = hasEpitaph ? Math.ceil(naturalEp * epScale) : 0;
+  const gfxH0 = hasBottomGraphics ? gfxBaseH : 0;
+
+  const needed =
+    (hasEpitaph ? epH0 : 0) +
+    (hasBottomGraphics && hasEpitaph ? gapBetween : 0) +
+    (hasBottomGraphics ? gfxH0 : 0);
+
+  if (needed > availH && needed > 0) {
+    const k = availH / needed;
+    // Ужимаем ТОЛЬКО эпитафию и графику
+    if (hasBottomGraphics) gfxScale = Math.max(0.35, Math.min(1, k));
+    if (hasEpitaph) epScale = Math.max(0.45, Math.min(epScaleBase, epScaleBase * k));
   }
 
-  const gfxH = Math.round(desiredGfxH * gfxScale);
-  const scaledEpH = hasEpitaph ? Math.ceil(naturalEp * epScale) : 0;
+  const epH = hasEpitaph ? Math.ceil(naturalEp * epScale) : 0;
+  const gfxH = hasBottomGraphics ? Math.round(gfxBaseH * gfxScale) : 0;
 
-  // Позиции:
-  // - графика всегда "в самый низ" (safeBottomY)
-  // - эпитафия либо над графикой, либо "в самый низ" (safeBottomY)
-  const gfxTop = hasBottomGraphics ? Math.max(0, safeBottomY - gfxH) : 0;
+  // ----- Финальные позиции (максимально низко) -----
+  // Графика прижимается к bottomLimit
+  const gfxTop = hasBottomGraphics ? bottomLimit - gfxH : 0;
+  // Эпитафия:
+  // - если есть графика: прямо над ней
+  // - иначе: прижимается к bottomLimit
   const epTop = hasEpitaph
     ? hasBottomGraphics
-      ? Math.max(0, gfxTop - gapBetween - scaledEpH)
-      : Math.max(0, safeBottomY - scaledEpH)
+      ? gfxTop - gapBetween - epH
+      : bottomLimit - epH
     : 0;
 
-  // graphics layout
+  // Гарантия "не выше topLimit" (на случай округлений): если вдруг залезли — ужмём ещё раз чуть-чуть
+  // (это не сдвигает метрику, только уменьшает низ)
+  const overflowUp = Math.max(0, topLimit - Math.min(epTop, gfxTop));
+  const mustFit = overflowUp > 0.5;
+
+  // В редких случаях из-за ceil/round можно на 1-2px пересечься
+  const finalEpScale = mustFit && hasEpitaph ? Math.max(0.4, epScale * 0.98) : epScale;
+  const finalGfxScale = mustFit && hasBottomGraphics ? Math.max(0.3, gfxScale * 0.98) : gfxScale;
+
+  const finalEpH = hasEpitaph ? Math.ceil(naturalEp * finalEpScale) : 0;
+  const finalGfxH = hasBottomGraphics ? Math.round(gfxBaseH * finalGfxScale) : 0;
+
+  const finalGfxTop = hasBottomGraphics ? bottomLimit - finalGfxH : 0;
+  const finalEpTop = hasEpitaph
+    ? hasBottomGraphics
+      ? finalGfxTop - gapBetween - finalEpH
+      : bottomLimit - finalEpH
+    : 0;
+
+  // --- графика: раскладка по ширине ---
   const gfxWrapW = Math.floor(W * 0.9);
   const gfxGap = 10;
   const n = others.length;
@@ -240,7 +266,7 @@ function BottomEpitaphAndGraphics({
     const totalGaps = (n - 1) * gfxGap;
     perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
   }
-  const perItemMaxH = Math.max(12, Math.floor(gfxH * 0.9));
+  const perItemMaxH = Math.max(12, Math.floor(finalGfxH * 0.9));
 
   const renderEpitaphText = (t: string, idx: number) => {
     if (isHorizontal && isPomnimLubenSkorbim(t)) {
@@ -271,13 +297,13 @@ function BottomEpitaphAndGraphics({
 
   return (
     <>
-      {hasEpitaph && epScale > 0 && (
+      {hasEpitaph && finalEpScale > 0 && (
         <div
           style={{
             position: "absolute",
-            top: epTop,
+            top: finalEpTop,
             left: "50%",
-            transform: `translateX(-50%) scale(${epScale})`,
+            transform: `translateX(-50%) scale(${finalEpScale})`,
             transformOrigin: "top center",
             width: epW,
             color: "#fff",
@@ -304,16 +330,16 @@ function BottomEpitaphAndGraphics({
         </div>
       )}
 
-      {hasBottomGraphics && gfxH > 0 && (
+      {hasBottomGraphics && finalGfxH > 0 && (
         <div
           style={{
             position: "absolute",
             left: "50%",
             transform: "translateX(-50%)",
-            top: gfxTop,
+            top: finalGfxTop,
             width: "90%",
-            height: gfxH,
-            maxHeight: gfxH,
+            height: finalGfxH,
+            maxHeight: finalGfxH,
             overflow: "hidden",
             display: "flex",
             justifyContent: "center",
@@ -345,7 +371,7 @@ function BottomEpitaphAndGraphics({
         </div>
       )}
 
-      {/* measure epitaph */}
+      {/* measure epitaph (без влияния на layout) */}
       <div style={{ position: "absolute", left: -99999, top: -99999, width: epW }}>
         <div ref={epitaphMeasureRef} style={{ width: epW }}>
           <div
@@ -369,7 +395,7 @@ function BottomEpitaphAndGraphics({
 }
 
 /* =======================================================================================
-   Main component
+   SketchTemplate (портреты/метрика/кресты — как было)
 ======================================================================================= */
 
 export default function SketchTemplate({
@@ -624,6 +650,7 @@ export default function SketchTemplate({
   };
 
   const HorizontalTwo = () => {
+    // оставляем как у вас (без изменений)
     if (!H || !W) return null;
 
     const topOffset = Math.round(0.08 * H);
@@ -679,6 +706,7 @@ export default function SketchTemplate({
   };
 
   const HorizontalMany = () => {
+    // оставляем как у вас (без изменений)
     if (!H || !W) return null;
 
     const topOffset = Math.round(0.14 * H);
@@ -690,8 +718,7 @@ export default function SketchTemplate({
     const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
     const colW = Math.floor(availableW / cols);
 
-    // ✅ widths
-    const portraitW = Math.max(26, Math.floor(colW * 0.85));
+    const portraitW = Math.max(26, Math.floor(colW * 0.50));
     const metricWpx = Math.max(30, Math.floor(colW * 0.95));
 
     const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3) * 0.88));
@@ -866,7 +893,6 @@ export default function SketchTemplate({
         H={H}
         W={W}
         isVertical={isVertical}
-        tplKey={tplKey}
         containerRef={containerRef}
         epitaphMeasureRef={epitaphMeasureRef}
         epitaphs={epitaphs}

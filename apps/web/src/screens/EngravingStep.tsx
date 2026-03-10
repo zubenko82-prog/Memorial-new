@@ -565,7 +565,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
           >
             {persons.length > 1 && (
               <a href="#" onClick={(e) => { e.preventDefault(); collapseAll(); }} style={linkLikeStyle()} title="Свернуть все — компактный вид">
-                Компактный вид ☰
+                ☰
               </a>
             )}
 
