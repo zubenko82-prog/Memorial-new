@@ -1,17 +1,16 @@
 // src/components/SketchTemplate.tsx
 //
-// Изменения (сводка):
-// - HorizontalMany:
-//   - портрет по ширине = 85% колонки (portraitW = colW * 0.85)
-//   - метрика по ширине = 95% колонки (metricWpx = colW * 0.95)
-//   - метрика 3 строки (Фамилия / Имя Отчество / Даты)
-//   - подбор шрифта по ширине с разными safety-коэффициентами, чтобы "имя отчество" точно влезало
-//   - letterSpacing убран внутри Metric3Lines, добавлен textOverflow
-// - При 3+ людей gap между колонками уменьшен.
-// - Кресты (>=3):
-//   - если крестов = людей (и людей >=3, горизонтальный many) — кресты слева от портретов по колонкам
-//   - иначе — колонка слева с распределением без перекрытий
-// - "Помним, любим, скорбим..." в горизонтальных шаблонах всегда одной строкой.
+// Вынесено аккуратно:
+// - BottomEpitaphAndGraphics (бывший EpitaphAndGraphics) вынесен из SketchTemplate в отдельный компонент,
+//   чтобы хуки useState/useEffect не вызывались внутри вложенной функции.
+// - Логика:
+//   - Горизонтальные: если нет others => эпитафия внизу; если есть others => графика внизу, эпитафия над ней
+//   - Минимальный отступ от низа
+//   - Запрет пересечений: считаем safeBottomY по всем метрикам ([data-sketch-el="metric"]) и ужимаем низ (эпитафия/графика)
+//     если нужно, чтобы не пересекаться с метрикой.
+//   - "Помним, любим, скорбим..." в горизонтальных — одной строкой, в вертикальных — лесенкой.
+//
+// Остальная часть файла — как у вас (включая HorizontalMany и кресты).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadOrderDraft, DRAFT_UPDATED_EVENT } from "../lib/order";
@@ -99,7 +98,6 @@ function measureTextPx(fontSize: number, fontWeight: number, text: string): numb
   ctx.font = `${fontWeight} ${fontSize}px ${FONT_CENTURY}`;
   return ctx.measureText(text || " ").width;
 }
-
 function fitFontSizeToWidth(params: { text: string; maxW: number; start: number; min: number; weight: number }) {
   const { text, maxW, start, min, weight } = params;
   let fs = start;
@@ -110,6 +108,269 @@ function fitFontSizeToWidth(params: { text: string; maxW: number; start: number;
   }
   return fs;
 }
+
+/* =======================================================================================
+   BottomEpitaphAndGraphics (вынесено)
+======================================================================================= */
+
+type BottomEpitaphAndGraphicsProps = {
+  H: number;
+  W: number;
+  isVertical: boolean;
+  tplKey: "one" | "two" | "many";
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  epitaphMeasureRef: React.RefObject<HTMLDivElement | null>;
+  epitaphs: string[];
+  others: Array<{ url: string; name?: string }>;
+};
+
+function BottomEpitaphAndGraphics({
+  H,
+  W,
+  isVertical,
+  tplKey,
+  containerRef,
+  epitaphMeasureRef,
+  epitaphs,
+  others
+}: BottomEpitaphAndGraphicsProps) {
+  const [bottomSafeY, setBottomSafeY] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!H || !W) return;
+    const root = containerRef.current;
+    if (!root) return;
+
+    const raf = requestAnimationFrame(() => {
+      const rootRect = root.getBoundingClientRect();
+
+      let safeBottom = H;
+
+      const metricNodes = root.querySelectorAll('[data-sketch-el="metric"]');
+      let minMetricTop = Number.POSITIVE_INFINITY;
+
+      metricNodes.forEach((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        const top = r.top - rootRect.top;
+        if (top < minMetricTop) minMetricTop = top;
+      });
+
+      const marginAbove = Math.max(6, Math.round(0.012 * H));
+      if (Number.isFinite(minMetricTop)) safeBottom = Math.min(safeBottom, Math.max(0, minMetricTop - marginAbove));
+
+      setBottomSafeY((prev) => (prev === safeBottom ? prev : safeBottom));
+    });
+
+    return () => cancelAnimationFrame(raf);
+  }, [H, W, isVertical, tplKey, epitaphs, others, containerRef]);
+
+  if (!H || !W) return null;
+
+  const isHorizontal = !isVertical;
+
+  // небольшой отступ от нижней границы — всегда
+  const bottomMarginPx = Math.max(4, Math.round(0.01 * H));
+  const gapBetween = Math.max(6, Math.round(0.012 * H));
+
+  // "низ", до которого можно рисовать, чтобы:
+  // - не касаться нижней границы
+  // - не пересечься с метрикой
+  const safeBottomY = Math.max(0, Math.min(bottomSafeY ?? H, H - bottomMarginPx));
+
+  const hasBottomGraphics = (others?.length || 0) > 0;
+  const hasEpitaph = Array.isArray(epitaphs) && epitaphs.length > 0;
+
+  const hasPomnim = Array.isArray(epitaphs) && epitaphs.some((t) => isPomnimLubenSkorbim(t));
+  const hasStair = !isHorizontal && hasPomnim;
+
+  const epW = Math.round(W * (hasStair ? 0.62 : 0.88));
+  const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
+
+  const desiredGfxH0 = isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H);
+  const desiredGfxH = hasBottomGraphics ? desiredGfxH0 : 0;
+
+  const epMaxH0 = Math.round((hasStair ? 0.24 : 0.20) * H);
+  const epScale0 = Math.min(1, epMaxH0 / naturalEp);
+
+  const availableBottomH = Math.max(0, safeBottomY);
+  const scaledEpH0 = hasEpitaph ? Math.ceil(naturalEp * epScale0) : 0;
+
+  // Ужимание при конфликте: если есть и графика и эпитафия — ужимаем обе
+  let gfxScale = 1;
+  let epScale = epScale0;
+
+  if (hasEpitaph && hasBottomGraphics) {
+    const needed = scaledEpH0 + gapBetween + desiredGfxH;
+    if (needed > availableBottomH && needed > 0) {
+      const k = availableBottomH / needed;
+      gfxScale = Math.max(0.45, Math.min(1, k));
+      epScale = Math.max(0.55, Math.min(epScale0, epScale0 * k));
+    }
+  } else if (hasEpitaph && !hasBottomGraphics) {
+    if (scaledEpH0 > availableBottomH && scaledEpH0 > 0) {
+      const k = availableBottomH / scaledEpH0;
+      epScale = Math.max(0.55, Math.min(epScale0, epScale0 * k));
+    }
+  } else if (!hasEpitaph && hasBottomGraphics) {
+    if (desiredGfxH > availableBottomH && desiredGfxH > 0) {
+      const k = availableBottomH / desiredGfxH;
+      gfxScale = Math.max(0.45, Math.min(1, k));
+    }
+  }
+
+  const gfxH = Math.round(desiredGfxH * gfxScale);
+  const scaledEpH = hasEpitaph ? Math.ceil(naturalEp * epScale) : 0;
+
+  // Позиции:
+  // - графика всегда "в самый низ" (safeBottomY)
+  // - эпитафия либо над графикой, либо "в самый низ" (safeBottomY)
+  const gfxTop = hasBottomGraphics ? Math.max(0, safeBottomY - gfxH) : 0;
+  const epTop = hasEpitaph
+    ? hasBottomGraphics
+      ? Math.max(0, gfxTop - gapBetween - scaledEpH)
+      : Math.max(0, safeBottomY - scaledEpH)
+    : 0;
+
+  // graphics layout
+  const gfxWrapW = Math.floor(W * 0.9);
+  const gfxGap = 10;
+  const n = others.length;
+  let perItemW = 0;
+  if (n > 0) {
+    const totalGaps = (n - 1) * gfxGap;
+    perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
+  }
+  const perItemMaxH = Math.max(12, Math.floor(gfxH * 0.9));
+
+  const renderEpitaphText = (t: string, idx: number) => {
+    if (isHorizontal && isPomnimLubenSkorbim(t)) {
+      return (
+        <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
+          {pomnimSingleLine()}
+        </div>
+      );
+    }
+
+    if (!isHorizontal && isPomnimLubenSkorbim(t)) {
+      const [a, b, c] = pomnimStairLines();
+      return (
+        <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 4 }}>
+          <div style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{a}</div>
+          <div style={{ textAlign: "center", whiteSpace: "pre-wrap" }}>{b}</div>
+          <div style={{ textAlign: "right", whiteSpace: "pre-wrap" }}>{c}</div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
+        {t}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      {hasEpitaph && epScale > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: epTop,
+            left: "50%",
+            transform: `translateX(-50%) scale(${epScale})`,
+            transformOrigin: "top center",
+            width: epW,
+            color: "#fff",
+            textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+            zIndex: 4,
+            overflow: "hidden",
+            pointerEvents: "none"
+          }}
+        >
+          <div
+            style={{
+              fontStyle: "italic",
+              textTransform: "none",
+              fontFamily: FONT_CENTURY,
+              lineHeight: 1.15,
+              letterSpacing: "0.2px",
+              fontSize: hasStair ? "clamp(16px, 3.4vw, 28px)" : "clamp(10px, 2.6vw, 20px)",
+              display: "grid",
+              gap: hasStair ? 4 : 8
+            }}
+          >
+            {epitaphs.slice(0, 8).map((t, idx) => renderEpitaphText(t, idx))}
+          </div>
+        </div>
+      )}
+
+      {hasBottomGraphics && gfxH > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            top: gfxTop,
+            width: "90%",
+            height: gfxH,
+            maxHeight: gfxH,
+            overflow: "hidden",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: `${gfxGap}px`,
+            flexWrap: "nowrap",
+            zIndex: 3,
+            pointerEvents: "none"
+          }}
+        >
+          {others.map((g, i) => (
+            <img
+              key={`other-bottom-${i}`}
+              data-sketch-el="graphic"
+              data-sketch-key={`${i}`}
+              src={g.url}
+              alt={g.name || "Графика"}
+              style={{
+                width: perItemW ? `${perItemW}px` : "auto",
+                height: "auto",
+                maxHeight: `${perItemMaxH}px`,
+                objectFit: "contain",
+                filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+                flex: "0 0 auto"
+              }}
+              draggable={false}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* measure epitaph */}
+      <div style={{ position: "absolute", left: -99999, top: -99999, width: epW }}>
+        <div ref={epitaphMeasureRef} style={{ width: epW }}>
+          <div
+            style={{
+              fontStyle: "italic",
+              textTransform: "none",
+              fontFamily: FONT_CENTURY,
+              lineHeight: 1.15,
+              letterSpacing: "0.2px",
+              fontSize: hasStair ? "clamp(16px, 3.4vw, 28px)" : "clamp(10px, 2.6vw, 20px)",
+              display: "grid",
+              gap: hasStair ? 4 : 8
+            }}
+          >
+            {epitaphs?.slice(0, 8).map((t, idx) => renderEpitaphText(t, idx))}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* =======================================================================================
+   Main component
+======================================================================================= */
 
 export default function SketchTemplate({
   item,
@@ -266,36 +527,10 @@ export default function SketchTemplate({
         const topOffset = Math.round(0.07 * H);
 
         return (
-          <div
-            style={{
-              position: "absolute",
-              left: gapSide,
-              right: gapSide,
-              top: topOffset,
-              display: "grid",
-              gridTemplateColumns: `repeat(${cols}, ${colW}px)`,
-              gap: colGap,
-              justifyContent: "center",
-              zIndex: 6,
-              pointerEvents: "none"
-            }}
-          >
+          <div style={{ position: "absolute", left: gapSide, right: gapSide, top: topOffset, display: "grid", gridTemplateColumns: `repeat(${cols}, ${colW}px)`, gap: colGap, justifyContent: "center", zIndex: 6, pointerEvents: "none" }}>
             {crosses.map((c, i) => (
               <div key={`cross-col-${i}`} style={{ width: colW, display: "flex", justifyContent: "flex-start", alignItems: "flex-start" }}>
-                <img
-                  data-sketch-el="cross"
-                  data-sketch-key={`${i}`}
-                  src={c.url}
-                  alt={c.name || "Крест"}
-                  style={{
-                    ...baseFilter,
-                    position: "static",
-                    width: Math.max(14, Math.floor(colW * 0.18)),
-                    height: "auto",
-                    marginTop: Math.max(2, Math.floor(0.01 * H))
-                  }}
-                  draggable={false}
-                />
+                <img data-sketch-el="cross" data-sketch-key={`${i}`} src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, position: "static", width: Math.max(14, Math.floor(colW * 0.18)), height: "auto", marginTop: Math.max(2, Math.floor(0.01 * H)) }} draggable={false} />
               </div>
             ))}
           </div>
@@ -303,32 +538,9 @@ export default function SketchTemplate({
       }
 
       return (
-        <div
-          style={{
-            position: "absolute",
-            left: "2.5%",
-            top: "10%",
-            bottom: "10%",
-            width: "7%",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 6,
-            zIndex: 6,
-            pointerEvents: "none"
-          }}
-        >
+        <div style={{ position: "absolute", left: "2.5%", top: "10%", bottom: "10%", width: "7%", display: "flex", flexDirection: "column", justifyContent: "space-between", alignItems: "center", gap: 6, zIndex: 6, pointerEvents: "none" }}>
           {crosses.slice(0, 8).map((c, i) => (
-            <img
-              key={`cross-left-stack-${i}`}
-              data-sketch-el="cross"
-              data-sketch-key={`${i}`}
-              src={c.url}
-              alt={c.name || "Крест"}
-              style={{ ...baseFilter, width: "100%", height: "auto", position: "static" }}
-              draggable={false}
-            />
+            <img key={`cross-left-stack-${i}`} data-sketch-el="cross" data-sketch-key={`${i}`} src={c.url} alt={c.name || "Крест"} style={{ ...baseFilter, width: "100%", height: "auto", position: "static" }} draggable={false} />
           ))}
         </div>
       );
@@ -396,23 +608,7 @@ export default function SketchTemplate({
           </div>
         </div>
 
-        <div
-          data-sketch-el="metric"
-          data-sketch-key={p.id}
-          style={{
-            position: "absolute",
-            top: s.metricTop,
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: s.metricW,
-            height: s.metricTargetH,
-            overflow: "hidden",
-            pointerEvents: "none",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "flex-start"
-          }}
-        >
+        <div data-sketch-el="metric" data-sketch-key={p.id} style={{ position: "absolute", top: s.metricTop, left: "50%", transform: "translateX(-50%)", width: s.metricW, height: s.metricTargetH, overflow: "hidden", pointerEvents: "none", display: "flex", justifyContent: "center", alignItems: "flex-start" }}>
           <div style={{ transform: `scale(${metricScaleH1})`, transformOrigin: "top center", width: "100%" }}>
             <PersonMetricText lines={p.lines} />
           </div>
@@ -485,18 +681,18 @@ export default function SketchTemplate({
   const HorizontalMany = () => {
     if (!H || !W) return null;
 
-    const topOffset = Math.round(0.14 * H); // было 0.07 увеличиваем отступ сверху
+    const topOffset = Math.round(0.14 * H);
     const gapSide = 16;
 
-    const colGap = Math.max(2, Math.round(CFG.horizontal.layout.gap * 0.33)); // 12 -> ~4
+    const colGap = Math.max(2, Math.round(CFG.horizontal.layout.gap * 0.33));
     const cols = Math.max(3, peopleBlocks.length);
 
     const availableW = Math.max(0, W - gapSide * 2 - colGap * (cols - 1));
     const colW = Math.floor(availableW / cols);
 
-    // ✅ НАСТРОЙКИ ШИРИНЫ:
-    const portraitW = Math.max(26, Math.floor(colW * 0.50)); // 50% ширины колонки
-    const metricWpx = Math.max(30, Math.floor(colW * 0.95)); // 95% ширины колонки
+    // ✅ widths
+    const portraitW = Math.max(26, Math.floor(colW * 0.85));
+    const metricWpx = Math.max(30, Math.floor(colW * 0.95));
 
     const portraitH = Math.max(34, Math.floor(portraitW * (4 / 3) * 0.88));
     const portraitMetricGapPx = Math.max(8, Math.round(0.014 * H));
@@ -511,7 +707,6 @@ export default function SketchTemplate({
     const Metric3Lines = ({ lines }: { lines: string[] }) => {
       const [l1, l2, l3] = build3Lines(lines).map((s) => s.toUpperCase());
 
-      // ✅ разные "запасы" — 2 строку ужимаем сильнее, чтобы ФИО точно не резалось
       const maxW1 = Math.floor(metricWpx * 0.90);
       const maxW2 = Math.floor(metricWpx * 0.82);
       const maxW3 = Math.floor(metricWpx * 0.84);
@@ -520,13 +715,7 @@ export default function SketchTemplate({
       const fs2 = fitFontSizeToWidth({ text: l2 || " ", maxW: maxW2, start: 16, min: 8, weight: 600 });
       const fs3 = fitFontSizeToWidth({ text: l3 || " ", maxW: maxW3, start: 14, min: 8, weight: 400 });
 
-      const line: React.CSSProperties = {
-        width: "100%",
-        textAlign: "center",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis"
-      };
+      const line: React.CSSProperties = { width: "100%", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 
       return (
         <div style={{ width: "100%", display: "grid", gap: 2, textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
@@ -642,178 +831,6 @@ export default function SketchTemplate({
     return <VerticalMany />;
   };
 
-  const EpitaphAndGraphics = () => {
-  if (!H || !W) return null;
-
-  const gap = Math.round(0.015 * H);
-  const bottomPadPx = Math.max(8, Math.round(0.02 * H));
-
-  const isHorizontal = !isVertical;
-
-  // В горизонтальных: "помним..." всегда одной строкой
-  const hasPomnim = Array.isArray(epitaphs) && epitaphs.some((t) => isPomnimLubenSkorbim(t));
-  const hasStair = !isHorizontal && hasPomnim;
-
-  const epW = Math.round(W * (hasStair ? 0.62 : 0.88));
-  const naturalEp = Math.max(1, epitaphMeasureRef.current?.scrollHeight || 1);
-
-  // нижняя графика (кроме крестов) — это others[]
-  const hasBottomGraphics = (others?.length || 0) > 0;
-
-  // высота блока графики
-  const desiredGfxH = isVertical ? Math.round(0.12 * H) : Math.round(0.16 * H);
-  const gfxH = hasBottomGraphics ? desiredGfxH : 0;
-
-  // Позиции снизу:
-  // - если есть графика: gfx снизу, эпитафия над ней
-  // - если нет графики: эпитафия снизу
-  const gfxTop = hasBottomGraphics ? H - bottomPadPx - gfxH : 0;
-
-  const epMaxH = Math.round((hasStair ? 0.24 : 0.20) * H);
-  const finalEpitaphScale = Math.min(1, epMaxH / naturalEp);
-  const scaledEpH = Math.floor(naturalEp * finalEpitaphScale);
-
-  // ✅ ключевое: считаем epTop от низа
-  const epTop = hasBottomGraphics
-    ? Math.max(Math.round(0.58 * H), gfxTop - gap - scaledEpH) // над графикой
-    : Math.max(Math.round(0.58 * H), H - bottomPadPx - scaledEpH); // в самом низу
-
-  // Раскладка и размеры items графики
-  const gfxWrapW = Math.floor(W * 0.9);
-  const gfxGap = 10;
-  const n = others.length;
-  let perItemW = 0;
-  if (n > 0) {
-    const totalGaps = (n - 1) * gfxGap;
-    perItemW = Math.max(12, Math.floor((gfxWrapW - totalGaps) / n));
-  }
-  const perItemMaxH = Math.max(16, Math.floor((hasBottomGraphics ? gfxH : desiredGfxH) * 0.9));
-
-  const renderEpitaphText = (t: string, idx: number) => {
-    if (isHorizontal && isPomnimLubenSkorbim(t)) {
-      return (
-        <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
-          {pomnimSingleLine()}
-        </div>
-      );
-    }
-
-    if (!isHorizontal && isPomnimLubenSkorbim(t)) {
-      const [a, b, c] = pomnimStairLines();
-      return (
-        <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ display: "grid", gap: 4 }}>
-          <div style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{a}</div>
-          <div style={{ textAlign: "center", whiteSpace: "pre-wrap" }}>{b}</div>
-          <div style={{ textAlign: "right", whiteSpace: "pre-wrap" }}>{c}</div>
-        </div>
-      );
-    }
-
-    return (
-      <div key={`ep-${idx}`} data-sketch-el="epitaph" data-sketch-key={`${idx}`} style={{ whiteSpace: "pre-wrap", textAlign: "center" }}>
-        {t}
-      </div>
-    );
-  };
-
-  return (
-    <>
-      {Array.isArray(epitaphs) && epitaphs.length > 0 && finalEpitaphScale > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            top: epTop,
-            left: "50%",
-            transform: `translateX(-50%) scale(${finalEpitaphScale})`,
-            transformOrigin: "top center",
-            width: epW,
-            color: "#fff",
-            textShadow: "0 1px 2px rgba(0,0,0,0.6)",
-            zIndex: 4,
-            overflow: "hidden",
-            pointerEvents: "none"
-          }}
-        >
-          <div
-            style={{
-              fontStyle: "italic",
-              textTransform: "none",
-              fontFamily: FONT_CENTURY,
-              lineHeight: 1.15,
-              letterSpacing: "0.2px",
-              fontSize: hasStair ? "clamp(16px, 3.4vw, 28px)" : "clamp(10px, 2.6vw, 20px)",
-              display: "grid",
-              gap: hasStair ? 4 : 8
-            }}
-          >
-            {epitaphs.slice(0, 8).map((t, idx) => renderEpitaphText(t, idx))}
-          </div>
-        </div>
-      )}
-
-      {hasBottomGraphics && (
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            top: gfxTop,
-            width: "90%",
-            height: gfxH,
-            maxHeight: gfxH,
-            overflow: "hidden",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            gap: `${gfxGap}px`,
-            flexWrap: "nowrap",
-            zIndex: 3,
-            pointerEvents: "none"
-          }}
-        >
-          {others.map((g, i) => (
-            <img
-              key={`other-bottom-${i}`}
-              data-sketch-el="graphic"
-              data-sketch-key={`${i}`}
-              src={g.url}
-              alt={g.name || "Графика"}
-              style={{
-                width: perItemW ? `${perItemW}px` : "auto",
-                height: "auto",
-                maxHeight: `${perItemMaxH}px`,
-                objectFit: "contain",
-                filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
-                flex: "0 0 auto"
-              }}
-              draggable={false}
-            />
-          ))}
-        </div>
-      )}
-
-      <div style={{ position: "absolute", left: -99999, top: -99999, width: epW }}>
-        <div ref={epitaphMeasureRef} style={{ width: epW }}>
-          <div
-            style={{
-              fontStyle: "italic",
-              textTransform: "none",
-              fontFamily: FONT_CENTURY,
-              lineHeight: 1.15,
-              letterSpacing: "0.2px",
-              fontSize: hasStair ? "clamp(16px, 3.4vw, 28px)" : "clamp(10px, 2.6vw, 20px)",
-              display: "grid",
-              gap: hasStair ? 4 : 8
-            }}
-          >
-            {epitaphs?.slice(0, 8).map((t, idx) => renderEpitaphText(t, idx))}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-};
-
   return (
     <div
       ref={containerRef}
@@ -844,7 +861,17 @@ export default function SketchTemplate({
 
       {renderPeople()}
       <CrossOverlay />
-      <EpitaphAndGraphics />
+
+      <BottomEpitaphAndGraphics
+        H={H}
+        W={W}
+        isVertical={isVertical}
+        tplKey={tplKey}
+        containerRef={containerRef}
+        epitaphMeasureRef={epitaphMeasureRef}
+        epitaphs={epitaphs}
+        others={others}
+      />
     </div>
   );
 }
