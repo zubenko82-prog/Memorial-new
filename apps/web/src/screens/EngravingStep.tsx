@@ -569,14 +569,21 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
               </a>
             )}
 
-            {persons.map((p) => {
-              const name = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
-              return (
-                <button key={p.id} onClick={() => scrollToForm(p.id)} style={glassButtonStyle("nano")} title={name}>
-                  {name}
-                </button>
-              );
-            })}
+            // ===== NAV: замените блок {persons.map(...)} целиком на этот =====
+{persons.map((p) => {
+  const name = [p.firstName, p.middleName].filter(Boolean).join(" ") || "Без имени";
+  return (
+    <button
+      key={p.id}
+      onClick={() => openAndScrollToForm(p.id)}
+      style={glassButtonStyle("nano")}
+      title={name}
+      type="button"
+    >
+      {name}
+    </button>
+  );
+})}
 
             <div style={{ flex: 1 }} />
             <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>Эскиз</button>
@@ -609,7 +616,15 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
               const hasPhoto = !!(transientPhotoUrlById[p.id] || p.photoDataUrl || p.photoUrl);
 
               return (
-                <div key={id} ref={(el) => (formRefs.current[id] = el)} style={{ ...glassPanelStyle(), padding: 0 }}>
+                <div
+  key={id}
+  ref={(el) => (formRefs.current[id] = el)}
+  style={{
+    ...glassPanelStyle(),
+    padding: 0,
+    scrollMarginTop: navH + 16 // ✅ чтобы при скролле заголовок не попадал под липкую навигацию
+  }}
+>
                   <div
                     onClick={() => setOpenMap((prev) => ({ ...prev, [id]: !isOpen }))}
                     style={{
