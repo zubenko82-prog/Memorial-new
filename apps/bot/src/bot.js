@@ -1,10 +1,12 @@
+// apps/bot/src/bot.js
 import { resolve, dirname as pathDirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as dotenv from 'dotenv';
 import { Telegraf } from 'telegraf';
 
+import { registerFilterMenu } from './modules/filterMenu.js';
 import { registerOrders } from './modules/orders.js';
-import { registerPostWizard, loadCatalogFromXlsx } from './modules/postWizard.js';
+import { registerPostWizard, loadCatalogFromXlsx, calcCaptionAndTags } from './modules/postWizard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = pathDirname(__filename);
@@ -234,6 +236,17 @@ if (token) {
     }
   });
 
+  // 1) ФИЛЬТР (нужен, чтобы отдать showFilterMenu в orders)
+  const filterApi = registerFilterMenu(bot, {
+    CHANNEL_USERNAME,
+    getAllCatalogPostKeys,
+    getCatalogPostMetaByKey,
+    loadCatalogFromXlsx,
+    CATALOG_XLSX_PATH,
+    calcCaptionAndTags,
+  });
+
+  // 2) ORDERS (передаём showFilterMenu, чтобы вызвать в конце заказа)
   registerOrders(bot, {
     HINT_TEXT,
     DEEPLINK_PREFIX,
@@ -245,8 +258,12 @@ if (token) {
     WEBAPP_URL,
     getPostMeta,
     loadCatalogFromXlsx,
+
+    // ✅ добавили
+    showFilterMenu: filterApi?.showFilterMenu,
   });
 
+  // 3) POST WIZARD
   registerPostWizard(bot, {
     HINT_TEXT,
     WEBAPP_URL,
@@ -261,14 +278,19 @@ if (token) {
     getAllCatalogPostKeys,
     getCatalogPostMetaByKey,
     setCatalogPostMetaByKey,
-    deleteCatalogPostMetaByKey, // ✅ прокинули
+    deleteCatalogPostMetaByKey,
   });
 
   bot.command('dump', async (ctx) => {
     const chat = ctx.chat || {};
     const from = ctx.from || {};
     const me = ctx.botInfo || (await ctx.telegram.getMe());
-    const info = [`chat_id = ${chat.id}`, `chat_type = ${chat.type}`, `user_id = ${from.id}`, `username = ${me.username}`].join('\n');
+    const info = [
+      `chat_id = ${chat.id}`,
+      `chat_type = ${chat.type}`,
+      `user_id = ${from.id}`,
+      `username = ${me.username}`,
+    ].join('\n');
     return ctx.reply('DEBUG:\n' + info);
   });
 

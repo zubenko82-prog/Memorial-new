@@ -577,3 +577,4 @@ export function registerOrders(bot, deps) {
     return next();
   });
 }
+await deps.showFilterMenu(ctx);
