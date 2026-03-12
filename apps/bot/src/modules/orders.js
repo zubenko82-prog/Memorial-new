@@ -39,28 +39,68 @@ function extractCompositionAndTotalFromPostText(text) {
   return { compositionLines, totalLine };
 }
 
-async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
-  if (!sourceToken || typeof getPostMeta !== 'function') {
-    return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '', meta: null };
+// ✅ если postmeta не найден — пробуем восстановить ссылку из sourceToken вида p_<absChatId>_<messageId>_...
+function parsePostRefFromSourceToken(sourceToken) {
+  const s = String(sourceToken || '').trim();
+  // p_1003585050485_129_cb29...
+  const m = /^p_(\d+)_([0-9]+)(?:_.*)?$/i.exec(s);
+  if (!m) return null;
+  const absChatId = Number(m[1]);
+  const messageId = Number(m[2]);
+  if (!Number.isFinite(absChatId) || !Number.isFinite(messageId)) return null;
+  return { absChatId, messageId };
+}
+
+function makePostLinkFallback(CHANNEL_USERNAME, absChatId, messageId) {
+  if (!messageId) return '';
+  if (CHANNEL_USERNAME) return `https://t.me/${String(CHANNEL_USERNAME).replace('@', '')}/${messageId}`;
+  if (absChatId) return `https://t.me/c/${Math.abs(Number(absChatId))}/${messageId}`;
+  return '';
+}
+
+async function getPostInfo(sourceToken, getPostMeta, makePostLink, CHANNEL_USERNAME) {
+  // default
+  const empty = { priceLine: '', postUrl: '', compositionLines: [], totalLine: '', meta: null, recoveredFromToken: false };
+
+  if (!sourceToken) return empty;
+
+  // 1) основной путь: postmeta
+  if (typeof getPostMeta === 'function') {
+    const meta = await getPostMeta(sourceToken).catch((e) => {
+      console.error('[orders] getPostInfo getPostMeta error', e?.message || e);
+      return null;
+    });
+
+    if (meta) {
+      const text = meta.text || '';
+      const priceLine = extractPriceLineFromPostText(text);
+      const { compositionLines, totalLine } = extractCompositionAndTotalFromPostText(text);
+
+      let postUrl = '';
+      if (meta.absChatId && meta.messageId && typeof makePostLink === 'function') {
+        postUrl = makePostLink(meta.absChatId, meta.messageId) || '';
+      }
+      // если makePostLink не отдал — соберем вручную
+      if (!postUrl && meta.absChatId && meta.messageId) {
+        postUrl = makePostLinkFallback(CHANNEL_USERNAME, meta.absChatId, meta.messageId);
+      }
+
+      return { priceLine, postUrl, compositionLines, totalLine, meta, recoveredFromToken: false };
+    }
   }
 
-  const meta = await getPostMeta(sourceToken).catch((e) => {
-    console.error('[orders] getPostInfo getPostMeta error', e?.message || e);
-    return null;
-  });
+  // 2) fallback: восстановить из sourceToken p_...
+  const ref = parsePostRefFromSourceToken(sourceToken);
+  if (ref) {
+    const postUrl =
+      typeof makePostLink === 'function'
+        ? makePostLink(ref.absChatId, ref.messageId) || makePostLinkFallback(CHANNEL_USERNAME, ref.absChatId, ref.messageId)
+        : makePostLinkFallback(CHANNEL_USERNAME, ref.absChatId, ref.messageId);
 
-  if (!meta) return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '', meta: null };
-
-  const text = meta.text || '';
-  const priceLine = extractPriceLineFromPostText(text);
-  const { compositionLines, totalLine } = extractCompositionAndTotalFromPostText(text);
-
-  let postUrl = '';
-  if (meta.absChatId && meta.messageId && typeof makePostLink === 'function') {
-    postUrl = makePostLink(meta.absChatId, meta.messageId) || '';
+    return { ...empty, postUrl, meta: { absChatId: ref.absChatId, messageId: ref.messageId }, recoveredFromToken: true };
   }
 
-  return { priceLine, postUrl, compositionLines, totalLine, meta };
+  return empty;
 }
 
 function buildFormPreview(s) {
@@ -77,7 +117,7 @@ function buildFormPreview(s) {
   ];
 }
 
-async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink }) {
+async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink, CHANNEL_USERNAME }) {
   const u = user || {};
   const fullName = [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || '—';
   const username = u.username ? `@${u.username}` : '—';
@@ -100,24 +140,35 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
     '📋 Данные заказа:',
     '',
     ...buildFormPreview(s),
+    '',
+    '🧷 Источник:',
+    `sourceToken: ${s.sourceToken || '— (не передан)'}`,
   ];
 
-  // ✅ Источник (ВСЕГДА печатаем)
-  lines.push('');
-  lines.push('🧷 Источник:');
-  if (s.sourceToken) {
-    lines.push(`sourceToken: ${s.sourceToken}`);
-  } else {
-    lines.push('sourceToken: — (не передан)');
-  }
-
   try {
-    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(s.sourceToken, getPostMeta, makePostLink);
+    const { priceLine, postUrl, compositionLines, totalLine, recoveredFromToken } = await getPostInfo(
+      s.sourceToken,
+      getPostMeta,
+      makePostLink,
+      CHANNEL_USERNAME
+    );
+
+    if (postUrl) {
+      lines.push('');
+      lines.push('🔗 Пост в канале:');
+      lines.push(postUrl);
+      if (recoveredFromToken) {
+        lines.push('(восстановлено из sourceToken, postmeta не найдено)');
+      }
+    } else {
+      lines.push('');
+      lines.push('⚠️ Пост в канале: ссылка не определена (sourceToken не содержит p_<absChatId>_<messageId> или неверный формат)');
+    }
 
     if (compositionLines.length || totalLine || priceLine) {
       lines.push('');
       if (compositionLines.length) {
-        lines.push('🧩 Состав заказа (из поста):');
+        lines.push('🧩 Состав заказа (из postmeta):');
         lines.push(...compositionLines);
       }
       if (totalLine) {
@@ -128,16 +179,6 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
         lines.push('💵 Цена в посте:');
         lines.push(priceLine);
       }
-    }
-
-    if (postUrl) {
-      lines.push('');
-      lines.push('🔗 Пост в канале:');
-      lines.push(postUrl);
-    } else {
-      // ✅ Явно показываем проблему
-      lines.push('');
-      lines.push('⚠️ Пост в канале: ссылка не определена (нет absChatId/messageId в postmeta или meta не найдено)');
     }
   } catch (e) {
     console.error('[orders] buildManagerSummary post info error', e?.message || e);
@@ -162,7 +203,6 @@ export function registerOrders(bot, deps) {
     showFilterMenu,
   } = deps;
 
-  // === КНОПКИ ===
   const kbReview = () => Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
 
   const kbEditMenu = () =>
@@ -185,14 +225,11 @@ export function registerOrders(bot, deps) {
 
   const kbRemove = () => Markup.removeKeyboard();
 
-  // ✅ Клавиатура после успешной отправки: WebApp + фильтр
   const kbAfterSubmit = () => {
     const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
-
     const rows = [];
     if (webAppUrl) rows.push([Markup.button.webApp('✨🪦 Подобрать памятник 🪦✨', webAppUrl)]);
     rows.push(['📚 Фильтр каталога']);
-
     return Markup.keyboard(rows).resize();
   };
 
@@ -204,14 +241,12 @@ export function registerOrders(bot, deps) {
 
   async function goAfterEditOrNext(ctx, defaultNextStep) {
     const s = getOrder(ctx);
-
     if (s.editReturnStep) {
       const back = s.editReturnStep;
       delete s.editReturnStep;
       s.step = back;
       return renderStep(ctx);
     }
-
     s.step = defaultNextStep;
     return renderStep(ctx);
   }
@@ -310,7 +345,12 @@ export function registerOrders(bot, deps) {
 
   async function sendOrderToManager(ctx, s, orderNo) {
     if (!MANAGER_CHAT_ID) throw new Error('MANAGER_CHAT_ID is not set');
-    const managerText = await buildManagerSummary(s, orderNo, ctx.from, { getPostMeta, makePostLink });
+
+    const managerText = await buildManagerSummary(s, orderNo, ctx.from, {
+      getPostMeta,
+      makePostLink,
+      CHANNEL_USERNAME,
+    });
 
     const photos = Array.isArray(s.photos) ? s.photos : [];
     if (photos.length > 0) {
@@ -370,7 +410,6 @@ export function registerOrders(bot, deps) {
 
   const isPostWizardActive = (ctx) => !!ctx.session?.postWizard;
 
-  // ====== Кнопка "Фильтр каталога" ======
   bot.hears('📚 Фильтр каталога', async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
     if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
@@ -447,9 +486,7 @@ export function registerOrders(bot, deps) {
 
   bot.hears(['Да, отменить'], async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
-    if (ctx.session?.order?.step === 'confirm_cancel') {
-      return cancelOrder(ctx, 'Заказ отменён.');
-    }
+    if (ctx.session?.order?.step === 'confirm_cancel') return cancelOrder(ctx, 'Заказ отменён.');
     return next();
   });
 
@@ -494,14 +531,12 @@ export function registerOrders(bot, deps) {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     const prefix = `${DEEPLINK_PREFIX}_`;
 
-    // /start без параметров -> фильтр
     if (!arg) {
       if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
       await ctx.reply(HINT_TEXT);
       return startOrder(ctx, undefined);
     }
 
-    // deep-link заказ
     let sourceToken = null;
     if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
 
@@ -528,14 +563,11 @@ export function registerOrders(bot, deps) {
       if (t.startsWith('/')) return next();
     }
 
-    // контакт
     if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact?.phone_number) {
       const num = ctx.message.contact.phone_number;
       s.tg_phone = num;
       s.phone = num;
-      s.step = 'fio';
-      await renderStep(ctx);
-      return;
+      return goAfterEditOrNext(ctx, 'fio');
     }
 
     if ('text' in ctx.message && ctx.message.text) {

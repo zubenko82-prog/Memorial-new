@@ -1,6 +1,7 @@
 // apps/bot/src/modules/filterMenu.js
 import { Markup } from 'telegraf';
 
+// NOTE: formatRub оставляю (может пригодиться позже), но сейчас не используется
 const formatRub = (n) => {
   const s = Math.round(Number(n) || 0).toString();
   return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -68,7 +69,6 @@ function menuKb(state) {
   });
 
   const rows = [];
-
   for (let i = 0; i < tagButtons.length; i += 2) rows.push(tagButtons.slice(i, i + 2));
   for (let i = 0; i < priceButtons.length; i += 2) rows.push(priceButtons.slice(i, i + 2));
 
@@ -179,12 +179,21 @@ export function registerFilterMenu(bot, deps) {
       const { caption } = calcCaptionAndTags(catalog, meta.selected);
       const tags = extractTagsFromCaption(caption);
 
+      // ✅ ВАЖНО: используем meta.sourceToken. Если его нет — не генерируем "левый" p_...
+      // потому что тогда заказ придёт без postmeta, и менеджеру нечего показать.
+      // Вместо этого пропустим пост (или можно fallback: оставить, но кнопка "Заказать" будет без состава).
+      if (!meta.sourceToken) {
+        // если хотите НЕ пропускать — можно убрать continue, но тогда придётся
+        // поддерживать восстановление ссылки/состава в orders.js (вы уже сделали восстановление ссылки).
+        continue;
+      }
+
       posts.push({
         key,
         messageId,
         channelChatId: meta.channelChatId,
         last_total_price: Number(meta.last_total_price ?? 0),
-        sourceToken: meta.sourceToken, // ideally exists
+        sourceToken: meta.sourceToken,
         _tagsSet: tags,
       });
     }
@@ -225,7 +234,7 @@ export function registerFilterMenu(bot, deps) {
     const matched = posts.filter((p) => matchPost(p, selectedTagKeys, selectedPriceKeys, tagIndex, priceIndex));
 
     if (!matched.length) {
-      await ctx.reply('Ничего не найдено по выбранным параметрам. Попробуйте убрать часть фильтров.');
+      await ctx.reply('Ничего не найдено по выбранным параметрам. (Проверьте, что посты созданы через /post и имеют sourceToken.)');
       return showFilterMenu(ctx);
     }
 
@@ -249,10 +258,8 @@ export function registerFilterMenu(bot, deps) {
 
       if (!sent?.message_id) continue;
 
-      // гарантируем кнопки
-      const absChatId = Math.abs(Number(p.channelChatId));
-      const sourceToken = p.sourceToken || `p_${absChatId}_${p.messageId}`;
-      const kb = buildInlineKbForPost(botUsername, WEBAPP_URL, DEEPLINK_PREFIX, sourceToken);
+      // ✅ гарантируем кнопки, но sourceToken теперь всегда настоящий (из meta.sourceToken)
+      const kb = buildInlineKbForPost(botUsername, WEBAPP_URL, DEEPLINK_PREFIX, p.sourceToken);
 
       try {
         await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, sent.message_id, undefined, kb.reply_markup);
