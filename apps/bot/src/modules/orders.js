@@ -7,9 +7,6 @@ function warningNote() {
 
 const kbConfirmCancel = () => Markup.keyboard([['Да, отменить', 'Нет, вернуться']]).resize();
 
-// eslint-disable-next-line no-unused-vars
-const normStr = (v) => String(v || '').trim();
-
 function extractPriceLineFromPostText(text) {
   if (!text) return '';
   const lines = String(text).split('\n').map((l) => l.trim());
@@ -44,7 +41,7 @@ function extractCompositionAndTotalFromPostText(text) {
 
 async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
   if (!sourceToken || typeof getPostMeta !== 'function') {
-    return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
+    return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '', meta: null };
   }
 
   const meta = await getPostMeta(sourceToken).catch((e) => {
@@ -52,7 +49,7 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
     return null;
   });
 
-  if (!meta) return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '' };
+  if (!meta) return { priceLine: '', postUrl: '', compositionLines: [], totalLine: '', meta: null };
 
   const text = meta.text || '';
   const priceLine = extractPriceLineFromPostText(text);
@@ -63,7 +60,7 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink) {
     postUrl = makePostLink(meta.absChatId, meta.messageId) || '';
   }
 
-  return { priceLine, postUrl, compositionLines, totalLine };
+  return { priceLine, postUrl, compositionLines, totalLine, meta };
 }
 
 function buildFormPreview(s) {
@@ -103,15 +100,20 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
     '📋 Данные заказа:',
     '',
     ...buildFormPreview(s),
-    '',
   ];
 
+  // ✅ Источник (ВСЕГДА печатаем)
+  lines.push('');
+  lines.push('🧷 Источник:');
+  if (s.sourceToken) {
+    lines.push(`sourceToken: ${s.sourceToken}`);
+  } else {
+    lines.push('sourceToken: — (не передан)');
+  }
+
   try {
-    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(
-      s.sourceToken,
-      getPostMeta,
-      makePostLink
-    );
+    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(s.sourceToken, getPostMeta, makePostLink);
+
     if (compositionLines.length || totalLine || priceLine) {
       lines.push('');
       if (compositionLines.length) {
@@ -127,13 +129,20 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
         lines.push(priceLine);
       }
     }
+
     if (postUrl) {
       lines.push('');
       lines.push('🔗 Пост в канале:');
       lines.push(postUrl);
+    } else {
+      // ✅ Явно показываем проблему
+      lines.push('');
+      lines.push('⚠️ Пост в канале: ссылка не определена (нет absChatId/messageId в postmeta или meta не найдено)');
     }
   } catch (e) {
     console.error('[orders] buildManagerSummary post info error', e?.message || e);
+    lines.push('');
+    lines.push('⚠️ Ошибка получения источника поста.');
   }
 
   return lines.join('\n');
@@ -176,20 +185,30 @@ export function registerOrders(bot, deps) {
 
   const kbRemove = () => Markup.removeKeyboard();
 
+  // ✅ Клавиатура после успешной отправки: WebApp + фильтр
+  const kbAfterSubmit = () => {
+    const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
+
+    const rows = [];
+    if (webAppUrl) rows.push([Markup.button.webApp('✨🪦 Подобрать памятник 🪦✨', webAppUrl)]);
+    rows.push(['📚 Фильтр каталога']);
+
+    return Markup.keyboard(rows).resize();
+  };
+
   function getOrder(ctx) {
     if (!ctx.session) ctx.session = {};
     if (!ctx.session.order) ctx.session.order = { step: 'name', photos: [] };
     return ctx.session.order;
   }
 
-  // ✅ если мы вошли в шаг из меню редактирования — после ввода возвращаемся в review
   async function goAfterEditOrNext(ctx, defaultNextStep) {
     const s = getOrder(ctx);
 
     if (s.editReturnStep) {
       const back = s.editReturnStep;
       delete s.editReturnStep;
-      s.step = back; // обычно 'review'
+      s.step = back;
       return renderStep(ctx);
     }
 
@@ -303,10 +322,7 @@ export function registerOrders(bot, deps) {
       await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
 
       if (photos.length > 10) {
-        await ctx.telegram.sendMessage(
-          MANAGER_CHAT_ID,
-          `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`
-        );
+        await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`);
       }
     } else {
       await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
@@ -322,8 +338,6 @@ export function registerOrders(bot, deps) {
     try {
       await sendOrderToManager(ctx, s, orderNo);
 
-      const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
-
       await ctx.reply(
         [
           `✅ Заказ №${orderNo} отправлен.`,
@@ -333,19 +347,8 @@ export function registerOrders(bot, deps) {
         ]
           .filter(Boolean)
           .join('\n'),
-        {
-          reply_markup: webAppUrl
-            ? Markup.keyboard([[Markup.button.webApp('✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨', webAppUrl)]])
-                .resize()
-                .oneTime()
-                .reply_markup
-            : kbRemove().reply_markup,
-        }
+        kbAfterSubmit()
       );
-
-      if (typeof showFilterMenu === 'function') {
-        await showFilterMenu(ctx);
-      }
     } catch (e) {
       await ctx.reply('😔 Не удалось отправить заказ. Попробуйте позже.', kbRemove());
     } finally {
@@ -360,12 +363,19 @@ export function registerOrders(bot, deps) {
 
   async function cancelEditReturnToReview(ctx) {
     const s = getOrder(ctx);
-    delete s.editReturnStep; // ✅ чтобы не осталось
+    delete s.editReturnStep;
     s.step = 'review';
     return stepReview(ctx);
   }
 
   const isPostWizardActive = (ctx) => !!ctx.session?.postWizard;
+
+  // ====== Кнопка "Фильтр каталога" ======
+  bot.hears('📚 Фильтр каталога', async (ctx, next) => {
+    if (isPostWizardActive(ctx)) return next();
+    if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
+    return ctx.reply('Фильтр сейчас недоступен. Попробуйте позже.');
+  });
 
   // ====== Редактирование ======
   bot.hears(['✏️ Изменить'], async (ctx, next) => {
@@ -380,7 +390,6 @@ export function registerOrders(bot, deps) {
     return cancelEditReturnToReview(ctx);
   });
 
-  // ✅ тут ставим editReturnStep='review'
   bot.hears('📝Имя', async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
     const s = getOrder(ctx);
@@ -485,12 +494,14 @@ export function registerOrders(bot, deps) {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     const prefix = `${DEEPLINK_PREFIX}_`;
 
+    // /start без параметров -> фильтр
     if (!arg) {
-      if (typeof deps.showFilterMenu === 'function') return deps.showFilterMenu(ctx);
+      if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
       await ctx.reply(HINT_TEXT);
       return startOrder(ctx, undefined);
     }
 
+    // deep-link заказ
     let sourceToken = null;
     if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
 
@@ -499,7 +510,7 @@ export function registerOrders(bot, deps) {
   });
 
   bot.command('cancel', async (ctx) => {
-    if (!ctx.session?.order) return ctx.reply('Нет активного заказа.', kbRemove());
+    if (!ctx.session?.order) return ctx.reply('Нет активного заказа.', Markup.removeKeyboard());
     return goConfirmCancel(ctx);
   });
 
@@ -522,10 +533,11 @@ export function registerOrders(bot, deps) {
       const num = ctx.message.contact.phone_number;
       s.tg_phone = num;
       s.phone = num;
-      return goAfterEditOrNext(ctx, 'fio');
+      s.step = 'fio';
+      await renderStep(ctx);
+      return;
     }
 
-    // текстовый ввод
     if ('text' in ctx.message && ctx.message.text) {
       const text = ctx.message.text.trim();
 
@@ -533,7 +545,6 @@ export function registerOrders(bot, deps) {
         s.name = text;
         return goAfterEditOrNext(ctx, 'phone');
       }
-
       if (st === 'phone') {
         if (!phoneOk(text)) {
           return ctx.reply(
@@ -545,17 +556,14 @@ export function registerOrders(bot, deps) {
         s.phone = text;
         return goAfterEditOrNext(ctx, 'fio');
       }
-
       if (st === 'fio') {
         s.fio = text;
         return goAfterEditOrNext(ctx, 'dates');
       }
-
       if (st === 'dates') {
         s.dates = text;
         return goAfterEditOrNext(ctx, 'photos');
       }
-
       if (st === 'comment') {
         if (!['✅ Продолжить', 'Продолжить', '🛑 Отменить заказ'].includes(text)) {
           s.comment = text;
@@ -568,20 +576,12 @@ export function registerOrders(bot, deps) {
       }
     }
 
-    // фото
     if ('photo' in ctx.message && ctx.message.photo?.length) {
       if (st === 'photos') {
         const fileId = ctx.message.photo.at(-1)?.file_id;
         if (fileId) {
           s.photos = s.photos || [];
           s.photos.push(fileId);
-
-          // при редактировании фото — тоже вернемся в review
-          if (s.editReturnStep) {
-            await ctx.reply('✅ Фото загружено.' + warningNote(), { parse_mode: 'HTML', ...kbPhotos() });
-            return goAfterEditOrNext(ctx, 'comment');
-          }
-
           await ctx.reply('✅ Фото загружено.\nМожно отправить ещё фото или нажать «➡️ Далее».' + warningNote(), {
             parse_mode: 'HTML',
             ...kbPhotos(),
