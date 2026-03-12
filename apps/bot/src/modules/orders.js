@@ -7,6 +7,7 @@ function warningNote() {
 
 const kbConfirmCancel = () => Markup.keyboard([['Да, отменить', 'Нет, вернуться']]).resize();
 
+// eslint-disable-next-line no-unused-vars
 const normStr = (v) => String(v || '').trim();
 
 function extractPriceLineFromPostText(text) {
@@ -149,14 +150,11 @@ export function registerOrders(bot, deps) {
     WEBAPP_URL,
     getPostMeta,
     makePostLink,
-
-    // ✅ добавили
     showFilterMenu,
   } = deps;
 
   // === КНОПКИ ===
-  const kbReview = () =>
-    Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
+  const kbReview = () => Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
 
   const kbEditMenu = () =>
     Markup.keyboard([
@@ -184,6 +182,21 @@ export function registerOrders(bot, deps) {
     return ctx.session.order;
   }
 
+  // ✅ если мы вошли в шаг из меню редактирования — после ввода возвращаемся в review
+  async function goAfterEditOrNext(ctx, defaultNextStep) {
+    const s = getOrder(ctx);
+
+    if (s.editReturnStep) {
+      const back = s.editReturnStep;
+      delete s.editReturnStep;
+      s.step = back; // обычно 'review'
+      return renderStep(ctx);
+    }
+
+    s.step = defaultNextStep;
+    return renderStep(ctx);
+  }
+
   function rememberBeforeCancel(ctx) {
     const s = getOrder(ctx);
     if (!s._beforeCancelStep) s._beforeCancelStep = s.step || 'review';
@@ -208,12 +221,14 @@ export function registerOrders(bot, deps) {
         );
       case 'phone':
         return ctx.reply(
-          '📞 Шаг 2 из 6. Контактный телефон.\nВы можете:\n• отправить номер кнопкой «📱»\n• или ввести номер вручную в формате +7...' + warningNote(),
+          '📞 Шаг 2 из 6. Контактный телефон.\nВы можете:\n• отправить номер кнопкой «📱»\n• или ввести номер вручную в формате +7...' +
+            warningNote(),
           { parse_mode: 'HTML', ...kbPhone() }
         );
       case 'fio':
         return ctx.reply(
-          '🕊 Шаг 3 из 6. ФИО усопшего.\nНапишите фамилию, имя и отчество так, как они должны быть на памятнике.' + warningNote(),
+          '🕊 Шаг 3 из 6. ФИО усопшего.\nНапишите фамилию, имя и отчество так, как они должны быть на памятнике.' +
+            warningNote(),
           { parse_mode: 'HTML', ...kbName() }
         );
       case 'dates':
@@ -328,7 +343,6 @@ export function registerOrders(bot, deps) {
         }
       );
 
-      // ✅ показать фильтр в конце заказа
       if (typeof showFilterMenu === 'function') {
         await showFilterMenu(ctx);
       }
@@ -346,6 +360,7 @@ export function registerOrders(bot, deps) {
 
   async function cancelEditReturnToReview(ctx) {
     const s = getOrder(ctx);
+    delete s.editReturnStep; // ✅ чтобы не осталось
     s.step = 'review';
     return stepReview(ctx);
   }
@@ -365,6 +380,7 @@ export function registerOrders(bot, deps) {
     return cancelEditReturnToReview(ctx);
   });
 
+  // ✅ тут ставим editReturnStep='review'
   bot.hears('📝Имя', async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
     const s = getOrder(ctx);
@@ -422,7 +438,9 @@ export function registerOrders(bot, deps) {
 
   bot.hears(['Да, отменить'], async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
-    if (ctx.session?.order?.step === 'confirm_cancel') return cancelOrder(ctx, 'Заказ отменён.');
+    if (ctx.session?.order?.step === 'confirm_cancel') {
+      return cancelOrder(ctx, 'Заказ отменён.');
+    }
     return next();
   });
 
@@ -467,9 +485,8 @@ export function registerOrders(bot, deps) {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     const prefix = `${DEEPLINK_PREFIX}_`;
 
-    // /start без параметров -> фильтр
     if (!arg) {
-      if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
+      if (typeof deps.showFilterMenu === 'function') return deps.showFilterMenu(ctx);
       await ctx.reply(HINT_TEXT);
       return startOrder(ctx, undefined);
     }
@@ -494,29 +511,29 @@ export function registerOrders(bot, deps) {
     const st = s.step;
     if (!st) return next();
 
+    // команды пропускаем
     if ('text' in ctx.message && typeof ctx.message.text === 'string') {
       const t = ctx.message.text.trim();
       if (t.startsWith('/')) return next();
     }
 
+    // контакт
     if (st === 'phone' && 'contact' in ctx.message && ctx.message.contact?.phone_number) {
       const num = ctx.message.contact.phone_number;
       s.tg_phone = num;
       s.phone = num;
-      s.step = 'fio';
-      await renderStep(ctx);
-      return;
+      return goAfterEditOrNext(ctx, 'fio');
     }
 
+    // текстовый ввод
     if ('text' in ctx.message && ctx.message.text) {
       const text = ctx.message.text.trim();
 
       if (st === 'name') {
         s.name = text;
-        s.step = 'phone';
-        await renderStep(ctx);
-        return;
+        return goAfterEditOrNext(ctx, 'phone');
       }
+
       if (st === 'phone') {
         if (!phoneOk(text)) {
           return ctx.reply(
@@ -526,22 +543,19 @@ export function registerOrders(bot, deps) {
           );
         }
         s.phone = text;
-        s.step = 'fio';
-        await renderStep(ctx);
-        return;
+        return goAfterEditOrNext(ctx, 'fio');
       }
+
       if (st === 'fio') {
         s.fio = text;
-        s.step = 'dates';
-        await renderStep(ctx);
-        return;
+        return goAfterEditOrNext(ctx, 'dates');
       }
+
       if (st === 'dates') {
         s.dates = text;
-        s.step = 'photos';
-        await renderStep(ctx);
-        return;
+        return goAfterEditOrNext(ctx, 'photos');
       }
+
       if (st === 'comment') {
         if (!['✅ Продолжить', 'Продолжить', '🛑 Отменить заказ'].includes(text)) {
           s.comment = text;
@@ -554,12 +568,20 @@ export function registerOrders(bot, deps) {
       }
     }
 
+    // фото
     if ('photo' in ctx.message && ctx.message.photo?.length) {
       if (st === 'photos') {
         const fileId = ctx.message.photo.at(-1)?.file_id;
         if (fileId) {
           s.photos = s.photos || [];
           s.photos.push(fileId);
+
+          // при редактировании фото — тоже вернемся в review
+          if (s.editReturnStep) {
+            await ctx.reply('✅ Фото загружено.' + warningNote(), { parse_mode: 'HTML', ...kbPhotos() });
+            return goAfterEditOrNext(ctx, 'comment');
+          }
+
           await ctx.reply('✅ Фото загружено.\nМожно отправить ещё фото или нажать «➡️ Далее».' + warningNote(), {
             parse_mode: 'HTML',
             ...kbPhotos(),
