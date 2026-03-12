@@ -31,7 +31,7 @@ const BOT_ADMINS = (process.env.BOT_ADMINS || '')
 
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://memorial-web-five.vercel.app/';
 const DEEPLINK_PREFIX = process.env.DEEPLINK_PREFIX || 'order'; // /start order_<token>
-const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || 'memorialDNR'; // публичный канал @memorialDNR
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || 'memorialDNR';
 
 console.log('[env] MANAGER_CHAT_ID parsed =', MANAGER_CHAT_ID);
 
@@ -40,6 +40,7 @@ const HINT_TEXT =
 
 const CATALOG_XLSX_PATH = resolve(__dirname, '../catalog.xlsx');
 
+// CHANNEL_ID может быть -100… (число) или @username (строка)
 function getChannelId() {
   if (!CHANNEL_ID_RAW) return null;
   if (CHANNEL_ID_RAW.startsWith('@')) return CHANNEL_ID_RAW;
@@ -95,11 +96,8 @@ async function saveSession(userId, data) {
 async function setPostMeta(sourceToken, meta) {
   const key = `postmeta:${sourceToken}`;
   const r = await getRedis();
-  if (r) {
-    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
-  } else {
-    memPostMeta.set(key, meta);
-  }
+  if (r) await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  else memPostMeta.set(key, meta);
 }
 async function getPostMeta(sourceToken) {
   const key = `postmeta:${sourceToken}`;
@@ -112,11 +110,8 @@ async function getPostMeta(sourceToken) {
 async function setCatalogPostMeta(messageId, meta) {
   const key = `catalogpost:${messageId}`;
   const r = await getRedis();
-  if (r) {
-    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
-  } else {
-    memCatalogPosts.set(key, meta);
-  }
+  if (r) await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  else memCatalogPosts.set(key, meta);
 }
 async function getCatalogPostMeta(messageId) {
   const key = `catalogpost:${messageId}`;
@@ -143,11 +138,8 @@ async function getCatalogPostMetaByKey(key) {
 }
 async function setCatalogPostMetaByKey(key, meta) {
   const r = await getRedis();
-  if (r) {
-    await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
-  } else {
-    memCatalogPosts.set(key, meta);
-  }
+  if (r) await r.set(key, meta, { ex: 60 * 60 * 24 * 365 });
+  else memCatalogPosts.set(key, meta);
 }
 async function deleteCatalogPostMetaByKey(key) {
   const r = await getRedis();
@@ -207,9 +199,10 @@ if (token) {
     }
   });
 
-  // Filter menu (НЕ регистрирует bot.start внутри, только /filter + callbacks)
   const filterApi = registerFilterMenu(bot, {
     CHANNEL_USERNAME,
+    WEBAPP_URL,
+    DEEPLINK_PREFIX,
     getAllCatalogPostKeys,
     getCatalogPostMetaByKey,
     loadCatalogFromXlsx,
@@ -227,8 +220,7 @@ if (token) {
     CHANNEL_USERNAME,
     WEBAPP_URL,
     getPostMeta,
-
-    // ✅ чтобы показать фильтр в конце заказа и в /start без параметров
+    loadCatalogFromXlsx,
     showFilterMenu: filterApi.showFilterMenu,
   });
 

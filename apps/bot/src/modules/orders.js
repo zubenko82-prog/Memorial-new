@@ -6,6 +6,7 @@ function warningNote() {
 }
 
 const kbConfirmCancel = () => Markup.keyboard([['Да, отменить', 'Нет, вернуться']]).resize();
+
 const normStr = (v) => String(v || '').trim();
 
 function extractPriceLineFromPostText(text) {
@@ -105,7 +106,11 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
   ];
 
   try {
-    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(s.sourceToken, getPostMeta, makePostLink);
+    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(
+      s.sourceToken,
+      getPostMeta,
+      makePostLink
+    );
     if (compositionLines.length || totalLine || priceLine) {
       lines.push('');
       if (compositionLines.length) {
@@ -150,7 +155,8 @@ export function registerOrders(bot, deps) {
   } = deps;
 
   // === КНОПКИ ===
-  const kbReview = () => Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
+  const kbReview = () =>
+    Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
 
   const kbEditMenu = () =>
     Markup.keyboard([
@@ -212,17 +218,20 @@ export function registerOrders(bot, deps) {
         );
       case 'dates':
         return ctx.reply(
-          '📅 Шаг 4 из 6. Даты.\nУкажите даты в формате:\nDD.MM.YYYY - DD.MM.YYYY\nНапример:\n12.03.1950 - 05.11.2020' + warningNote(),
+          '📅 Шаг 4 из 6. Даты.\nУкажите даты в формате:\nDD.MM.YYYY - DD.MM.YYYY\nНапример:\n12.03.1950 - 05.11.2020' +
+            warningNote(),
           { parse_mode: 'HTML', ...kbName() }
         );
       case 'photos':
         return ctx.reply(
-          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nЕсли цифрового файла нет - сфотографируйте фото на телефон.\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»' + warningNote(),
+          '🖼 Шаг 5 из 6. Фотографии.\n(Без фото — жмите «➡️ Далее»)\n\nЕсли цифрового файла нет - сфотографируйте фото на телефон.\n\nПри загрузке фотографии дождитесь сообщения,\n«✅ Фото загружено»,\nтолько после этого нажмите\n«➡️ Далее»' +
+            warningNote(),
           { parse_mode: 'HTML', ...kbPhotos() }
         );
       case 'comment':
         return ctx.reply(
-          '💬 Шаг 6 из 6. Комментарий, способ связи или промокод.\nЕсли комментариев нет — просто нажмите «✅ Продолжить».' + warningNote(),
+          '💬 Шаг 6 из 6. Комментарий, способ связи или промокод.\nЕсли комментариев нет — просто нажмите «✅ Продолжить».' +
+            warningNote(),
           { parse_mode: 'HTML', ...kbComment() }
         );
       case 'review':
@@ -279,7 +288,10 @@ export function registerOrders(bot, deps) {
       await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
 
       if (photos.length > 10) {
-        await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`);
+        await ctx.telegram.sendMessage(
+          MANAGER_CHAT_ID,
+          `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`
+        );
       }
     } else {
       await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
@@ -316,7 +328,7 @@ export function registerOrders(bot, deps) {
         }
       );
 
-      // ✅ ПОСЛЕ ЗАКАЗА показываем фильтр-меню (если передано)
+      // ✅ показать фильтр в конце заказа
       if (typeof showFilterMenu === 'function') {
         await showFilterMenu(ctx);
       }
@@ -455,15 +467,13 @@ export function registerOrders(bot, deps) {
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
     const prefix = `${DEEPLINK_PREFIX}_`;
 
-    // ✅ если /start БЕЗ параметров — показываем фильтр (если есть) и не стартуем заказ
+    // /start без параметров -> фильтр
     if (!arg) {
       if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
-      // fallback: если фильтр не подключен
       await ctx.reply(HINT_TEXT);
       return startOrder(ctx, undefined);
     }
 
-    // deep-link заказ
     let sourceToken = null;
     if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
 

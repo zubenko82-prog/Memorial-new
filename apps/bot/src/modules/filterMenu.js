@@ -1,29 +1,33 @@
 // apps/bot/src/modules/filterMenu.js
 import { Markup } from 'telegraf';
 
-const normStr = (v) => String(v || '').trim();
 const formatRub = (n) => {
   const s = Math.round(Number(n) || 0).toString();
   return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 };
 
-// Утилита: ссылки на посты
-function makeChannelPostLink(CHANNEL_USERNAME, channelChatId, messageId) {
-  if (CHANNEL_USERNAME) return `https://t.me/${String(CHANNEL_USERNAME).replace('@', '')}/${messageId}`;
-  const n = Number(channelChatId);
-  if (Number.isFinite(n)) return `https://t.me/c/${Math.abs(n)}/${messageId}`;
-  return '';
-}
-
-// ====== Определение доступных фильтров ======
-// Теги берутся из вашего же calcCaptionAndTags().caption (там "#..." через пробел).
-// Тут описываем UI-ярлыки и соответствие тегу.
+// ====== ФИЛЬТРЫ (чекбоксы, мультивыбор) ======
 const TAG_FILTERS = [
+  // Стела (размеры)
+  { key: 'stela_60x40x5', label: 'Стела 60×40×5', tag: '#стела_60x40x5' },
+  { key: 'stela_60x40x8', label: 'Стела 60×40×8', tag: '#стела_60x40x8' },
+  { key: 'stela_80x40x8', label: 'Стела 80×40×8', tag: '#стела_80x40x8' },
+  { key: 'stela_100x50x8', label: 'Стела 100×50×8', tag: '#стела_100x50x8' },
+  { key: 'stela_120x60x8', label: 'Стела 120×60×8', tag: '#стела_120x60x8' },
+  { key: 'stela_140x70x8', label: 'Стела 140×70×8', tag: '#стела_140x70x8' },
+
+  // Надгробная плита
   { key: 'no_plita', label: 'Без плиты', tag: '#без_плиты' },
+  { key: 'plita_80x40x5', label: 'Плита 80×40×5', tag: '#плита_80x40x5' },
+  { key: 'plita_100x50x5', label: 'Плита 100×50×5', tag: '#плита_100x50x5' },
+  { key: 'plita_120x60x5', label: 'Плита 120×60×5', tag: '#плита_120x60x5' },
+
+  // Тип работы
+  { key: 'work_mill', label: 'Фрезерная работа', tag: '#фрезерная_работа' },
+  { key: 'work_carve', label: 'Резная работа', tag: '#резная_работа' },
+
+  // было ранее
   { key: 'no_cvetnik', label: 'Без цветника', tag: '#без_цветника' },
-  // добавляйте любые ваши хэштеги из постов:
-  // { key:'vertical', label:'Вертикальные', tag:'#вертикальный' },
-  // { key:'gabbro', label:'Габбро', tag:'#габбро' },
 ];
 
 const PRICE_FILTERS = [
@@ -34,10 +38,7 @@ const PRICE_FILTERS = [
 ];
 
 function getFilterState(ctx) {
-  ctx.session.filterMenu = ctx.session.filterMenu || {
-    tags: {}, // { key: true }
-    prices: {}, // { key: true }
-  };
+  ctx.session.filterMenu = ctx.session.filterMenu || { tags: {}, prices: {} };
   return ctx.session.filterMenu;
 }
 
@@ -48,8 +49,8 @@ function renderMenuText(state) {
   return [
     'Фильтр каталога:',
     '',
-    `Теги: ${chosenTags.length ? chosenTags.join(', ') : '— любые —'}`,
-    `Цена: ${chosenPrices.length ? chosenPrices.join(', ') : '— любая —'}`,
+    `Параметры: ${chosenTags.length ? chosenTags.join(', ') : '— любые —'}`,
+    `Бюджет: ${chosenPrices.length ? chosenPrices.join(', ') : '— любой —'}`,
     '',
     'Выберите параметры и нажмите «Показать»',
   ].join('\n');
@@ -68,9 +69,7 @@ function menuKb(state) {
 
   const rows = [];
 
-  // теги по 2 в ряд
   for (let i = 0; i < tagButtons.length; i += 2) rows.push(tagButtons.slice(i, i + 2));
-  // цены по 2 в ряд
   for (let i = 0; i < priceButtons.length; i += 2) rows.push(priceButtons.slice(i, i + 2));
 
   rows.push([
@@ -81,23 +80,18 @@ function menuKb(state) {
   return Markup.inlineKeyboard(rows);
 }
 
-// Вытащить теги из caption
 function extractTagsFromCaption(caption) {
   const tags = new Set();
   const parts = String(caption || '').split(/\s+/);
-  for (const p of parts) {
-    if (p.startsWith('#')) tags.add(p.trim());
-  }
+  for (const p of parts) if (p.startsWith('#')) tags.add(p.trim());
   return tags;
 }
 
-// Применение фильтра к одному посту (meta)
+// AND по тегам, OR по бюджету
 function matchPost(meta, selectedTagKeys, selectedPriceKeys, tagIndex, priceIndex) {
   if (!meta) return false;
 
-  // tags
   if (selectedTagKeys.length) {
-    // AND-логика: должны присутствовать ВСЕ выбранные теги
     for (const key of selectedTagKeys) {
       const needTag = tagIndex.get(key);
       if (!needTag) continue;
@@ -106,9 +100,8 @@ function matchPost(meta, selectedTagKeys, selectedPriceKeys, tagIndex, priceInde
     }
   }
 
-  // price
   if (selectedPriceKeys.length) {
-    const price = Number(meta.last_total_price ?? meta.lastTotalPrice ?? meta.total ?? 0);
+    const price = Number(meta.last_total_price ?? 0);
     let ok = false;
     for (const k of selectedPriceKeys) {
       const band = priceIndex.get(k);
@@ -124,23 +117,39 @@ function matchPost(meta, selectedTagKeys, selectedPriceKeys, tagIndex, priceInde
   return true;
 }
 
+function buildInlineKbForPost(botUsername, WEBAPP_URL, DEEPLINK_PREFIX, sourceToken) {
+  const startParam = `${DEEPLINK_PREFIX}_${sourceToken}`;
+  const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
+
+  if (webAppUrl) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`),
+        Markup.button.webApp('Подобрать памятник', webAppUrl),
+      ],
+    ]);
+  }
+
+  return Markup.inlineKeyboard([[Markup.button.url('Заказать', `https://t.me/${botUsername}?start=${startParam}`)]]);
+}
+
 export function registerFilterMenu(bot, deps) {
   const {
     CHANNEL_USERNAME,
+    WEBAPP_URL,
+    DEEPLINK_PREFIX,
     getAllCatalogPostKeys,
     getCatalogPostMetaByKey,
     loadCatalogFromXlsx,
     CATALOG_XLSX_PATH,
-    calcCaptionAndTags, // передадим из postWizard, чтобы не дублировать
+    calcCaptionAndTags,
   } = deps;
 
-  // показать меню фильтра
   async function showFilterMenu(ctx) {
     const state = getFilterState(ctx);
     const text = renderMenuText(state);
     const kb = menuKb(state);
 
-    // если это вызов из callback — удобнее edit
     if (ctx.updateType === 'callback_query') {
       try {
         await ctx.editMessageText(text, kb);
@@ -149,11 +158,9 @@ export function registerFilterMenu(bot, deps) {
       }
       return;
     }
-
     await ctx.reply(text, kb);
   }
 
-  // получить каталог постов (meta) и проставить _tagsSet
   async function loadPostsWithTags() {
     const keys = await getAllCatalogPostKeys();
     if (!Array.isArray(keys) || keys.length === 0) return [];
@@ -176,9 +183,8 @@ export function registerFilterMenu(bot, deps) {
         key,
         messageId,
         channelChatId: meta.channelChatId,
-        last_total_price: meta.last_total_price ?? 0,
-        baseTextNoHint: meta.baseTextNoHint || '',
-        _caption: caption,
+        last_total_price: Number(meta.last_total_price ?? 0),
+        sourceToken: meta.sourceToken, // ideally exists
         _tagsSet: tags,
       });
     }
@@ -186,12 +192,8 @@ export function registerFilterMenu(bot, deps) {
     return posts;
   }
 
-  
-
-  // команда /filter (на всякий)
   bot.command('filter', async (ctx) => showFilterMenu(ctx));
 
-  // callbacks
   bot.action(/^flt:(tag|price):(.+)$/, async (ctx) => {
     const [, kind, key] = ctx.match;
     const state = getFilterState(ctx);
@@ -213,12 +215,8 @@ export function registerFilterMenu(bot, deps) {
     await ctx.answerCbQuery('Ищу...');
 
     const state = getFilterState(ctx);
-    const selectedTagKeys = Object.entries(state.tags)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-    const selectedPriceKeys = Object.entries(state.prices)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
+    const selectedTagKeys = Object.entries(state.tags).filter(([, v]) => v).map(([k]) => k);
+    const selectedPriceKeys = Object.entries(state.prices).filter(([, v]) => v).map(([k]) => k);
 
     const tagIndex = new Map(TAG_FILTERS.map((t) => [t.key, t.tag]));
     const priceIndex = new Map(PRICE_FILTERS.map((p) => [p.key, { min: p.min, max: p.max }]));
@@ -231,20 +229,45 @@ export function registerFilterMenu(bot, deps) {
       return showFilterMenu(ctx);
     }
 
-    // сортировка по цене
-    matched.sort((a, b) => Number(a.last_total_price || 0) - Number(b.last_total_price || 0));
+    matched.sort((a, b) => (a.last_total_price || 0) - (b.last_total_price || 0));
 
-    const top = matched.slice(0, 20);
-    const lines = top.map((p, idx) => {
-      const link = makeChannelPostLink(CHANNEL_USERNAME, p.channelChatId, p.messageId);
-      return `${idx + 1}) Цена: от ${formatRub(p.last_total_price)} ₽\n${link}`;
-    });
+    // лимит чтобы не уткнуться в flood-control
+    const MAX_SEND = 30;
+    const toSend = matched.slice(0, MAX_SEND);
 
-    await ctx.reply(`Нашёл: ${matched.length}\nПоказываю первые ${top.length}:\n\n${lines.join('\n\n')}`);
+    const me = ctx.botInfo || (await ctx.telegram.getMe());
+    const botUsername = me.username;
+
+    for (const p of toSend) {
+      const sent = await ctx.telegram.copyMessage(ctx.chat.id, p.channelChatId, p.messageId).catch(async () => {
+        const link = CHANNEL_USERNAME
+          ? `https://t.me/${String(CHANNEL_USERNAME).replace('@', '')}/${p.messageId}`
+          : `https://t.me/c/${Math.abs(Number(p.channelChatId))}/${p.messageId}`;
+        await ctx.reply(link);
+        return null;
+      });
+
+      if (!sent?.message_id) continue;
+
+      // гарантируем кнопки
+      const absChatId = Math.abs(Number(p.channelChatId));
+      const sourceToken = p.sourceToken || `p_${absChatId}_${p.messageId}`;
+      const kb = buildInlineKbForPost(botUsername, WEBAPP_URL, DEEPLINK_PREFIX, sourceToken);
+
+      try {
+        await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, sent.message_id, undefined, kb.reply_markup);
+      } catch {
+        // ignore
+      }
+    }
+
+    // последним сообщением — сколько найдено
+    await ctx.reply(
+      `Найдено: ${matched.length}\nПоказано: ${toSend.length}` + (matched.length > MAX_SEND ? `\n(показываю первые ${MAX_SEND})` : '')
+    );
 
     return showFilterMenu(ctx);
   });
 
-  // Экспортируем функцию, чтобы можно было вызвать из orders.js "в конце заказа"
   return { showFilterMenu };
 }
