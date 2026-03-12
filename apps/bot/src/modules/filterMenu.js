@@ -186,15 +186,7 @@ export function registerFilterMenu(bot, deps) {
     return posts;
   }
 
-  // /start без параметров -> показываем фильтр
-  bot.start(async (ctx) => {
-    const text = ctx.message?.text || '';
-    // если deep-link: /start order_xxx — пусть отрабатывает orders.js (он обычно перехватывает сам)
-    // но чтобы не конфликтовать — показываем фильтр только если нет параметров
-    const hasParam = /\s+/.test(text);
-    if (hasParam) return;
-    return showFilterMenu(ctx);
-  });
+  
 
   // команда /filter (на всякий)
   bot.command('filter', async (ctx) => showFilterMenu(ctx));

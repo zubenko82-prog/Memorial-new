@@ -942,8 +942,6 @@ export function registerPostWizard(bot, deps) {
 
       return;
     }
-    
-export { calcCaptionAndTags };
 
     // SINGLE groups
     const singleGroups = ['STELA', 'TUMBA', 'CVETNIK', 'PLITA', 'WORK'];
@@ -978,3 +976,4 @@ export { calcCaptionAndTags };
     return next();
   });
 }
+export { calcCaptionAndTags };

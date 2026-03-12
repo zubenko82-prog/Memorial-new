@@ -40,7 +40,6 @@ const HINT_TEXT =
 
 const CATALOG_XLSX_PATH = resolve(__dirname, '../catalog.xlsx');
 
-// CHANNEL_ID может быть -100… (число) или @username (строка)
 function getChannelId() {
   if (!CHANNEL_ID_RAW) return null;
   if (CHANNEL_ID_RAW.startsWith('@')) return CHANNEL_ID_RAW;
@@ -150,19 +149,12 @@ async function setCatalogPostMetaByKey(key, meta) {
     memCatalogPosts.set(key, meta);
   }
 }
-
-// ✅ НАСТОЯЩЕЕ УДАЛЕНИЕ КЛЮЧА catalogpost:...
 async function deleteCatalogPostMetaByKey(key) {
   const r = await getRedis();
   if (r) {
-    if (typeof r.del === 'function') {
-      await r.del(key);
-    } else if (typeof r.delete === 'function') {
-      await r.delete(key);
-    } else {
-      // fallback (если вдруг нет del/delete): превращаем в короткоживущий ключ
-      await r.set(key, null, { ex: 1 });
-    }
+    if (typeof r.del === 'function') await r.del(key);
+    else if (typeof r.delete === 'function') await r.delete(key);
+    else await r.set(key, null, { ex: 1 });
   } else {
     memCatalogPosts.delete(key);
   }
@@ -188,12 +180,8 @@ function makeOrderNo(d = new Date()) {
 
 function makePostLink(absChatId, messageId) {
   if (!messageId) return '';
-  if (CHANNEL_USERNAME) {
-    return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
-  }
-  if (absChatId) {
-    return `https://t.me/c/${absChatId}/${messageId}`;
-  }
+  if (CHANNEL_USERNAME) return `https://t.me/${CHANNEL_USERNAME}/${messageId}`;
+  if (absChatId) return `https://t.me/c/${absChatId}/${messageId}`;
   return '';
 }
 
@@ -208,23 +196,6 @@ let bot = null;
 if (token) {
   bot = new Telegraf(token);
 
-  bot.on('message', (ctx, next) => {
-    try {
-      console.log(
-        '[GLOBAL] update:',
-        JSON.stringify({
-          text: 'text' in ctx.message ? ctx.message.text : null,
-          hasPhoto: !!ctx.message.photo,
-          fromId: ctx.from?.id,
-          chatId: ctx.chat?.id,
-        })
-      );
-    } catch (e) {
-      console.log('[GLOBAL] cannot stringify message', e?.message || e);
-    }
-    return next();
-  });
-
   bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (!uid) return next();
@@ -236,7 +207,7 @@ if (token) {
     }
   });
 
-  // 1) ФИЛЬТР (нужен, чтобы отдать showFilterMenu в orders)
+  // Filter menu (НЕ регистрирует bot.start внутри, только /filter + callbacks)
   const filterApi = registerFilterMenu(bot, {
     CHANNEL_USERNAME,
     getAllCatalogPostKeys,
@@ -246,7 +217,6 @@ if (token) {
     calcCaptionAndTags,
   });
 
-  // 2) ORDERS (передаём showFilterMenu, чтобы вызвать в конце заказа)
   registerOrders(bot, {
     HINT_TEXT,
     DEEPLINK_PREFIX,
@@ -257,13 +227,11 @@ if (token) {
     CHANNEL_USERNAME,
     WEBAPP_URL,
     getPostMeta,
-    loadCatalogFromXlsx,
 
-    // ✅ добавили
-    showFilterMenu: filterApi?.showFilterMenu,
+    // ✅ чтобы показать фильтр в конце заказа и в /start без параметров
+    showFilterMenu: filterApi.showFilterMenu,
   });
 
-  // 3) POST WIZARD
   registerPostWizard(bot, {
     HINT_TEXT,
     WEBAPP_URL,
@@ -279,27 +247,6 @@ if (token) {
     getCatalogPostMetaByKey,
     setCatalogPostMetaByKey,
     deleteCatalogPostMetaByKey,
-  });
-
-  bot.command('dump', async (ctx) => {
-    const chat = ctx.chat || {};
-    const from = ctx.from || {};
-    const me = ctx.botInfo || (await ctx.telegram.getMe());
-    const info = [
-      `chat_id = ${chat.id}`,
-      `chat_type = ${chat.type}`,
-      `user_id = ${from.id}`,
-      `username = ${me.username}`,
-    ].join('\n');
-    return ctx.reply('DEBUG:\n' + info);
-  });
-
-  bot.command('id', async (ctx) => {
-    const fwd = ctx.message?.forward_from_chat;
-    if (fwd) {
-      return ctx.reply(`CHANNEL_ID: ${fwd.id}\nusername: ${fwd.username || '—'}\ntitle: ${fwd.title || '—'}`);
-    }
-    return ctx.reply('Перешлите мне пост канала и повторите /id — пришлю CHANNEL_ID.');
   });
 
   bot.catch((err) => console.error('[bot] error:', err));

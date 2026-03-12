@@ -1,16 +1,11 @@
 // apps/bot/src/modules/orders.js
 import { Markup } from 'telegraf';
 
-const redWarning =
-  '<b><span class="tg-spoiler" style="color:#D52B1E">Если допустили ошибку - не исправляйте сообщение, исправить можно на этапе проверки воспользовавшись меню "✏️ Изменить"</span></b>';
-
 function warningNote() {
   return '\n\n<b>🛑 ВАЖНО: \nЕсли допустили ошибку — не правьте сообщение. В конце заказа можно исправить через меню «✏️ Изменить».</b>';
 }
 
-const kbConfirmCancel = () =>
-  Markup.keyboard([['Да, отменить', 'Нет, вернуться']]).resize();
-
+const kbConfirmCancel = () => Markup.keyboard([['Да, отменить', 'Нет, вернуться']]).resize();
 const normStr = (v) => String(v || '').trim();
 
 function extractPriceLineFromPostText(text) {
@@ -37,13 +32,9 @@ function extractCompositionAndTotalFromPostText(text) {
 
   let compositionLines = [];
   if (priceLineIdx !== -1) {
-    const untilIdx = totalLine
-      ? lines.findIndex((l, i) => i > priceLineIdx && /^Итого\s*:/i.test(l))
-      : -1;
+    const untilIdx = totalLine ? lines.findIndex((l, i) => i > priceLineIdx && /^Итого\s*:/i.test(l)) : -1;
     const end = untilIdx === -1 ? lines.length : untilIdx;
-    compositionLines = lines
-      .slice(priceLineIdx + 1, end)
-      .filter((l) => l && !/^Итого\s*:/i.test(l));
+    compositionLines = lines.slice(priceLineIdx + 1, end).filter((l) => l && !/^Итого\s*:/i.test(l));
   }
 
   return { compositionLines, totalLine };
@@ -114,11 +105,7 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
   ];
 
   try {
-    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(
-      s.sourceToken,
-      getPostMeta,
-      makePostLink
-    );
+    const { priceLine, postUrl, compositionLines, totalLine } = await getPostInfo(s.sourceToken, getPostMeta, makePostLink);
     if (compositionLines.length || totalLine || priceLine) {
       lines.push('');
       if (compositionLines.length) {
@@ -157,11 +144,13 @@ export function registerOrders(bot, deps) {
     WEBAPP_URL,
     getPostMeta,
     makePostLink,
+
+    // ✅ добавили
+    showFilterMenu,
   } = deps;
 
   // === КНОПКИ ===
-  const kbReview = () =>
-    Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
+  const kbReview = () => Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
 
   const kbEditMenu = () =>
     Markup.keyboard([
@@ -175,22 +164,11 @@ export function registerOrders(bot, deps) {
   const kbName = () => Markup.keyboard([['🛑 Отменить заказ']]).resize();
 
   const kbPhone = () =>
-    Markup.keyboard([
-      [Markup.button.contactRequest('📱 Отправить мой контакт')],
-      ['🛑 Отменить заказ'],
-    ]).resize();
+    Markup.keyboard([[Markup.button.contactRequest('📱 Отправить мой контакт')], ['🛑 Отменить заказ']]).resize();
 
-  const kbPhotos = () =>
-    Markup.keyboard([
-      ['➡️ Далее'],
-      ['🛑 Отменить заказ'],
-    ]).resize();
+  const kbPhotos = () => Markup.keyboard([['➡️ Далее'], ['🛑 Отменить заказ']]).resize();
 
-  const kbComment = () =>
-    Markup.keyboard([
-      ['✅ Продолжить'],
-      ['🛑 Отменить заказ'],
-    ]).resize();
+  const kbComment = () => Markup.keyboard([['✅ Продолжить'], ['🛑 Отменить заказ']]).resize();
 
   const kbRemove = () => Markup.removeKeyboard();
 
@@ -252,16 +230,13 @@ export function registerOrders(bot, deps) {
       case 'edit_menu':
         return ctx.reply('Что хотите изменить?', kbEditMenu());
       case 'confirm_cancel':
-        return ctx.reply(
-          'Вы действительно хотите отменить заказ? Все введённые данные будут удалены.',
-          kbConfirmCancel()
-        );
+        return ctx.reply('Вы действительно хотите отменить заказ? Все введённые данные будут удалены.', kbConfirmCancel());
       default:
         s.step = 'name';
-        return ctx.reply(
-          '👋 Добро пожаловать! Представтесь, как к вам обращаться (ФИО или имя):' + warningNote(),
-          { parse_mode: 'HTML', ...kbName() }
-        );
+        return ctx.reply('👋 Добро пожаловать! Представтесь, как к вам обращаться (ФИО или имя):' + warningNote(), {
+          parse_mode: 'HTML',
+          ...kbName(),
+        });
     }
   }
 
@@ -304,10 +279,7 @@ export function registerOrders(bot, deps) {
       await ctx.telegram.sendMediaGroup(MANAGER_CHAT_ID, media);
 
       if (photos.length > 10) {
-        await ctx.telegram.sendMessage(
-          MANAGER_CHAT_ID,
-          `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`
-        );
+        await ctx.telegram.sendMessage(MANAGER_CHAT_ID, `Дополнительные фото (${photos.length - 10} шт.) пользователь отправит отдельно.`);
       }
     } else {
       await ctx.telegram.sendMessage(MANAGER_CHAT_ID, managerText);
@@ -324,13 +296,16 @@ export function registerOrders(bot, deps) {
       await sendOrderToManager(ctx, s, orderNo);
 
       const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
+
       await ctx.reply(
         [
           `✅ Заказ №${orderNo} отправлен.`,
           ``,
           `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
           CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
-        ].filter(Boolean).join('\n'),
+        ]
+          .filter(Boolean)
+          .join('\n'),
         {
           reply_markup: webAppUrl
             ? Markup.keyboard([[Markup.button.webApp('✨🪦 ПОДОБРАТЬ ПАМЯТНИК 🪦✨', webAppUrl)]])
@@ -340,6 +315,11 @@ export function registerOrders(bot, deps) {
             : kbRemove().reply_markup,
         }
       );
+
+      // ✅ ПОСЛЕ ЗАКАЗА показываем фильтр-меню (если передано)
+      if (typeof showFilterMenu === 'function') {
+        await showFilterMenu(ctx);
+      }
     } catch (e) {
       await ctx.reply('😔 Не удалось отправить заказ. Попробуйте позже.', kbRemove());
     } finally {
@@ -358,7 +338,6 @@ export function registerOrders(bot, deps) {
     return stepReview(ctx);
   }
 
-  // ====== ВАЖНО: если активен мастер /post — заказ не должен ловить кнопки ======
   const isPostWizardActive = (ctx) => !!ctx.session?.postWizard;
 
   // ====== Редактирование ======
@@ -422,7 +401,7 @@ export function registerOrders(bot, deps) {
     await renderStep(ctx);
   });
 
-  // ====== ОТМЕНА ЗАКАЗА (везде через подтверждение) ======
+  // ====== ОТМЕНА ЗАКАЗА ======
   bot.hears(['🛑 Отменить заказ'], async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
     if (!ctx.session?.order) return next();
@@ -431,9 +410,7 @@ export function registerOrders(bot, deps) {
 
   bot.hears(['Да, отменить'], async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
-    if (ctx.session?.order?.step === 'confirm_cancel') {
-      return cancelOrder(ctx, 'Заказ отменён.');
-    }
+    if (ctx.session?.order?.step === 'confirm_cancel') return cancelOrder(ctx, 'Заказ отменён.');
     return next();
   });
 
@@ -476,15 +453,24 @@ export function registerOrders(bot, deps) {
     ctx.session.order = null;
 
     const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
-    let sourceToken = null;
     const prefix = `${DEEPLINK_PREFIX}_`;
+
+    // ✅ если /start БЕЗ параметров — показываем фильтр (если есть) и не стартуем заказ
+    if (!arg) {
+      if (typeof showFilterMenu === 'function') return showFilterMenu(ctx);
+      // fallback: если фильтр не подключен
+      await ctx.reply(HINT_TEXT);
+      return startOrder(ctx, undefined);
+    }
+
+    // deep-link заказ
+    let sourceToken = null;
     if (arg.startsWith(prefix)) sourceToken = arg.slice(prefix.length);
 
     await ctx.reply(HINT_TEXT);
     await startOrder(ctx, sourceToken || undefined);
   });
 
-  // /cancel тоже отменяет заказ, но через подтверждение
   bot.command('cancel', async (ctx) => {
     if (!ctx.session?.order) return ctx.reply('Нет активного заказа.', kbRemove());
     return goConfirmCancel(ctx);
@@ -498,7 +484,6 @@ export function registerOrders(bot, deps) {
     const st = s.step;
     if (!st) return next();
 
-    // команды пропускаем
     if ('text' in ctx.message && typeof ctx.message.text === 'string') {
       const t = ctx.message.text.trim();
       if (t.startsWith('/')) return next();
@@ -565,10 +550,10 @@ export function registerOrders(bot, deps) {
         if (fileId) {
           s.photos = s.photos || [];
           s.photos.push(fileId);
-          await ctx.reply(
-            '✅ Фото загружено.\nМожно отправить ещё фото или нажать «➡️ Далее».' + warningNote(),
-            { parse_mode: 'HTML', ...kbPhotos() }
-          );
+          await ctx.reply('✅ Фото загружено.\nМожно отправить ещё фото или нажать «➡️ Далее».' + warningNote(), {
+            parse_mode: 'HTML',
+            ...kbPhotos(),
+          });
           return;
         }
       }
@@ -577,4 +562,3 @@ export function registerOrders(bot, deps) {
     return next();
   });
 }
-await deps.showFilterMenu(ctx);
