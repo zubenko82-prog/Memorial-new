@@ -1,12 +1,6 @@
 // apps/bot/src/modules/filterMenu.js
 import { Markup } from 'telegraf';
 
-// NOTE: formatRub оставляю (может пригодиться позже), но сейчас не используется
-const formatRub = (n) => {
-  const s = Math.round(Number(n) || 0).toString();
-  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-};
-
 // ====== ФИЛЬТРЫ (чекбоксы, мультивыбор) ======
 const TAG_FILTERS = [
   // Стела (размеры)
@@ -50,8 +44,8 @@ function renderMenuText(state) {
   return [
     'Фильтр каталога:',
     '',
-    `Параметры: ${chosenTags.length ? chosenTags.join(', ') : '— любые —'}`,
-    `Бюджет: ${chosenPrices.length ? chosenPrices.join(', ') : '— любой —'}`,
+    `Параметры (OR): ${chosenTags.length ? chosenTags.join(', ') : '— любые —'}`,
+    `Бюджет (OR): ${chosenPrices.length ? chosenPrices.join(', ') : '— любой —'}`,
     '',
     'Выберите параметры и нажмите «Показать»',
   ].join('\n');
@@ -87,19 +81,28 @@ function extractTagsFromCaption(caption) {
   return tags;
 }
 
-// AND по тегам, OR по бюджету
+// ✅ OR по тегам, OR по бюджету
+// - если не выбрано ни одного тега => теги не ограничивают
+// - если не выбран бюджет => бюджет не ограничивает
 function matchPost(meta, selectedTagKeys, selectedPriceKeys, tagIndex, priceIndex) {
   if (!meta) return false;
 
+  // OR tags
   if (selectedTagKeys.length) {
+    const tags = meta._tagsSet || new Set();
+    let ok = false;
     for (const key of selectedTagKeys) {
       const needTag = tagIndex.get(key);
       if (!needTag) continue;
-      const tags = meta._tagsSet || new Set();
-      if (!tags.has(needTag)) return false;
+      if (tags.has(needTag)) {
+        ok = true;
+        break;
+      }
     }
+    if (!ok) return false;
   }
 
+  // OR price
   if (selectedPriceKeys.length) {
     const price = Number(meta.last_total_price ?? 0);
     let ok = false;
@@ -145,20 +148,48 @@ export function registerFilterMenu(bot, deps) {
     calcCaptionAndTags,
   } = deps;
 
+  // чтобы "прятать меню" до конца выдачи:
+  // сохраняем id сообщения меню (у пользователя в этой сессии)
+  function getMenuMsgId(ctx) {
+    return ctx.session?.filterMenuMsgId || null;
+  }
+  function setMenuMsgId(ctx, messageId) {
+    ctx.session.filterMenuMsgId = messageId;
+  }
+
+  async function hideMenuMessageIfAny(ctx) {
+    const mid = getMenuMsgId(ctx);
+    if (!mid) return;
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, mid);
+    } catch {
+      // ignore
+    }
+    ctx.session.filterMenuMsgId = null;
+  }
+
   async function showFilterMenu(ctx) {
     const state = getFilterState(ctx);
     const text = renderMenuText(state);
     const kb = menuKb(state);
 
+    // если меню вызывается кнопкой "Фильтр каталога" после выдачи — это обычный message/hears
+    // если меню вызывается из callback (когда меню уже открыто) — edit
     if (ctx.updateType === 'callback_query') {
       try {
         await ctx.editMessageText(text, kb);
+        // message_id меню уже есть (текущий)
+        const mid = ctx.callbackQuery?.message?.message_id;
+        if (mid) setMenuMsgId(ctx, mid);
       } catch {
-        await ctx.reply(text, kb);
+        const m = await ctx.reply(text, kb);
+        if (m?.message_id) setMenuMsgId(ctx, m.message_id);
       }
       return;
     }
-    await ctx.reply(text, kb);
+
+    const m = await ctx.reply(text, kb);
+    if (m?.message_id) setMenuMsgId(ctx, m.message_id);
   }
 
   async function loadPostsWithTags() {
@@ -179,14 +210,8 @@ export function registerFilterMenu(bot, deps) {
       const { caption } = calcCaptionAndTags(catalog, meta.selected);
       const tags = extractTagsFromCaption(caption);
 
-      // ✅ ВАЖНО: используем meta.sourceToken. Если его нет — не генерируем "левый" p_...
-      // потому что тогда заказ придёт без postmeta, и менеджеру нечего показать.
-      // Вместо этого пропустим пост (или можно fallback: оставить, но кнопка "Заказать" будет без состава).
-      if (!meta.sourceToken) {
-        // если хотите НЕ пропускать — можно убрать continue, но тогда придётся
-        // поддерживать восстановление ссылки/состава в orders.js (вы уже сделали восстановление ссылки).
-        continue;
-      }
+      // Важно: используем только "настоящий" sourceToken, чтобы менеджеру приходила ссылка/состав
+      if (!meta.sourceToken) continue;
 
       posts.push({
         key,
@@ -201,6 +226,7 @@ export function registerFilterMenu(bot, deps) {
     return posts;
   }
 
+  // Команда оставляем (можно открыть меню вручную)
   bot.command('filter', async (ctx) => showFilterMenu(ctx));
 
   bot.action(/^flt:(tag|price):(.+)$/, async (ctx) => {
@@ -223,6 +249,9 @@ export function registerFilterMenu(bot, deps) {
   bot.action('flt:show', async (ctx) => {
     await ctx.answerCbQuery('Ищу...');
 
+    // ✅ прячем меню перед выдачей
+    await hideMenuMessageIfAny(ctx);
+
     const state = getFilterState(ctx);
     const selectedTagKeys = Object.entries(state.tags).filter(([, v]) => v).map(([k]) => k);
     const selectedPriceKeys = Object.entries(state.prices).filter(([, v]) => v).map(([k]) => k);
@@ -234,19 +263,21 @@ export function registerFilterMenu(bot, deps) {
     const matched = posts.filter((p) => matchPost(p, selectedTagKeys, selectedPriceKeys, tagIndex, priceIndex));
 
     if (!matched.length) {
-      await ctx.reply('Ничего не найдено по выбранным параметрам. (Проверьте, что посты созданы через /post и имеют sourceToken.)');
-      return showFilterMenu(ctx);
+      const m = await ctx.reply('Ничего не найдено по выбранным параметрам.');
+      // после "ничего" — снова показать меню
+      await showFilterMenu(ctx);
+      return m;
     }
 
     matched.sort((a, b) => (a.last_total_price || 0) - (b.last_total_price || 0));
 
-    // лимит чтобы не уткнуться в flood-control
     const MAX_SEND = 30;
     const toSend = matched.slice(0, MAX_SEND);
 
     const me = ctx.botInfo || (await ctx.telegram.getMe());
     const botUsername = me.username;
 
+    // 1) сначала все найденные посты (с кнопками)
     for (const p of toSend) {
       const sent = await ctx.telegram.copyMessage(ctx.chat.id, p.channelChatId, p.messageId).catch(async () => {
         const link = CHANNEL_USERNAME
@@ -258,7 +289,6 @@ export function registerFilterMenu(bot, deps) {
 
       if (!sent?.message_id) continue;
 
-      // ✅ гарантируем кнопки, но sourceToken теперь всегда настоящий (из meta.sourceToken)
       const kb = buildInlineKbForPost(botUsername, WEBAPP_URL, DEEPLINK_PREFIX, p.sourceToken);
 
       try {
@@ -268,11 +298,16 @@ export function registerFilterMenu(bot, deps) {
       }
     }
 
-    // последним сообщением — сколько найдено
+    // 2) последним сообщением — сколько найдено/показано + кнопка "Фильтр каталога"
     await ctx.reply(
-      `Найдено: ${matched.length}\nПоказано: ${toSend.length}` + (matched.length > MAX_SEND ? `\n(показываю первые ${MAX_SEND})` : '')
+      `Найдено: ${matched.length}\nПоказано: ${toSend.length}` + (matched.length > MAX_SEND ? `\n(показываю первые ${MAX_SEND})` : ''),
+      Markup.inlineKeyboard([[Markup.button.callback('📚 Фильтр каталога', 'flt:open')]])
     );
+  });
 
+  // кнопка "Фильтр каталога" под итоговым сообщением
+  bot.action('flt:open', async (ctx) => {
+    await ctx.answerCbQuery();
     return showFilterMenu(ctx);
   });
 
