@@ -42,7 +42,6 @@ function extractCompositionAndTotalFromPostText(text) {
 // ✅ если postmeta не найден — пробуем восстановить ссылку из sourceToken вида p_<absChatId>_<messageId>_...
 function parsePostRefFromSourceToken(sourceToken) {
   const s = String(sourceToken || '').trim();
-  // p_1003585050485_129_cb29...
   const m = /^p_(\d+)_([0-9]+)(?:_.*)?$/i.exec(s);
   if (!m) return null;
   const absChatId = Number(m[1]);
@@ -59,12 +58,9 @@ function makePostLinkFallback(CHANNEL_USERNAME, absChatId, messageId) {
 }
 
 async function getPostInfo(sourceToken, getPostMeta, makePostLink, CHANNEL_USERNAME) {
-  // default
   const empty = { priceLine: '', postUrl: '', compositionLines: [], totalLine: '', meta: null, recoveredFromToken: false };
-
   if (!sourceToken) return empty;
 
-  // 1) основной путь: postmeta
   if (typeof getPostMeta === 'function') {
     const meta = await getPostMeta(sourceToken).catch((e) => {
       console.error('[orders] getPostInfo getPostMeta error', e?.message || e);
@@ -80,7 +76,6 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink, CHANNEL_USERN
       if (meta.absChatId && meta.messageId && typeof makePostLink === 'function') {
         postUrl = makePostLink(meta.absChatId, meta.messageId) || '';
       }
-      // если makePostLink не отдал — соберем вручную
       if (!postUrl && meta.absChatId && meta.messageId) {
         postUrl = makePostLinkFallback(CHANNEL_USERNAME, meta.absChatId, meta.messageId);
       }
@@ -89,7 +84,6 @@ async function getPostInfo(sourceToken, getPostMeta, makePostLink, CHANNEL_USERN
     }
   }
 
-  // 2) fallback: восстановить из sourceToken p_...
   const ref = parsePostRefFromSourceToken(sourceToken);
   if (ref) {
     const postUrl =
@@ -157,12 +151,10 @@ async function buildManagerSummary(s, orderNo, user, { getPostMeta, makePostLink
       lines.push('');
       lines.push('🔗 Пост в канале:');
       lines.push(postUrl);
-      if (recoveredFromToken) {
-        lines.push('(восстановлено из sourceToken, postmeta не найдено)');
-      }
+      if (recoveredFromToken) lines.push('(восстановлено из sourceToken)');
     } else {
       lines.push('');
-      lines.push('⚠️ Пост в канале: ссылка не определена (sourceToken не содержит p_<absChatId>_<messageId> или неверный формат)');
+      lines.push('⚠️ Пост в канале: ссылка не определена.');
     }
 
     if (compositionLines.length || totalLine || priceLine) {
@@ -203,6 +195,7 @@ export function registerOrders(bot, deps) {
     showFilterMenu,
   } = deps;
 
+  // === КНОПКИ ===
   const kbReview = () => Markup.keyboard([['📨 Отправить'], ['✏️ Изменить'], ['🛑 Отменить заказ']]).resize();
 
   const kbEditMenu = () =>
@@ -225,13 +218,21 @@ export function registerOrders(bot, deps) {
 
   const kbRemove = () => Markup.removeKeyboard();
 
-  const kbAfterSubmit = () => {
+  // ✅ одна и та же клавиатура "после завершения" (и для успеха, и для отмены)
+  const kbAfterFinish = () => {
     const webAppUrl = WEBAPP_URL ? new URL(WEBAPP_URL).toString() : null;
     const rows = [];
+
     if (webAppUrl) rows.push([Markup.button.webApp('✨🪦 Подобрать памятник 🪦✨', webAppUrl)]);
     rows.push(['📚 Фильтр каталога']);
+
     return Markup.keyboard(rows).resize();
   };
+
+  function channelLinkLine() {
+    const u = CHANNEL_USERNAME ? String(CHANNEL_USERNAME).replace('@', '') : '';
+    return u ? `Наш канал: https://t.me/${u}` : '';
+  }
 
   function getOrder(ctx) {
     if (!ctx.session) ctx.session = {};
@@ -369,6 +370,11 @@ export function registerOrders(bot, deps) {
     }
   }
 
+  async function finishUserMessage(ctx, textTopLine) {
+    const lines = [textTopLine, '', channelLinkLine()].filter(Boolean).join('\n');
+    await ctx.reply(lines, kbAfterFinish());
+  }
+
   async function submitOrder(ctx) {
     const s = getOrder(ctx);
     if (!s.name || !s.phone || !phoneOk(s.phone)) {
@@ -378,16 +384,13 @@ export function registerOrders(bot, deps) {
     try {
       await sendOrderToManager(ctx, s, orderNo);
 
-      await ctx.reply(
+      await finishUserMessage(
+        ctx,
         [
           `✅ Заказ №${orderNo} отправлен.`,
-          ``,
+          '',
           `Спасибо ${s.name || ''}! Наш менеджер свяжется с вами по указанному телефону.`,
-          CHANNEL_USERNAME ? `\nНаш канал: https://t.me/${CHANNEL_USERNAME}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-        kbAfterSubmit()
+        ].join('\n')
       );
     } catch (e) {
       await ctx.reply('😔 Не удалось отправить заказ. Попробуйте позже.', kbRemove());
@@ -396,9 +399,10 @@ export function registerOrders(bot, deps) {
     }
   }
 
+  // ✅ отмена теперь тоже показывает канал + кнопки (как после оформления)
   async function cancelOrder(ctx, msg = 'Заказ отменён.') {
     ctx.session.order = null;
-    return ctx.reply(`🛑 ${msg}`, kbRemove());
+    await finishUserMessage(ctx, `🛑 ${msg}`);
   }
 
   async function cancelEditReturnToReview(ctx) {
@@ -486,7 +490,9 @@ export function registerOrders(bot, deps) {
 
   bot.hears(['Да, отменить'], async (ctx, next) => {
     if (isPostWizardActive(ctx)) return next();
-    if (ctx.session?.order?.step === 'confirm_cancel') return cancelOrder(ctx, 'Заказ отменён.');
+    if (ctx.session?.order?.step === 'confirm_cancel') {
+      return cancelOrder(ctx, 'Заказ отменён.');
+    }
     return next();
   });
 
@@ -545,7 +551,7 @@ export function registerOrders(bot, deps) {
   });
 
   bot.command('cancel', async (ctx) => {
-    if (!ctx.session?.order) return ctx.reply('Нет активного заказа.', Markup.removeKeyboard());
+    if (!ctx.session?.order) return ctx.reply('Нет активного заказа.', kbRemove());
     return goConfirmCancel(ctx);
   });
 
