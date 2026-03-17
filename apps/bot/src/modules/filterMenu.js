@@ -44,8 +44,8 @@ function renderMenuText(state) {
   return [
     'Фильтр каталога:',
     '',
-    `Параметры (OR): ${chosenTags.length ? chosenTags.join(', ') : '— любые —'}`,
-    `Бюджет (OR): ${chosenPrices.length ? chosenPrices.join(', ') : '— любой —'}`,
+    `Параметры: ${chosenTags.length ? chosenTags.join(', ') : '— любые —'}`,
+    `Бюджет: ${chosenPrices.length ? chosenPrices.join(', ') : '— любой —'}`,
     '',
     'Выберите параметры и нажмите «Показать»',
   ].join('\n');

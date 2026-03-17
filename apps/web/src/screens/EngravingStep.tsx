@@ -593,7 +593,7 @@ export default function EngravingStep({ item, sizeResult, initial, onBack, onSav
 
             <div style={{ flex: 1 }} />
             <button onClick={scrollToPreview} style={glassButtonStyle("nano")} type="button">
-              Эскиз
+              Превью
             </button>
           </div>
         </div>

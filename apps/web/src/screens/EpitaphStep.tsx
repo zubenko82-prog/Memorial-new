@@ -376,7 +376,7 @@ export default function EpitaphStep(props: any) {
           </button>
           <div style={{ flex: 1 }} />
           <button onClick={scrollToPreview} style={glassButtonStyle("nano")}>
-            Эскиз
+            Превью
           </button>
         </div>
       </div>
